@@ -1179,6 +1179,7 @@ mod tests {
         let image = StepImage {
             full: "steps/a.webp".into(),
             crop: None,
+            crop_rect: None,
             after: None,
             show: Default::default(),
         };

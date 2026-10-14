@@ -537,6 +537,7 @@ impl Builder {
             image: StepImage {
                 full,
                 crop: Some(crop),
+                crop_rect: None,
                 after: None,
                 show: ImageShow::Crop,
             },
@@ -565,6 +566,7 @@ impl Builder {
             image: StepImage {
                 full,
                 crop: None,
+                crop_rect: None,
                 after: None,
                 show: ImageShow::Full,
             },

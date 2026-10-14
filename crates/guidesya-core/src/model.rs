@@ -205,6 +205,11 @@ pub struct StepImage {
     /// inserted from an image file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<String>,
+    /// Where the crop sits inside the full screenshot, in full-screenshot
+    /// pixels. Annotation geometry is in full-screenshot pixels, so this is
+    /// what maps it into the crop. Absent for older guides or no crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_rect: Option<Rect>,
     /// Optional frame captured after the action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
