@@ -32,7 +32,11 @@ pub struct TimedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum CaptureEvent {
     MouseDown {
         point: Point,
@@ -40,6 +44,10 @@ pub enum CaptureEvent {
         /// 1 for a single click, 2 for the second press of a double click, etc.
         click_count: u32,
         modifiers: Modifiers,
+        /// AX element under the pointer. The event tap leaves this `None`;
+        /// the recording session fills it from an AX lookup at the click.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element: Option<RawElement>,
     },
     MouseUp {
         point: Point,
@@ -48,8 +56,15 @@ pub enum CaptureEvent {
         modifiers: Modifiers,
     },
     /// Pointer moved with a button held.
-    MouseDragged { point: Point, button: MouseButton },
-    Scroll { point: Point, delta_x: f64, delta_y: f64 },
+    MouseDragged {
+        point: Point,
+        button: MouseButton,
+    },
+    Scroll {
+        point: Point,
+        delta_x: f64,
+        delta_y: f64,
+    },
     KeyDown {
         key: Key,
         modifiers: Modifiers,
@@ -60,11 +75,17 @@ pub enum CaptureEvent {
         #[serde(default)]
         secure: bool,
     },
-    FlagsChanged { modifiers: Modifiers },
+    FlagsChanged {
+        modifiers: Modifiers,
+    },
     /// The AX focused element changed (or focus was lost).
-    FocusChanged { element: Option<RawElement> },
+    FocusChanged {
+        element: Option<RawElement>,
+    },
     /// The frontmost application changed.
-    AppActivated { app: AppRef },
+    AppActivated {
+        app: AppRef,
+    },
     /// User pressed the manual-step hotkey.
     ManualStep,
 }
@@ -182,6 +203,7 @@ mod tests {
                 button: MouseButton::Left,
                 click_count: 1,
                 modifiers: Modifiers::default(),
+                element: None,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();
