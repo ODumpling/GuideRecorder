@@ -24,20 +24,30 @@
 //!
 //! Bundles are built and torn down under hidden temp names in the root
 //! (`.create-<ulid>.tmp`, `.rename-<ulid>.tmp`, `.delete-<ulid>.tmp`), so a
-//! visible `.guidesya` folder is always complete. [`Library::open`] sweeps
-//! leftovers older than an hour: `.create-*` folders and `.guide.json.*.tmp`
-//! files are removed, and a `.rename-*` folder holding a guide is put back
-//! as a bundle. `.delete-*` folders are left alone: a failed removal leaves
-//! the whole guide there, and only the user should throw it away.
+//! visible `.guidesya` folder is always complete. [`Library::recover`],
+//! which only the app calls, sweeps leftovers older than an hour (by the
+//! ULID timestamp in the name): `.create-*` folders and stale temp files are
+//! removed, and a `.rename-*` folder holding a guide is put back as a
+//! bundle. `.delete-*` folders are left alone: a failed removal leaves the
+//! whole guide there, and only the user should throw it away.
 //!
-//! `list` scans the folders and never writes; the SQLite index (#340) is a
-//! separate layer.
+//! Readers and the app: [`Library::open`], `list`, `scan`, `find` and
+//! [`Library::read`] never write, so MCP and CLI readers share a library
+//! with the app using only those. The app opens guides with
+//! [`Library::load`] (which may migrate and rewrite the file), saves,
+//! creates, renames, deletes and calls [`Library::recover`]. The SQLite
+//! index (#340) is a separate layer.
+//!
+//! Schema versions (#444 "Versioning", [`crate::migrate`]): every read
+//! migrates older `guide.json` files in memory. `load` also backs up the
+//! original to `.backup/guide.v{N}.json` and rewrites the file. Guides from
+//! a newer app are listed and open read-only; saves refuse to overwrite them.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -47,8 +57,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use ulid::Ulid;
 
+use crate::migrate::{self, MigrationError, Schema};
 use crate::model::Guide;
-use crate::SCHEMA_VERSION;
 
 /// Extension of a guide bundle folder.
 pub const BUNDLE_EXTENSION: &str = "guidesya";
@@ -67,12 +77,13 @@ pub const MAX_WEBP_DIMENSION: u32 = 16383;
 const MAX_STEM_BYTES: usize = 100;
 const UNTITLED: &str = "Untitled";
 /// Device names Windows reserves regardless of extension.
-const WINDOWS_RESERVED: [&str; 30] = [
-    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
-    "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
-    "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
+const WINDOWS_RESERVED: [&str; 32] = [
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM0", "COM1", "COM2", "COM3", "COM4",
+    "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3",
+    "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ];
-/// Age after which [`Library::open`] sweeps leftover temp files and folders.
+/// Age after which [`Library::recover`] sweeps leftover temp files and
+/// folders.
 const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, thiserror::Error)]
@@ -120,6 +131,23 @@ pub enum LibraryError {
     },
     #[error("{path}: missing or invalid schemaVersion")]
     InvalidSchemaVersion { path: PathBuf },
+    #[error("{path}: {source}")]
+    Migration {
+        path: PathBuf,
+        source: MigrationError,
+    },
+    /// The file on disk is at an older schema that [`Library::load`] has not
+    /// backed up and rewritten yet, so a save would lose the original.
+    #[error("{path}: guide.json schema version {found} has not been migrated to {current}")]
+    NotMigrated {
+        path: PathBuf,
+        found: u32,
+        current: u32,
+    },
+    /// `guide.json` changed on disk while [`Library::load`] was migrating
+    /// it (e.g. a sync); the migration was not written back.
+    #[error("{0}: changed on disk during migration")]
+    ChangedOnDisk(PathBuf),
     #[error("{path}: guide.json schema version {found} is newer than supported {supported}")]
     NewerSchema {
         path: PathBuf,
@@ -236,9 +264,9 @@ impl GuideHandle {
 pub struct GuideSummary {
     pub id: Ulid,
     pub path: PathBuf,
-    /// Version as stored on disk. Greater than [`SCHEMA_VERSION`] means the
-    /// guide is from a newer app; it is listed but `load` refuses it (the
-    /// read-only behaviour is decided in #346).
+    /// Version as stored on disk. Lower than [`crate::SCHEMA_VERSION`]: the
+    /// other fields come from a migration in memory, and `load` will rewrite
+    /// the file. Greater: the guide is from a newer app and loads read-only.
     pub schema_version: u32,
     pub title: String,
     pub summary: String,
@@ -260,10 +288,47 @@ impl GuideSummary {
     }
 }
 
+/// The result of [`Library::load`].
+#[derive(Debug, Clone)]
+pub struct LoadedGuide {
+    pub handle: GuideHandle,
+    pub guide: Guide,
+    /// Show the guide, but do not offer editing. Set when:
+    ///
+    /// - it is from a newer app (its `schemaVersion` is above
+    ///   [`crate::SCHEMA_VERSION`]): `save` and `save_to` refuse with
+    ///   [`LibraryError::NewerSchema`], and fields this app does not know
+    ///   are missing from `guide`;
+    /// - it was migrated in memory but the backup or rewrite failed (see
+    ///   [`LoadedGuide::migration_error`]): `save` and `save_to` refuse with
+    ///   [`LibraryError::NotMigrated`] until a later `load` succeeds.
+    pub read_only: bool,
+    /// The version on disk before `load` migrated the guide. The file was
+    /// rewritten unless [`LoadedGuide::migration_error`] is set.
+    pub migrated_from: Option<u32>,
+    /// Where the original file was copied before the rewrite.
+    pub backup: Option<PathBuf>,
+    /// Why the migrated guide could not be written back (e.g. a read-only
+    /// folder). `guide.json` is untouched; `guide` is the migrated copy in
+    /// memory. A warning for the user, not a failed load.
+    pub migration_error: Option<Arc<LibraryError>>,
+}
+
+/// What [`Library::recover`] cleaned up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Recovery {
+    /// Stale temp files and folders that were deleted.
+    pub removed: Vec<PathBuf>,
+    /// Bundles put back from a stranded `.rename-*` folder (new paths).
+    pub restored: Vec<PathBuf>,
+}
+
 /// A library folder. Cheap to share by reference; methods take `&self`.
 #[derive(Debug)]
 pub struct Library {
     root: PathBuf,
+    /// The schema guides are read at; [`migrate::CURRENT`] outside tests.
+    schema: Schema,
     /// Guide id → bundle path, filled by `scan`, `create` and `load`.
     /// Only a hint: entries are re-checked before use.
     known: RwLock<HashMap<Ulid, PathBuf>>,
@@ -271,21 +336,32 @@ pub struct Library {
 
 impl Library {
     /// Opens the library at `root`, creating the folder if it is missing.
+    /// Writes nothing else; see [`Library::recover`].
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_schema(root, migrate::CURRENT)
+    }
+
+    fn open_with_schema(root: impl AsRef<Path>, schema: Schema) -> Result<Self> {
         let root = root.as_ref();
         fs::create_dir_all(root).map_err(io_err(root))?;
         let root = fs::canonicalize(root).map_err(io_err(root))?;
-        let library = Self {
+        Ok(Self {
             root,
+            schema,
             known: RwLock::new(HashMap::new()),
-        };
-        library.sweep(STALE_TEMP_AGE);
-        Ok(library)
+        })
     }
 
-    /// Best-effort cleanup of temp files and folders older than `min_age`
-    /// left by crashes (see the module docs). Errors are ignored.
-    fn sweep(&self, min_age: Duration) {
+    /// Cleans up after crashes: removes temp files and folders older than an
+    /// hour and puts stranded bundles back (see the module docs). Only the
+    /// app calls this, at startup; readers (MCP, CLI) never do. Best-effort:
+    /// anything that fails is left for next time.
+    pub fn recover(&self) -> Recovery {
+        self.recover_older_than(STALE_TEMP_AGE)
+    }
+
+    fn recover_older_than(&self, min_age: Duration) -> Recovery {
+        let mut report = Recovery::default();
         let entries = || {
             fs::read_dir(&self.root)
                 .into_iter()
@@ -298,36 +374,61 @@ impl Library {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if !name.ends_with(".tmp") || !path.is_dir() || !is_older_than(&path, min_age) {
+            // Real folders only: a symlink is not ours.
+            if !is_real_dir(&path) {
                 continue;
             }
-            if name.starts_with(".create-") {
-                let _ = fs::remove_dir_all(&path);
-            } else if name.starts_with(".rename-") {
-                self.recover_renamed(&path);
+            if temp_name_is_older_than(&name, "create", min_age) {
+                if fs::remove_dir_all(&path).is_ok() {
+                    report.removed.push(path);
+                }
+            } else if temp_name_is_older_than(&name, "rename", min_age) {
+                match self.recover_renamed(&path) {
+                    Some(restored) => report.restored.push(restored),
+                    None if !path.exists() => report.removed.push(path),
+                    None => {}
+                }
             }
         }
-        // After recovery, so recovered bundles are swept too.
-        for path in entries().filter(|p| is_bundle_path(p) && p.is_dir()) {
-            sweep_guide_temps(&path, min_age);
+        // After recovery, so restored bundles are swept too. Real folders
+        // only: a symlinked bundle points outside the library.
+        for bundle in entries().filter(|p| is_bundle_path(p) && is_real_dir(p)) {
+            let guide_temp = format!(".{GUIDE_FILE}.");
+            sweep_temp_files(&bundle, min_age, &mut report, |name| {
+                name.starts_with(&guide_temp)
+            });
+            sweep_temp_files(&bundle.join(STEPS_DIR), min_age, &mut report, |name| {
+                name.starts_with('.') && name.contains(".webp.")
+            });
+            sweep_temp_files(&bundle.join(BACKUP_DIR), min_age, &mut report, |name| {
+                name.starts_with('.')
+            });
         }
+        report
     }
 
     /// Puts a bundle stranded under a `.rename-*` name back in the library,
-    /// named after its title; removes the folder if it holds no guide.
-    fn recover_renamed(&self, path: &Path) {
+    /// named after its title, and returns its new path; removes the folder
+    /// if it holds no guide.
+    fn recover_renamed(&self, path: &Path) -> Option<PathBuf> {
         if !path.join(GUIDE_FILE).is_file() {
             let _ = fs::remove_dir_all(path);
-            return;
+            return None;
         }
-        let title = read_summary(path)
-            .map(|summary| summary.title)
-            .unwrap_or_else(|_| "Recovered".to_owned());
+        // Not `read_summary`: its placeholder for undecodable newer guides
+        // is titled after the folder, here a `.rename-<ulid>.tmp` name.
+        let title = read_value(path, &self.schema)
+            .ok()
+            .and_then(|(_, value, _)| RawSummary::deserialize(&value).ok())
+            .map(|raw| raw.title)
+            .unwrap_or_else(|| "Recovered".to_owned());
         if let Ok(Claim::Fresh(target)) = self.claim_bundle_dir(&sanitize_title(&title), None) {
-            if fs::rename(path, &target).is_err() {
-                let _ = fs::remove_dir(&target);
+            if fs::rename(path, &target).is_ok() {
+                return Some(target);
             }
+            let _ = fs::remove_dir(&target);
         }
+        None
     }
 
     pub fn root(&self) -> &Path {
@@ -369,7 +470,7 @@ impl Library {
         let mut out: Vec<_> = paths
             .into_iter()
             .map(|path| {
-                let entry = read_summary(&path);
+                let entry = read_summary(&path, &self.schema);
                 (path, entry)
             })
             .collect();
@@ -434,6 +535,11 @@ impl Library {
     /// The bundle is built under a hidden temp name and renamed into place,
     /// so a failure never leaves a partial `.guidesya` folder.
     pub fn create(&self, guide: &Guide) -> Result<GuideHandle> {
+        let would_be = self.root.join(format!(
+            "{}.{BUNDLE_EXTENSION}",
+            sanitize_title(&guide.title)
+        ));
+        self.check_writable_version(&would_be, guide)?;
         if let Some(existing) = self.find(guide.id)? {
             return Err(LibraryError::DuplicateId {
                 id: guide.id,
@@ -479,21 +585,76 @@ impl Library {
         Ok(handle)
     }
 
-    /// Loads the guide in bundle `path` (the `.guidesya` folder).
+    /// Opens the guide in bundle `path` (the `.guidesya` folder). This is
+    /// the only read that writes:
     ///
-    /// Fails with [`LibraryError::NewerSchema`] for guides from a newer app.
-    /// Explicit opens are where #346 adds the `.backup/` copy and the
-    /// rewrite of migrated files; `list`/`scan`/`find` must stay read-only.
-    pub fn load(&self, path: impl AsRef<Path>) -> Result<(GuideHandle, Guide)> {
-        let path = path.as_ref();
+    /// - An older schema is migrated. The original bytes are first copied to
+    ///   `.backup/guide.v{N}.json` (`guide.v{N}.2.json`, ... if taken; an
+    ///   existing backup is never overwritten), then `guide.json` is
+    ///   rewritten atomically. If either write fails, `guide.json` is
+    ///   untouched and the migrated guide loads read-only with
+    ///   [`LoadedGuide::migration_error`] set. A failed migration step is an
+    ///   error ([`LibraryError::Migration`]): there is no guide to show.
+    /// - A newer schema loads with [`LoadedGuide::read_only`] set.
+    pub fn load(&self, path: impl AsRef<Path>) -> Result<LoadedGuide> {
+        let (mut loaded, bytes) = self.open_guide(path.as_ref())?;
+        if let Some(version) = loaded.migrated_from {
+            if let Err(e) = write_back(&mut loaded, version, &bytes) {
+                loaded.read_only = true;
+                loaded.migration_error = Some(Arc::new(e));
+            }
+        }
+        self.remember(&loaded.handle);
+        Ok(loaded)
+    }
+
+    /// Reads the guide in bundle `path` without writing anything: the path
+    /// for MCP and CLI readers, which must not change a library the app
+    /// owns. An older schema is migrated in memory only
+    /// ([`LoadedGuide::migrated_from`] is set, `backup` is not); any guide
+    /// not at the current schema is [`LoadedGuide::read_only`].
+    pub fn read(&self, path: impl AsRef<Path>) -> Result<LoadedGuide> {
+        let (mut loaded, _) = self.open_guide(path.as_ref())?;
+        loaded.read_only |= loaded.migrated_from.is_some();
+        self.remember(&loaded.handle);
+        Ok(loaded)
+    }
+
+    /// Reads, migrates in memory and decodes a bundle's guide. Returns the
+    /// original bytes for the backup. Pure.
+    fn open_guide(&self, path: &Path) -> Result<(LoadedGuide, Vec<u8>)> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }
         let path = fs::canonicalize(path).map_err(io_err(path))?;
-        let guide = read_guide(&path)?;
-        let handle = GuideHandle { id: guide.id, path };
-        self.remember(&handle);
-        Ok((handle, guide))
+        let json = path.join(GUIDE_FILE);
+        let bytes = fs::read(&json).map_err(io_err(&json))?;
+        let (value, version) = parse_and_upgrade(&json, &bytes, &self.schema)?;
+        let guide: Guide = serde_json::from_value(value).map_err(|source| {
+            if version > self.schema.version {
+                // A newer format this app cannot decode: say so, rather
+                // than report it as corrupt.
+                LibraryError::NewerSchema {
+                    path: json.clone(),
+                    found: version,
+                    supported: self.schema.version,
+                }
+            } else {
+                LibraryError::Json {
+                    path: json.clone(),
+                    source,
+                }
+            }
+        })?;
+        let loaded = LoadedGuide {
+            read_only: version > self.schema.version,
+            migrated_from: (version < self.schema.version).then_some(version),
+            backup: None,
+            migration_error: None,
+            handle: GuideHandle { id: guide.id, path },
+            guide,
+        };
+        Ok((loaded, bytes))
     }
 
     /// Atomically rewrites `guide.json` in the canonical bundle that holds
@@ -511,31 +672,59 @@ impl Library {
     /// Like [`Library::save`] for a known bundle, without the scan (the
     /// autosave path). Fails with [`LibraryError::IdMismatch`] if `guide` or
     /// the bundle on disk is not `handle.id`, [`LibraryError::NewerSchema`]
-    /// if the file on disk is from a newer app, and
-    /// [`LibraryError::Unverifiable`] if it is missing or unreadable.
+    /// if the file on disk or `guide` itself is from a newer app (a
+    /// read-only [`LoadedGuide`]), [`LibraryError::NotMigrated`] if the file
+    /// on disk is older and was never backed up and rewritten by `load`, and
+    /// [`LibraryError::Unverifiable`] if the file is missing or unreadable.
     pub fn save_to(&self, handle: &GuideHandle, guide: &Guide) -> Result<()> {
         check_guide_id(handle, guide)?;
+        self.check_writable_version(&handle.path, guide)?;
         let header = verify_header(handle)?;
-        if let Some(found) = header.schema_version.filter(|v| *v > SCHEMA_VERSION) {
+        if let Some(found) = header.schema_version.filter(|v| *v > self.schema.version) {
             return Err(LibraryError::NewerSchema {
                 path: handle.guide_json(),
                 found,
-                supported: SCHEMA_VERSION,
+                supported: self.schema.version,
+            });
+        }
+        if let Some(found) = header.schema_version.filter(|v| *v < self.schema.version) {
+            return Err(LibraryError::NotMigrated {
+                path: handle.guide_json(),
+                found,
+                current: self.schema.version,
             });
         }
         write_guide(&handle.path, guide)
     }
 
-    /// Writes `guide.json` without checking what is on disk: for "Save
-    /// anyway" after [`LibraryError::Unverifiable`], e.g. to repair a
-    /// truncated file. Overwrites whatever is there, including newer-schema
-    /// files. Still requires `guide.id == handle.id` and an existing bundle
-    /// folder; it never creates one.
+    /// Writes `guide.json` without the usual checks: for "Save anyway"
+    /// after [`LibraryError::Unverifiable`], e.g. to repair a truncated
+    /// file. Overwrites whatever is there, including newer-schema files.
+    /// Still requires `guide.id == handle.id`, a `guide` that is not itself
+    /// from a newer app, and an existing bundle folder; it never creates one.
+    ///
+    /// An original at any other schema version (older, or from a newer app)
+    /// is never destroyed without a copy: it is backed up to `.backup/`
+    /// first (as [`Library::load`] does), and if that fails the save fails.
     pub fn save_to_force(&self, handle: &GuideHandle, guide: &Guide) -> Result<()> {
         check_guide_id(handle, guide)?;
+        self.check_writable_version(&handle.path, guide)?;
         let is_dir = fs::symlink_metadata(&handle.path).map_err(io_err(&handle.path))?;
         if !is_dir.is_dir() {
             return Err(LibraryError::NotABundle(handle.path.clone()));
+        }
+        // A missing file, or one without a valid version (the repair case),
+        // has nothing worth a backup. The version is read on its own, so a
+        // broken `id` does not hide it.
+        if let Ok(original) = fs::read(handle.guide_json()) {
+            let other_version = serde_json::from_slice::<Value>(&original)
+                .ok()
+                .and_then(|value| value.get("schemaVersion").and_then(Value::as_u64))
+                .and_then(|v| u32::try_from(v).ok())
+                .filter(|v| *v >= 1 && *v != self.schema.version);
+            if let Some(version) = other_version {
+                write_backup(handle, version, &original)?;
+            }
         }
         write_guide(&handle.path, guide)
     }
@@ -597,6 +786,19 @@ impl Library {
         // Best effort: the bundle is already gone from the library.
         let _ = sync_dir(&self.root);
         removed
+    }
+
+    /// Refuses to write a guide decoded from a newer schema: this app has
+    /// already dropped the fields it does not know.
+    fn check_writable_version(&self, bundle: &Path, guide: &Guide) -> Result<()> {
+        if guide.schema_version > self.schema.version {
+            return Err(LibraryError::NewerSchema {
+                path: bundle.join(GUIDE_FILE),
+                found: guide.schema_version,
+                supported: self.schema.version,
+            });
+        }
+        Ok(())
     }
 
     fn remember(&self, handle: &GuideHandle) {
@@ -679,6 +881,11 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// A directory, not a symlink to one.
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
 fn is_bundle_path(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == BUNDLE_EXTENSION)
 }
@@ -700,6 +907,8 @@ fn has_stem(current: &str, stem: &str) -> bool {
         })
 }
 
+/// Whether a file's mtime is at least `min_age` ago. For temp files, which
+/// are written as they are created; folders use [`temp_name_is_older_than`].
 fn is_older_than(path: &Path, min_age: Duration) -> bool {
     fs::symlink_metadata(path)
         .and_then(|m| m.modified())
@@ -708,22 +917,46 @@ fn is_older_than(path: &Path, min_age: Duration) -> bool {
         .is_some_and(|age| age >= min_age)
 }
 
-/// Removes stale `.guide.json.*.tmp` files left by an interrupted
-/// [`write_atomic`] in one bundle.
-fn sweep_guide_temps(bundle: &Path, min_age: Duration) {
-    let Ok(entries) = fs::read_dir(bundle) else {
+/// Whether `name` is a `.{purpose}-<ulid>.tmp` temp folder name whose ULID
+/// was minted at least `min_age` ago. Renaming a folder does not touch its
+/// mtime, so the name is the only reliable age.
+fn temp_name_is_older_than(name: &str, purpose: &str, min_age: Duration) -> bool {
+    name.strip_prefix('.')
+        .and_then(|n| n.strip_prefix(purpose))
+        .and_then(|n| n.strip_prefix('-'))
+        .and_then(|n| n.strip_suffix(".tmp"))
+        .and_then(|ulid| ulid.parse::<Ulid>().ok())
+        .and_then(|ulid| SystemTime::now().duration_since(ulid.datetime()).ok())
+        .is_some_and(|age| age >= min_age)
+}
+
+/// Removes stale `*.tmp` files in `dir` left by an interrupted
+/// [`write_atomic`] or backup, for names `matches` accepts.
+fn sweep_temp_files(
+    dir: &Path,
+    min_age: Duration,
+    report: &mut Recovery,
+    matches: impl Fn(&str) -> bool,
+) {
+    // `read_dir` follows symlinks: a symlinked `steps/` or `.backup` would
+    // let the sweep delete files outside the bundle.
+    if !is_real_dir(dir) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let prefix = format!(".{GUIDE_FILE}.");
     for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if name.starts_with(&prefix)
-            && name.ends_with(".tmp")
-            && path.is_file()
+        let is_file = fs::symlink_metadata(&path).is_ok_and(|m| m.is_file());
+        if name.ends_with(".tmp")
+            && matches(&name)
+            && is_file
             && is_older_than(&path, min_age)
+            && fs::remove_file(&path).is_ok()
         {
-            let _ = fs::remove_file(&path);
+            report.removed.push(path);
         }
     }
 }
@@ -819,26 +1052,29 @@ fn is_format_char(c: char) -> bool {
 // guide.json IO
 
 /// Reads `guide.json` and passes it through [`upgrade`]. Never writes.
-fn read_value(bundle: &Path) -> Result<(PathBuf, Value, u32)> {
+fn read_value(bundle: &Path, schema: &Schema) -> Result<(PathBuf, Value, u32)> {
     let path = bundle.join(GUIDE_FILE);
     let bytes = fs::read(&path).map_err(io_err(&path))?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|source| LibraryError::Json {
-        path: path.clone(),
+    let (value, version) = parse_and_upgrade(&path, &bytes, schema)?;
+    Ok((path, value, version))
+}
+
+fn parse_and_upgrade(path: &Path, bytes: &[u8], schema: &Schema) -> Result<(Value, u32)> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|source| LibraryError::Json {
+        path: path.to_path_buf(),
         source,
     })?;
-    let (value, version) = upgrade(&path, value)?;
-    Ok((path, value, version))
+    upgrade(path, value, schema)
 }
 
 /// Migration hook: the single place every `guide.json` read passes through
 /// before it is decoded. Pure and in-memory; `path` is only for errors.
 ///
-/// Returns the value at [`SCHEMA_VERSION`] plus the version found on disk.
-/// Migrations (#346) go here as ordered `vN → vN+1` steps; callers that
-/// see an original version below the current one decide whether to back up
-/// and rewrite (only [`Library::load`] should). Values from a newer app are
-/// returned unchanged; [`read_guide`] refuses them, summaries list them.
-fn upgrade(path: &Path, value: Value) -> Result<(Value, u32)> {
+/// Returns the value migrated to `schema.version` (see [`crate::migrate`])
+/// plus the version found on disk. Only [`Library::load`] acts on an older
+/// original version, by backing up and rewriting the file. Values from a
+/// newer app are returned unchanged.
+fn upgrade(path: &Path, value: Value, schema: &Schema) -> Result<(Value, u32)> {
     let version = value
         .get("schemaVersion")
         .and_then(Value::as_u64)
@@ -847,20 +1083,81 @@ fn upgrade(path: &Path, value: Value) -> Result<(Value, u32)> {
         .ok_or_else(|| LibraryError::InvalidSchemaVersion {
             path: path.to_path_buf(),
         })?;
-    // Only version 1 exists today, so there is nothing to migrate yet.
+    if version >= schema.version {
+        return Ok((value, version));
+    }
+    let (value, _) = schema
+        .migrate(value, version)
+        .map_err(|source| LibraryError::Migration {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok((value, version))
 }
 
-fn read_guide(bundle: &Path) -> Result<Guide> {
-    let (path, value, version) = read_value(bundle)?;
-    if version > SCHEMA_VERSION {
-        return Err(LibraryError::NewerSchema {
-            path,
-            found: version,
-            supported: SCHEMA_VERSION,
-        });
+/// Copies the original `guide.json` bytes (at schema `version`) to
+/// `.backup/guide.v{version}.json`, or `guide.v{version}.{n}.json` for the
+/// first free `n >= 2`, and returns its path. An existing backup of that
+/// version with identical bytes is reused instead (e.g. a load that keeps
+/// failing after the backup). Never overwrites a backup: the copy is
+/// written to a temp file, synced, and moved into place with a no-clobber
+/// rename.
+fn write_backup(handle: &GuideHandle, version: u32, bytes: &[u8]) -> Result<PathBuf> {
+    // `resolve` refuses a symlinked `.backup`.
+    let dir = handle.resolve(BACKUP_DIR)?;
+    match fs::create_dir(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(io_err(&dir)(e)),
     }
-    serde_json::from_value(value).map_err(|source| LibraryError::Json { path, source })
+    if let Some(existing) = find_backup(handle, &dir, version, bytes) {
+        return Ok(existing);
+    }
+    let first = format!("guide.v{version}.json");
+    let mut tmp = temp_file_in(&dir, &first)?;
+    tmp.write_all(bytes).map_err(io_err(tmp.path()))?;
+    tmp.as_file().sync_all().map_err(io_err(tmp.path()))?;
+    for n in 1u32.. {
+        let name = if n == 1 {
+            first.clone()
+        } else {
+            format!("guide.v{version}.{n}.json")
+        };
+        let target = handle.resolve(&format!("{BACKUP_DIR}/{name}"))?;
+        match tmp.persist_noclobber(&target) {
+            Ok(_) => {
+                sync_dir(&dir)?;
+                return Ok(target);
+            }
+            Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => tmp = e.file,
+            Err(e) => return Err(io_err(&target)(e.error)),
+        }
+    }
+    unreachable!("u32 range exhausted")
+}
+
+/// A backup of `version` in `dir` holding exactly `bytes`, if any.
+fn find_backup(handle: &GuideHandle, dir: &Path, version: u32, bytes: &[u8]) -> Option<PathBuf> {
+    let prefix = format!("guide.v{version}.");
+    fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| {
+            name.strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix("json"))
+                .is_some_and(|n| {
+                    n.is_empty()
+                        || n.strip_suffix('.')
+                            .is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n >= 2))
+                })
+        })
+        // `resolve` refuses symlinks; only real files count as backups.
+        .filter_map(|name| handle.resolve(&format!("{BACKUP_DIR}/{name}")).ok())
+        .find(|path| {
+            fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64)
+                && fs::read(path).is_ok_and(|b| b == bytes)
+        })
 }
 
 /// The fields `list` needs, decoded leniently so guides from newer
@@ -885,10 +1182,35 @@ struct RawItem {
     kind: Option<String>,
 }
 
-fn read_summary(bundle: &Path) -> Result<GuideSummary> {
-    let (path, value, schema_version) = read_value(bundle)?;
-    let raw: RawSummary =
-        serde_json::from_value(value).map_err(|source| LibraryError::Json { path, source })?;
+/// Backs up the `original` bytes (at `version`) and rewrites `guide.json`
+/// with the migrated `loaded.guide`, unless the file changed on disk since
+/// it was read. Sets `loaded.backup` once the backup exists.
+fn write_back(loaded: &mut LoadedGuide, version: u32, original: &[u8]) -> Result<()> {
+    let handle = loaded.handle.clone();
+    loaded.backup = Some(write_backup(&handle, version, original)?);
+    let json = handle.guide_json();
+    #[cfg(test)]
+    tests::before_rewrite(&json);
+    let current = fs::read(&json).map_err(io_err(&json))?;
+    if current != original {
+        return Err(LibraryError::ChangedOnDisk(json));
+    }
+    write_guide(&handle.path, &loaded.guide)
+}
+
+/// A guide's listing entry. A newer-schema guide whose fields this app
+/// cannot decode still gets an entry if its `id` is readable: titled after
+/// the folder, with no summary, tags or steps, so it does not vanish from
+/// `list` (opening it fails with [`LibraryError::NewerSchema`]).
+fn read_summary(bundle: &Path, schema: &Schema) -> Result<GuideSummary> {
+    let (path, value, schema_version) = read_value(bundle, schema)?;
+    let raw: RawSummary = match RawSummary::deserialize(&value) {
+        Ok(raw) => raw,
+        Err(_) if schema_version > schema.version => {
+            return newer_placeholder(bundle, &path, &value, schema_version, schema)
+        }
+        Err(source) => return Err(LibraryError::Json { path, source }),
+    };
     Ok(GuideSummary {
         id: raw.id,
         path: bundle.to_path_buf(),
@@ -902,6 +1224,46 @@ fn read_summary(bundle: &Path) -> Result<GuideSummary> {
             .filter(|item| item.kind.as_deref() == Some("step"))
             .count(),
         updated_at: raw.updated_at,
+        duplicate_of: None,
+    })
+}
+
+fn newer_placeholder(
+    bundle: &Path,
+    path: &Path,
+    value: &Value,
+    schema_version: u32,
+    schema: &Schema,
+) -> Result<GuideSummary> {
+    let newer = || LibraryError::NewerSchema {
+        path: path.to_path_buf(),
+        found: schema_version,
+        supported: schema.version,
+    };
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| id.parse::<Ulid>().ok())
+        .ok_or_else(newer)?;
+    let updated_at = value
+        .get("updatedAt")
+        .and_then(|v| DateTime::<Utc>::deserialize(v).ok())
+        .or_else(|| {
+            fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(DateTime::<Utc>::from)
+        })
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    Ok(GuideSummary {
+        id,
+        path: bundle.to_path_buf(),
+        schema_version,
+        title: bundle_stem(bundle).unwrap_or(UNTITLED).to_owned(),
+        summary: String::new(),
+        tags: Vec::new(),
+        step_count: 0,
+        updated_at,
         duplicate_of: None,
     })
 }
@@ -996,16 +1358,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durability: Durability) -> Result
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let prefix = format!(".{name}.");
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(&prefix).suffix(".tmp");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Normal document permissions (umask applies), not tempfile's 0600.
-        builder.permissions(fs::Permissions::from_mode(0o666));
-    }
-    let mut tmp = builder.tempfile_in(dir).map_err(io_err(dir))?;
+    let mut tmp = temp_file_in(dir, &name)?;
     tmp.write_all(bytes).map_err(io_err(tmp.path()))?;
     if durability == Durability::Full {
         tmp.as_file().sync_all().map_err(io_err(tmp.path()))?;
@@ -1015,6 +1368,20 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durability: Durability) -> Result
         sync_dir(dir)?;
     }
     Ok(())
+}
+
+/// A `.{name}.<random>.tmp` file in `dir` with normal document permissions.
+fn temp_file_in(dir: &Path, name: &str) -> Result<tempfile::NamedTempFile> {
+    let prefix = format!(".{name}.");
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(&prefix).suffix(".tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Umask applies, not tempfile's 0600.
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    builder.tempfile_in(dir).map_err(io_err(dir))
 }
 
 fn sync_dir(dir: &Path) -> Result<()> {
@@ -1169,7 +1536,26 @@ pub fn read_webp(path: &Path) -> Result<RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::migrate::test_schema;
     use crate::model::{Item, Section};
+    use crate::SCHEMA_VERSION;
+    use std::cell::RefCell;
+
+    type Hook = Box<dyn Fn(&Path)>;
+
+    thread_local! {
+        /// Runs in `write_back` between the backup and the re-read, to
+        /// simulate another writer. Per test thread.
+        static BEFORE_REWRITE: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn before_rewrite(path: &Path) {
+        BEFORE_REWRITE.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook(path);
+            }
+        });
+    }
 
     fn library() -> (tempfile::TempDir, Library) {
         let dir = tempfile::tempdir().unwrap();
@@ -1219,9 +1605,12 @@ mod tests {
         let (_tmp, lib) = library();
         let mut guide = sample_guide();
         let handle = lib.create(&guide).unwrap();
-        let (loaded_handle, loaded) = lib.load(&handle.path).unwrap();
-        assert_eq!(loaded_handle, handle);
-        assert_eq!(loaded, guide);
+        let loaded = lib.load(&handle.path).unwrap();
+        assert_eq!(loaded.handle, handle);
+        assert_eq!(loaded.guide, guide);
+        assert!(!loaded.read_only);
+        assert_eq!(loaded.migrated_from, None);
+        assert_eq!(loaded.backup, None);
 
         guide.title = "Renamed".into();
         guide.items.push(Item::Section(Section {
@@ -1229,7 +1618,7 @@ mod tests {
             title: "More".into(),
         }));
         assert_eq!(lib.save(&guide).unwrap(), handle);
-        assert_eq!(lib.load(&handle.path).unwrap().1, guide);
+        assert_eq!(lib.load(&handle.path).unwrap().guide, guide);
         // The folder name is kept when the title changes.
         assert!(handle.guide_json().is_file());
 
@@ -1237,7 +1626,7 @@ mod tests {
         let fresh = Library::open(lib.root()).unwrap();
         guide.summary = "changed".into();
         assert_eq!(fresh.save(&guide).unwrap(), handle);
-        assert_eq!(fresh.load(&handle.path).unwrap().1.summary, "changed");
+        assert_eq!(fresh.load(&handle.path).unwrap().guide.summary, "changed");
     }
 
     #[test]
@@ -1310,7 +1699,7 @@ mod tests {
             Err(LibraryError::Unverifiable { .. })
         ));
         lib.save_to_force(&handle, &guide).unwrap();
-        assert_eq!(lib.load(&handle.path).unwrap().1, guide);
+        assert_eq!(lib.load(&handle.path).unwrap().guide, guide);
 
         fs::remove_file(handle.guide_json()).unwrap();
         assert!(matches!(
@@ -1318,7 +1707,7 @@ mod tests {
             Err(LibraryError::Unverifiable { .. })
         ));
         lib.save_to_force(&handle, &guide).unwrap();
-        assert_eq!(lib.load(&handle.path).unwrap().1, guide);
+        assert_eq!(lib.load(&handle.path).unwrap().guide, guide);
 
         // Never recreates a missing bundle or writes another guide's id.
         let other = Guide::new("Other", "en");
@@ -1349,52 +1738,123 @@ mod tests {
         assert!(files_in(&new.steps_dir()).is_empty());
     }
 
+    fn temp_dir_name(purpose: &str, minted: SystemTime) -> String {
+        format!(".{purpose}-{}.tmp", Ulid::from_datetime(minted))
+    }
+
+    fn set_mtime(path: &Path, time: SystemTime) {
+        File::open(path).unwrap().set_modified(time).unwrap();
+    }
+
     #[test]
-    fn open_sweeps_stale_temps() {
+    fn recover_sweeps_stale_temps() {
         let (_tmp, lib) = library();
         let guide = Guide::new("Stranded", "en");
         let handle = lib.create(&guide).unwrap();
         let root = lib.root().to_path_buf();
         let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
-        let age = |path: &Path| {
-            File::open(path)
-                .unwrap()
-                .set_modified(two_hours_ago)
-                .unwrap()
-        };
 
-        // Old leftovers.
-        let create = root.join(format!(".create-{}.tmp", Ulid::new()));
+        // Old leftovers: folders are aged by the ULID in the name, files by
+        // mtime.
+        let create = root.join(temp_dir_name("create", two_hours_ago));
         fs::create_dir_all(create.join(STEPS_DIR)).unwrap();
-        age(&create);
         let temp_json = handle.path.join(".guide.json.abc123.tmp");
         fs::write(&temp_json, "partial").unwrap();
-        age(&temp_json);
-        let empty_rename = root.join(format!(".rename-{}.tmp", Ulid::new()));
+        set_mtime(&temp_json, two_hours_ago);
+        let temp_webp = handle
+            .steps_dir()
+            .join(".01J9ZQ3K8V4N6T2W5X7Y8Z9A0D.crop.webp.x1.tmp");
+        fs::write(&temp_webp, "partial").unwrap();
+        set_mtime(&temp_webp, two_hours_ago);
+        let empty_rename = root.join(temp_dir_name("rename", two_hours_ago));
         fs::create_dir(&empty_rename).unwrap();
-        age(&empty_rename);
         // A bundle stranded mid-rename is recovered, not deleted.
-        let stranded = root.join(format!(".rename-{}.tmp", Ulid::new()));
+        let stranded = root.join(temp_dir_name("rename", two_hours_ago));
         fs::rename(&handle.path, &stranded).unwrap();
-        age(&stranded);
-        // Kept: deletes, and anything recent.
-        let doomed = root.join(format!(".delete-{}.tmp", Ulid::new()));
-        fs::create_dir(&doomed).unwrap();
-        age(&doomed);
-        let recent = root.join(format!(".create-{}.tmp", Ulid::new()));
-        fs::create_dir(&recent).unwrap();
 
+        // Kept: deletes, anything recent, and folders that are not ours.
+        let doomed = root.join(temp_dir_name("delete", two_hours_ago));
+        fs::create_dir(&doomed).unwrap();
+        let recent = root.join(temp_dir_name("create", SystemTime::now()));
+        fs::create_dir(&recent).unwrap();
+        let foreign = root.join(".create-notaulid.tmp");
+        fs::create_dir(&foreign).unwrap();
+        set_mtime(&foreign, two_hours_ago);
+
+        // Opening never sweeps.
+        let snapshot = tree(&root);
         let reopened = Library::open(&root).unwrap();
+        assert_eq!(tree(&root), snapshot);
+
+        let report = reopened.recover();
+        let bundle = root.join("Stranded.guidesya");
+        assert_eq!(report.restored, std::slice::from_ref(&bundle));
+        let mut removed = report.removed.clone();
+        removed.sort();
         let mut expected = vec![
-            doomed.file_name().unwrap().to_string_lossy().into_owned(),
-            recent.file_name().unwrap().to_string_lossy().into_owned(),
-            "Stranded.guidesya".to_owned(),
+            create,
+            empty_rename,
+            bundle.join(".guide.json.abc123.tmp"),
+            bundle.join(STEPS_DIR).join(temp_webp.file_name().unwrap()),
         ];
         expected.sort();
-        assert_eq!(files_in(&root), expected);
-        let (recovered, loaded) = reopened.load(root.join("Stranded.guidesya")).unwrap();
-        assert_eq!(loaded, guide);
-        assert_eq!(files_in(&recovered.path), ["assets", "guide.json", "steps"]);
+        assert_eq!(removed, expected);
+
+        let mut names = vec![
+            doomed.file_name().unwrap().to_string_lossy().into_owned(),
+            recent.file_name().unwrap().to_string_lossy().into_owned(),
+            foreign.file_name().unwrap().to_string_lossy().into_owned(),
+            "Stranded.guidesya".to_owned(),
+        ];
+        names.sort();
+        assert_eq!(files_in(&root), names);
+        let recovered = reopened.load(&bundle).unwrap();
+        assert_eq!(recovered.guide, guide);
+        assert_eq!(files_in(&bundle), ["assets", "guide.json", "steps"]);
+        assert!(files_in(&bundle.join(STEPS_DIR)).is_empty());
+
+        // Nothing left to do.
+        assert_eq!(reopened.recover(), Recovery::default());
+    }
+
+    #[test]
+    fn recover_ages_folders_by_name_not_mtime() {
+        let (_tmp, lib) = library();
+        let handle = lib.create(&Guide::new("Moving", "en")).unwrap();
+        let long_ago = SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+        set_mtime(&handle.path, long_ago);
+        // Mid-rename right now: the folder keeps its old mtime, but the name
+        // was just minted, so it must be left alone.
+        let in_flight = lib.root().join(temp_dir_name("rename", SystemTime::now()));
+        fs::rename(&handle.path, &in_flight).unwrap();
+        let staging = lib.root().join(temp_dir_name("create", SystemTime::now()));
+        fs::create_dir(&staging).unwrap();
+        set_mtime(&staging, long_ago);
+
+        assert_eq!(lib.recover(), Recovery::default());
+        assert!(in_flight.is_dir() && staging.is_dir());
+    }
+
+    #[test]
+    fn temp_names_age_by_ulid() {
+        let hour = Duration::from_secs(60 * 60);
+        let old = temp_dir_name("rename", SystemTime::now() - 2 * hour);
+        assert!(temp_name_is_older_than(&old, "rename", hour));
+        assert!(!temp_name_is_older_than(&old, "create", hour));
+        let new = temp_dir_name("rename", SystemTime::now());
+        assert!(!temp_name_is_older_than(&new, "rename", hour));
+        let future = temp_dir_name("create", SystemTime::now() + 2 * hour);
+        assert!(!temp_name_is_older_than(&future, "create", hour));
+        for bad in [
+            ".create-x.tmp",
+            "create-01J9ZQ3K8V4N6T2W5X7Y8Z9A0D.tmp",
+            ".create-.tmp",
+        ] {
+            assert!(
+                !temp_name_is_older_than(bad, "create", Duration::ZERO),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
@@ -1407,7 +1867,7 @@ mod tests {
             lib.save_to(&handle, &guide).unwrap();
         }
         assert_eq!(files_in(&handle.path), ["assets", "guide.json", "steps"]);
-        assert_eq!(lib.load(&handle.path).unwrap().1.summary, "rev 4");
+        assert_eq!(lib.load(&handle.path).unwrap().guide.summary, "rev 4");
 
         #[cfg(unix)]
         {
@@ -1493,8 +1953,8 @@ mod tests {
         let mut edited = guide.clone();
         edited.summary = "edited".into();
         assert_eq!(fresh.save(&edited).unwrap(), handle);
-        assert_eq!(fresh.load(&handle.path).unwrap().1.summary, "edited");
-        assert_eq!(read_summary(&copy).unwrap().summary, "");
+        assert_eq!(fresh.load(&handle.path).unwrap().guide.summary, "edited");
+        assert_eq!(read_summary(&copy, &migrate::CURRENT).unwrap().summary, "");
     }
 
     #[test]
@@ -1505,7 +1965,7 @@ mod tests {
         let copy = duplicate(&handle, lib.root(), "Original copy.guidesya");
 
         let fresh = Library::open(lib.root()).unwrap();
-        let (opened, _) = fresh.load(&copy).unwrap();
+        let opened = fresh.load(&copy).unwrap().handle;
         assert_eq!(opened.path, copy);
         let scanned = fresh.scan().unwrap();
         let original = scanned.iter().find(|(p, _)| *p == handle.path).unwrap();
@@ -1534,7 +1994,7 @@ mod tests {
     }
 
     #[test]
-    fn newer_schema_is_listed_but_not_loaded() {
+    fn newer_schema_loads_read_only() {
         let (_tmp, lib) = library();
         let guide = Guide::new("Future", "en");
         let handle = lib.create(&guide).unwrap();
@@ -1548,11 +2008,31 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].schema_version, SCHEMA_VERSION + 1);
         assert_eq!(listed[0].title, "Future");
-        assert!(matches!(
-            lib.load(&handle.path),
-            Err(LibraryError::NewerSchema { found, .. }) if found == SCHEMA_VERSION + 1
-        ));
-        // Listing and loading never rewrite the file.
+
+        let loaded = lib.load(&handle.path).unwrap();
+        assert!(loaded.read_only);
+        assert_eq!(loaded.migrated_from, None);
+        assert_eq!(loaded.backup, None);
+        assert_eq!(loaded.handle, handle);
+        assert_eq!(loaded.guide.title, "Future");
+        assert_eq!(loaded.guide.schema_version, SCHEMA_VERSION + 1);
+
+        // Saves refuse, whether by the guide in memory or by what is on disk.
+        let mut edited = loaded.guide.clone();
+        edited.summary = "edited".into();
+        for result in [
+            lib.save_to(&handle, &edited),
+            lib.save(&edited).map(drop),
+            lib.save_to_force(&handle, &edited),
+            lib.save_to(&handle, &guide),
+            lib.save(&guide).map(drop),
+        ] {
+            assert!(matches!(
+                result,
+                Err(LibraryError::NewerSchema { found, .. }) if found == SCHEMA_VERSION + 1
+            ));
+        }
+        // Listing, loading and refused saves never rewrite the file.
         assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), text);
         assert_eq!(files_in(&handle.path), ["assets", "guide.json", "steps"]);
 
@@ -1563,10 +2043,587 @@ mod tests {
     }
 
     #[test]
+    fn create_refuses_newer_schema_guide() {
+        let (_tmp, lib) = library();
+        let mut guide = Guide::new("Future", "en");
+        guide.schema_version = SCHEMA_VERSION + 1;
+        let expected = lib.root().join("Future.guidesya").join(GUIDE_FILE);
+        assert!(matches!(
+            lib.create(&guide),
+            Err(LibraryError::NewerSchema { path, .. }) if path == expected
+        ));
+        assert!(files_in(lib.root()).is_empty());
+    }
+
+    /// A library on [`test_schema::SCHEMA`] (version 3).
+    fn v3_library() -> (tempfile::TempDir, Library) {
+        let dir = tempfile::tempdir().unwrap();
+        let lib =
+            Library::open_with_schema(dir.path().join("Library"), test_schema::SCHEMA).unwrap();
+        (dir, lib)
+    }
+
+    /// `guide` in the version 1 format of [`test_schema`].
+    fn v1_json(guide: &Guide, subtitle: &str) -> String {
+        let mut value = serde_json::to_value(guide).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("summary");
+        object.remove("tags");
+        object.insert("subtitle".into(), subtitle.into());
+        object.insert("schemaVersion".into(), 1.into());
+        serde_json::to_string_pretty(&value).unwrap()
+    }
+
+    /// A bundle holding `text` as its guide.json.
+    fn old_bundle(lib: &Library, guide: &Guide, text: &str) -> GuideHandle {
+        let handle = lib.create(guide).unwrap();
+        fs::write(handle.guide_json(), text).unwrap();
+        handle
+    }
+
+    /// Every file under `dir` with its bytes, by relative path.
+    fn tree(dir: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in fs::read_dir(&current).unwrap() {
+                let path = entry.unwrap().path();
+                let relative = path.strip_prefix(dir).unwrap().to_path_buf();
+                if path.is_dir() {
+                    out.push((relative, None));
+                    stack.push(path);
+                } else {
+                    out.push((relative, Some(fs::read(&path).unwrap())));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn load_migrates_older_schema_with_backup() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Legacy", "en");
+        let original = v1_json(&guide, "From v1");
+        let handle = old_bundle(&lib, &guide, &original);
+
+        let loaded = lib.load(&handle.path).unwrap();
+        assert!(!loaded.read_only);
+        assert_eq!(loaded.migrated_from, Some(1));
+        let backup = handle.backup_dir().join("guide.v1.json");
+        assert_eq!(loaded.backup.as_deref(), Some(backup.as_path()));
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+        assert_eq!(loaded.guide.schema_version, 3);
+        assert_eq!(loaded.guide.summary, "From v1");
+        assert!(loaded.guide.tags.is_empty());
+        assert_eq!(loaded.guide.title, "Legacy");
+
+        // guide.json now holds the migrated guide at version 3.
+        let rewritten: Value =
+            serde_json::from_slice(&fs::read(handle.guide_json()).unwrap()).unwrap();
+        assert_eq!(rewritten["schemaVersion"], 3);
+        assert!(rewritten.get("subtitle").is_none());
+        assert_eq!(
+            serde_json::from_value::<Guide>(rewritten).unwrap(),
+            loaded.guide
+        );
+        assert_eq!(
+            files_in(&handle.path),
+            [".backup", "assets", "guide.json", "steps"]
+        );
+
+        // A second load has nothing to do.
+        let again = lib.load(&handle.path).unwrap();
+        assert_eq!(again.migrated_from, None);
+        assert_eq!(again.backup, None);
+        assert_eq!(again.guide, loaded.guide);
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+
+        // The migrated guide saves normally.
+        let mut edited = again.guide;
+        edited.summary = "edited".into();
+        lib.save_to(&handle, &edited).unwrap();
+    }
+
+    #[test]
+    fn repeated_backups_get_unique_names() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Again", "en");
+        let handle = old_bundle(&lib, &guide, "{}");
+        let mut originals = Vec::new();
+        for i in 0..3 {
+            // e.g. a sync service bringing back an old copy each time.
+            let text = v1_json(&guide, &format!("rev {i}"));
+            fs::write(handle.guide_json(), &text).unwrap();
+            let loaded = lib.load(&handle.path).unwrap();
+            assert_eq!(loaded.guide.summary, format!("rev {i}"));
+            originals.push((loaded.backup.unwrap(), text));
+        }
+        let mut v2 = serde_json::to_value(&guide).unwrap();
+        v2["schemaVersion"] = 2.into();
+        v2["keywords"] = "a, b".into();
+        let v2 = v2.to_string();
+        fs::write(handle.guide_json(), &v2).unwrap();
+        let loaded = lib.load(&handle.path).unwrap();
+        assert_eq!(loaded.migrated_from, Some(2));
+        assert_eq!(loaded.guide.tags, ["a", "b"]);
+        originals.push((loaded.backup.unwrap(), v2));
+
+        assert_eq!(
+            files_in(&handle.backup_dir()),
+            [
+                "guide.v1.2.json",
+                "guide.v1.3.json",
+                "guide.v1.json",
+                "guide.v2.json"
+            ]
+        );
+        // Every original is kept byte for byte.
+        for (path, text) in originals {
+            assert_eq!(fs::read_to_string(path).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn failed_migration_or_backup_leaves_file_untouched() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Broken", "en");
+        let mut bad = serde_json::to_value(&guide).unwrap();
+        bad["schemaVersion"] = 2.into();
+        bad["keywords"] = 5.into();
+        let bad = bad.to_string();
+        let handle = old_bundle(&lib, &guide, &bad);
+        assert!(matches!(
+            lib.load(&handle.path),
+            Err(LibraryError::Migration {
+                source: MigrationError::Step { from: 2, .. },
+                ..
+            })
+        ));
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), bad);
+        assert!(!handle.backup_dir().exists());
+
+        // A symlinked .backup is refused before anything is written; the
+        // migrated guide still opens, read-only.
+        #[cfg(unix)]
+        {
+            let elsewhere = handle
+                .path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, handle.backup_dir()).unwrap();
+            let original = v1_json(&guide, "S");
+            fs::write(handle.guide_json(), &original).unwrap();
+            let loaded = lib.load(&handle.path).unwrap();
+            assert!(loaded.read_only);
+            assert_eq!(loaded.guide.summary, "S");
+            assert!(matches!(
+                loaded.migration_error.as_deref(),
+                Some(LibraryError::SymlinkInBundle(_))
+            ));
+            assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), original);
+            assert!(files_in(&elsewhere).is_empty());
+        }
+    }
+
+    /// Makes `dir` read-only; false if writes still succeed (e.g. as root),
+    /// in which case the caller skips the test.
+    #[cfg(unix)]
+    fn make_read_only(dir: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = dir.join("probe");
+        if fs::write(&probe, "x").is_ok() {
+            let _ = fs::remove_file(probe);
+            return false;
+        }
+        true
+    }
+
+    #[cfg(unix)]
+    fn make_writable(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_migration_loads_read_only() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Locked", "en");
+        let original = v1_json(&guide, "From v1");
+        let handle = old_bundle(&lib, &guide, &original);
+
+        // 1. The backup cannot be written: nothing is touched.
+        fs::create_dir(handle.backup_dir()).unwrap();
+        if !make_read_only(&handle.backup_dir()) {
+            make_writable(&handle.backup_dir());
+            eprintln!("skipped: permissions are not enforced for this user");
+            return;
+        }
+        let loaded = lib.load(&handle.path).unwrap();
+        make_writable(&handle.backup_dir());
+        assert!(loaded.read_only);
+        assert_eq!(loaded.migrated_from, Some(1));
+        assert_eq!(loaded.backup, None);
+        assert!(matches!(
+            loaded.migration_error.as_deref(),
+            Some(LibraryError::Io { .. })
+        ));
+        assert_eq!(loaded.guide.summary, "From v1");
+        assert_eq!(loaded.guide.schema_version, 3);
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), original);
+        assert!(files_in(&handle.backup_dir()).is_empty());
+
+        // Saving the read-only copy would lose the un-backed-up original.
+        for result in [
+            lib.save_to(&handle, &loaded.guide),
+            lib.save(&loaded.guide).map(drop),
+        ] {
+            assert!(matches!(
+                result,
+                Err(LibraryError::NotMigrated {
+                    found: 1,
+                    current: 3,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), original);
+
+        // 2. The backup is written but the rewrite fails (read-only bundle
+        // folder): guide.json is untouched, the backup is kept, and later
+        // attempts reuse it instead of piling up copies.
+        assert!(make_read_only(&handle.path));
+        let backup = handle.backup_dir().join("guide.v1.json");
+        for _ in 0..3 {
+            let loaded = lib.load(&handle.path).unwrap();
+            assert!(loaded.read_only);
+            assert!(loaded.migration_error.is_some());
+            assert_eq!(loaded.backup.as_deref(), Some(backup.as_path()));
+        }
+        make_writable(&handle.path);
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), original);
+        assert_eq!(
+            files_in(&handle.path),
+            [".backup", "assets", "guide.json", "steps"]
+        );
+
+        // 3. Once writable, a normal load migrates, reusing the backup.
+        let loaded = lib.load(&handle.path).unwrap();
+        assert!(!loaded.read_only);
+        assert!(loaded.migration_error.is_none());
+        assert_eq!(loaded.migrated_from, Some(1));
+        assert_eq!(loaded.backup.as_deref(), Some(backup.as_path()));
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+        let rewritten: Value =
+            serde_json::from_slice(&fs::read(handle.guide_json()).unwrap()).unwrap();
+        assert_eq!(rewritten["schemaVersion"], 3);
+        lib.save_to(&handle, &loaded.guide).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_force_backs_up_older_original() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Forced", "en");
+        let original = v1_json(&guide, "From v1");
+        let handle = old_bundle(&lib, &guide, &original);
+        fs::create_dir(handle.backup_dir()).unwrap();
+        if !make_read_only(&handle.backup_dir()) {
+            make_writable(&handle.backup_dir());
+            eprintln!("skipped: permissions are not enforced for this user");
+            return;
+        }
+        let loaded = lib.load(&handle.path).unwrap();
+        assert!(loaded.read_only && loaded.backup.is_none());
+
+        // No backup possible: "Save anyway" fails and keeps the original.
+        assert!(lib.save_to_force(&handle, &loaded.guide).is_err());
+        make_writable(&handle.backup_dir());
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), original);
+
+        // With a backup, it goes through and the original is kept.
+        lib.save_to_force(&handle, &loaded.guide).unwrap();
+        assert_eq!(
+            fs::read_to_string(handle.backup_dir().join("guide.v1.json")).unwrap(),
+            original
+        );
+        assert_eq!(lib.load(&handle.path).unwrap().guide, loaded.guide);
+        // A current-schema file needs no backup.
+        lib.save_to_force(&handle, &loaded.guide).unwrap();
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+    }
+
+    #[test]
+    fn save_to_force_backs_up_newer_original() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Overwritten", "en");
+        let handle = lib.create(&guide).unwrap();
+        let mut value = serde_json::to_value(&guide).unwrap();
+        value["schemaVersion"] = (SCHEMA_VERSION + 1).into();
+        value["futureData"] = "keep me".into();
+        let newer = value.to_string();
+        fs::write(handle.guide_json(), &newer).unwrap();
+
+        lib.save_to_force(&handle, &guide).unwrap();
+        let backup = handle
+            .backup_dir()
+            .join(format!("guide.v{}.json", SCHEMA_VERSION + 1));
+        assert_eq!(fs::read_to_string(backup).unwrap(), newer);
+        assert_eq!(lib.load(&handle.path).unwrap().guide, guide);
+    }
+
+    #[test]
+    fn save_to_force_backs_up_despite_invalid_id() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Bad id", "en");
+        let mut value: Value = serde_json::from_str(&v1_json(&guide, "S")).unwrap();
+        value["id"] = "not-a-ulid".into();
+        let original = value.to_string();
+        let handle = old_bundle(&lib, &guide, &original);
+        assert!(matches!(
+            lib.save_to(&handle, &guide),
+            Err(LibraryError::Unverifiable { .. })
+        ));
+
+        let mut current = guide.clone();
+        current.schema_version = 3;
+        lib.save_to_force(&handle, &current).unwrap();
+        assert_eq!(
+            fs::read_to_string(handle.backup_dir().join("guide.v1.json")).unwrap(),
+            original
+        );
+        assert_eq!(lib.load(&handle.path).unwrap().guide, current);
+    }
+
+    #[test]
+    fn recovered_undecodable_guide_is_named_recovered() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Reshaped", "en");
+        let handle = lib.create(&guide).unwrap();
+        let mut value = serde_json::to_value(&guide).unwrap();
+        value["schemaVersion"] = (SCHEMA_VERSION + 1).into();
+        value["title"] = serde_json::json!({ "en": "Reshaped" });
+        fs::write(handle.guide_json(), value.to_string()).unwrap();
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        let stranded = lib.root().join(temp_dir_name("rename", two_hours_ago));
+        fs::rename(&handle.path, &stranded).unwrap();
+
+        let report = lib.recover();
+        let restored = lib.root().join("Recovered.guidesya");
+        assert_eq!(report.restored, std::slice::from_ref(&restored));
+        assert_eq!(lib.list().unwrap()[0].title, "Recovered");
+    }
+
+    #[test]
+    fn identical_original_reuses_backup() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Same", "en");
+        let original = v1_json(&guide, "S");
+        let handle = old_bundle(&lib, &guide, &original);
+        let first = lib.load(&handle.path).unwrap().backup.unwrap();
+        // A sync service brings back the same old file.
+        fs::write(handle.guide_json(), &original).unwrap();
+        let second = lib.load(&handle.path).unwrap();
+        assert_eq!(second.migrated_from, Some(1));
+        assert_eq!(second.backup, Some(first));
+        assert_eq!(files_in(&handle.backup_dir()), ["guide.v1.json"]);
+    }
+
+    #[test]
+    fn read_migrates_in_memory_only() {
+        let (_tmp, lib) = v3_library();
+        let old = Guide::new("Old", "en");
+        let old_handle = old_bundle(&lib, &old, &v1_json(&old, "Sub"));
+        let mut current = Guide::new("Current", "en");
+        current.schema_version = 3;
+        let current_handle = lib.create(&current).unwrap();
+        let future = Guide::new("Future", "en");
+        let mut value = serde_json::to_value(&future).unwrap();
+        value["schemaVersion"] = 9.into();
+        let future_handle = old_bundle(&lib, &future, &value.to_string());
+        let before = tree(lib.root());
+
+        let reader = Library::open_with_schema(lib.root(), test_schema::SCHEMA).unwrap();
+        let read = reader.read(&old_handle.path).unwrap();
+        assert!(read.read_only);
+        assert_eq!(read.migrated_from, Some(1));
+        assert_eq!(read.backup, None);
+        assert!(read.migration_error.is_none());
+        assert_eq!(read.guide.summary, "Sub");
+        assert_eq!(read.guide.schema_version, 3);
+
+        let read = reader.read(&current_handle.path).unwrap();
+        assert!(!read.read_only);
+        assert_eq!(read.migrated_from, None);
+        assert_eq!(read.guide, current);
+
+        assert!(reader.read(&future_handle.path).unwrap().read_only);
+        assert_eq!(tree(lib.root()), before);
+    }
+
+    #[test]
+    fn undecodable_newer_schema_is_listed_as_placeholder() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Reshaped", "en");
+        let handle = lib.create(&guide).unwrap();
+        let mut value = serde_json::to_value(&guide).unwrap();
+        value["schemaVersion"] = (SCHEMA_VERSION + 1).into();
+        value["title"] = serde_json::json!({ "en": "Reshaped" });
+        fs::write(handle.guide_json(), value.to_string()).unwrap();
+
+        for result in [lib.load(&handle.path), lib.read(&handle.path)] {
+            assert!(matches!(
+                result,
+                Err(LibraryError::NewerSchema { found, .. }) if found == SCHEMA_VERSION + 1
+            ));
+        }
+        let listed = lib.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        let entry = &listed[0];
+        assert_eq!(entry.id, guide.id);
+        assert_eq!(entry.title, "Reshaped");
+        assert_eq!(entry.schema_version, SCHEMA_VERSION + 1);
+        assert_eq!(entry.step_count, 0);
+        assert_eq!(entry.updated_at, guide.updated_at);
+        assert_eq!(lib.find(guide.id).unwrap(), Some(handle.clone()));
+
+        // Without a readable id there is nothing to list; scan reports it.
+        value.as_object_mut().unwrap().remove("id");
+        fs::write(handle.guide_json(), value.to_string()).unwrap();
+        assert!(lib.list().unwrap().is_empty());
+        assert!(matches!(
+            &lib.scan().unwrap()[0].1,
+            Err(LibraryError::NewerSchema { .. })
+        ));
+
+        // An older or current guide that fails to decode is still corrupt.
+        fs::write(
+            handle.guide_json(),
+            format!(r#"{{"schemaVersion": {SCHEMA_VERSION}, "id": 5}}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            lib.load(&handle.path),
+            Err(LibraryError::Json { .. })
+        ));
+    }
+
+    #[test]
+    fn change_during_migration_is_not_overwritten() {
+        let (_tmp, lib) = v3_library();
+        let guide = Guide::new("Synced", "en");
+        let original = v1_json(&guide, "Old");
+        let handle = old_bundle(&lib, &guide, &original);
+        let synced = v1_json(&guide, "Arrived during load");
+        let incoming = synced.clone();
+        BEFORE_REWRITE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |path: &Path| {
+                fs::write(path, &incoming).unwrap();
+            }));
+        });
+        let loaded = lib.load(&handle.path).unwrap();
+        BEFORE_REWRITE.with(|hook| hook.borrow_mut().take());
+
+        assert!(loaded.read_only);
+        assert!(matches!(
+            loaded.migration_error.as_deref(),
+            Some(LibraryError::ChangedOnDisk(_))
+        ));
+        assert_eq!(fs::read_to_string(handle.guide_json()).unwrap(), synced);
+        assert_eq!(
+            fs::read_to_string(loaded.backup.unwrap()).unwrap(),
+            original
+        );
+        // The next load migrates the new content.
+        let again = lib.load(&handle.path).unwrap();
+        assert!(!again.read_only);
+        assert_eq!(again.guide.summary, "Arrived during load");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recover_never_follows_symlinks() {
+        use std::os::unix::fs::symlink;
+        let (tmp, lib) = library();
+        let handle = lib.create(&Guide::new("Linked", "en")).unwrap();
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        let outside = |name: &str, file: &str| {
+            let dir = tmp.path().join(name);
+            fs::create_dir(&dir).unwrap();
+            let path = dir.join(file);
+            fs::write(&path, "user data").unwrap();
+            set_mtime(&path, two_hours_ago);
+            (dir, path)
+        };
+        let (steps_target, photo) = outside("out-steps", ".photo.webp.abc.tmp");
+        let (backup_target, notes) = outside("out-backup", ".notes.tmp");
+        let (bundle_target, json_temp) = outside("out-bundle", ".guide.json.xyz.tmp");
+
+        fs::remove_dir(handle.steps_dir()).unwrap();
+        symlink(&steps_target, handle.steps_dir()).unwrap();
+        symlink(&backup_target, handle.backup_dir()).unwrap();
+        symlink(&bundle_target, lib.root().join("Elsewhere.guidesya")).unwrap();
+
+        let report = lib.recover();
+        assert_eq!(report, Recovery::default());
+        for path in [photo, notes, json_temp] {
+            assert!(path.is_file(), "{path:?} was deleted");
+        }
+    }
+
+    #[test]
+    fn list_scan_find_never_write() {
+        let (_tmp, lib) = v3_library();
+        let old = Guide::new("Old", "en");
+        let old_handle = old_bundle(&lib, &old, &v1_json(&old, "Sub"));
+        let future = Guide::new("Future", "en");
+        let mut value = serde_json::to_value(&future).unwrap();
+        value["schemaVersion"] = 9.into();
+        old_bundle(&lib, &future, &value.to_string());
+        let mut current = Guide::new("Current", "en");
+        current.schema_version = 3;
+        lib.create(&current).unwrap();
+        fs::create_dir(lib.root().join("Broken.guidesya")).unwrap();
+        // A stale leftover, which only recover() may remove.
+        let leftover = lib.root().join(temp_dir_name(
+            "create",
+            SystemTime::now() - Duration::from_secs(2 * 60 * 60),
+        ));
+        fs::create_dir(&leftover).unwrap();
+        let before = tree(lib.root());
+
+        let fresh = Library::open_with_schema(lib.root(), test_schema::SCHEMA).unwrap();
+        let listed = fresh.list().unwrap();
+        assert_eq!(listed.len(), 3);
+        let summary = listed.iter().find(|s| s.id == old.id).unwrap();
+        // Migrated in memory only.
+        assert_eq!(summary.schema_version, 1);
+        assert_eq!(summary.summary, "Sub");
+        let versions: Vec<_> = listed.iter().map(|s| s.schema_version).collect();
+        assert!(versions.contains(&9) && versions.contains(&3));
+        assert_eq!(fresh.scan().unwrap().len(), 4);
+        for id in [old.id, future.id, current.id] {
+            assert!(fresh.find(id).unwrap().is_some());
+        }
+        assert_eq!(tree(lib.root()), before);
+        assert!(!old_handle.backup_dir().exists());
+    }
+
+    #[test]
     fn missing_schema_version_is_an_error() {
         let (_tmp, lib) = library();
         let handle = lib.create(&Guide::new("Bad", "en")).unwrap();
-        let mut value = serde_json::to_value(lib.load(&handle.path).unwrap().1).unwrap();
+        let mut value = serde_json::to_value(lib.load(&handle.path).unwrap().guide).unwrap();
         value.as_object_mut().unwrap().remove("schemaVersion");
         fs::write(handle.guide_json(), value.to_string()).unwrap();
         assert!(matches!(
@@ -1724,6 +2781,8 @@ mod tests {
         assert_eq!(sanitize_title("CONOUT$.log"), "CONOUT$_.log");
         assert_eq!(sanitize_title("COM\u{b9}"), "COM\u{b9}_");
         assert_eq!(sanitize_title("lpt\u{b3}"), "lpt\u{b3}_");
+        assert_eq!(sanitize_title("COM0"), "COM0_");
+        assert_eq!(sanitize_title("lpt0.txt"), "lpt0_.txt");
     }
 
     #[test]
