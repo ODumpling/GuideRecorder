@@ -2214,6 +2214,7 @@ version = "0.1.0"
 dependencies = [
  "guidesya-capture",
  "guidesya-core",
+ "image",
  "serde",
  "serde_json",
  "tauri",
