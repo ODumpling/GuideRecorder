@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0B",
+  "title": "Export a report",
+  "summary": "How to export the monthly report as PDF.",
+  "tags": [
+    "reports",
+    "pdf"
+  ],
+  "intro": "You will export the **monthly** report.",
+  "prerequisites": "- An account\n- Access to *Reports*",
+  "audience": "expert",
+  "language": "en",
+  "createdAt": "2026-10-14T12:00:00Z",
+  "updatedAt": "2026-10-14T12:30:00Z",
+  "recording": {
+    "appVersion": "0.1.0",
+    "osVersion": "macOS 26.1",
+    "apps": [
+      {
+        "name": "Numbers",
+        "bundleId": "com.apple.iWork.Numbers",
+        "version": "14.2"
+      }
+    ],
+    "displays": [
+      {
+        "id": 1,
+        "name": "Built-in",
+        "width": 3024,
+        "height": 1964,
+        "scale": 2.0
+      }
+    ]
+  },
+  "items": [
+    {
+      "type": "section",
+      "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0C",
+      "title": "Open the report"
+    },
+    {
+      "type": "step",
+      "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0D",
+      "title": "Click **Export**",
+      "description": "",
+      "kind": "doubleClick",
+      "point": {
+        "x": 512.5,
+        "y": 300.0
+      },
+      "element": {
+        "role": "AXButton",
+        "label": "Export",
+        "app": "Numbers",
+        "bundleId": "com.apple.iWork.Numbers",
+        "window": "Report.numbers"
+      },
+      "keystrokes": "⌘E",
+      "image": {
+        "full": "steps/01J9ZQ3K8V4N6T2W5X7Y8Z9A0D.webp",
+        "crop": "steps/01J9ZQ3K8V4N6T2W5X7Y8Z9A0D.crop.webp",
+        "after": "steps/01J9ZQ3K8V4N6T2W5X7Y8Z9A0D.after.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0E",
+          "type": "arrow",
+          "geometry": {
+            "from": {
+              "x": 10.0,
+              "y": 20.0
+            },
+            "to": {
+              "x": 30.0,
+              "y": 40.0
+            }
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 4.0
+          }
+        },
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0F",
+          "type": "box",
+          "geometry": {
+            "x": 1.0,
+            "y": 2.0,
+            "width": 3.0,
+            "height": 4.0
+          },
+          "style": {}
+        },
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0G",
+          "type": "highlight",
+          "geometry": {
+            "x": 1.0,
+            "y": 2.0,
+            "width": 3.0,
+            "height": 4.0
+          },
+          "style": {
+            "fill": "#ffcc00",
+            "opacity": 0.4
+          }
+        },
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0H",
+          "type": "callout",
+          "geometry": {
+            "x": 5.0,
+            "y": 6.0,
+            "width": 100.0,
+            "height": 40.0,
+            "anchor": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "text": "Here"
+          },
+          "style": {
+            "fontSize": 14.0
+          }
+        },
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0J",
+          "type": "blur",
+          "geometry": {
+            "x": 0.0,
+            "y": 0.0,
+            "width": 50.0,
+            "height": 10.0
+          },
+          "style": {
+            "blurMode": "pixelate",
+            "blurAmount": 8.0
+          }
+        },
+        {
+          "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0K",
+          "type": "crop",
+          "geometry": {
+            "x": 0.0,
+            "y": 0.0,
+            "width": 800.0,
+            "height": 600.0
+          },
+          "style": {}
+        }
+      ],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-haiku-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0M",
+      "title": "Add a cover image",
+      "description": "",
+      "kind": "manual",
+      "image": {
+        "full": "assets/cover.png",
+        "show": "crop"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "template"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0P",
+      "title": "Drag the chart onto the page",
+      "description": "",
+      "kind": "drag",
+      "point": {
+        "x": 200.0,
+        "y": 150.0
+      },
+      "endPoint": {
+        "x": 640.0,
+        "y": 420.0
+      },
+      "element": {
+        "role": "AXImage",
+        "label": "Chart",
+        "app": "Numbers"
+      },
+      "image": {
+        "full": "steps/01J9ZQ3K8V4N6T2W5X7Y8Z9A0P.webp",
+        "crop": "steps/01J9ZQ3K8V4N6T2W5X7Y8Z9A0P.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "edited"
+      }
+    },
+    {
+      "type": "note",
+      "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0N",
+      "kind": "warning",
+      "body": "Do not close the window."
+    }
+  ]
+}
