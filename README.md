@@ -24,3 +24,7 @@ cd app && pnpm install
 pnpm tauri dev          # run the app (Vite on :1430)
 cargo test --workspace  # from repo root
 ```
+
+macOS permissions (Screen Recording, Accessibility) only survive rebuilds when
+builds are signed with a stable identity. Run `scripts/macos-signing.sh create`
+once; see [docs/signing.md](docs/signing.md).
