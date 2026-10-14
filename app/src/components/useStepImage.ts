@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { errorMessage, tauriApi } from "@/lib/ipc";
-import type { ImageVariant } from "@/lib/types";
 
 type ImageState = { url: string | null; error: string | null };
 
-/** Loads a step image as a blob URL, revoked when it changes or unmounts. */
-export function useStepImage(guideId: string, stepId: string, variant: ImageVariant): ImageState {
+/**
+ * Loads a step image (a bundle-relative path from the editor's copy of the
+ * guide) as a blob URL, revoked when it changes or unmounts.
+ */
+export function useStepImage(guideId: string, path: string): ImageState {
   const [state, setState] = useState<ImageState>({ url: null, error: null });
 
   useEffect(() => {
@@ -13,7 +15,7 @@ export function useStepImage(guideId: string, stepId: string, variant: ImageVari
     let cancelled = false;
     setState({ url: null, error: null });
     tauriApi
-      .stepImage(guideId, stepId, variant)
+      .stepImage(guideId, path)
       .then((bytes) => {
         if (cancelled) return;
         url = URL.createObjectURL(new Blob([bytes], { type: "image/webp" }));
@@ -26,7 +28,7 @@ export function useStepImage(guideId: string, stepId: string, variant: ImageVari
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [guideId, stepId, variant]);
+  }, [guideId, path]);
 
   return state;
 }

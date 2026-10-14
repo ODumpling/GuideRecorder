@@ -1,16 +1,23 @@
-//! The editor's library session: opening the library, listing, opening and
-//! saving guides, and reading step images. Blocking file IO only; the Tauri
-//! commands in `commands.rs` run it on the blocking pool.
+//! The editor's library session: opening the library, listing, opening,
+//! saving and closing guides, and reading and adding step images. Blocking
+//! file IO only; the Tauri commands in `commands.rs` run it on the blocking
+//! pool.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use guidesya_core::index::{self, Index, IndexedGuide, ListFilter};
-use guidesya_core::library::{GuideHandle, Library, LibraryError};
-use guidesya_core::model::{Guide, Item};
+use guidesya_core::library::{
+    GuideHandle, Library, LibraryError, PixelBuffer, StepImageVariant, MAX_WEBP_DIMENSION,
+    STEPS_DIR,
+};
+use guidesya_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
 use guidesya_core::Ulid;
-use serde::{Deserialize, Serialize};
+use image::{ImageFormat, ImageReader, Limits};
+use serde::Serialize;
 
 /// Environment variable that overrides the library folder.
 pub const LIBRARY_ENV: &str = "GUIDESYA_LIBRARY";
@@ -117,17 +124,25 @@ pub struct OpenedGuide {
     pub migration_error: Option<String>,
 }
 
-/// Which step image `step_image` returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ImageVariant {
-    Full,
-    Crop,
-    After,
-}
+/// Largest PNG `add_image_step` accepts. A 40 MP screenshot is far
+/// smaller; this only bounds what the decoder is given.
+pub const MAX_PNG_BYTES: usize = 256 * 1024 * 1024;
+
+/// Image files `read_image_file` accepts, by extension. The webview decodes
+/// them; Rust only stores WebP.
+pub const IMAGE_FILE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "tif", "tiff", "bmp",
+];
+
+/// Largest image file `read_image_file` reads.
+pub const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Most pixels in a manual step's image (the editor scales larger ones
+/// down to fit): 40 MP is 160 MB as RGBA.
+pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 
 /// A guide opened for editing: the bundle it came from and the latest copy
-/// (as opened or last saved), for image lookups.
+/// (as opened or last saved).
 #[derive(Debug)]
 struct OpenGuide {
     handle: GuideHandle,
@@ -267,54 +282,383 @@ impl Session {
         Ok(())
     }
 
-    /// The raw WebP bytes of a step image of an opened guide.
-    pub fn step_image(
-        &self,
-        guide_id: &str,
-        step_id: &str,
-        variant: ImageVariant,
-    ) -> Result<Vec<u8>> {
+    /// The bundle of an opened guide that may be written.
+    fn writable_handle(&self, id: Ulid) -> Result<GuideHandle> {
+        let open = self.open.lock().unwrap();
+        let entry = open
+            .get(&id)
+            .ok_or_else(|| AppError::new(ErrorKind::NotOpen, format!("guide {id} is not open")))?;
+        if entry.read_only {
+            return Err(AppError::new(
+                ErrorKind::ReadOnly,
+                format!("guide {id} is read-only"),
+            ));
+        }
+        Ok(entry.handle.clone())
+    }
+
+    /// The raw WebP bytes of an image in an opened guide's bundle, by its
+    /// bundle-relative path (`StepImage::full` and friends).
+    ///
+    /// The path comes from the editor's copy of the guide, not the saved
+    /// one, so images of steps that are not saved yet (inserted, split,
+    /// restored by undo) load too. Only WebP files under `steps/` or
+    /// `assets/` are served, through [`GuideHandle::resolve`], which keeps
+    /// the path inside the bundle.
+    pub fn step_image(&self, guide_id: &str, path: &str) -> Result<Vec<u8>> {
         let guide_id = parse_id(guide_id)?;
-        let step_id = parse_id(step_id)?;
-        let (handle, relative) = {
+        let allowed =
+            (path.starts_with("steps/") || path.starts_with("assets/")) && path.ends_with(".webp");
+        if !allowed {
+            return Err(AppError::new(
+                ErrorKind::Invalid,
+                format!("not a step image path: {path:?}"),
+            ));
+        }
+        let handle = {
             let open = self.open.lock().unwrap();
             let entry = open.get(&guide_id).ok_or_else(|| {
                 AppError::new(ErrorKind::NotOpen, format!("guide {guide_id} is not open"))
             })?;
-            let step = entry
-                .guide
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Step(step) if step.id == step_id => Some(step),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    AppError::new(ErrorKind::NotFound, format!("step {step_id} not found"))
-                })?;
-            let relative = match variant {
-                ImageVariant::Full => Some(step.image.full.clone()),
-                ImageVariant::Crop => step.image.crop.clone(),
-                ImageVariant::After => step.image.after.clone(),
-            }
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorKind::NotFound,
-                    format!("step {step_id} has no {variant:?} image"),
-                )
-            })?;
-            (entry.handle.clone(), relative)
+            entry.handle.clone()
         };
-        let path = handle.resolve(&relative)?;
-        std::fs::read(&path).map_err(|e| {
-            let kind = if e.kind() == std::io::ErrorKind::NotFound {
-                ErrorKind::NotFound
-            } else {
-                ErrorKind::Io
-            };
-            AppError::new(kind, format!("{}: {e}", path.display()))
+        let path = handle.resolve(path)?;
+        std::fs::read(&path).map_err(|e| file_error(&path, e))
+    }
+
+    /// Stores a PNG (made by the webview from whatever file the user chose)
+    /// as the full image of a new manual step and returns the step. The
+    /// guide itself is not changed: the editor inserts the step as an
+    /// undoable edit, and saves it with the guide.
+    pub fn add_image_step(&self, guide_id: &str, png: &[u8]) -> Result<Step> {
+        let guide_id = parse_id(guide_id)?;
+        let image = decode_png(png)?;
+        let (width, height) = image.dimensions();
+        let rgba = image.as_raw();
+        let lock = self.guide_lock(guide_id);
+        let _guard = lock.lock().unwrap();
+        let handle = self.writable_handle(guide_id)?;
+        let id = Ulid::new();
+        let full = handle.write_step_image(
+            id,
+            StepImageVariant::Full,
+            &PixelBuffer::rgba(width, height, rgba),
+        )?;
+        Ok(Step {
+            id,
+            title: String::new(),
+            description: String::new(),
+            kind: StepKind::Manual,
+            point: None,
+            end_point: None,
+            element: None,
+            keystrokes: None,
+            image: StepImage {
+                full,
+                crop: None,
+                crop_rect: None,
+                after: None,
+                show: ImageShow::Full,
+            },
+            annotations: Vec::new(),
+            ai_state: AiState::default(),
         })
     }
+
+    /// Forgets an opened guide and deletes the step images that its saved
+    /// `guide.json` no longer uses. Editing keeps every image (undo may
+    /// bring a deleted step back); closing is the point where they can go.
+    /// The editor saves (or discards) its changes first. Returns the
+    /// removed files' bundle-relative paths.
+    pub fn close_guide(&self, guide_id: &str) -> Result<Vec<String>> {
+        let guide_id = parse_id(guide_id)?;
+        let lock = self.guide_lock(guide_id);
+        let _guard = lock.lock().unwrap();
+        let Some(entry) = self.open.lock().unwrap().remove(&guide_id) else {
+            return Ok(Vec::new());
+        };
+        if entry.read_only {
+            return Ok(Vec::new());
+        }
+        // The file on disk decides, not the cached copy.
+        let saved = self.library.read(&entry.handle.path)?;
+        if saved.read_only || saved.guide.id != guide_id {
+            return Ok(Vec::new());
+        }
+        sweep_step_images(&entry.handle)
+    }
+}
+
+/// Decodes a step image PNG. The size in its header is checked before any
+/// pixels are decoded (at most [`MAX_WEBP_DIMENSION`] per side and
+/// [`MAX_IMAGE_PIXELS`]), and the decoder runs with matching limits.
+fn decode_png(png: &[u8]) -> Result<image::RgbaImage> {
+    let invalid = |e: image::ImageError| {
+        AppError::new(ErrorKind::Invalid, format!("not a readable PNG image: {e}"))
+    };
+    if png.len() > MAX_PNG_BYTES {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("the image is too large ({} MB)", png.len() / 1024 / 1024),
+        ));
+    }
+    let reader = || ImageReader::with_format(Cursor::new(png), ImageFormat::Png);
+    let (width, height) = reader().into_dimensions().map_err(invalid)?;
+    let valid = 1..=MAX_WEBP_DIMENSION;
+    if !valid.contains(&width)
+        || !valid.contains(&height)
+        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+    {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!(
+                "image size {width}×{height} is not supported (at most {MAX_WEBP_DIMENSION} \
+                 per side and {} MP)",
+                MAX_IMAGE_PIXELS / 1_000_000
+            ),
+        ));
+    }
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_WEBP_DIMENSION);
+    limits.max_image_height = Some(MAX_WEBP_DIMENSION);
+    // 16-bit RGBA at the pixel limit, plus the 8-bit copy.
+    limits.max_alloc = Some(MAX_IMAGE_PIXELS * 12);
+    let mut reader = reader();
+    reader.limits(limits);
+    Ok(reader.decode().map_err(invalid)?.into_rgba8())
+}
+
+/// Deletes files in `steps/` named like step images (`<ulid>.webp`,
+/// `<ulid>.crop.webp`, `<ulid>.after.webp`) that the bundle's `guide.json`
+/// and its `.backup/*.json` copies do not mention. Other files are left
+/// alone, and so is everything when `steps/` is not a real folder inside
+/// the bundle (a symlinked one could point at another guide).
+fn sweep_step_images(handle: &GuideHandle) -> Result<Vec<String>> {
+    let Some(used) = referenced_step_images(handle)? else {
+        return Ok(Vec::new());
+    };
+    // `resolve` refuses a symlinked `steps`; the check below refuses a
+    // `steps` that is a file or that was swapped since.
+    let dir = match handle.resolve(STEPS_DIR) {
+        Ok(dir) => dir,
+        Err(LibraryError::SymlinkInBundle(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(file_error(&dir, e)),
+    }
+    let entries = std::fs::read_dir(&dir).map_err(|e| file_error(&dir, e))?;
+    let mut removed = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| file_error(&dir, e))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(key) = step_image_key(&name) else {
+            continue;
+        };
+        if used.contains(&key) {
+            continue;
+        }
+        let path = entry.path();
+        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed.push(format!("{STEPS_DIR}/{name}")),
+            Err(e) => eprintln!("guidesya: cannot remove {}: {e}", path.display()),
+        }
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+/// Which step image a file is: its step id and variant (0 full, 1 crop,
+/// 2 after). Case-insensitive, as macOS file names are.
+type StepImageKey = (Ulid, u8);
+
+/// The key of a step image file name, `<ulid>[.crop|.after].webp` in any
+/// case; `None` for any other name.
+fn step_image_key(name: &str) -> Option<StepImageKey> {
+    let lower = name.to_ascii_lowercase();
+    let stem = lower.strip_suffix(".webp")?;
+    let (id, variant) = if let Some(id) = stem.strip_suffix(".crop") {
+        (id, 1)
+    } else if let Some(id) = stem.strip_suffix(".after") {
+        (id, 2)
+    } else {
+        (stem, 0)
+    };
+    if id.len() != 26 {
+        return None;
+    }
+    Ulid::from_string(&id.to_ascii_uppercase())
+        .ok()
+        .map(|id| (id, variant))
+}
+
+/// Every step image mentioned anywhere in `guide.json` or a JSON file in
+/// `.backup/`, in any spelling of its path (`steps//X.webp`, `./steps/x.webp`
+/// and so on all count): any string whose last path component is a step
+/// image name. `None` when a file can't be read, so nothing is deleted.
+fn referenced_step_images(handle: &GuideHandle) -> Result<Option<HashSet<StepImageKey>>> {
+    let mut files = vec![handle.guide_json()];
+    let backups = handle.backup_dir();
+    match std::fs::symlink_metadata(&backups) {
+        Ok(meta) if meta.is_dir() => {
+            for entry in std::fs::read_dir(&backups).map_err(|e| file_error(&backups, e))? {
+                let path = entry.map_err(|e| file_error(&backups, e))?.path();
+                if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(file_error(&backups, e)),
+    }
+    let mut used = HashSet::new();
+    for path in files {
+        let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+        let json = regular
+            .then(|| std::fs::read(&path).ok())
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let Some(json) = json else {
+            eprintln!(
+                "guidesya: not sweeping images: cannot read {}",
+                path.display()
+            );
+            return Ok(None);
+        };
+        collect_step_images(&json, &mut used);
+    }
+    Ok(Some(used))
+}
+
+fn collect_step_images(value: &serde_json::Value, used: &mut HashSet<StepImageKey>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(key) = s.rsplit(['/', '\\']).next().and_then(step_image_key) {
+                used.insert(key);
+            }
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_step_images(item, used)),
+        serde_json::Value::Object(map) => map
+            .values()
+            .for_each(|item| collect_step_images(item, used)),
+        _ => {}
+    }
+}
+
+/// Files the user dropped on the window. `read_image_file` reads only
+/// these, each once, for a short while after the drop.
+#[derive(Default)]
+pub struct DroppedFiles {
+    paths: Mutex<Vec<(PathBuf, Instant)>>,
+}
+
+impl DroppedFiles {
+    /// How long a dropped path stays readable.
+    pub const TTL: Duration = Duration::from_secs(120);
+
+    pub fn record(&self, paths: &[PathBuf]) {
+        self.record_at(paths, Instant::now());
+    }
+
+    fn record_at(&self, paths: &[PathBuf], now: Instant) {
+        let mut list = self.paths.lock().unwrap();
+        list.retain(|(_, at)| now.duration_since(*at) < Self::TTL);
+        list.extend(paths.iter().map(|path| (path.clone(), now)));
+    }
+
+    /// Removes `path` from the list; true if it was there and fresh.
+    fn take_at(&self, path: &Path, now: Instant) -> bool {
+        let mut list = self.paths.lock().unwrap();
+        list.retain(|(_, at)| now.duration_since(*at) < Self::TTL);
+        match list.iter().position(|(dropped, _)| dropped == path) {
+            Some(i) => {
+                list.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Reads a dropped image file (see [`read_image_file`]); any other path
+    /// is refused.
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        if !self.take_at(path, Instant::now()) {
+            return Err(AppError::new(
+                ErrorKind::Invalid,
+                format!("{} was not dropped on the window", path.display()),
+            ));
+        }
+        read_image_file(path)
+    }
+}
+
+/// Reads an image file, for the webview to decode: known image extensions
+/// and regular files up to [`MAX_IMAGE_FILE_BYTES`] only. The size is
+/// checked on the open file and the read is capped, so a file that grows
+/// meanwhile is refused too.
+fn read_image_file(path: &Path) -> Result<Vec<u8>> {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !extension.is_some_and(|e| IMAGE_FILE_EXTENSIONS.contains(&e.as_str())) {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("{} is not an image file", path.display()),
+        ));
+    }
+    let file = std::fs::File::open(path).map_err(|e| file_error(path, e))?;
+    let meta = file.metadata().map_err(|e| file_error(path, e))?;
+    if !meta.is_file() {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("{} is not a file", path.display()),
+        ));
+    }
+    let too_large = || {
+        AppError::new(
+            ErrorKind::Invalid,
+            format!(
+                "{} is too large (over {} MB)",
+                path.display(),
+                MAX_IMAGE_FILE_BYTES / 1024 / 1024
+            ),
+        )
+    };
+    if meta.len() > MAX_IMAGE_FILE_BYTES {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_IMAGE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| file_error(path, e))?;
+    if bytes.len() as u64 > MAX_IMAGE_FILE_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
+fn file_error(path: &Path, e: std::io::Error) -> AppError {
+    let kind = if e.kind() == std::io::ErrorKind::NotFound {
+        ErrorKind::NotFound
+    } else {
+        ErrorKind::Io
+    };
+    AppError::new(kind, format!("{}: {e}", path.display()))
 }
 
 fn parse_id(id: &str) -> Result<Ulid> {
@@ -521,9 +865,7 @@ mod tests {
         let id = fixture_id(&root);
         let guide = session.open_guide(&id).unwrap().guide;
         let step = guide.steps().next().unwrap();
-        let bytes = session
-            .step_image(&id, &step.id.to_string(), ImageVariant::Full)
-            .unwrap();
+        let bytes = session.step_image(&id, &step.image.full).unwrap();
         assert_eq!(&bytes[..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WEBP");
         assert_eq!(
@@ -531,16 +873,412 @@ mod tests {
             fs::read(root.join(FIXTURE).join(&step.image.full)).unwrap()
         );
 
-        let missing = session.step_image(&id, &Ulid::new().to_string(), ImageVariant::Full);
+        let missing = session.step_image(&id, &format!("steps/{}.webp", Ulid::new()));
         assert_eq!(missing.unwrap_err().kind, ErrorKind::NotFound);
-        let bad = session.step_image(&id, "nope", ImageVariant::Crop);
-        assert_eq!(bad.unwrap_err().kind, ErrorKind::Invalid);
-        let unopened = session.step_image(
-            &Ulid::new().to_string(),
-            &step.id.to_string(),
-            ImageVariant::Full,
-        );
+        for bad in [
+            "guide.json",
+            "steps/../guide.json",
+            "steps/../../x.webp",
+            "/etc/x.webp",
+            "steps/a.png",
+            "x/steps/a.webp",
+        ] {
+            let err = session.step_image(&id, bad).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid, "{bad}");
+        }
+        let bad_id = session.step_image("nope", &step.image.full);
+        assert_eq!(bad_id.unwrap_err().kind, ErrorKind::Invalid);
+        let unopened = session.step_image(&Ulid::new().to_string(), &step.image.full);
         assert_eq!(unopened.unwrap_err().kind, ErrorKind::NotOpen);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn pixels(width: u32, height: u32) -> Vec<u8> {
+        (0..width * height)
+            .flat_map(|i| [(i % 256) as u8, 40, 200, 255])
+            .collect()
+    }
+
+    /// `pixels(width, height)` as an RGBA PNG, as the webview sends it.
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(
+                &pixels(width, height),
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        out
+    }
+
+    /// A 1×1 PNG whose header claims `width`×`height` (with a valid CRC):
+    /// only the size check can tell.
+    fn png_claiming(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = png(1, 1);
+        // Signature (8), IHDR length (4), "IHDR" (4), then width and height.
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        let crc = crc32(&bytes[12..29]);
+        bytes[29..33].copy_from_slice(&crc.to_be_bytes());
+        bytes
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in data {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn decodes_pngs_within_limits_only() {
+        assert_eq!(decode_png(&png(6, 4)).unwrap().into_raw(), pixels(6, 4));
+        // The header is checked before decoding: these claim sizes that
+        // would be refused (their pixel data is missing, so a decode
+        // would fail differently).
+        for (w, h) in [
+            (MAX_WEBP_DIMENSION + 1, 1),
+            (10_000, 4_001),
+            (16_000, 16_000),
+        ] {
+            let err = decode_png(&png_claiming(w, h)).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid);
+            assert!(
+                err.message.contains("not supported"),
+                "{w}×{h}: {}",
+                err.message
+            );
+        }
+        // Within the limits the claimed size is read, then the data fails.
+        let err = decode_png(&png_claiming(2, 2)).unwrap_err();
+        assert!(
+            err.message.contains("not a readable PNG"),
+            "{}",
+            err.message
+        );
+        // 16-bit PNGs become 8-bit RGBA.
+        let mut wide = Vec::new();
+        {
+            use image::ImageEncoder;
+            let data: Vec<u8> = [0x12u8, 0x34].repeat(3 * 2 * 4);
+            image::codecs::png::PngEncoder::new(&mut wide)
+                .write_image(&data, 3, 2, image::ExtendedColorType::Rgba16)
+                .unwrap();
+        }
+        assert_eq!(decode_png(&wide).unwrap().dimensions(), (3, 2));
+        for junk in [&b""[..], b"not a png", &png(2, 2)[..20]] {
+            assert_eq!(decode_png(junk).unwrap_err().kind, ErrorKind::Invalid);
+        }
+        // Other formats are not taken as PNG.
+        let steps = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/guides")
+            .join(FIXTURE)
+            .join("steps");
+        let webp = fs::read_dir(steps).unwrap().next().unwrap().unwrap().path();
+        let err = decode_png(&fs::read(webp).unwrap()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Invalid);
+        // Over the byte cap: refused before reading the header.
+        let mut huge = png(1, 1);
+        huge.resize(MAX_PNG_BYTES + 1, 0);
+        assert!(decode_png(&huge).unwrap_err().message.contains("too large"));
+    }
+
+    #[test]
+    fn adds_image_steps_readable_before_saving() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        session.open_guide(&id).unwrap();
+
+        let step = session.add_image_step(&id, &png(6, 4)).unwrap();
+        assert_eq!(step.kind, StepKind::Manual);
+        assert_eq!(step.image.full, format!("steps/{}.webp", step.id));
+        assert_eq!(step.image.crop, None);
+        assert_eq!(step.image.show, ImageShow::Full);
+        // Not in guide.json yet, but its image loads.
+        let bytes = session.step_image(&id, &step.image.full).unwrap();
+        assert_eq!(&bytes[8..12], b"WEBP");
+        let stored =
+            guidesya_core::library::read_webp(&root.join(FIXTURE).join(&step.image.full)).unwrap();
+        assert_eq!(stored.dimensions(), (6, 4));
+        assert_eq!(stored.into_raw(), pixels(6, 4));
+
+        for bad in [b"junk".to_vec(), png_claiming(10_000, 4_001)] {
+            let err = session.add_image_step(&id, &bad).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid);
+        }
+        let unopened = session.add_image_step(&Ulid::new().to_string(), &png(1, 1));
+        assert_eq!(unopened.unwrap_err().kind, ErrorKind::NotOpen);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_image_step_refuses_read_only_guides() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let path = root.join(FIXTURE).join("guide.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["schemaVersion"] = (guidesya_core::SCHEMA_VERSION + 1).into();
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        session.open_guide(&id).unwrap();
+        let before = fs::read_dir(root.join(FIXTURE).join("steps"))
+            .unwrap()
+            .count();
+        let err = session.add_image_step(&id, &png(1, 1)).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ReadOnly);
+        // Closing a read-only guide sweeps nothing.
+        let orphan = root
+            .join(FIXTURE)
+            .join(format!("steps/{}.webp", Ulid::new()));
+        fs::write(&orphan, b"x").unwrap();
+        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(orphan.exists());
+        assert_eq!(
+            fs::read_dir(root.join(FIXTURE).join("steps"))
+                .unwrap()
+                .count(),
+            before + 1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn close_sweeps_unused_step_images_only() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let bundle = root.join(FIXTURE);
+        let mut guide = session.open_guide(&id).unwrap().guide;
+        let used: Vec<String> = guide
+            .steps()
+            .flat_map(|s| [Some(s.image.full.clone()), s.image.crop.clone()])
+            .flatten()
+            .collect();
+
+        // One new step is saved, one is added and dropped (undone).
+        let kept = session.add_image_step(&id, &png(2, 2)).unwrap();
+        let dropped = session.add_image_step(&id, &png(2, 2)).unwrap();
+        guide
+            .items
+            .push(guidesya_core::model::Item::Step(kept.clone()));
+        session.save_guide(guide).unwrap();
+        // A step deleted from the guide leaves its old crop behind.
+        let stale = format!("steps/{}.crop.webp", Ulid::new());
+        fs::write(bundle.join(&stale), b"x").unwrap();
+        // Files that are not step images stay.
+        for other in ["steps/notes.txt", "steps/.hidden.webp", "steps/ABC.webp"] {
+            fs::write(bundle.join(other), b"x").unwrap();
+        }
+
+        let mut removed = session.close_guide(&id).unwrap();
+        removed.sort();
+        let mut expected = vec![dropped.image.full.clone(), stale.clone()];
+        expected.sort();
+        assert_eq!(removed, expected);
+        assert!(!bundle.join(&dropped.image.full).exists());
+        assert!(bundle.join(&kept.image.full).exists());
+        for path in used {
+            assert!(bundle.join(&path).exists(), "{path}");
+        }
+        for other in ["steps/notes.txt", "steps/.hidden.webp", "steps/ABC.webp"] {
+            assert!(bundle.join(other).exists(), "{other}");
+        }
+        // Closed: images are no longer served, and closing again is a no-op.
+        let err = session.step_image(&id, &kept.image.full).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotOpen);
+        assert!(session.close_guide(&id).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Opens the fixture with a fresh image step saved into it.
+    fn session_with_saved_image_step(root: &Path) -> (Session, String, Step) {
+        let session = Session::start(root, None).unwrap();
+        let id = fixture_id(root);
+        let mut guide = session.open_guide(&id).unwrap().guide;
+        let step = session.add_image_step(&id, &png(2, 2)).unwrap();
+        guide
+            .items
+            .push(guidesya_core::model::Item::Step(step.clone()));
+        session.save_guide(guide).unwrap();
+        (session, id, step)
+    }
+
+    #[test]
+    fn sweep_counts_any_spelling_of_a_path() {
+        let root = library();
+        let (session, id, step) = session_with_saved_image_step(&root);
+        let bundle = root.join(FIXTURE);
+        let json_path = bundle.join("guide.json");
+        let json = fs::read_to_string(&json_path).unwrap();
+        let lower = format!("steps/{}.webp", step.id.to_string().to_lowercase());
+        // A doubled slash and a lowercase name: same files, other spellings.
+        let crop = Ulid::new();
+        fs::write(bundle.join(format!("steps/{crop}.crop.webp")), b"x").unwrap();
+        let json = json.replace(&step.image.full, &lower).replacen(
+            "\"show\"",
+            &format!("\"after\": \"steps//{crop}.crop.webp\", \"show\""),
+            1,
+        );
+        fs::write(&json_path, json).unwrap();
+        // The sweep runs: an unmentioned image goes.
+        let orphan = format!("steps/{}.webp", Ulid::new());
+        fs::write(bundle.join(&orphan), b"x").unwrap();
+        assert_eq!(session.close_guide(&id).unwrap(), vec![orphan]);
+        assert!(bundle.join(&step.image.full).exists());
+        assert!(bundle.join(format!("steps/{crop}.crop.webp")).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sweep_keeps_images_of_backups_and_skips_unreadable_ones() {
+        let root = library();
+        let (session, id, _) = session_with_saved_image_step(&root);
+        let bundle = root.join(FIXTURE);
+        let old = Ulid::new();
+        let orphan = Ulid::new();
+        for name in [old, orphan] {
+            fs::write(bundle.join(format!("steps/{name}.webp")), b"x").unwrap();
+        }
+        fs::create_dir_all(bundle.join(".backup")).unwrap();
+        fs::write(
+            bundle.join(".backup/guide.v0.json"),
+            format!(r#"{{"items": [{{"image": {{"full": "steps/{old}.webp"}}}}]}}"#),
+        )
+        .unwrap();
+        session.open_guide(&id).unwrap();
+        assert_eq!(
+            session.close_guide(&id).unwrap(),
+            vec![format!("steps/{orphan}.webp")]
+        );
+        assert!(bundle.join(format!("steps/{old}.webp")).exists());
+
+        // A backup that can't be read stops the sweep.
+        fs::write(bundle.join(format!("steps/{orphan}.webp")), b"x").unwrap();
+        fs::write(bundle.join(".backup/guide.v00.json"), b"{not json").unwrap();
+        session.open_guide(&id).unwrap();
+        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(bundle.join(format!("steps/{orphan}.webp")).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_never_follows_a_symlinked_steps_folder() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let bundle = root.join(FIXTURE);
+        let other = root.join("Share a calendar event.guidesya/steps");
+        let before: Vec<_> = fs::read_dir(&other)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert!(!before.is_empty());
+        // `steps/` now points at another guide's images, none of which
+        // this guide.json mentions.
+        fs::remove_dir_all(bundle.join("steps")).unwrap();
+        std::os::unix::fs::symlink(&other, bundle.join("steps")).unwrap();
+        session.open_guide(&id).unwrap();
+        assert!(session.close_guide(&id).unwrap().is_empty());
+        for path in before {
+            assert!(path.exists(), "{}", path.display());
+        }
+
+        // A symlinked image inside a real `steps/` is skipped too.
+        fs::remove_file(bundle.join("steps")).unwrap();
+        fs::create_dir(bundle.join("steps")).unwrap();
+        let target = fs::read_dir(&other)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let link = bundle.join(format!("steps/{}.webp", Ulid::new()));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        session.open_guide(&id).unwrap();
+        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(target.exists() && fs::symlink_metadata(&link).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn step_image_names() {
+        let id = Ulid::new();
+        let lower = id.to_string().to_lowercase();
+        assert_eq!(step_image_key(&format!("{id}.webp")), Some((id, 0)));
+        assert_eq!(step_image_key(&format!("{id}.crop.webp")), Some((id, 1)));
+        assert_eq!(step_image_key(&format!("{id}.after.WEBP")), Some((id, 2)));
+        assert_eq!(step_image_key(&format!("{lower}.Crop.webp")), Some((id, 1)));
+        for name in [
+            format!("{id}.png"),
+            format!("{id}.thumb.webp"),
+            format!(".{id}.webp.1.tmp"),
+            "ABC.webp".to_owned(),
+            ".webp".to_owned(),
+        ] {
+            assert_eq!(step_image_key(&name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn reads_dropped_files_once() {
+        let root = library();
+        let png = root.join("shot.png");
+        fs::write(&png, b"png bytes").unwrap();
+        let dropped = DroppedFiles::default();
+        assert_eq!(dropped.read(&png).unwrap_err().kind, ErrorKind::Invalid);
+        dropped.record(std::slice::from_ref(&png));
+        assert_eq!(dropped.read(&png).unwrap(), b"png bytes");
+        // Each drop allows one read.
+        assert_eq!(dropped.read(&png).unwrap_err().kind, ErrorKind::Invalid);
+
+        let then = Instant::now();
+        dropped.record_at(std::slice::from_ref(&png), then);
+        assert!(!dropped.take_at(&png, then + DroppedFiles::TTL));
+        dropped.record_at(std::slice::from_ref(&png), then);
+        assert!(!dropped.take_at(&root.join("other.png"), then));
+        assert!(dropped.take_at(&png, then + Duration::from_secs(1)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_image_files_only() {
+        let root = library();
+        let png = root.join("shot.PNG");
+        fs::write(&png, b"not really a png").unwrap();
+        assert_eq!(read_image_file(&png).unwrap(), b"not really a png");
+        let text = root.join("notes.txt");
+        fs::write(&text, b"x").unwrap();
+        assert_eq!(read_image_file(&text).unwrap_err().kind, ErrorKind::Invalid);
+        let folder = root.join("folder.png");
+        fs::create_dir(&folder).unwrap();
+        assert_eq!(
+            read_image_file(&folder).unwrap_err().kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(
+            read_image_file(&root.join("missing.jpg")).unwrap_err().kind,
+            ErrorKind::NotFound
+        );
+        let big = root.join("big.webp");
+        fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_IMAGE_FILE_BYTES + 1)
+            .unwrap();
+        assert_eq!(read_image_file(&big).unwrap_err().kind, ErrorKind::Invalid);
         fs::remove_dir_all(root).unwrap();
     }
 

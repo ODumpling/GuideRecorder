@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use guidesya_core::index::Index;
 use serde::Serialize;
-use tauri::{Manager, RunEvent};
+use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
 
 mod commands;
 mod editor;
 mod navigation;
 
-use editor::{AppError, ErrorKind, Session, SessionCell};
+use editor::{AppError, DroppedFiles, ErrorKind, Session, SessionCell};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +33,7 @@ pub fn run() {
         .plugin(navigation::guard())
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
+            app.manage(Arc::new(DroppedFiles::default()));
             let cell = Arc::new(SessionCell::default());
             app.manage(Arc::clone(&cell));
             let root = editor::library_root(
@@ -56,13 +57,23 @@ pub fn run() {
             });
             Ok(())
         })
+        // Files dropped on the window are the only ones `read_image_file`
+        // reads.
+        .on_window_event(|window, event| {
+            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<Arc<DroppedFiles>>().record(paths);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             commands::library_root,
             commands::list_guides,
             commands::open_guide,
             commands::save_guide,
+            commands::close_guide,
             commands::step_image,
+            commands::add_image_step,
+            commands::read_image_file,
             commands::quit_ack,
             commands::quit_app,
         ])

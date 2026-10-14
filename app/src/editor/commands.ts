@@ -1,4 +1,5 @@
-import type { Guide, ImageShow, Item, Step } from "@/lib/types";
+import type { Guide, ImageShow, Item, NoteKind, Step } from "@/lib/types";
+import { normalizeMarkdown } from "@/text/markdown";
 
 /**
  * A minimal change to a guide. Items are addressed by id, so a patch stays
@@ -24,6 +25,11 @@ export interface Command {
    * merge into one undo step.
    */
   coalesceKey?: string;
+  /**
+   * The item to select after `forward` and after `inverse` (null: none);
+   * leaves the selection alone when absent.
+   */
+  select?: { forward?: string | null; inverse?: string | null };
 }
 
 export class PatchError extends Error {}
@@ -165,4 +171,132 @@ export function setImageShow(guide: Guide, id: string, show: ImageShow): Command
 export function coalesce(prev: Command, next: Command): Command | null {
   if (!prev.coalesceKey || prev.coalesceKey !== next.coalesceKey) return null;
   return { ...next, inverse: prev.inverse };
+}
+
+// ---------------------------------------------------------------------------
+// Item operations (#351)
+
+const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note" };
+
+/** Inserts `item` after the item `afterId`, or at the end when it is null. */
+export function insertItemAfter(guide: Guide, item: Item, afterId: string | null): Command {
+  const index = afterId === null ? guide.items.length : indexOf(guide, afterId) + 1;
+  return insertItemAt(guide, item, index, afterId);
+}
+
+/** Inserts `item` before the item `beforeId`, or at the start when it is null. */
+export function insertItemBefore(guide: Guide, item: Item, beforeId: string | null): Command {
+  const index = beforeId === null ? 0 : indexOf(guide, beforeId);
+  return insertItemAt(guide, item, index, beforeId);
+}
+
+function insertItemAt(guide: Guide, item: Item, index: number, previousSelection: string | null): Command {
+  if (guide.items.some((other) => other.id === item.id)) throw new PatchError(`item ${item.id} exists`);
+  return {
+    label: `Insert ${item.type === "note" ? item.kind : ITEM_NAMES[item.type]}`,
+    forward: [{ op: "insertItem", index, item }],
+    inverse: [{ op: "removeItem", id: item.id }],
+    select: { forward: item.id, inverse: previousSelection },
+  };
+}
+
+export function newSection(id: string): Item {
+  return { type: "section", id, title: "" };
+}
+
+export function newNote(id: string, kind: NoteKind): Item {
+  return { type: "note", id, kind, body: "" };
+}
+
+/** Deletes an item; the next one (or else the previous one) is selected. */
+export function deleteItem(guide: Guide, id: string): Command {
+  const index = indexOf(guide, id);
+  const item = guide.items[index];
+  const neighbour = guide.items[index + 1] ?? guide.items[index - 1] ?? null;
+  return {
+    label: `Delete ${item.type === "note" ? item.kind : ITEM_NAMES[item.type]}`,
+    forward: [{ op: "removeItem", id }],
+    inverse: [{ op: "insertItem", index, item }],
+    select: { forward: neighbour?.id ?? null, inverse: id },
+  };
+}
+
+/** The step directly after `id`, if that item is a step. */
+export function nextStep(guide: Guide, id: string): Step | null {
+  const next = guide.items[indexOf(guide, id) + 1];
+  return next?.type === "step" ? next : null;
+}
+
+/** Normalized Markdown blocks joined by blank lines, skipping empty ones. */
+function joinBlocks(parts: string[]): string {
+  return normalizeMarkdown(parts.filter((part) => part.trim()).join("\n\n"));
+}
+
+/**
+ * Merges the step `id` with the step right after it:
+ *
+ * - the first step keeps its title, kind, element, point and end point,
+ *   screenshot and annotations;
+ * - the second step's title and description are appended to its
+ *   description, as paragraphs;
+ * - keystrokes are joined with a space (or whichever step has them);
+ * - the text counts as `edited`;
+ * - the second step goes, with its screenshot and annotations. Undo brings
+ *   them back until the guide is closed; then its image files are deleted.
+ */
+export function mergeWithNext(guide: Guide, id: string): Command {
+  const first = findStep(guide, id);
+  const second = nextStep(guide, id);
+  if (!second) throw new PatchError(`no step after ${id} to merge with`);
+  const description = joinBlocks([first.description, second.title, second.description]);
+  const keystrokes = [first.keystrokes, second.keystrokes].filter(Boolean).join(" ") || undefined;
+  const forward: Patch[] = [
+    { op: "setItem", id, key: "description", value: description },
+    { op: "setItem", id, key: "aiState", value: { ...first.aiState, status: "edited" } },
+  ];
+  const inverse: Patch[] = [
+    { op: "setItem", id, key: "aiState", value: first.aiState },
+    { op: "setItem", id, key: "description", value: first.description },
+  ];
+  if (keystrokes !== first.keystrokes) {
+    forward.push({ op: "setItem", id, key: "keystrokes", value: keystrokes });
+    inverse.unshift({ op: "setItem", id, key: "keystrokes", value: first.keystrokes });
+  }
+  forward.push({ op: "removeItem", id: second.id });
+  inverse.unshift({ op: "insertItem", index: indexOf(guide, second.id), item: second });
+  return { label: "Merge steps", forward, inverse, select: { forward: id, inverse: id } };
+}
+
+/**
+ * Splits a step in two at a point in its description: the step keeps its
+ * title and `before`; a new manual step `newId` right after it gets `after`
+ * and shows the same screenshot (the image files are shared).
+ */
+export function splitStep(guide: Guide, id: string, newId: string, before: string, after: string): Command {
+  const step = findStep(guide, id);
+  if (guide.items.some((item) => item.id === newId)) throw new PatchError(`item ${newId} exists`);
+  const added: Step = {
+    type: "step",
+    id: newId,
+    title: "",
+    description: after,
+    kind: "manual",
+    image: { ...step.image },
+    annotations: [],
+    // Text the user wrote is theirs; an empty step is left to the AI.
+    aiState: { status: after.trim() ? "edited" : "template" },
+  };
+  const forward: Patch[] = [{ op: "insertItem", index: indexOf(guide, id) + 1, item: added }];
+  const inverse: Patch[] = [{ op: "removeItem", id: newId }];
+  if (before !== step.description) {
+    forward.unshift(
+      { op: "setItem", id, key: "description", value: before },
+      { op: "setItem", id, key: "aiState", value: { ...step.aiState, status: "edited" } },
+    );
+    inverse.push(
+      { op: "setItem", id, key: "aiState", value: step.aiState },
+      { op: "setItem", id, key: "description", value: step.description },
+    );
+  }
+  return { label: "Split step", forward, inverse, select: { forward: newId, inverse: id } };
 }

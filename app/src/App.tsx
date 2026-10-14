@@ -2,13 +2,14 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Lock, Redo2, Undo2 } from "lucide-react";
+import { ImagePlus, Lock, Redo2, TriangleAlert, Undo2, X } from "lucide-react";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { LibrarySidebar } from "@/components/LibrarySidebar";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { StepView } from "@/components/StepView";
+import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import { shortcutFor } from "@/editor/shortcuts";
@@ -25,6 +26,20 @@ function ReadOnlyBanner() {
           ? `This guide was upgraded but could not be saved (${doc.migrationError}). It is read-only.`
           : "This guide was made with a newer version of GuidesYa. It is read-only."}
       </span>
+    </div>
+  );
+}
+
+function Notice() {
+  const notice = useEditor((s) => s.notice);
+  if (!notice) return null;
+  return (
+    <div role="alert" className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
+      <TriangleAlert className="size-4 shrink-0 text-[var(--status-danger)]" />
+      <span className="flex-1">{notice}</span>
+      <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={() => editorStore.getState().notify(null)}>
+        <X />
+      </Button>
     </div>
   );
 }
@@ -62,6 +77,7 @@ function Toolbar() {
 
 export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
+  const draggingImages = useImageDrop();
 
   useEffect(() => {
     void editorStore.getState().loadGuides();
@@ -101,6 +117,7 @@ export default function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Toolbar />
         <ReadOnlyBanner />
+        <Notice />
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 overflow-y-auto">
             <StepView />
@@ -113,6 +130,13 @@ export default function App() {
         </div>
       </div>
       <LeaveDialog />
+      {draggingImages && (
+        <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <ImagePlus className="size-5" /> Drop images to add them as steps
+          </span>
+        </div>
+      )}
     </div>
   );
 }

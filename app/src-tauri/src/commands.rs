@@ -5,12 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use guidesya_core::model::Guide;
-use tauri::ipc::Response;
+use guidesya_core::model::{Guide, Step};
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::editor::{
-    AppError, ErrorKind, GuideListItem, ImageVariant, OpenedGuide, Result, Session, SessionCell,
+    AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
 };
 
 /// Runs `f` with the session on the blocking pool.
@@ -48,15 +48,86 @@ pub async fn save_guide(cell: State<'_, Arc<SessionCell>>, guide: Guide) -> Resu
     with_session(cell, move |s| s.save_guide(guide)).await
 }
 
-/// Raw WebP bytes (an `ArrayBuffer` in JS).
+/// Saves nothing: the editor saves first. Forgets the guide and deletes
+/// step images its saved `guide.json` no longer uses.
+#[tauri::command]
+pub async fn close_guide(cell: State<'_, Arc<SessionCell>>, id: String) -> Result<Vec<String>> {
+    with_session(cell, move |s| s.close_guide(&id)).await
+}
+
+/// Raw WebP bytes (an `ArrayBuffer` in JS) of an image in an opened
+/// guide's bundle, by bundle-relative path.
 #[tauri::command]
 pub async fn step_image(
     cell: State<'_, Arc<SessionCell>>,
     guide_id: String,
-    step_id: String,
-    variant: ImageVariant,
+    path: String,
 ) -> Result<Response> {
-    let bytes = with_session(cell, move |s| s.step_image(&guide_id, &step_id, variant)).await?;
+    let bytes = with_session(cell, move |s| s.step_image(&guide_id, &path)).await?;
+    Ok(Response::new(bytes))
+}
+
+/// Header naming the guide for [`add_image_step`], whose body is the PNG.
+pub const GUIDE_ID_HEADER: &str = "guidesya-guide-id";
+
+/// Stores an image as a new manual step's screenshot and returns the step
+/// (not yet part of the guide; the editor inserts it). The body is a PNG
+/// the webview encoded from the user's file, so any format it can read
+/// works.
+#[tauri::command]
+pub async fn add_image_step(
+    cell: State<'_, Arc<SessionCell>>,
+    request: Request<'_>,
+) -> Result<Step> {
+    let guide_id = request
+        .headers()
+        .get(GUIDE_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorKind::Invalid,
+                format!("missing {GUIDE_ID_HEADER} header"),
+            )
+        })?;
+    let png = body_bytes(request.body())?;
+    with_session(cell, move |s| s.add_image_step(&guide_id, &png)).await
+}
+
+/// The bytes of a command's binary body. Over the custom IPC protocol
+/// they arrive raw; after Tauri falls back to postMessage they arrive as a
+/// JSON array of numbers (or, from a plain `JSON.stringify`, an object with
+/// index keys).
+fn body_bytes(body: &InvokeBody) -> Result<Vec<u8>> {
+    let invalid = || AppError::new(ErrorKind::Invalid, "expected image bytes");
+    let byte = |value: &serde_json::Value| {
+        value
+            .as_u64()
+            .and_then(|n| u8::try_from(n).ok())
+            .ok_or_else(invalid)
+    };
+    match body {
+        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        InvokeBody::Json(serde_json::Value::Array(items)) => items.iter().map(byte).collect(),
+        InvokeBody::Json(serde_json::Value::Object(map)) => (0..map.len())
+            .map(|i| map.get(&i.to_string()).ok_or_else(invalid).and_then(byte))
+            .collect(),
+        InvokeBody::Json(_) => Err(invalid()),
+    }
+}
+
+/// The bytes of an image file the user dropped on the window (Tauri gives
+/// the webview paths, not files), for the webview to decode. Only paths
+/// from a recent drop, each once (see [`DroppedFiles`]).
+#[tauri::command]
+pub async fn read_image_file(
+    dropped: State<'_, Arc<DroppedFiles>>,
+    path: String,
+) -> Result<Response> {
+    let dropped = Arc::clone(&dropped);
+    let bytes = tauri::async_runtime::spawn_blocking(move || dropped.read(path.as_ref()))
+        .await
+        .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))??;
     Ok(Response::new(bytes))
 }
 
@@ -114,4 +185,35 @@ pub fn quit_ack(gate: State<'_, Arc<QuitGate>>) {
 pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
     gate.allowed.store(true, Ordering::SeqCst);
     app.exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn body_bytes_from_raw_and_postmessage_bodies() {
+        let png = vec![0x89, b'P', b'N', b'G', 0, 255];
+        assert_eq!(body_bytes(&InvokeBody::Raw(png.clone())).unwrap(), png);
+        assert_eq!(
+            body_bytes(&InvokeBody::Json(json!([137, 80, 78, 71, 0, 255]))).unwrap(),
+            png
+        );
+        assert_eq!(
+            body_bytes(&InvokeBody::Json(json!({"1": 80, "0": 137}))).unwrap(),
+            vec![137, 80]
+        );
+        for bad in [
+            json!([256]),
+            json!([-1]),
+            json!(["1"]),
+            json!({"0": 1, "2": 2}),
+            json!({"guideId": "x"}),
+            json!(null),
+        ] {
+            let err = body_bytes(&InvokeBody::Json(bad.clone())).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid, "{bad}");
+        }
+    }
 }

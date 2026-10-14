@@ -1,9 +1,12 @@
-import { lazy, Suspense } from "react";
-import { ImageOff } from "lucide-react";
+import { lazy, Suspense, useRef, type Ref } from "react";
+import { ImageOff, Merge, Scissors, Trash2 } from "lucide-react";
+import type { MarkdownEditorHandle } from "@/components/MarkdownEditor";
+import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
+import { canMergeSelected, deleteSelected, mergeSelected, splitSelected } from "@/editor/actions";
 import { setItemText, type TextField } from "@/editor/commands";
 import { editorStore, useEditor, useSelectedItem } from "@/editor/editor";
-import type { Step } from "@/lib/types";
+import type { Item, Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
 
@@ -11,8 +14,8 @@ import { markdownToPlainText } from "@/text/markdown";
 const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
-  const variant = step.image.show === "crop" && step.image.crop ? "crop" : "full";
-  const { url, error } = useStepImage(guideId, step.id, variant);
+  const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
+  const { url, error } = useStepImage(guideId, path);
   return (
     <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
       {url ? (
@@ -34,6 +37,7 @@ function StepImage({ guideId, step }: { guideId: string; step: Step }) {
 
 /** A Markdown field of an item, edited through store commands. */
 function TextEditor({
+  handle,
   id,
   field,
   value,
@@ -43,6 +47,7 @@ function TextEditor({
   singleLine,
   className,
 }: {
+  handle?: Ref<MarkdownEditorHandle>;
   id: string;
   field: TextField;
   value: string;
@@ -70,6 +75,7 @@ function TextEditor({
       <MarkdownEditor
         // A fresh editor per item, so the cursor never carries over.
         key={`${id}.${field}`}
+        handle={handle}
         value={value}
         readOnly={readOnly}
         label={label}
@@ -87,10 +93,50 @@ function TextEditor({
   );
 }
 
+const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note" };
+
+/** Delete, merge and split for the selected item. */
+function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
+  // Re-render when the guide changes, so merge availability stays current.
+  const canMerge = useEditor(() => canMergeSelected(editorStore));
+  const name = item.type === "note" ? item.kind : ITEM_NAMES[item.type];
+  return (
+    <div className="flex items-center gap-1" role="toolbar" aria-label={`${name} actions`}>
+      {item.type === "step" && (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Split this step at the cursor in its description"
+            // Keep the description's cursor.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onSplit}
+          >
+            <Scissors /> Split
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Merge the next step into this one: its title, description and keystrokes are added here; its screenshot and annotations are removed"
+            disabled={!canMerge}
+            onClick={() => mergeSelected(editorStore)}
+          >
+            <Merge /> Merge with next
+          </Button>
+        </>
+      )}
+      <Button variant="ghost" size="sm" title={`Delete this ${name}`} onClick={() => deleteSelected(editorStore)}>
+        <Trash2 /> Delete
+      </Button>
+    </div>
+  );
+}
+
 /** The centre pane: the selected step, section or note. */
 export function StepView() {
   const doc = useEditor((s) => s.doc);
   const item = useSelectedItem();
+  const description = useRef<MarkdownEditorHandle>(null);
   if (!doc) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -105,8 +151,18 @@ export function StepView() {
       </div>
     );
   }
+  const split = () => {
+    if (item.type !== "step") return;
+    // Until the editor has loaded, the whole description stays.
+    splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
+  };
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
+      {!doc.readOnly && (
+        <div className="-my-2 flex justify-end">
+          <ItemActions item={item} onSplit={split} />
+        </div>
+      )}
       {item.type === "step" && (
         <>
           <StepImage guideId={doc.guide.id} step={item} />
@@ -121,6 +177,7 @@ export function StepView() {
             className="font-medium"
           />
           <TextEditor
+            handle={description}
             id={item.id}
             field="description"
             value={item.description}

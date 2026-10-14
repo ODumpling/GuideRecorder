@@ -49,6 +49,8 @@ export interface EditorState {
   savedRevision: number;
   saveStatus: SaveStatus;
   saveError: string | null;
+  /** A message about a failed action (e.g. an image that would not load). */
+  notice: string | null;
 
   loadGuides(): Promise<void>;
   setQuery(query: string): Promise<void>;
@@ -62,6 +64,7 @@ export interface EditorState {
   requestQuit(): Promise<boolean>;
   resolveLeave(choice: LeaveChoice): Promise<boolean>;
   select(id: string | null): void;
+  notify(message: string | null): void;
   /** Applies an undoable command. Returns false if it was refused. */
   dispatch(command: Command): boolean;
   undo(): void;
@@ -84,6 +87,11 @@ export interface EditorOptions {
 
 export type EditorStore = StoreApi<EditorState>;
 
+/** The state change for a command's selection hint (none when absent). */
+function selection(id: string | null | undefined): Partial<EditorState> {
+  return id === undefined ? {} : { selectedId: id };
+}
+
 /** True if a command would change nothing (e.g. typing the same title). */
 function isNoop(command: Command): boolean {
   return JSON.stringify(command.forward) === JSON.stringify(command.inverse);
@@ -96,6 +104,7 @@ const cleanHistory = {
   savedRevision: 0,
   saveStatus: "saved",
   saveError: null,
+  notice: null,
 } satisfies Partial<EditorState>;
 
 export function createEditorStore({
@@ -184,6 +193,19 @@ export function createEditorStore({
       }
     }
 
+    /**
+     * Tells the backend a guide is closed, which deletes step images its
+     * saved copy no longer uses (kept until now for undo). Best effort.
+     */
+    async function release(id: string | null) {
+      if (!id) return;
+      try {
+        await api.closeGuide(id);
+      } catch (error) {
+        console.error(`closing guide ${id} failed:`, error);
+      }
+    }
+
     /** Saves (unless discarding), then closes, opens or quits. */
     async function leaveTo(intent: LeaveIntent, discard = false): Promise<boolean> {
       if (get().busy) return false;
@@ -194,14 +216,19 @@ export function createEditorStore({
           return false;
         }
         autosave.cancel();
+        const leaving = get().doc?.guide.id ?? null;
         switch (intent.kind) {
           case "close":
             set({ doc: null, selectedId: null, ...cleanHistory });
+            await release(leaving);
             break;
           case "open":
             await open(intent.id);
+            // A failed open keeps the old guide, so it stays open.
+            if (get().doc?.guide.id === intent.id && leaving !== intent.id) await release(leaving);
             break;
           case "quit":
+            await release(leaving);
             await api.quit();
             break;
         }
@@ -227,6 +254,7 @@ export function createEditorStore({
       savedRevision: 0,
       saveStatus: "saved",
       saveError: null,
+      notice: null,
 
       async loadGuides() {
         const request = ++listRequest;
@@ -266,6 +294,10 @@ export function createEditorStore({
         set({ selectedId: id });
       },
 
+      notify(message) {
+        set({ notice: message });
+      },
+
       dispatch(command) {
         const { doc, undoStack, busy } = get();
         if (!doc || doc.readOnly || busy || isNoop(command)) return false;
@@ -285,6 +317,7 @@ export function createEditorStore({
         changed(guide, {
           undoStack: merged && isNoop(merged) ? stack : [...stack, entry],
           redoStack: [],
+          ...selection(command.select?.forward),
         });
         return true;
       },
@@ -296,6 +329,7 @@ export function createEditorStore({
         changed(applyPatches(doc.guide, entry.command.inverse), {
           undoStack: undoStack.slice(0, -1),
           redoStack: [...redoStack, { ...entry, at: Number.NEGATIVE_INFINITY }],
+          ...selection(entry.command.select?.inverse),
         });
       },
 
@@ -307,6 +341,7 @@ export function createEditorStore({
           // An old `at`, so a redone step never merges with the next edit.
           undoStack: [...undoStack, { ...entry, at: Number.NEGATIVE_INFINITY }],
           redoStack: redoStack.slice(0, -1),
+          ...selection(entry.command.select?.forward),
         });
       },
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorApi } from "@/lib/ipc";
 import type { Guide, OpenedGuide } from "@/lib/types";
-import { moveItem, renameGuide, setItemTitle } from "@/editor/commands";
+import { deleteItem, insertItemAfter, moveItem, newNote, renameGuide, setItemTitle } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 
@@ -27,8 +27,8 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
             },
           ],
     ),
-    openGuide: vi.fn(async () => ({
-      guide: guide(),
+    openGuide: vi.fn(async (id: string) => ({
+      guide: { ...guide(), id },
       path: "/lib/Guide.guidesya",
       readOnly: false,
       migratedFrom: null,
@@ -39,6 +39,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
       if (blockSaves) await new Promise<void>((resolve) => (release = resolve));
       saved.push(g);
     }),
+    closeGuide: vi.fn(async () => []),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
   };
@@ -354,5 +355,71 @@ describe("leaving a guide", () => {
     expect(await closing).toBe(true);
     expect(saved.map((g) => g.title)).toEqual(["One"]);
     expect(s().doc).toBeNull();
+  });
+});
+
+describe("selection hints", () => {
+  it("follow dispatch, undo and redo", async () => {
+    const { s } = await opened();
+    s().select("B");
+    s().dispatch(deleteItem(s().doc!.guide, "B"));
+    expect(s().selectedId).toBe("N1");
+    s().undo();
+    expect(s().selectedId).toBe("B");
+    s().redo();
+    expect(s().selectedId).toBe("N1");
+    s().dispatch(insertItemAfter(s().doc!.guide, newNote("T1", "tip"), "A"));
+    expect(s().selectedId).toBe("T1");
+    // Commands without a hint keep the selection.
+    s().dispatch(renameGuide(s().doc!.guide, "x"));
+    expect(s().selectedId).toBe("T1");
+  });
+});
+
+describe("closing in the backend", () => {
+  it("happens after saving, on close, open and quit", async () => {
+    const { s, api, saved } = await opened();
+    s().dispatch(renameGuide(s().doc!.guide, "Saved first"));
+    vi.mocked(api.closeGuide).mockImplementation(async () => {
+      expect(saved.map((g) => g.title)).toEqual(["Saved first"]);
+      return [];
+    });
+    expect(await s().openGuide("G2")).toBe(true);
+    expect(api.closeGuide).toHaveBeenLastCalledWith("G1");
+    expect(await s().closeGuide()).toBe(true);
+    expect(api.closeGuide).toHaveBeenLastCalledWith("G2");
+    await s().openGuide("G3");
+    await s().requestQuit();
+    expect(api.closeGuide).toHaveBeenLastCalledWith("G3");
+    expect(vi.mocked(api.closeGuide).mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      vi.mocked(api.quit).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("not when leaving is refused or the new guide fails to open", async () => {
+    const { s, api } = await opened();
+    api.saveGuide = vi.fn(async () => Promise.reject({ kind: "io", message: "disk full" }));
+    s().dispatch(renameGuide(s().doc!.guide, "Unsaved"));
+    expect(await s().closeGuide()).toBe(false);
+    expect(api.closeGuide).not.toHaveBeenCalled();
+
+    await s().resolveLeave("discard");
+    expect(api.closeGuide).toHaveBeenCalledWith("G1");
+    vi.mocked(api.closeGuide).mockClear();
+    await s().openGuide("G1");
+    api.openGuide = vi.fn(async () => Promise.reject({ kind: "notFound", message: "gone" }));
+    await s().openGuide("G9");
+    expect(s().doc?.guide.id).toBe("G1");
+    expect(api.closeGuide).not.toHaveBeenCalled();
+  });
+
+  it("errors do not stop leaving", async () => {
+    const { s, api } = await opened();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    api.closeGuide = vi.fn(async () => Promise.reject({ kind: "io", message: "busy" }));
+    expect(await s().closeGuide()).toBe(true);
+    expect(s().doc).toBeNull();
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
   });
 });

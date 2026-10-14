@@ -116,8 +116,6 @@ export interface OpenedGuide {
   migrationError: string | null;
 }
 
-export type ImageVariant = "full" | "crop" | "after";
-
 export type ErrorKind = "notFound" | "readOnly" | "notOpen" | "conflict" | "invalid" | "io";
 
 export interface AppError {

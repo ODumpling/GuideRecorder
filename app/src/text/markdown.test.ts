@@ -151,11 +151,20 @@ describe("round trip through the editor", () => {
     expect(roundTrip(input)).toBe(expected);
   });
 
-  it("reads CR LF, lone CR and Unicode separators as line endings", () => {
+  it("reads CR LF and lone CR as line endings", () => {
     expect(roundTrip("a\r\nb\r\n\r\nc")).toBe("a b\n\nc");
     expect(roundTrip("a\rb")).toBe("a b");
-    expect(roundTrip("a\u2028b\u2029c")).toBe("a b\n\nc");
-    expect(serialize([p(text("a\u2028b"))])).toBe("a b");
+  });
+
+  it("keeps Unicode separators as text, like core, but shows them as spaces", () => {
+    expect(normalizeMarkdown("a\u2028b\u2029c")).toBe("a\u2028b\u2029c");
+    expect(roundTrip("a\u2028b\u2029c")).toBe("a b c");
+    // Core's structure: a separator never starts a block quote or a list.
+    expect(normalizeMarkdown("a\u2028> b")).toBe("a\u2028\\> b");
+    expect(roundTrip("a\u2028> b")).toBe("a \\> b");
+    expect(roundTrip("\u2028- x")).toBe("\\- x");
+    // Typed or pasted separators are text too; core keeps them.
+    expect(serialize([p(text("a\u2028b"))])).toBe("a\u2028b");
   });
 
   it("flattens titles to one line", () => {

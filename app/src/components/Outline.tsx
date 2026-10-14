@@ -1,6 +1,18 @@
-import { useMemo, useState, type DragEvent } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, Heading, Info, MousePointerClick } from "lucide-react";
+import { lazy, Suspense, useMemo, useState, type DragEvent } from "react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Heading,
+  ImageIcon,
+  Info,
+  Lightbulb,
+  MousePointerClick,
+  Plus,
+  TriangleAlert,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { deleteSelected } from "@/editor/actions";
 import { Input } from "@/components/ui/input";
 import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
 import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
@@ -22,6 +34,9 @@ function plainLabel(markdown: string): string {
   return label;
 }
 
+// The menu (Radix and its positioning) loads with the first opened guide.
+const InsertMenu = lazy(() => import("@/components/InsertMenu"));
+
 function itemLabel(item: Item): string {
   switch (item.type) {
     case "step":
@@ -35,7 +50,12 @@ function itemLabel(item: Item): string {
 
 function ItemIcon({ item }: { item: Item }) {
   if (item.type === "section") return <Heading className="size-3.5 text-muted-foreground" />;
-  if (item.type === "note") return <Info className="size-3.5 text-[var(--status-info)]" />;
+  if (item.type === "note") {
+    if (item.kind === "tip") return <Lightbulb className="size-3.5 text-[var(--status-success)]" />;
+    if (item.kind === "warning") return <TriangleAlert className="size-3.5 text-[var(--status-warning)]" />;
+    return <Info className="size-3.5 text-[var(--status-info)]" />;
+  }
+  if (item.kind === "manual") return <ImageIcon className="size-3.5 text-muted-foreground" />;
   return <MousePointerClick className="size-3.5 text-muted-foreground" />;
 }
 
@@ -77,9 +97,20 @@ export function Outline() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-2 border-b border-sidebar-border p-3">
-        <Button variant="ghost" size="sm" className="self-start" onClick={() => void back()}>
-          <ArrowLeft /> Library
-        </Button>
+        <div className="flex items-center justify-between">
+          <Button variant="ghost" size="sm" onClick={() => void back()}>
+            <ArrowLeft /> Library
+          </Button>
+          <Suspense
+            fallback={
+              <Button variant="outline" size="sm" disabled>
+                <Plus /> Insert
+              </Button>
+            }
+          >
+            <InsertMenu disabled={readOnly} />
+          </Suspense>
+        </div>
         <Input
           aria-label="Guide title"
           className="font-semibold"
@@ -111,6 +142,18 @@ export function Outline() {
             <button
               type="button"
               onClick={() => select(item.id)}
+              onKeyDown={(e) => {
+                if (readOnly || (e.key !== "Delete" && e.key !== "Backspace")) return;
+                e.preventDefault();
+                select(item.id);
+                deleteSelected(editorStore);
+                // Keep the keyboard in the outline, on the newly selected item.
+                const next = editorStore.getState().selectedId;
+                requestAnimationFrame(() =>
+                  document.querySelector<HTMLElement>(`[data-outline-item="${next}"]`)?.focus(),
+                );
+              }}
+              data-outline-item={item.id}
               className={cn(
                 "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
                 item.type === "section" && "font-semibold",

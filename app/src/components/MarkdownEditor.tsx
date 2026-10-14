@@ -1,13 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { Bold, Code, Italic, Link2, Link2Off, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { textExtensions } from "@/text/extensions";
 import { linkFromInput, parseMarkdown, serializeMarkdown } from "@/text/markdown";
+import { splitMarkdown } from "@/text/split";
 import { cn } from "@/lib/utils";
 
+/** What the editor offers its parent. */
+export interface MarkdownEditorHandle {
+  /**
+   * The text before and after the cursor (the start of a selection). Before
+   * the field was ever focused, the cursor counts as being at the end.
+   */
+  splitAtCursor(): [string, string];
+}
+
 export interface MarkdownEditorProps {
+  handle?: Ref<MarkdownEditorHandle>;
   /** Stored Markdown. */
   value: string;
   /**
@@ -182,6 +193,7 @@ function Toolbar({ editor, singleLine, onLink }: { editor: Editor; singleLine: b
  * undo or redo come back as a new `value`.
  */
 export default function MarkdownEditor({
+  handle,
   value,
   onChange,
   onUndo,
@@ -198,6 +210,7 @@ export default function MarkdownEditor({
   const handlers = useRef({ onChange, onUndo, onRedo });
   handlers.current = { onChange, onUndo, onRedo };
   const [linking, setLinking] = useState(false);
+  const focused = useRef(false);
   const extensions = useMemo(() => textExtensions({ singleLine, placeholder }), [singleLine, placeholder]);
   // Only the first render's content is used; later values arrive below.
   const [initialContent] = useState(() => parseMarkdown(value, { singleLine }));
@@ -245,6 +258,9 @@ export default function MarkdownEditor({
         },
       },
     },
+    onFocus: () => {
+      focused.current = true;
+    },
     onUpdate: ({ editor }) => {
       const markdown = serializeMarkdown(editor.getJSON());
       if (markdown === shown.current) return;
@@ -260,6 +276,17 @@ export default function MarkdownEditor({
   useEffect(() => {
     editor.setEditable(!readOnly, false);
   }, [editor, readOnly]);
+
+  useImperativeHandle(
+    handle,
+    () => ({
+      splitAtCursor: () => {
+        const { doc, selection } = editor.state;
+        return splitMarkdown(doc, focused.current ? selection.from : doc.content.size);
+      },
+    }),
+    [editor],
+  );
 
   // Outside changes replace the content, keeping the cursor where it was.
   useEffect(() => {

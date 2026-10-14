@@ -3,6 +3,13 @@ import {
   applyPatch,
   applyPatches,
   coalesce,
+  deleteItem,
+  insertItemAfter,
+  insertItemBefore,
+  mergeWithNext,
+  newNote,
+  newSection,
+  splitStep,
   dropTarget,
   moveItem,
   PatchError,
@@ -13,6 +20,7 @@ import {
   type Command,
 } from "@/editor/commands";
 import { guide, step } from "@/editor/test-fixtures";
+import type { Step } from "@/lib/types";
 
 const ids = (g: ReturnType<typeof guide>) => g.items.map((item) => item.id);
 
@@ -114,5 +122,138 @@ describe("commands", () => {
     expect(merged.inverse).toEqual(first.inverse);
     expect(coalesce(first, setItemTitle(g, "B", "x"))).toBeNull();
     expect(coalesce(moveItem(g, "A", 2), moveItem(g, "A", 3))).toBeNull();
+  });
+});
+
+describe("item operations", () => {
+  it("insert sections before and notes after the selection, or at the ends", () => {
+    let after = roundTrip(insertItemBefore(guide(), newSection("S2"), "B"));
+    expect(ids(after)).toEqual(["S1", "A", "S2", "B", "N1", "C"]);
+    after = roundTrip(insertItemBefore(guide(), newSection("S2"), null));
+    expect(ids(after)[0]).toBe("S2");
+    after = roundTrip(insertItemAfter(guide(), newNote("T1", "warning"), "B"));
+    expect(ids(after)).toEqual(["S1", "A", "B", "T1", "N1", "C"]);
+    expect(after.items[3]).toEqual({ type: "note", id: "T1", kind: "warning", body: "" });
+    after = roundTrip(insertItemAfter(guide(), newNote("T1", "tip"), null));
+    expect(ids(after).at(-1)).toBe("T1");
+
+    const command = insertItemAfter(guide(), newNote("T1", "tip"), "B");
+    expect(command.label).toBe("Insert tip");
+    expect(command.select).toEqual({ forward: "T1", inverse: "B" });
+    expect(() => insertItemAfter(guide(), step("A"), null)).toThrow(PatchError);
+  });
+
+  it("delete any item and restore it in place", () => {
+    for (const id of ["S1", "A", "N1", "C"]) {
+      const g = guide();
+      const after = roundTrip(deleteItem(g, id));
+      expect(ids(after)).toEqual(ids(g).filter((other) => other !== id));
+    }
+    expect(deleteItem(guide(), "B").select).toEqual({ forward: "N1", inverse: "B" });
+    expect(deleteItem(guide(), "C").select).toEqual({ forward: "N1", inverse: "C" });
+  });
+
+  it("merge a step with the next step", () => {
+    const g = guide();
+    (g.items[1] as Step).description = "First *part*.";
+    (g.items[2] as Step).title = "Click **OK**";
+    (g.items[2] as Step).description = "- one\n- two";
+    const command = mergeWithNext(g, "A");
+    const after = applyPatches(g, command.forward);
+    expect(ids(after)).toEqual(["S1", "A", "N1", "C"]);
+    expect(after.items[1]).toMatchObject({
+      title: "Step A",
+      description: "First *part*.\n\nClick **OK**\n- one\n- two",
+      image: g.items[1].type === "step" ? g.items[1].image : undefined,
+      aiState: { status: "edited" },
+    });
+    expect(applyPatches(after, command.inverse)).toEqual(g);
+    // Empty parts are skipped.
+    expect(applyPatches(guide(), mergeWithNext(guide(), "A").forward).items[1]).toMatchObject({
+      description: "Step B",
+    });
+  });
+
+  it("merge keeps the first step's data and joins keystrokes", () => {
+    const g = guide();
+    const [first, second] = [g.items[1] as Step, g.items[2] as Step];
+    Object.assign(first, {
+      kind: "type",
+      keystrokes: "staging",
+      element: { role: "AXTextField", label: "Env" },
+      point: { x: 1, y: 2 },
+      annotations: [{ type: "box" }],
+    });
+    Object.assign(second, {
+      kind: "shortcut",
+      keystrokes: "⏎",
+      element: { role: "AXButton", label: "OK" },
+      point: { x: 9, y: 9 },
+      endPoint: { x: 10, y: 10 },
+      annotations: [{ type: "arrow" }],
+    });
+    const command = mergeWithNext(g, "A");
+    const merged = applyPatches(g, command.forward).items[1] as Step;
+    expect(merged).toMatchObject({
+      kind: "type",
+      keystrokes: "staging ⏎",
+      element: { role: "AXTextField", label: "Env" },
+      point: { x: 1, y: 2 },
+      image: first.image,
+      annotations: [{ type: "box" }],
+    });
+    expect(merged.endPoint).toBeUndefined();
+    expect(applyPatches(applyPatches(g, command.forward), command.inverse)).toEqual(g);
+
+    // Only one side has keystrokes: those are kept.
+    const h = guide();
+    (h.items[2] as Step).keystrokes = "⌘S";
+    expect((applyPatches(h, mergeWithNext(h, "A").forward).items[1] as Step).keystrokes).toBe("⌘S");
+    const k = guide();
+    (k.items[1] as Step).keystrokes = "abc";
+    const keep = mergeWithNext(k, "A");
+    expect(keep.forward.some((p) => p.op === "setItem" && p.key === "keystrokes")).toBe(false);
+    expect((applyPatches(k, keep.forward).items[1] as Step).keystrokes).toBe("abc");
+    // Neither: no keystrokes field appears.
+    expect(applyPatches(guide(), mergeWithNext(guide(), "A").forward).items[1]).not.toHaveProperty("keystrokes");
+  });
+
+  it("merge only into a step that has a step after it", () => {
+    expect(() => mergeWithNext(guide(), "B")).toThrow(PatchError); // a note follows
+    expect(() => mergeWithNext(guide(), "C")).toThrow(PatchError); // last
+    expect(() => mergeWithNext(guide(), "S1")).toThrow(PatchError); // not a step
+  });
+
+  it("split a step, sharing its screenshot", () => {
+    const g = guide();
+    (g.items[1] as Step).description = "Before.\n\nAfter.";
+    (g.items[1] as Step).annotations = [{ type: "arrow" }];
+    const command = splitStep(g, "A", "A2", "Before.", "After.");
+    const after = applyPatches(g, command.forward);
+    expect(ids(after)).toEqual(["S1", "A", "A2", "B", "N1", "C"]);
+    expect(after.items[1]).toMatchObject({ description: "Before.", aiState: { status: "edited" } });
+    expect(after.items[2]).toEqual({
+      type: "step",
+      id: "A2",
+      title: "",
+      description: "After.",
+      kind: "manual",
+      image: (g.items[1] as Step).image,
+      annotations: [],
+      aiState: { status: "edited" },
+    });
+    expect(applyPatches(after, command.inverse)).toEqual(g);
+    expect(command.select).toEqual({ forward: "A2", inverse: "A" });
+  });
+
+  it("split at the end adds an empty step and leaves the first alone", () => {
+    const g = guide();
+    const command = splitStep(g, "A", "A2", "", "");
+    expect(command.forward).toHaveLength(1);
+    const after = roundTrip(command);
+    expect(after.items[1]).toEqual(g.items[1]);
+    expect(after.items[2]).toMatchObject({ id: "A2", aiState: { status: "template" } });
+    expect(() => splitStep(g, "N1", "X", "", "")).toThrow(PatchError);
+    expect(() => splitStep(g, "A", "B", "", "")).toThrow(PatchError);
   });
 });

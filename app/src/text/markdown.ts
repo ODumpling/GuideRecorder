@@ -271,14 +271,17 @@ class Builder {
   }
 }
 
-/**
- * Line endings as core's parser sees them: CR LF and lone CR become LF.
- * Unicode line and paragraph separators become a line break and a blank
- * line, so they never reach the editor as invisible characters.
- */
+/** Line endings as core's parser sees them: CR LF and lone CR become LF. */
 function cleanLineEndings(input: string): string {
-  return input.replace(/\r\n?/g, "\n").replace(/\u2028/g, "\n").replace(/\u2029/g, "\n\n");
+  return input.replace(/\r\n?/g, "\n");
 }
+
+/**
+ * Unicode line and paragraph separators are plain text to core. In the
+ * editor they become spaces (after parsing, so the structure stays core's)
+ * instead of invisible characters.
+ */
+const editorText = (text: string) => text.replace(/[\u2028\u2029]/g, " ");
 
 function parseBlocks(input: string): Block[] {
   const builder = new Builder();
@@ -334,10 +337,10 @@ function inlinesToJSON(inlines: Inline[], marks: MarkJSON[], out: JSONContent[])
     const withMarks = (node: JSONContent): JSONContent => (marks.length ? { ...node, marks } : node);
     switch (inline.kind) {
       case "text":
-        if (inline.text) out.push(withMarks({ type: "text", text: inline.text }));
+        if (inline.text) out.push(withMarks({ type: "text", text: editorText(inline.text) }));
         break;
       case "code":
-        if (inline.text) out.push({ type: "text", text: inline.text, marks: withMark(marks, { type: "code" }) });
+        if (inline.text) out.push({ type: "text", text: editorText(inline.text), marks: withMark(marks, { type: "code" }) });
         break;
       case "break":
         out.push(withMarks({ type: "hardBreak" }));
