@@ -15,6 +15,9 @@ pub struct ExportReport {
     pub files: Vec<PathBuf>,
     /// Per-step image warnings, keyed by step id.
     pub warnings: Vec<(Ulid, RenderWarning)>,
+    /// Document-level warnings not tied to a step (e.g. typesetter
+    /// diagnostics), as human-readable text.
+    pub notes: Vec<String>,
 }
 
 impl ExportReport {
