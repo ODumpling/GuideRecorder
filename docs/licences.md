@@ -1,0 +1,35 @@
+# Dependency licences
+
+Audit of 2026-10-14 (Solo todo #373). GuidesYa is closed source, so only
+permissive licences are acceptable; nothing GPL/LGPL/AGPL is linked.
+
+## Rust (`cargo metadata`, ~800 third-party crates)
+
+- MIT / Apache-2.0 (and dual forms): the vast majority.
+- Also permissive: BSD-2/3-Clause, ISC, Zlib, 0BSD, Unlicense, CC0-1.0,
+  BSL-1.0, Unicode-3.0 (ICU data), CDLA-Permissive-2.0 (webpki root certs).
+- `r-efi` is "MIT OR Apache-2.0 OR LGPL-2.1-or-later": used under MIT.
+- `aws-lc-sys` (rustls crypto via reqwest): ISC / Apache-2.0 / MIT /
+  BSD-3-Clause / OpenSSL-style terms, all permissive.
+- MPL-2.0 (weak, file-level copyleft) only via Tauri: `cssparser`,
+  `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`. Fine for a
+  closed-source app as long as those files are not modified.
+
+## Frontend (`pnpm licenses list --prod`)
+
+87 packages: 83 MIT, plus 0BSD (tslib), Apache-2.0
+(class-variance-authority), Apache-2.0 OR MIT (@tauri-apps/api) and ISC
+(lucide-react).
+
+## Bundled assets
+
+- Lato Regular/Bold/Italic/BoldItalic 2.015: SIL OFL 1.1
+  (`crates/guidesya-core/assets/fonts`, hashes in its README).
+- typst-assets fonts (DejaVu Sans Mono, New Computer Modern, Libertinus
+  Serif): their own free font licences (Bitstream Vera/DejaVu, GUST/OFL,
+  OFL), redistributable; embedded as PDF subsets.
+
+## Keeping it clean
+
+`deny.toml` encodes the policy for `cargo deny check licenses`. Re-run this
+audit when adding dependencies; new crates must be permissive.
