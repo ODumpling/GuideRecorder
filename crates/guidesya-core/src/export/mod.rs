@@ -8,6 +8,9 @@
 mod annotate;
 pub mod ast;
 pub mod blur;
+pub mod docx;
+pub mod html;
+pub mod md;
 pub mod raster;
 pub mod render;
 
