@@ -17,6 +17,6 @@ pub mod render;
 pub mod report;
 
 pub use md::{Branding, CheckedBranding};
-pub use raster::{render_step_image, ImageOptions, RenderWarning, RenderedImage};
+pub use raster::{render_step_image, verify_crop_rect, ImageOptions, RenderWarning, RenderedImage};
 pub use render::{RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep};
 pub use report::ExportReport;

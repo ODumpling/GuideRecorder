@@ -228,6 +228,14 @@ fn point(x: u32, y: u32) -> Point {
 
 /// The whole-pixel origin from a stored `crop_rect`, if its size matches the
 /// crop image (±1 px).
+/// Whether a stored `crop_rect` places `crop` exactly in `full`: the size
+/// matches (±1 px), the origin is whole pixels, and the crop equals the
+/// full screenshot there. This is the check [`render_step_image`] applies
+/// before trusting `crop_rect`.
+pub fn verify_crop_rect(full: &RgbaImage, crop: &RgbaImage, rect: Rect) -> bool {
+    stored_origin(rect, crop).is_some_and(|(x, y)| crop_matches_at(full, crop, x, y))
+}
+
 fn stored_origin(r: Rect, crop: &RgbaImage) -> Option<(u32, u32)> {
     let whole = |v: f64| {
         (v.is_finite() && v >= 0.0 && (v - v.round()).abs() < 1e-6).then(|| v.round() as u32)
@@ -458,6 +466,42 @@ mod tests {
         RgbaImage::from_fn(w, h, |x, y| {
             image::Rgba([(x * 7 + y) as u8, (y * 13) as u8, (x ^ y) as u8, 255])
         })
+    }
+
+    #[test]
+    fn verifies_stored_crop_rect() {
+        let full = pattern(64, 40);
+        let crop = imageops::crop_imm(&full, 20, 10, 16, 10).to_image();
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        assert!(verify_crop_rect(&full, &crop, rect(20.0, 10.0, 16.0, 10.0)));
+        // Right size, wrong place: the pixels don't match.
+        assert!(!verify_crop_rect(
+            &full,
+            &crop,
+            rect(21.0, 10.0, 16.0, 10.0)
+        ));
+        // Size off by more than a pixel, or a fractional origin.
+        assert!(!verify_crop_rect(
+            &full,
+            &crop,
+            rect(20.0, 10.0, 18.0, 10.0)
+        ));
+        assert!(!verify_crop_rect(
+            &full,
+            &crop,
+            rect(20.5, 10.0, 16.0, 10.0)
+        ));
+        // Outside the screenshot.
+        assert!(!verify_crop_rect(
+            &full,
+            &crop,
+            rect(60.0, 10.0, 16.0, 10.0)
+        ));
     }
 
     #[test]
