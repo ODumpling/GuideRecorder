@@ -1,0 +1,13 @@
+[
+  {"ts": 500000000, "event": {"type": "appActivated", "app": {"pid": 500, "name": "TextEdit", "bundleId": "com.apple.TextEdit"}}},
+  {"ts": 600000000, "event": {"type": "focusChanged", "element": {"role": "AXTextArea", "app": {"pid": 500, "name": "TextEdit", "bundleId": "com.apple.TextEdit"}}}},
+  {"ts": 1000000000, "event": {"type": "keyDown", "key": {"code": 4, "characters": "H"}, "modifiers": {"shift": true, "control": false, "option": false, "command": false, "function": false, "capsLock": false}, "isRepeat": false}},
+  {"ts": 1100000000, "event": {"type": "keyDown", "key": {"code": 34, "characters": "i"}, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}, "isRepeat": false}},
+  {"ts": 2000000000, "event": {"type": "keyDown", "key": {"code": 1, "characters": "s", "charactersIgnoringModifiers": "s"}, "modifiers": {"shift": false, "control": false, "option": false, "command": true, "function": false, "capsLock": false}, "isRepeat": false}},
+  {"ts": 2050000000, "event": {"type": "keyDown", "key": {"code": 1, "characters": "s", "charactersIgnoringModifiers": "s"}, "modifiers": {"shift": false, "control": false, "option": false, "command": true, "function": false, "capsLock": false}, "isRepeat": true}},
+  {"ts": 3000000000, "event": {"type": "keyDown", "key": {"code": 36, "characters": "\r"}, "modifiers": {"shift": true, "control": true, "option": true, "command": true, "function": false, "capsLock": false}, "isRepeat": false}},
+  {"ts": 4000000000, "event": {"type": "keyDown", "key": {"code": 96, "characters": ""}, "modifiers": {"shift": false, "control": false, "option": false, "command": true, "function": true, "capsLock": false}, "isRepeat": false}},
+  {"ts": 4500000000, "event": {"type": "flagsChanged", "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}}},
+  {"ts": 4600000000, "event": {"type": "keyDown", "key": {"code": 124, "characters": ""}, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}, "isRepeat": false}},
+  {"ts": 5000000000, "event": {"type": "keyDown", "key": {"code": 53, "characters": "\u001b"}, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}, "isRepeat": false}}
+]

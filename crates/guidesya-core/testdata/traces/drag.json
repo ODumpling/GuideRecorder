@@ -1,0 +1,14 @@
+[
+  {"ts": 500000000, "event": {"type": "appActivated", "app": {"pid": 100, "name": "Finder", "bundleId": "com.apple.finder"}}},
+  {"ts": 600000000, "event": {"type": "focusChanged", "element": {"role": "AXImage", "app": {"pid": 100, "name": "Finder", "bundleId": "com.apple.finder"}, "label": "Report.pdf", "frame": {"x": 50, "y": 80, "width": 120, "height": 40}}}},
+  {"ts": 1000000000, "event": {"type": "mouseDown", "point": {"x": 100, "y": 100}, "button": "left", "clickCount": 1, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}}},
+  {"ts": 1100000000, "event": {"type": "mouseDragged", "point": {"x": 102, "y": 101}, "button": "left"}},
+  {"ts": 1200000000, "event": {"type": "mouseDragged", "point": {"x": 250, "y": 180}, "button": "left"}},
+  {"ts": 1300000000, "event": {"type": "mouseDragged", "point": {"x": 400, "y": 250}, "button": "left"}},
+  {"ts": 1350000000, "event": {"type": "mouseUp", "point": {"x": 400, "y": 250}, "button": "left", "clickCount": 1, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}}},
+  {"ts": 2000000000, "event": {"type": "scroll", "point": {"x": 300, "y": 300}, "deltaX": 0.0, "deltaY": -12.5}},
+  {"ts": 3000000000, "event": {"type": "mouseDown", "point": {"x": 800, "y": 600}, "button": "left", "clickCount": 1, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}}},
+  {"ts": 3050000000, "event": {"type": "mouseDragged", "point": {"x": 802, "y": 602}, "button": "left"}},
+  {"ts": 3100000000, "event": {"type": "mouseUp", "point": {"x": 803, "y": 603}, "button": "left", "clickCount": 1, "modifiers": {"shift": false, "control": false, "option": false, "command": false, "function": false, "capsLock": false}}},
+  {"ts": 5000000000, "event": {"type": "manualStep"}}
+]
