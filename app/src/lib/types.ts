@@ -155,9 +155,26 @@ export interface OpenedGuide {
   migrationError: string | null;
 }
 
-export type ErrorKind = "notFound" | "readOnly" | "notOpen" | "conflict" | "invalid" | "io";
+/** `exists`: an export target is already there and overwrite is off. */
+export type ErrorKind = "notFound" | "readOnly" | "notOpen" | "conflict" | "invalid" | "exists" | "io";
 
 export interface AppError {
   kind: ErrorKind;
   message: string;
+}
+
+export type ExportFormat = "md" | "html" | "docx" | "pdf";
+
+/** Export branding: a logo the user chose in the logo dialog, and an accent colour. */
+export interface ExportBranding {
+  logo: string | null;
+  accent: string | null;
+}
+
+/** What an export wrote and what degraded along the way. */
+export interface ExportResult {
+  /** Files written, the main document first. */
+  files: string[];
+  warnings: { stepId: Ulid; message: string }[];
+  notes: string[];
 }

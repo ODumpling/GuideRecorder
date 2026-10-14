@@ -1,5 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppError, Guide, GuideListItem, OpenedGuide, Step, StepImage } from "@/lib/types";
+import type {
+  AppError,
+  ExportBranding,
+  ExportFormat,
+  ExportResult,
+  Guide,
+  GuideListItem,
+  OpenedGuide,
+  Step,
+  StepImage,
+} from "@/lib/types";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
 export interface EditorApi {
@@ -55,6 +65,45 @@ export function copyStepImages(guideId: string, image: StepImage, newStepId: str
 export async function readImageFile(path: string): Promise<ArrayBuffer> {
   return toArrayBuffer(await invoke("read_image_file", { path }));
 }
+
+/**
+ * Whether a step's `cropRect` places its crop image exactly, by the
+ * exporter's check (size and pixels against the full screenshot).
+ */
+export function verifyCrop(guideId: string, image: StepImage): Promise<boolean> {
+  return invoke("verify_crop", { guideId, image });
+}
+
+/**
+ * Export commands. The native dialogs run on the Rust side, which accepts
+ * only destinations and logos they returned.
+ */
+export interface ExportApi {
+  /** A folder a Markdown or HTML export goes into; null if cancelled. */
+  chooseFolder(): Promise<string | null>;
+  /** Where a DOCX or PDF file is saved; null if cancelled. */
+  chooseFile(format: ExportFormat, fileName: string): Promise<string | null>;
+  /** A PNG or JPEG logo; null if cancelled. */
+  chooseLogo(): Promise<string | null>;
+  exportGuide(
+    guideId: string,
+    format: ExportFormat,
+    out: string,
+    overwrite: boolean,
+    branding: ExportBranding,
+  ): Promise<ExportResult>;
+  /** Shows a file an export wrote in Finder. */
+  reveal(path: string): Promise<void>;
+}
+
+export const tauriExportApi: ExportApi = {
+  chooseFolder: () => invoke("choose_export_folder"),
+  chooseFile: (format, fileName) => invoke("choose_export_file", { format, fileName }),
+  chooseLogo: () => invoke("choose_logo"),
+  exportGuide: (guideId, format, out, overwrite, branding) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding }),
+  reveal: (path) => invoke("reveal_export", { path }),
+};
 
 /** Emitted by the Rust side on Cmd+Q; answer with `quit_ack`, then save and quit. */
 export const QUIT_REQUESTED_EVENT = "guidesya://quit-requested";

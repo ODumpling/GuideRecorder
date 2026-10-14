@@ -44,6 +44,8 @@ pub enum ErrorKind {
     Conflict,
     /// Bad input from the UI (e.g. an invalid id).
     Invalid,
+    /// The export target already exists and overwrite is off.
+    Exists,
     /// Anything else: IO, index, startup.
     Io,
 }
@@ -195,12 +197,34 @@ impl Session {
         })
     }
 
-    fn guide_lock(&self, id: Ulid) -> Arc<Mutex<()>> {
+    pub(crate) fn guide_lock(&self, id: Ulid) -> Arc<Mutex<()>> {
         Arc::clone(self.guide_locks.lock().unwrap().entry(id).or_default())
     }
 
     pub fn root(&self) -> &Path {
         self.library.root()
+    }
+
+    pub(crate) fn library(&self) -> &Library {
+        &self.library
+    }
+
+    /// The bundle of an opened guide.
+    pub(crate) fn open_handle(&self, id: Ulid) -> Result<GuideHandle> {
+        let open = self.open.lock().unwrap();
+        let entry = open
+            .get(&id)
+            .ok_or_else(|| AppError::new(ErrorKind::NotOpen, format!("guide {id} is not open")))?;
+        Ok(entry.handle.clone())
+    }
+
+    /// The bundle of a guide: the one it was opened from, else the one the
+    /// library finds.
+    pub(crate) fn bundle(&self, id: Ulid) -> Result<GuideHandle> {
+        match self.open_handle(id) {
+            Ok(handle) => Ok(handle),
+            Err(_) => Ok(self.library.find(id)?.ok_or(LibraryError::NotFound(id))?),
+        }
     }
 
     /// Lists guides, best match first when `query` is set. Uses the index
@@ -308,13 +332,7 @@ impl Session {
     pub fn step_image(&self, guide_id: &str, path: &str) -> Result<Vec<u8>> {
         let guide_id = parse_id(guide_id)?;
         check_image_path(path)?;
-        let handle = {
-            let open = self.open.lock().unwrap();
-            let entry = open.get(&guide_id).ok_or_else(|| {
-                AppError::new(ErrorKind::NotOpen, format!("guide {guide_id} is not open"))
-            })?;
-            entry.handle.clone()
-        };
+        let handle = self.open_handle(guide_id)?;
         let path = handle.resolve(path)?;
         std::fs::read(&path).map_err(|e| file_error(&path, e))
     }
@@ -442,7 +460,7 @@ impl Session {
 
 /// Step image paths the editor may name: WebP files under `steps/` or
 /// `assets/` (then resolved inside the bundle).
-fn check_image_path(path: &str) -> Result<()> {
+pub(crate) fn check_image_path(path: &str) -> Result<()> {
     let allowed =
         (path.starts_with("steps/") || path.starts_with("assets/")) && path.ends_with(".webp");
     if allowed {
@@ -733,7 +751,7 @@ fn read_image_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn file_error(path: &Path, e: std::io::Error) -> AppError {
+pub(crate) fn file_error(path: &Path, e: std::io::Error) -> AppError {
     let kind = if e.kind() == std::io::ErrorKind::NotFound {
         ErrorKind::NotFound
     } else {
@@ -742,7 +760,7 @@ fn file_error(path: &Path, e: std::io::Error) -> AppError {
     AppError::new(kind, format!("{}: {e}", path.display()))
 }
 
-fn parse_id(id: &str) -> Result<Ulid> {
+pub(crate) fn parse_id(id: &str) -> Result<Ulid> {
     Ulid::from_string(id)
         .map_err(|_| AppError::new(ErrorKind::Invalid, format!("invalid id {id:?}")))
 }
@@ -781,15 +799,15 @@ impl SessionCell {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    const FIXTURE: &str = "Rotate an API key.guidesya";
+    pub(crate) const FIXTURE: &str = "Rotate an API key.guidesya";
 
     /// A fresh library under `target/` holding a copy of the fixtures.
-    fn library() -> PathBuf {
+    pub(crate) fn library() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/guidesya-app-tests")
@@ -821,7 +839,7 @@ mod tests {
         }
     }
 
-    fn fixture_id(root: &Path) -> String {
+    pub(crate) fn fixture_id(root: &Path) -> String {
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join(FIXTURE).join("guide.json")).unwrap())
                 .unwrap();

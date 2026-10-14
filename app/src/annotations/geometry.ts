@@ -214,6 +214,15 @@ export function drawOrder(annotations: Annotation[]): Annotation[] {
   ];
 }
 
+/**
+ * The order of the hit targets, bottom first: crops (picked by their edge)
+ * under everything, then {@link drawOrder}, so a click picks the shape
+ * drawn on top.
+ */
+export function hitOrder(annotations: Annotation[]): Annotation[] {
+  return [...annotations.filter((a) => a.type === "crop"), ...drawOrder(annotations)];
+}
+
 /** The exporter's rule for `strokeWidth`. */
 export function strokeWidth(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, 256) : fallback;

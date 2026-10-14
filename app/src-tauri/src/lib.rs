@@ -6,6 +6,7 @@ use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
 
 mod commands;
 mod editor;
+mod export;
 mod navigation;
 
 use editor::{AppError, DroppedFiles, ErrorKind, Session, SessionCell};
@@ -31,9 +32,13 @@ fn app_info() -> AppInfo {
 pub fn run() {
     tauri::Builder::default()
         .plugin(navigation::guard())
+        // Dialogs and Reveal run from Rust only: no capability grants them
+        // to the webview.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
             app.manage(Arc::new(DroppedFiles::default()));
+            app.manage(Arc::new(export::ChosenPaths::default()));
             let cell = Arc::new(SessionCell::default());
             app.manage(Arc::clone(&cell));
             let root = editor::library_root(
@@ -75,6 +80,12 @@ pub fn run() {
             commands::add_image_step,
             commands::copy_step_images,
             commands::read_image_file,
+            commands::choose_export_folder,
+            commands::choose_export_file,
+            commands::choose_logo,
+            commands::export_guide,
+            commands::reveal_export,
+            commands::verify_crop,
             commands::quit_ack,
             commands::quit_app,
         ])

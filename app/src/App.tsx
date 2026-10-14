@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ImagePlus, Lock, Redo2, TriangleAlert, Undo2, X } from "lucide-react";
+import { FileOutput, ImagePlus, Lock, Redo2, TriangleAlert, Undo2, X } from "lucide-react";
+import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { LibrarySidebar } from "@/components/LibrarySidebar";
@@ -49,6 +50,7 @@ function Toolbar() {
   const canUndo = useEditor((s) => s.undoStack.length > 0 && !s.doc?.readOnly);
   const canRedo = useEditor((s) => s.redoStack.length > 0 && !s.doc?.readOnly);
   const { undo, redo } = editorStore.getState();
+  const [exporting, setExporting] = useState(false);
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
       <span className="truncate text-sm font-medium">{doc ? doc.guide.title || "Untitled" : "GuidesYa"}</span>
@@ -70,6 +72,14 @@ function Toolbar() {
         >
           <Redo2 />
         </Button>
+        {doc && (
+          <>
+            <Button variant="outline" size="sm" className="ml-1" onClick={() => setExporting(true)}>
+              <FileOutput /> Export…
+            </Button>
+            <ExportDialog open={exporting} onOpenChange={setExporting} />
+          </>
+        )}
       </div>
     </header>
   );

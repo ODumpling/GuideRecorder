@@ -17,6 +17,7 @@ import {
   bounds,
   cropFits,
   drawOrder,
+  hitOrder,
   clientToImage,
   createAnnotation,
   dragAnnotation,
@@ -34,7 +35,8 @@ import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { setImageShow, type Command } from "@/editor/commands";
 import { editorStore } from "@/editor/editor";
-import type { Annotation, Guide, Point, Step } from "@/lib/types";
+import { verifyCrop } from "@/lib/ipc";
+import type { Annotation, Guide, Point, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { cn } from "@/lib/utils";
 
@@ -90,6 +92,39 @@ function useNaturalSize(url: string | null): { width: number; height: number } |
   return size && size.url === url ? size : null;
 }
 
+/** Identifies what `verify_crop` checked: the image paths and `cropRect`. */
+function cropCheckKey(image: StepImage): string | null {
+  if (image.show !== "crop" || !image.crop || !image.cropRect) return null;
+  const { x, y, width, height } = image.cropRect;
+  return `${image.full}|${image.crop}|${x},${y},${width},${height}`;
+}
+
+/**
+ * The result of `verify_crop` for the step's crop view: `true` or `false`
+ * once known, `null` while pending or when no crop is shown. A failed
+ * check counts as `false`, so the full screenshot is shown.
+ */
+function useCropCheck(guideId: string, image: StepImage): boolean | null {
+  const key = cropCheckKey(image);
+  const [result, setResult] = useState<{ key: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    verifyCrop(guideId, image).then(
+      (ok) => !cancelled && setResult({ key, ok }),
+      (error) => {
+        console.error("verify_crop failed:", error);
+        if (!cancelled) setResult({ key, ok: false });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // `key` covers the parts of `image` the check reads.
+  }, [guideId, key]);
+  return key && result?.key === key ? result.ok : null;
+}
+
 function Layer({
   guideId,
   step,
@@ -107,19 +142,24 @@ function Layer({
   selectedId: string | null;
   select(id: string | null): void;
 }) {
-  // A crop whose image doesn't fit its `cropRect` is set aside for the full
-  // screenshot (by path, so a new crop is checked afresh).
+  // A crop is shown only once the Rust side has checked its `cropRect`
+  // the way the exporter does (size, and pixels against the full
+  // screenshot); otherwise it is set aside for the full screenshot. Keyed
+  // by the image paths and rect, so a changed crop is checked afresh.
+  const verified = useCropCheck(guideId, step.image);
   const [rejectedCrop, setRejectedCrop] = useState<string | null>(null);
-  const shown = imageView(step.image, rejectedCrop !== null && rejectedCrop === step.image.crop);
+  const cropKey = cropCheckKey(step.image);
+  const rejected = (rejectedCrop !== null && rejectedCrop === cropKey) || verified === false;
+  const shown = imageView(step.image, rejected);
   const { url, error } = useStepImage(guideId, shown.path);
   const natural = useNaturalSize(url);
   const cropMismatch = !!shown.rect && !!natural && !cropFits(shown.rect, natural);
   useEffect(() => {
-    if (cropMismatch) setRejectedCrop(step.image.crop ?? null);
-  }, [cropMismatch, step.image.crop]);
+    if (cropMismatch) setRejectedCrop(cropKey);
+  }, [cropMismatch, cropKey]);
   // Nothing is drawn until the crop is known to fit.
   const view: View | null = shown.rect
-    ? natural && !cropMismatch
+    ? natural && !cropMismatch && verified === true
       ? shown.rect
       : null
     : natural && { x: 0, y: 0, width: natural.width, height: natural.height };
@@ -309,7 +349,7 @@ function Layer({
 
         {/* Hit targets, in drawing order so the topmost shape wins. */}
         <g pointerEvents={tool === "select" ? "auto" : "none"}>
-          {annotations.map((annotation) => {
+          {hitOrder(annotations).map((annotation) => {
             const down = (e: ReactPointerEvent) => onShapeDown(e, annotation, { kind: "body" });
             if (annotation.type === "arrow") {
               const { from, to } = annotation.geometry;

@@ -4,6 +4,7 @@ import {
   clampPoint,
   cropFits,
   drawOrder,
+  hitOrder,
   arrowShape,
   blurAmount,
   calloutEdge,
@@ -259,6 +260,17 @@ describe("drawing rules (as the exporter)", () => {
     });
     const order = drawOrder([shape("b1", "blur"), shape("x1", "box"), shape("k", "crop"), shape("b2", "blur"), shape("h", "highlight")]);
     expect(order.map((a) => a.id)).toEqual(["x1", "h", "b1", "b2"]);
+  });
+
+  it("hit targets follow the drawing order, with crops at the bottom", () => {
+    const shape = (id: string, type: "box" | "blur" | "crop" | "highlight"): Annotation => ({
+      id,
+      type,
+      geometry: { x: 0, y: 0, width: 1, height: 1 },
+    });
+    // A box added after a blur is still under it, so the blur wins a click.
+    const order = hitOrder([shape("b1", "blur"), shape("x1", "box"), shape("k", "crop"), shape("h", "highlight")]);
+    expect(order.map((a) => a.id)).toEqual(["k", "x1", "h", "b1"]);
   });
 
   it("callout pointers, the active crop and the crop mask", () => {

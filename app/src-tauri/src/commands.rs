@@ -1,18 +1,21 @@
 //! Tauri commands over the editor [`Session`]. Library IO runs on the
 //! blocking pool, never on the main thread.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use guidesya_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::editor::{
     AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
     MAX_PNG_BYTES,
 };
+use crate::export::{self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format};
 
 /// Runs `f` with the session on the blocking pool.
 async fn with_session<T, F>(cell: State<'_, Arc<SessionCell>>, f: F) -> Result<T>
@@ -159,6 +162,151 @@ pub async fn read_image_file(
         .await
         .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))??;
     Ok(Response::new(bytes))
+}
+
+/// Runs `f` on the blocking pool (native dialogs block until closed).
+async fn blocking<T, F>(f: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))?
+}
+
+fn dialog_path(path: FilePath) -> Result<PathBuf> {
+    path.into_path()
+        .map_err(|e| AppError::new(ErrorKind::Invalid, format!("not a file path: {e}")))
+}
+
+/// Asks for the folder a Markdown or HTML export goes into (as a new
+/// folder inside it). `None` if the user cancelled.
+#[tauri::command]
+pub async fn choose_export_folder<R: Runtime>(
+    window: WebviewWindow<R>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+) -> Result<Option<PathBuf>> {
+    let chosen = Arc::clone(&chosen);
+    blocking(move || {
+        let Some(path) = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Export into folder")
+            .blocking_pick_folder()
+        else {
+            return Ok(None);
+        };
+        let path = dialog_path(path)?;
+        chosen.add_folder(path.clone());
+        Ok(Some(path))
+    })
+    .await
+}
+
+/// Asks where a DOCX or PDF export is saved, suggesting `file_name`.
+/// `None` if the user cancelled.
+#[tauri::command]
+pub async fn choose_export_file<R: Runtime>(
+    window: WebviewWindow<R>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+    format: Format,
+    file_name: String,
+) -> Result<Option<PathBuf>> {
+    let extension = format.extension().ok_or_else(|| {
+        AppError::new(ErrorKind::Invalid, "Markdown and HTML export into a folder")
+    })?;
+    let chosen = Arc::clone(&chosen);
+    blocking(move || {
+        let label = extension.to_ascii_uppercase();
+        let Some(path) = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(format!("Export as {label}"))
+            .set_file_name(with_extension(PathBuf::from(file_name), extension).to_string_lossy())
+            .add_filter(label, &[extension])
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = with_extension(dialog_path(path)?, extension);
+        chosen.add_file(path.clone());
+        Ok(Some(path))
+    })
+    .await
+}
+
+/// Asks for a logo image (PNG or JPEG). `None` if the user cancelled.
+#[tauri::command]
+pub async fn choose_logo<R: Runtime>(
+    window: WebviewWindow<R>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+) -> Result<Option<PathBuf>> {
+    let chosen = Arc::clone(&chosen);
+    blocking(move || {
+        let Some(path) = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Choose a logo")
+            .add_filter("PNG or JPEG image", &["png", "jpg", "jpeg"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = dialog_path(path)?;
+        chosen.add_logo(path.clone());
+        Ok(Some(path))
+    })
+    .await
+}
+
+/// Exports a guide from its saved bundle (see [`export::export_guide`]).
+/// The editor saves its changes first.
+#[tauri::command]
+pub async fn export_guide(
+    cell: State<'_, Arc<SessionCell>>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+    guide_id: String,
+    format: Format,
+    out: PathBuf,
+    overwrite: bool,
+    branding: BrandingRequest,
+) -> Result<ExportResult> {
+    let chosen = Arc::clone(&chosen);
+    with_session(cell, move |s| {
+        export::export_guide(s, &chosen, &guide_id, format, &out, overwrite, &branding)
+    })
+    .await
+}
+
+/// Shows a file an export wrote in Finder.
+#[tauri::command]
+pub async fn reveal_export(chosen: State<'_, Arc<ChosenPaths>>, path: PathBuf) -> Result<()> {
+    chosen.check_exported(&path)?;
+    blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| {
+            AppError::new(
+                ErrorKind::Io,
+                format!("cannot reveal {}: {e}", path.display()),
+            )
+        })
+    })
+    .await
+}
+
+/// Whether a step's `cropRect` places its crop exactly (see
+/// [`export::verify_crop`]); the annotation layer shows the crop view only
+/// then.
+#[tauri::command]
+pub async fn verify_crop(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    image: StepImage,
+) -> Result<bool> {
+    with_session(cell, move |s| export::verify_crop(s, &guide_id, &image)).await
 }
 
 /// Emitted on a user quit (Cmd+Q, last window closed); see `QuitGate`.
