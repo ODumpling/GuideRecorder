@@ -1,0 +1,10 @@
+{
+  // Type-checks the e2e tests and their harness: `pnpm exec tsc -p e2e`.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"]
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"],
+  "exclude": ["node_modules", "test-results"]
+}
