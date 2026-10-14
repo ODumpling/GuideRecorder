@@ -1,0 +1,54 @@
+# Rotate an API key
+
+Replace a leaked or expiring API key without downtime.
+
+Rotate keys every *90 days*, or right away if one leaks.
+
+## Prerequisites
+
+Admin access to the console.
+
+> **Warning:** Creating a new key **revokes** the old one immediately. Update these first:
+>
+> 1. The CI secret
+> 2. Local `.env` files
+
+## 1. Open **Settings → API keys**
+
+![Open Settings → API keys](images/01-open-settings-api-keys.png)
+
+## 2. Enter your password to confirm
+
+![Enter your password to confirm](images/02-enter-your-password-to-confirm.png)
+
+Password input is masked while recording.
+
+## 3. Click **Create key** and copy the new key
+
+![Click Create key and copy the new key](images/03-click-create-key-and-copy-the-new-key.png)
+
+The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
+
+## 4. Drag the new key to **Production**
+
+![Drag the new key to Production](images/04-drag-the-new-key-to-production.png)
+
+## 5. Check that the key works
+
+![Check that the key works](images/05-check-that-the-key-works.png)
+
+Run this in Terminal:
+
+`curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`
+
+It should print *pong*.
+
+<!-- files -->
+guide.md
+images/01-open-settings-api-keys.png
+images/02-enter-your-password-to-confirm.png
+images/03-click-create-key-and-copy-the-new-key.png
+images/04-drag-the-new-key-to-production.png
+images/05-check-that-the-key-works.png
+<!-- warnings -->
+01M4WZCE2000000000000002R4 crop position unknown; showing the full screenshot
