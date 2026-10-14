@@ -2,8 +2,12 @@
 //!
 //! See design scratchpads #444 (format), #443 (export) and #442 (AI).
 
+pub mod ai;
+pub mod events;
+pub mod library;
 pub mod markdown;
 pub mod model;
+pub mod steps;
 
 pub use ulid::Ulid;
 

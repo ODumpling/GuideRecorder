@@ -1,4 +1,6 @@
 //! macOS capture backend: ScreenCaptureKit frames, CGEventTap input, AX lookups.
-//! Implemented in M0 (#339, #356, #354, #344).
 
+pub mod ax;
+pub mod event_tap;
+pub mod frames;
 pub mod permissions;
