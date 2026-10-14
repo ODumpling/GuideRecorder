@@ -28,3 +28,19 @@ cargo test --workspace  # from repo root
 macOS permissions (Screen Recording, Accessibility) only survive rebuilds when
 builds are signed with a stable identity. Run `scripts/macos-signing.sh create`
 once; see [docs/signing.md](docs/signing.md).
+
+## Use with Claude Code (MCP)
+
+```sh
+cargo build --release -p guidesya-mcp
+claude mcp add guidesya -- "$PWD/target/release/guidesya-mcp" --library ~/Documents/GuidesYa
+```
+
+The server is read-only. See [crates/guidesya-mcp/README.md](crates/guidesya-mcp/README.md).
+
+## CLI
+
+```sh
+cargo run -p guidesya-cli -- --library <dir> list | search <q> | validate <bundle>
+cargo run -p guidesya-cli -- --library <dir> --index <path> reindex   # the only writer
+```
