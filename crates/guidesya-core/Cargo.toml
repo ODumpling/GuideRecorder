@@ -13,7 +13,7 @@ thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 ulid = { version = "1", features = ["serde"] }
-image = { version = "0.25.10", default-features = false, features = ["webp"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 keyring = "4.2.0"
