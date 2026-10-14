@@ -18,16 +18,31 @@ import {
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
 import type { ExportFormat } from "@/lib/types";
+import { settingsStore } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
-/** Choices kept between exports while the app runs (Settings will store defaults). */
+/**
+ * Choices made in this dialog while the app runs; until then the dialog
+ * starts from the Export defaults in Settings. Not "Replace": that is
+ * asked afresh for every destination.
+ */
 const remembered: {
-  format: ExportFormat;
-  folder: string | null;
-  overwrite: boolean;
-  logo: string | null;
-  accent: string;
-} = { format: "pdf", folder: null, overwrite: false, logo: null, accent: "" };
+  format?: ExportFormat;
+  folder?: string | null;
+  logo?: string | null;
+  accent?: string;
+} = {};
+
+/** The dialog's starting choices: this session's, else the Settings defaults. */
+function initialChoices() {
+  const defaults = settingsStore.getState().settings?.export;
+  return {
+    format: remembered.format ?? defaults?.format ?? "pdf",
+    folder: remembered.folder !== undefined ? remembered.folder : (defaults?.folder ?? null),
+    logo: remembered.logo !== undefined ? remembered.logo : (defaults?.logo ?? null),
+    accent: remembered.accent ?? defaults?.accent ?? "",
+  };
+}
 
 /** `#rgb` as `#rrggbb`, for the colour well. */
 function wellColor(accent: string): string {
@@ -74,15 +89,15 @@ export function ExportDialog({
   const guideId = doc?.guide.id ?? null;
   const title = doc?.guide.title ?? "";
 
-  const [format, setFormat] = useState<ExportFormat>(remembered.format);
-  const [destination, setDestination] = useState<Destination>({
-    folder: remembered.folder,
+  const [format, setFormat] = useState<ExportFormat>(() => initialChoices().format);
+  const [destination, setDestination] = useState<Destination>(() => ({
+    folder: initialChoices().folder,
     name: exportName(title),
     file: null,
-  });
-  const [overwrite, setOverwrite] = useState(remembered.overwrite);
-  const [logo, setLogo] = useState<string | null>(remembered.logo);
-  const [accent, setAccent] = useState(remembered.accent);
+  }));
+  const [overwrite, setOverwrite] = useState(false);
+  const [logo, setLogo] = useState<string | null>(() => initialChoices().logo);
+  const [accent, setAccent] = useState(() => initialChoices().accent);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -96,12 +111,23 @@ export function ExportDialog({
 
   useEffect(() => {
     if (open) {
+      const start = initialChoices();
+      setFormat(start.format);
+      setDestination((d) => ({ ...d, folder: start.folder }));
+      setLogo(start.logo);
+      setAccent(start.accent);
       setOutcome(null);
       setRevealError(null);
     }
   }, [open]);
 
   const out = outPath(format, destination);
+  // "Replace" covers one destination only: a new guide, format or target,
+  // or reopening the dialog, asks again.
+  useEffect(() => {
+    setOverwrite(false);
+  }, [open, guideId, out]);
+
   const accentOk = isAccent(accent);
   const canExport = !!guideId && !!out && accentOk && !busy;
 
@@ -116,15 +142,18 @@ export function ExportDialog({
 
   const chooseDestination = () =>
     isFolderFormat(format)
-      ? choose(api.chooseFolder, (folder) => setDestination((d) => ({ ...d, folder })))
+      ? choose(
+          () => api.chooseFolder(destination.folder),
+          (folder) => setDestination((d) => ({ ...d, folder })),
+        )
       : choose(
-          () => api.chooseFile(format, destination.name.trim() || exportName(title)),
+          () => api.chooseFile(format, destination.name.trim() || exportName(title), destination.folder),
           (file) => setDestination((d) => ({ ...d, file })),
         );
 
   const start = async () => {
     if (!guideId || !out || !canExport) return;
-    Object.assign(remembered, { format, folder: destination.folder, overwrite, logo, accent });
+    Object.assign(remembered, { format, folder: destination.folder, logo, accent });
     setBusy(true);
     setOutcome(null);
     setRevealError(null);

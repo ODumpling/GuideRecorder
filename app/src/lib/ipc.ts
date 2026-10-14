@@ -6,7 +6,13 @@ import type {
   ExportResult,
   Guide,
   GuideListItem,
+  LibraryInfo,
+  McpSetup,
   OpenedGuide,
+  Permission,
+  PermissionStatus,
+  Settings,
+  SettingsView,
   Step,
   StepImage,
 } from "@/lib/types";
@@ -79,10 +85,10 @@ export function verifyCrop(guideId: string, image: StepImage): Promise<boolean> 
  * only destinations and logos they returned.
  */
 export interface ExportApi {
-  /** A folder a Markdown or HTML export goes into; null if cancelled. */
-  chooseFolder(): Promise<string | null>;
+  /** A folder a Markdown or HTML export goes into; null if cancelled. `directory`: where the dialog starts. */
+  chooseFolder(directory?: string | null): Promise<string | null>;
   /** Where a DOCX or PDF file is saved; null if cancelled. */
-  chooseFile(format: ExportFormat, fileName: string): Promise<string | null>;
+  chooseFile(format: ExportFormat, fileName: string, directory?: string | null): Promise<string | null>;
   /** A PNG or JPEG logo; null if cancelled. */
   chooseLogo(): Promise<string | null>;
   exportGuide(
@@ -97,8 +103,9 @@ export interface ExportApi {
 }
 
 export const tauriExportApi: ExportApi = {
-  chooseFolder: () => invoke("choose_export_folder"),
-  chooseFile: (format, fileName) => invoke("choose_export_file", { format, fileName }),
+  chooseFolder: (directory) => invoke("choose_export_folder", { directory: directory ?? null }),
+  chooseFile: (format, fileName, directory) =>
+    invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
   exportGuide: (guideId, format, out, overwrite, branding) =>
     invoke("export_guide", { guideId, format, out, overwrite, branding }),
@@ -115,3 +122,40 @@ export function errorMessage(error: unknown): string {
   }
   return String(error);
 }
+
+/** Settings commands (see app/src-tauri/src/settings_commands.rs). */
+export interface SettingsApi {
+  get(): Promise<SettingsView>;
+  /** Validates and stores; returns the settings as stored. */
+  update(settings: Settings): Promise<Settings>;
+  libraryInfo(): Promise<LibraryInfo>;
+  /** A library folder from the native dialog; null if cancelled. */
+  chooseLibrary(): Promise<string | null>;
+  /** Opens that library (null: the default one); returns its path. */
+  switchLibrary(path: string | null): Promise<string>;
+  launchAtLogin(): Promise<boolean>;
+  /** Returns the login item's actual state. */
+  setLaunchAtLogin(enabled: boolean): Promise<boolean>;
+  apiKeyStored(): Promise<boolean>;
+  setApiKey(key: string): Promise<void>;
+  deleteApiKey(): Promise<void>;
+  permissions(): Promise<{ permission: Permission; status: PermissionStatus }[]>;
+  openPermissionSettings(permission: Permission): Promise<void>;
+  mcpSetup(): Promise<McpSetup>;
+}
+
+export const tauriSettingsApi: SettingsApi = {
+  get: () => invoke("get_settings"),
+  update: (settings) => invoke("update_settings", { settings }),
+  libraryInfo: () => invoke("library_info"),
+  chooseLibrary: () => invoke("choose_library_folder"),
+  switchLibrary: (path) => invoke("switch_library", { path }),
+  launchAtLogin: () => invoke("launch_at_login"),
+  setLaunchAtLogin: (enabled) => invoke("set_launch_at_login", { enabled }),
+  apiKeyStored: () => invoke("api_key_status"),
+  setApiKey: (key) => invoke("set_api_key", { key }),
+  deleteApiKey: () => invoke("delete_api_key"),
+  permissions: () => invoke("permission_status"),
+  openPermissionSettings: (permission) => invoke("open_permission_settings", { permission }),
+  mcpSetup: () => invoke("mcp_setup"),
+};

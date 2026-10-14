@@ -2,19 +2,21 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FileOutput, ImagePlus, Lock, Redo2, TriangleAlert, Undo2, X } from "lucide-react";
+import { FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
 import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { LibrarySidebar } from "@/components/LibrarySidebar";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import { shortcutFor } from "@/editor/shortcuts";
 import { QUIT_REQUESTED_EVENT } from "@/lib/ipc";
+import { settingsStore } from "@/settings/settings";
 
 function ReadOnlyBanner() {
   const doc = useEditor((s) => s.doc);
@@ -45,7 +47,7 @@ function Notice() {
   );
 }
 
-function Toolbar() {
+function Toolbar({ onSettings }: { onSettings(): void }) {
   const doc = useEditor((s) => s.doc);
   const canUndo = useEditor((s) => s.undoStack.length > 0 && !s.doc?.readOnly);
   const canRedo = useEditor((s) => s.redoStack.length > 0 && !s.doc?.readOnly);
@@ -80,6 +82,9 @@ function Toolbar() {
             <ExportDialog open={exporting} onOpenChange={setExporting} />
           </>
         )}
+        <Button variant="ghost" size="icon" aria-label="Settings" title="Settings (⌘,)" onClick={onSettings}>
+          <SettingsIcon />
+        </Button>
       </div>
     </header>
   );
@@ -88,10 +93,17 @@ function Toolbar() {
 export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
   const draggingImages = useImageDrop();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     void editorStore.getState().loadGuides();
+    void settingsStore.getState().load();
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "," && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       const action = shortcutFor(e);
       if (!action || !editorStore.getState().doc) return;
       // Our history replaces the inputs' own undo, which would fight the store.
@@ -125,7 +137,7 @@ export default function App() {
         {hasDoc ? <Outline /> : <LibrarySidebar />}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar />
+        <Toolbar onSettings={() => setSettingsOpen(true)} />
         <ReadOnlyBanner />
         <Notice />
         <div className="flex min-h-0 flex-1">
@@ -140,6 +152,7 @@ export default function App() {
         </div>
       </div>
       <LeaveDialog />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">
           <span className="flex items-center gap-2 text-sm font-medium">

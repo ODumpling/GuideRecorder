@@ -21,12 +21,13 @@ use serde::{Deserialize, Serialize};
 use crate::editor::{check_image_path, file_error, parse_id, AppError, ErrorKind, Result, Session};
 
 /// The export formats, as the UI and the CLI name them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Md,
     Html,
     Docx,
+    #[default]
     Pdf,
 }
 
@@ -108,6 +109,8 @@ struct Chosen {
     /// DOCX and PDF files chosen in a save dialog.
     files: Vec<PathBuf>,
     logos: Vec<PathBuf>,
+    /// Library folders chosen in Settings.
+    libraries: Vec<PathBuf>,
     /// Files earlier exports wrote, for "Reveal in Finder".
     exported: Vec<PathBuf>,
 }
@@ -131,6 +134,27 @@ impl ChosenPaths {
 
     pub fn add_logo(&self, path: PathBuf) {
         remember(&mut self.inner.lock().unwrap().logos, path);
+    }
+
+    pub fn add_library(&self, path: PathBuf) {
+        remember(&mut self.inner.lock().unwrap().libraries, path);
+    }
+
+    pub fn is_folder(&self, path: &Path) -> bool {
+        self.inner.lock().unwrap().folders.iter().any(|p| p == path)
+    }
+
+    pub fn is_logo(&self, path: &Path) -> bool {
+        self.inner.lock().unwrap().logos.iter().any(|p| p == path)
+    }
+
+    pub fn is_library(&self, path: &Path) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .libraries
+            .iter()
+            .any(|p| p == path)
     }
 
     fn add_exported(&self, path: PathBuf) {
@@ -172,7 +196,7 @@ impl ChosenPaths {
     }
 
     fn check_logo(&self, path: &Path) -> Result<()> {
-        if self.inner.lock().unwrap().logos.iter().any(|p| p == path) {
+        if self.is_logo(path) {
             Ok(())
         } else {
             Err(AppError::new(

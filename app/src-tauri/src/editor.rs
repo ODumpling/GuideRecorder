@@ -205,6 +205,11 @@ impl Session {
         self.library.root()
     }
 
+    /// Whether the UI has a guide open (a library switch waits for none).
+    pub fn has_open_guides(&self) -> bool {
+        !self.open.lock().unwrap().is_empty()
+    }
+
     pub(crate) fn library(&self) -> &Library {
         &self.library
     }
@@ -787,6 +792,12 @@ impl SessionCell {
     pub fn set(&self, session: Result<Session>) {
         *self.state.lock().unwrap() = Some(session.map(Arc::new));
         self.ready.notify_all();
+    }
+
+    /// The session or its startup error, without waiting; `None` while it
+    /// is still starting.
+    pub fn current(&self) -> Option<Result<Arc<Session>>> {
+        self.state.lock().unwrap().clone()
     }
 
     /// Blocks until [`SessionCell::set`] has run. Call from the blocking

@@ -178,3 +178,65 @@ export interface ExportResult {
   warnings: { stepId: Ulid; message: string }[];
   notes: string[];
 }
+
+export type CaptureArea = "display" | "window" | "region";
+
+/** App settings, as stored in Application Support (see settings.rs). */
+export interface Settings {
+  version: number;
+  general: {
+    /** null: ~/Documents/GuidesYa. */
+    library: string | null;
+    launchAtLogin: boolean;
+    menuBarIcon: boolean;
+  };
+  recording: {
+    hotkeys: { record: string; pause: string; manualStep: string };
+    captureArea: CaptureArea;
+    afterFrames: boolean;
+    afterFrameDelayMs: number;
+    excludedApps: string[];
+    typingIdleMs: number;
+  };
+  ai: {
+    enabled: boolean;
+    autoRun: boolean;
+    stepModel: string;
+    guideModel: string;
+    /** BCP 47 tag; empty: the guide's own language. */
+    language: string;
+    audience: "beginner" | "expert";
+  };
+  export: {
+    format: ExportFormat;
+    folder: string | null;
+    logo: string | null;
+    accent: string | null;
+  };
+}
+
+export interface SettingsView {
+  settings: Settings;
+  /** Saved by a newer GuidesYa: shown, not saved over. */
+  readOnly: boolean;
+  /** Why the stored settings could not be used, if so. */
+  loadError: string | null;
+}
+
+export interface LibraryInfo {
+  path: string | null;
+  error: string | null;
+  starting: boolean;
+  fromEnv: boolean;
+  defaultPath: string | null;
+}
+
+export type Permission = "screen_recording" | "accessibility" | "input_monitoring";
+export type PermissionStatus = "granted" | "denied" | "not_determined" | "unknown";
+
+export interface McpSetup {
+  command: string;
+  mcpPath: string;
+  found: boolean;
+  library: string | null;
+}

@@ -9,7 +9,7 @@ use std::time::Duration;
 use guidesya_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
-use tauri_plugin_dialog::{DialogExt, FilePath};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::editor::{
     AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
@@ -175,6 +175,18 @@ where
         .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))?
 }
 
+/// Starts a dialog in `directory` when it is an existing folder (only where
+/// the dialog opens; the user still picks).
+fn start_in<R: Runtime>(
+    dialog: FileDialogBuilder<R>,
+    directory: Option<PathBuf>,
+) -> FileDialogBuilder<R> {
+    match directory.filter(|d| d.is_dir()) {
+        Some(directory) => dialog.set_directory(directory),
+        None => dialog,
+    }
+}
+
 fn dialog_path(path: FilePath) -> Result<PathBuf> {
     path.into_path()
         .map_err(|e| AppError::new(ErrorKind::Invalid, format!("not a file path: {e}")))
@@ -186,12 +198,11 @@ fn dialog_path(path: FilePath) -> Result<PathBuf> {
 pub async fn choose_export_folder<R: Runtime>(
     window: WebviewWindow<R>,
     chosen: State<'_, Arc<ChosenPaths>>,
+    directory: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {
     let chosen = Arc::clone(&chosen);
     blocking(move || {
-        let Some(path) = window
-            .dialog()
-            .file()
+        let Some(path) = start_in(window.dialog().file(), directory)
             .set_parent(&window)
             .set_title("Export into folder")
             .blocking_pick_folder()
@@ -213,6 +224,7 @@ pub async fn choose_export_file<R: Runtime>(
     chosen: State<'_, Arc<ChosenPaths>>,
     format: Format,
     file_name: String,
+    directory: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {
     let extension = format.extension().ok_or_else(|| {
         AppError::new(ErrorKind::Invalid, "Markdown and HTML export into a folder")
@@ -220,9 +232,7 @@ pub async fn choose_export_file<R: Runtime>(
     let chosen = Arc::clone(&chosen);
     blocking(move || {
         let label = extension.to_ascii_uppercase();
-        let Some(path) = window
-            .dialog()
-            .file()
+        let Some(path) = start_in(window.dialog().file(), directory)
             .set_parent(&window)
             .set_title(format!("Export as {label}"))
             .set_file_name(with_extension(PathBuf::from(file_name), extension).to_string_lossy())

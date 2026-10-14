@@ -3,7 +3,15 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type { Guide, GuideListItem, OpenedGuide, StepImage } from "../src/lib/types";
+import type {
+  ExportBranding,
+  ExportResult,
+  Guide,
+  GuideListItem,
+  OpenedGuide,
+  Settings,
+  StepImage,
+} from "../src/lib/types";
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
 const SCHEMA_VERSION = 1;
@@ -54,6 +62,50 @@ export class Backend {
   readonly saves: Guide[] = [];
   /** Every command called, in order. */
   readonly calls: { cmd: string; args: unknown }[] = [];
+
+  /**
+   * What the next native dialog returns (null: cancelled). The app's Rust
+   * side runs these dialogs; tests set the answer before clicking.
+   */
+  dialog: { folder: string | null; file: string | null; logo: string | null } = {
+    folder: null,
+    file: null,
+    logo: null,
+  };
+  /** Every `export_guide` call that succeeded. */
+  readonly exports: { guideId: string; format: string; out: string; overwrite: boolean; branding: ExportBranding }[] =
+    [];
+  /** Export targets that exist (written by an earlier export). */
+  readonly exported = new Set<string>();
+  /** Paths `reveal_export` was asked to show. */
+  readonly revealed: string[] = [];
+  /** `verify_crop`'s answer for a crop that has a `cropRect`. */
+  cropVerifies = true;
+
+  /** The stored settings (the app's defaults to start with). */
+  settings: Settings = {
+    version: 1,
+    general: { library: null, launchAtLogin: false, menuBarIcon: false },
+    recording: {
+      hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
+      captureArea: "display",
+      afterFrames: true,
+      afterFrameDelayMs: 400,
+      excludedApps: [],
+      typingIdleMs: 1500,
+    },
+    ai: {
+      enabled: true,
+      autoRun: true,
+      stepModel: "claude-haiku-5-5",
+      guideModel: "claude-sonnet-5-5",
+      language: "",
+      audience: "beginner",
+    },
+    export: { format: "pdf", folder: null, logo: null, accent: null },
+  };
+  /** Whether an API key is "stored"; the key itself is never kept. */
+  apiKeyStored = false;
 
   constructor(options: BackendOptions = {}) {
     for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guidesya")).sort()) {
@@ -166,6 +218,79 @@ export class Backend {
           after: image.after && copy(image.after, ".after"),
         } satisfies StepImage;
       }
+      case "verify_crop": {
+        const bundle = this.bundle(String(args.guideId));
+        const image = args.image as StepImage;
+        return !!image.crop && !!image.cropRect && bundle.files.has(image.crop) && this.cropVerifies;
+      }
+      case "choose_export_folder":
+        return this.dialog.folder;
+      case "choose_logo":
+        return this.dialog.logo;
+      case "choose_export_file": {
+        const ext = String(args.format);
+        if (ext !== "docx" && ext !== "pdf") fail("invalid", "Markdown and HTML export into a folder");
+        const file = this.dialog.file;
+        return file && !file.toLowerCase().endsWith(`.${ext}`) ? `${file}.${ext}` : file;
+      }
+      case "export_guide": {
+        const guideId = String(args.guideId);
+        this.bundle(guideId);
+        const format = String(args.format);
+        const out = String(args.out);
+        const overwrite = args.overwrite === true;
+        if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
+        this.exported.add(out);
+        this.exports.push({ guideId, format, out, overwrite, branding: args.branding as ExportBranding });
+        const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
+        return { files: [main], warnings: [], notes: [] } satisfies ExportResult;
+      }
+      case "reveal_export":
+        this.revealed.push(String(args.path));
+        return null;
+      case "get_settings":
+        return { settings: structuredClone(this.settings), readOnly: false, loadError: null };
+      case "update_settings": {
+        const next = args.settings as Settings;
+        if (next.recording.typingIdleMs < 300 || next.recording.typingIdleMs > 10_000) {
+          fail("invalid", "the typing pause must be 300–10000 ms");
+        }
+        this.settings = structuredClone(next);
+        return structuredClone(next);
+      }
+      case "library_info":
+        return { path: "/Users/me/Documents/GuidesYa", error: null, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuidesYa" };
+      case "choose_library_folder":
+        return null;
+      case "launch_at_login":
+        return this.settings.general.launchAtLogin;
+      case "set_launch_at_login":
+        this.settings.general.launchAtLogin = args.enabled === true;
+        return this.settings.general.launchAtLogin;
+      case "api_key_status":
+        return this.apiKeyStored;
+      case "set_api_key":
+        if (!String(args.key).trim()) fail("invalid", "no API key");
+        this.apiKeyStored = true;
+        return null;
+      case "delete_api_key":
+        this.apiKeyStored = false;
+        return null;
+      case "permission_status":
+        return [
+          { permission: "screen_recording", status: "granted" },
+          { permission: "accessibility", status: "denied" },
+          { permission: "input_monitoring", status: "not_determined" },
+        ];
+      case "open_permission_settings":
+        return null;
+      case "mcp_setup":
+        return {
+          command: "claude mcp add guidesya -- /Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp --library /Users/me/Documents/GuidesYa",
+          mcpPath: "/Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp",
+          found: true,
+          library: "/Users/me/Documents/GuidesYa",
+        };
       case "quit_ack":
       case "quit_app":
         return null;

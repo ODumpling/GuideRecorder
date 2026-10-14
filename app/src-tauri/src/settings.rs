@@ -1,0 +1,854 @@
+//! App settings (design #439 "Settings"): a JSON file in Application
+//! Support (`dev.guidesya.app/settings.json`), written atomically, with a
+//! schema version.
+//!
+//! The API key is not here: it lives in the Keychain (core's
+//! `ai::keychain`). Recording settings are only stored for now; the capture
+//! session reads them once recording is wired (#341).
+//!
+//! Paths in settings (the library, the default export folder and the logo)
+//! are trusted later without another dialog, so the webview may only set
+//! them to a path a native dialog returned (see [`Settings::check_paths`]).
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use guidesya_core::ai::claude::{DEFAULT_GUIDE_MODEL, DEFAULT_STEP_MODEL};
+use guidesya_core::library::{write_atomic, Durability};
+use guidesya_core::model::Audience;
+use serde::{Deserialize, Serialize};
+
+use crate::editor::{AppError, ErrorKind, Result};
+use crate::export::{ChosenPaths, Format};
+
+/// The settings format this app writes.
+pub const SETTINGS_VERSION: u32 = 1;
+
+/// File name inside the app's Application Support folder.
+pub const SETTINGS_FILE: &str = "settings.json";
+
+/// Largest settings file read; a real one is a few kB.
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
+
+/// `~/Library/Application Support/dev.guidesya.app/settings.json` (macOS;
+/// the index lives next to it). `None` without a home folder.
+pub fn default_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join("Library/Application Support/dev.guidesya.app")
+            .join(SETTINGS_FILE),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    pub version: u32,
+    pub general: General,
+    pub recording: Recording,
+    pub ai: Ai,
+    pub export: ExportDefaults,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            version: SETTINGS_VERSION,
+            general: General::default(),
+            recording: Recording::default(),
+            ai: Ai::default(),
+            export: ExportDefaults::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct General {
+    /// The library folder; `None` is `~/Documents/GuidesYa`.
+    /// `$GUIDESYA_LIBRARY` overrides it.
+    pub library: Option<PathBuf>,
+    /// Desired state; the login item itself is the truth (see the
+    /// `set_launch_at_login` command).
+    pub launch_at_login: bool,
+    /// Placeholder: there is no menu bar icon yet.
+    pub menu_bar_icon: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureArea {
+    #[default]
+    Display,
+    Window,
+    Region,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Hotkeys {
+    /// Start and stop recording.
+    pub record: String,
+    pub pause: String,
+    /// Add a manual step while recording.
+    pub manual_step: String,
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self {
+            record: "CmdOrCtrl+Shift+R".into(),
+            pause: "CmdOrCtrl+Shift+P".into(),
+            manual_step: "CmdOrCtrl+Shift+M".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Recording {
+    pub hotkeys: Hotkeys,
+    pub capture_area: CaptureArea,
+    /// Also capture a frame after each action.
+    pub after_frames: bool,
+    /// How long after the action that frame is taken.
+    pub after_frame_delay_ms: u32,
+    /// Bundle ids of apps whose windows are never recorded.
+    pub excluded_apps: Vec<String>,
+    /// Typing pauses longer than this end a typing step.
+    pub typing_idle_ms: u32,
+}
+
+impl Default for Recording {
+    fn default() -> Self {
+        Self {
+            hotkeys: Hotkeys::default(),
+            capture_area: CaptureArea::default(),
+            after_frames: true,
+            after_frame_delay_ms: 400,
+            excluded_apps: Vec::new(),
+            typing_idle_ms: 1500,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Ai {
+    pub enabled: bool,
+    /// Write the guide text when a recording stops.
+    pub auto_run: bool,
+    pub step_model: String,
+    pub guide_model: String,
+    /// BCP 47 tag of the language to write in; empty: the guide's own.
+    pub language: String,
+    pub audience: Audience,
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_run: true,
+            step_model: DEFAULT_STEP_MODEL.into(),
+            guide_model: DEFAULT_GUIDE_MODEL.into(),
+            language: String::new(),
+            audience: Audience::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExportDefaults {
+    pub format: Format,
+    /// The folder Markdown and HTML exports go into, and where the save
+    /// dialog starts.
+    pub folder: Option<PathBuf>,
+    pub logo: Option<PathBuf>,
+    pub accent: Option<String>,
+}
+
+/// Limits for the stored values.
+pub const TYPING_IDLE_MS: std::ops::RangeInclusive<u32> = 300..=10_000;
+pub const AFTER_FRAME_DELAY_MS: std::ops::RangeInclusive<u32> = 0..=3_000;
+pub const MAX_EXCLUDED_APPS: usize = 100;
+
+const MODIFIERS: &[&str] = &[
+    "CmdOrCtrl",
+    "CommandOrControl",
+    "Cmd",
+    "Command",
+    "Super",
+    "Ctrl",
+    "Control",
+    "Alt",
+    "Option",
+    "Shift",
+];
+
+/// A global shortcut as Tauri spells it: modifiers (at least one besides
+/// Shift) plus one key, e.g. `CmdOrCtrl+Shift+R`. Empty means none.
+pub fn is_hotkey(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let parts: Vec<&str> = value.split('+').collect();
+    let Some((key, mods)) = parts.split_last() else {
+        return false;
+    };
+    let key_ok = (key.len() == 1 && key.bytes().all(|b| b.is_ascii_alphanumeric()))
+        || (key.len() <= 3
+            && key.starts_with('F')
+            && key[1..].parse::<u8>().is_ok_and(|n| (1..=20).contains(&n)))
+        || ["Space", "Enter", "Tab", "Escape", "Backspace", "Delete"].contains(key);
+    let mods_ok = mods.iter().all(|m| MODIFIERS.contains(m))
+        && mods.iter().any(|m| *m != "Shift")
+        && (1..mods.len()).all(|i| !mods[..i].contains(&mods[i]));
+    key_ok && mods_ok
+}
+
+/// A model id such as `claude-haiku-5-5`.
+pub fn is_model_id(value: &str) -> bool {
+    (1..=100).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._:@".contains(&b))
+}
+
+/// Empty, or a BCP 47-looking tag (`en`, `de-CH`, `zh-Hant-TW`).
+pub fn is_language(value: &str) -> bool {
+    value.is_empty()
+        || (value.len() <= 35
+            && value.split('-').all(|part| {
+                (1..=8).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphanumeric())
+            }))
+}
+
+/// A bundle id such as `com.1password.1password`.
+pub fn is_bundle_id(value: &str) -> bool {
+    (1..=255).contains(&value.len())
+        && value.contains('.')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+}
+
+/// `#rgb` or `#rrggbb`.
+pub fn is_accent(value: &str) -> bool {
+    let hex = value.strip_prefix('#').unwrap_or("");
+    (hex.len() == 3 || hex.len() == 6) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn invalid(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorKind::Invalid, message)
+}
+
+impl Settings {
+    /// Checks every value against the limits above.
+    pub fn validate(&self) -> Result<()> {
+        let r = &self.recording;
+        let keys = [
+            ("record", &r.hotkeys.record),
+            ("pause", &r.hotkeys.pause),
+            ("manual step", &r.hotkeys.manual_step),
+        ];
+        for (name, key) in keys {
+            if !is_hotkey(key) {
+                return Err(invalid(format!("the {name} shortcut {key:?} is not valid")));
+            }
+        }
+        for (i, (_, a)) in keys.iter().enumerate() {
+            if !a.is_empty() && keys[..i].iter().any(|(_, b)| b == a) {
+                return Err(invalid(format!("the shortcut {a} is used twice")));
+            }
+        }
+        if !TYPING_IDLE_MS.contains(&r.typing_idle_ms) {
+            return Err(invalid(format!(
+                "the typing pause must be {}–{} ms",
+                TYPING_IDLE_MS.start(),
+                TYPING_IDLE_MS.end()
+            )));
+        }
+        if !AFTER_FRAME_DELAY_MS.contains(&r.after_frame_delay_ms) {
+            return Err(invalid(format!(
+                "the after-frame delay must be {}–{} ms",
+                AFTER_FRAME_DELAY_MS.start(),
+                AFTER_FRAME_DELAY_MS.end()
+            )));
+        }
+        if r.excluded_apps.len() > MAX_EXCLUDED_APPS {
+            return Err(invalid(format!(
+                "at most {MAX_EXCLUDED_APPS} excluded apps"
+            )));
+        }
+        if let Some(app) = r.excluded_apps.iter().find(|a| !is_bundle_id(a)) {
+            return Err(invalid(format!("{app:?} is not an app bundle id")));
+        }
+        for model in [&self.ai.step_model, &self.ai.guide_model] {
+            if !is_model_id(model) {
+                return Err(invalid(format!("{model:?} is not a model id")));
+            }
+        }
+        if !is_language(&self.ai.language) {
+            return Err(invalid(format!(
+                "{:?} is not a language tag",
+                self.ai.language
+            )));
+        }
+        if let Some(accent) = self.export.accent.as_deref().filter(|a| !is_accent(a)) {
+            return Err(invalid(format!(
+                "accent {accent:?} is not a hex colour (#rgb or #rrggbb)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuses a changed path the user did not pick in a native dialog: a
+    /// path may stay as it was, be cleared, or become one the dialogs
+    /// returned. The library changes only through `switch_library`.
+    pub fn check_paths(&self, old: &Settings, chosen: &ChosenPaths) -> Result<()> {
+        if self.general.library != old.general.library {
+            return Err(invalid("change the library folder with Choose…"));
+        }
+        let changed = |new: &Option<PathBuf>, old: &Option<PathBuf>| {
+            new.as_ref().filter(|n| Some(*n) != old.as_ref()).cloned()
+        };
+        if let Some(folder) = changed(&self.export.folder, &old.export.folder) {
+            if !chosen.is_folder(&folder) {
+                return Err(invalid(format!(
+                    "{} was not chosen as the export folder",
+                    folder.display()
+                )));
+            }
+        }
+        if let Some(logo) = changed(&self.export.logo, &old.export.logo) {
+            if !chosen.is_logo(&logo) {
+                return Err(invalid(format!(
+                    "{} was not chosen as the logo",
+                    logo.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How the stored settings were found at startup.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadState {
+    /// A newer GuidesYa wrote them: shown, not saved over.
+    pub read_only: bool,
+    /// Why the file could not be used (it was set aside), if so.
+    pub error: Option<String>,
+}
+
+/// The settings file and its current contents.
+pub struct SettingsStore {
+    path: Option<PathBuf>,
+    state: Mutex<(Settings, LoadState)>,
+}
+
+/// `get_settings`'s result.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub settings: Settings,
+    pub read_only: bool,
+    pub load_error: Option<String>,
+}
+
+impl SettingsStore {
+    /// Loads `path`. A missing file gives the defaults. An unreadable or
+    /// corrupt one is renamed aside (`settings.json.corrupt-<secs>`) and
+    /// the defaults are used. A newer version is used but never written.
+    /// Without a path the settings live in memory only.
+    pub fn load(path: Option<PathBuf>) -> Self {
+        let (settings, state) = match &path {
+            Some(path) => read(path),
+            None => (Settings::default(), LoadState::default()),
+        };
+        if let Some(error) = &state.error {
+            eprintln!("guidesya: settings: {error}");
+        }
+        Self {
+            path,
+            state: Mutex::new((settings, state)),
+        }
+    }
+
+    pub fn get(&self) -> Settings {
+        self.state.lock().unwrap().0.clone()
+    }
+
+    pub fn view(&self) -> SettingsView {
+        let state = self.state.lock().unwrap();
+        SettingsView {
+            settings: state.0.clone(),
+            read_only: state.1.read_only,
+            load_error: state.1.error.clone(),
+        }
+    }
+
+    /// Validates and stores `settings` from the UI (see
+    /// [`Settings::check_paths`]). The version is always ours.
+    pub fn update(&self, mut settings: Settings, chosen: &ChosenPaths) -> Result<Settings> {
+        let mut state = self.state.lock().unwrap();
+        if state.1.read_only {
+            return Err(AppError::new(
+                ErrorKind::ReadOnly,
+                "these settings were saved by a newer GuidesYa and can't be changed here",
+            ));
+        }
+        settings.version = SETTINGS_VERSION;
+        settings.validate()?;
+        settings.check_paths(&state.0, chosen)?;
+        self.write(&settings)?;
+        state.0 = settings.clone();
+        Ok(settings)
+    }
+
+    /// Applies `f` to the stored settings and saves them, for changes the
+    /// app itself makes (the library switch, the login item).
+    pub fn modify(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+        let mut state = self.state.lock().unwrap();
+        if state.1.read_only {
+            return Err(AppError::new(
+                ErrorKind::ReadOnly,
+                "these settings were saved by a newer GuidesYa and can't be changed here",
+            ));
+        }
+        let mut settings = state.0.clone();
+        f(&mut settings);
+        self.write(&settings)?;
+        state.0 = settings.clone();
+        Ok(settings)
+    }
+
+    fn write(&self, settings: &Settings) -> Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| AppError::new(ErrorKind::Io, format!("{}: {e}", dir.display())))?;
+        }
+        let mut json = serde_json::to_vec_pretty(settings)
+            .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
+        json.push(b'\n');
+        write_atomic(path, &json, Durability::Full)?;
+        Ok(())
+    }
+}
+
+fn read(path: &Path) -> (Settings, LoadState) {
+    let bytes = match read_capped(path) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return (Settings::default(), LoadState::default()),
+        // Not corruption: never rename it, and never save over it.
+        Err(e) => {
+            return keep_read_only(
+                Settings::default(),
+                format!(
+                    "cannot read {}: {e}; using the defaults, and changes can't be saved until it is readable",
+                    path.display()
+                ),
+            )
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(e) => return set_aside(path, format!("{} is not valid JSON: {e}", path.display())),
+    };
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(u64::from(SETTINGS_VERSION));
+    let read_only = version > u64::from(SETTINGS_VERSION);
+    match serde_json::from_value::<Settings>(value) {
+        Ok(settings) if read_only || settings.validate().is_ok() => (
+            settings,
+            LoadState {
+                read_only,
+                error: None,
+            },
+        ),
+        Ok(settings) => {
+            // Keep what is valid: fall back field group by field group.
+            let error = settings.validate().err().map(|e| e.message);
+            (
+                sanitize(settings),
+                LoadState {
+                    read_only: false,
+                    error: error
+                        .map(|e| format!("{}: {e}; using the default there", path.display())),
+                },
+            )
+        }
+        // A newer GuidesYa's settings this one can't decode (a new enum
+        // value, a changed type): leave the file alone.
+        Err(e) if read_only => keep_read_only(
+            Settings::default(),
+            format!(
+                "{} was saved by a newer GuidesYa (settings version {version}) and can't be read here ({e}); \
+                 showing the defaults, and changes can't be saved",
+                path.display()
+            ),
+        ),
+        Err(e) => set_aside(path, format!("{}: {e}", path.display())),
+    }
+}
+
+/// Settings that are shown but never saved, with why.
+fn keep_read_only(settings: Settings, error: String) -> (Settings, LoadState) {
+    (
+        settings,
+        LoadState {
+            read_only: true,
+            error: Some(error),
+        },
+    )
+}
+
+/// Replaces each invalid group with its defaults.
+fn sanitize(mut settings: Settings) -> Settings {
+    let defaults = Settings::default();
+    let check = |s: &Settings| s.validate().is_ok();
+    let mut probe = defaults.clone();
+    probe.recording = settings.recording.clone();
+    if !check(&probe) {
+        settings.recording = defaults.recording.clone();
+    }
+    let mut probe = defaults.clone();
+    probe.ai = settings.ai.clone();
+    if !check(&probe) {
+        settings.ai = defaults.ai.clone();
+    }
+    let mut probe = defaults.clone();
+    probe.export = settings.export.clone();
+    if !check(&probe) {
+        settings.export.accent = None;
+    }
+    settings.version = SETTINGS_VERSION;
+    settings
+}
+
+/// Reads at most [`MAX_SETTINGS_BYTES`]; `None` if there is no file.
+fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(std::io::Error::other("the file is too large"));
+    }
+    Ok(Some(bytes))
+}
+
+/// Renames an unusable settings file aside and returns the defaults.
+fn set_aside(path: &Path, error: String) -> (Settings, LoadState) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut aside = path.as_os_str().to_owned();
+    aside.push(format!(".corrupt-{secs}"));
+    let note = match std::fs::rename(path, &aside) {
+        Ok(()) => format!("{error}; it was renamed to {}", Path::new(&aside).display()),
+        Err(_) => error,
+    };
+    (
+        Settings::default(),
+        LoadState {
+            read_only: false,
+            error: Some(note),
+        },
+    )
+}
+
+/// `s` quoted for a POSIX shell when it needs it.
+pub fn shell_quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./:@%+=,".contains(&b));
+    if plain {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// The `claude mcp add` command that registers the GuidesYa MCP server for
+/// the library at `library`.
+pub fn mcp_add_command(mcp: &Path, library: &Path) -> String {
+    format!(
+        "claude mcp add guidesya -- {} --library {}",
+        shell_quote(&mcp.to_string_lossy()),
+        shell_quote_home(&library.to_string_lossy())
+    )
+}
+
+/// Like [`shell_quote`], but a leading `~/` stays unquoted so the shell
+/// still expands it to the home folder.
+pub fn shell_quote_home(s: &str) -> String {
+    match s.strip_prefix("~/") {
+        Some("") => "~/".to_owned(),
+        Some(rest) => format!("~/{}", shell_quote(rest)),
+        None => shell_quote(s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn scratch() -> PathBuf {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guidesya-app-tests")
+            .join(format!(
+                "settings-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::SeqCst)
+            ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn defaults_are_valid_and_round_trip() {
+        let settings = Settings::default();
+        settings.validate().unwrap();
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["recording"]["typingIdleMs"], 1500);
+        assert_eq!(json["ai"]["stepModel"], DEFAULT_STEP_MODEL);
+        assert_eq!(json["export"]["format"], "pdf");
+        assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), settings);
+        // Missing fields take their defaults.
+        let partial: Settings =
+            serde_json::from_str(r#"{"version":1,"ai":{"enabled":false}}"#).unwrap();
+        assert!(!partial.ai.enabled);
+        assert_eq!(partial.ai.guide_model, DEFAULT_GUIDE_MODEL);
+    }
+
+    #[test]
+    fn value_checks() {
+        for ok in [
+            "",
+            "CmdOrCtrl+Shift+R",
+            "Alt+F5",
+            "Ctrl+Option+Space",
+            "Cmd+1",
+        ] {
+            assert!(is_hotkey(ok), "{ok}");
+        }
+        for bad in [
+            "R",
+            "Shift+R",
+            "Cmd+",
+            "Cmd+Cmd+R",
+            "Hyper+R",
+            "Cmd+F21",
+            "Cmd+RR",
+        ] {
+            assert!(!is_hotkey(bad), "{bad}");
+        }
+        assert!(is_model_id("claude-sonnet-5-5"));
+        assert!(!is_model_id("") && !is_model_id("a b"));
+        assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));
+        assert!(!is_language("en_US") && !is_language("-en"));
+        assert!(is_bundle_id("com.1password.1password"));
+        assert!(!is_bundle_id("Safari") && !is_bundle_id("com.x/y"));
+        assert!(is_accent("#abc") && is_accent("#A1B2C3"));
+        assert!(!is_accent("abc") && !is_accent("#abcd") && !is_accent("red"));
+
+        let mut s = Settings::default();
+        s.recording.hotkeys.pause = s.recording.hotkeys.record.clone();
+        assert!(s.validate().unwrap_err().message.contains("used twice"));
+        let mut s = Settings::default();
+        s.recording.typing_idle_ms = 50;
+        assert!(s.validate().is_err());
+        let mut s = Settings::default();
+        s.recording.excluded_apps = vec!["com.apple.Safari".into(), "nope".into()];
+        assert!(s.validate().unwrap_err().message.contains("nope"));
+        let mut s = Settings::default();
+        s.export.accent = Some("blue".into());
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn paths_change_only_to_chosen_ones() {
+        let chosen = ChosenPaths::default();
+        let old = Settings::default();
+        let mut new = old.clone();
+        new.export.folder = Some("/Users/me/Exports".into());
+        assert!(new.check_paths(&old, &chosen).is_err());
+        chosen.add_folder("/Users/me/Exports".into());
+        new.check_paths(&old, &chosen).unwrap();
+        // Unchanged or cleared paths need no dialog.
+        new.check_paths(&new, &ChosenPaths::default()).unwrap();
+        Settings::default()
+            .check_paths(&new, &ChosenPaths::default())
+            .unwrap();
+
+        let mut logo = old.clone();
+        logo.export.logo = Some("/etc/passwd".into());
+        assert!(logo.check_paths(&old, &chosen).is_err());
+        let mut library = old.clone();
+        library.general.library = Some("/tmp/x".into());
+        assert!(library.check_paths(&old, &chosen).is_err());
+    }
+
+    #[test]
+    fn stores_atomically_and_reloads() {
+        let dir = scratch();
+        let path = dir.join("app/settings.json");
+        let store = SettingsStore::load(Some(path.clone()));
+        assert_eq!(store.get(), Settings::default());
+        assert!(!path.exists(), "loading never writes");
+
+        let mut s = store.get();
+        s.ai.language = "de".into();
+        s.version = 99;
+        let saved = store.update(s, &ChosenPaths::default()).unwrap();
+        assert_eq!(saved.version, SETTINGS_VERSION);
+        let reloaded = SettingsStore::load(Some(path.clone()));
+        assert_eq!(reloaded.get().ai.language, "de");
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+
+        let mut bad = store.get();
+        bad.recording.typing_idle_ms = 1;
+        assert_eq!(
+            store.update(bad, &ChosenPaths::default()).unwrap_err().kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(store.get().recording.typing_idle_ms, 1500);
+
+        let library = store
+            .modify(|s| s.general.library = Some("/lib".into()))
+            .unwrap();
+        assert_eq!(library.general.library, Some(PathBuf::from("/lib")));
+    }
+
+    #[test]
+    fn corrupt_files_are_set_aside_and_newer_ones_kept() {
+        let dir = scratch();
+        let path = dir.join("settings.json");
+        fs::write(&path, b"{ not json").unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        assert_eq!(store.get(), Settings::default());
+        assert!(store.view().load_error.unwrap().contains("renamed"));
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+
+        fs::write(&path, br#"{"version":2,"ai":{"language":"fr"}}"#).unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        assert!(store.view().read_only);
+        assert_eq!(store.get().ai.language, "fr");
+        let err = store
+            .update(store.get(), &ChosenPaths::default())
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ReadOnly);
+        assert!(store.modify(|_| {}).is_err());
+        assert!(fs::read_to_string(&path).unwrap().contains("\"version\":2"));
+
+        // A newer file this version can't decode: defaults, read-only, and
+        // the file is neither renamed nor saved over.
+        let newer = br#"{"version":2,"export":{"format":"pptx"}}"#;
+        fs::write(&path, newer).unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let view = store.view();
+        assert!(view.read_only);
+        assert_eq!(view.settings, Settings::default());
+        assert!(view.load_error.unwrap().contains("newer GuidesYa"));
+        assert_eq!(
+            store
+                .update(store.get(), &ChosenPaths::default())
+                .unwrap_err()
+                .kind,
+            ErrorKind::ReadOnly
+        );
+        assert!(store.modify(|_| {}).is_err());
+        assert_eq!(fs::read(&path).unwrap(), newer);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2, "nothing set aside");
+
+        // Invalid values fall back per group; the rest is kept.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"typingIdleMs":5},"ai":{"language":"it"}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path));
+        assert_eq!(store.get().recording.typing_idle_ms, 1500);
+        assert_eq!(store.get().ai.language, "it");
+        assert!(store.view().load_error.is_some());
+    }
+
+    #[test]
+    fn unreadable_files_are_kept_read_only() {
+        let dir = scratch();
+        // Not a regular file (a folder in its place).
+        let path = dir.join("settings.json");
+        fs::create_dir(&path).unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        assert!(store.view().read_only);
+        assert!(store.view().load_error.unwrap().contains("cannot read"));
+        assert!(path.is_dir());
+        assert!(store.modify(|_| {}).is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "nothing renamed");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = dir.join("locked.json");
+            fs::write(&locked, br#"{"version":1}"#).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            // Root can read anything; the check only means something otherwise.
+            if fs::read(&locked).is_err() {
+                let store = SettingsStore::load(Some(locked.clone()));
+                assert!(store.view().read_only);
+                assert!(locked.exists());
+            }
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
+    #[test]
+    fn mcp_command_keeps_the_home_tilde() {
+        assert_eq!(
+            mcp_add_command(Path::new("/a/mcp"), Path::new("~/Documents/GuidesYa")),
+            "claude mcp add guidesya -- /a/mcp --library ~/Documents/GuidesYa"
+        );
+        assert_eq!(shell_quote_home("~/My Guides"), "~/'My Guides'");
+        assert_eq!(shell_quote_home("~user/x"), "'~user/x'");
+        assert_eq!(shell_quote_home("~/"), "~/");
+    }
+
+    #[test]
+    fn mcp_command_quotes_paths() {
+        assert_eq!(
+            mcp_add_command(
+                Path::new("/Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp"),
+                Path::new("/Users/me/Documents/GuidesYa")
+            ),
+            "claude mcp add guidesya -- /Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp --library /Users/me/Documents/GuidesYa"
+        );
+        assert_eq!(
+            mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's")),
+            r"claude mcp add guidesya -- '/a b/mcp' --library '/it'\''s'"
+        );
+    }
+}

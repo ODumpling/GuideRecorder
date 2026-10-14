@@ -8,6 +8,8 @@ mod commands;
 mod editor;
 mod export;
 mod navigation;
+mod settings;
+mod settings_commands;
 
 use editor::{AppError, DroppedFiles, ErrorKind, Session, SessionCell};
 
@@ -35,16 +37,36 @@ pub fn run() {
         // Dialogs and Reveal run from Rust only: no capability grants them
         // to the webview.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
             app.manage(Arc::new(DroppedFiles::default()));
-            app.manage(Arc::new(export::ChosenPaths::default()));
+            // A few kB, read once before the library is chosen.
+            let store = settings::SettingsStore::load(settings::default_path());
+            let stored = store.get();
+            let chosen = export::ChosenPaths::default();
+            // Stored paths were chosen in a dialog when they were set.
+            if let Some(folder) = stored.export.folder.clone() {
+                chosen.add_folder(folder);
+            }
+            if let Some(logo) = stored.export.logo.clone() {
+                chosen.add_logo(logo);
+            }
+            app.manage(Arc::new(store));
+            app.manage(Arc::new(chosen));
             let cell = Arc::new(SessionCell::default());
             app.manage(Arc::clone(&cell));
-            let root = editor::library_root(
+            let root = settings_commands::startup_library(
                 std::env::var_os(editor::LIBRARY_ENV),
+                stored.general.library,
                 app.path().document_dir().ok(),
             );
+            let target = Arc::new(settings_commands::LibraryTarget::default());
+            target.set(root.clone());
+            app.manage(target);
             // Recovery and the index sync touch the disk: keep them off the
             // main thread. Commands wait for the session.
             tauri::async_runtime::spawn_blocking(move || {
@@ -86,6 +108,19 @@ pub fn run() {
             commands::export_guide,
             commands::reveal_export,
             commands::verify_crop,
+            settings_commands::get_settings,
+            settings_commands::update_settings,
+            settings_commands::library_info,
+            settings_commands::choose_library_folder,
+            settings_commands::switch_library,
+            settings_commands::set_launch_at_login,
+            settings_commands::launch_at_login,
+            settings_commands::api_key_status,
+            settings_commands::set_api_key,
+            settings_commands::delete_api_key,
+            settings_commands::permission_status,
+            settings_commands::open_permission_settings,
+            settings_commands::mcp_setup,
             commands::quit_ack,
             commands::quit_app,
         ])
