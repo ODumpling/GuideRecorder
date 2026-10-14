@@ -1,0 +1,24 @@
+Title | Share a calendar event
+Subtitle | Invite a colleague to an existing Calendar event.
+Normal | This guide shows how to invite someone to an event you **already** created.
+Heading1 | Prerequisites
+Normal num=2/0 | A Mac signed in to iCloud
+Normal num=2/0 | An existing event
+Heading1 | Open the event
+Heading2 | 1. Click **Calendar** in the Dock
+Normal | [image 609600x381000]
+Heading2 | 2. Double-click the *Team sync* event
+Normal | [image 609600x381000]
+Normal | The event opens in its own window.
+Normal shd=E8F5E9 | **Tip: **You can also select the event and press `⌘O` to open it.
+Heading1 | Invite people
+Heading2 | 3. Type the guest's email in **Add Invitees**
+Normal | [image 304800x190500]
+Normal | Separate several guests with commas.
+Normal num=3/0 | Guests get an email invite
+Normal num=3/0 | You can remove them later
+Heading2 | 4. Right-click the guest and choose **Send Email**
+Normal | [image 609600x381000]
+Heading2 | 5. Press `⌘S` to save
+Normal | [image 304800x190500]
+Normal shd=E8F0FE | **Note: **Guests see changes after they [refresh their calendar](https://support.apple.com/guide/calendar/welcome/mac).

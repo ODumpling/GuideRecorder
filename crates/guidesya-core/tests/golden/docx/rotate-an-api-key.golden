@@ -1,0 +1,23 @@
+Title | Rotate an API key
+Subtitle | Replace a leaked or expiring API key without downtime.
+Normal | Rotate keys every *90 days*, or right away if one leaks.
+Heading1 | Prerequisites
+Normal | Admin access to the console.
+Normal shd=FFF4E5 | **Warning: **Creating a new key **revokes** the old one immediately. Update these first:
+Normal num=2/0 shd=FFF4E5 | The CI secret
+Normal num=2/0 shd=FFF4E5 | Local `.env` files
+Heading2 | 1. Open **Settings → API keys**
+Normal | [image 304800x190500]
+Heading2 | 2. Enter your password to confirm
+Normal | [image 609600x381000]
+Normal | Password input is masked while recording.
+Heading2 | 3. Click **Create key** and copy the new key
+Normal | [image 609600x190500]
+Normal | The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
+Heading2 | 4. Drag the new key to **Production**
+Normal | [image 609600x381000]
+Heading2 | 5. Check that the key works
+Normal | [image 609600x381000]
+Normal | Run this in Terminal:
+Normal | `curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`
+Normal | It should print *pong*.
