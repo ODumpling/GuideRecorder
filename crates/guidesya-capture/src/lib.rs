@@ -4,6 +4,9 @@
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod permissions;
+
+pub use permissions::{Permission, PermissionReport, PermissionStatus};
 
 /// Name of the backend compiled for this platform.
 pub fn backend_name() -> &'static str {
