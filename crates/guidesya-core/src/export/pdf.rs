@@ -7,7 +7,9 @@
 //!
 //! - A cover page with the title ("Untitled" / "Unbenannt" when blank),
 //!   summary and date (the [`PdfOptions::timestamp`] day; no date without
-//!   one), and the optional [`Branding`] logo and accent colour.
+//!   one), and the optional [`CheckedBranding`] logo (top of the cover; the
+//!   checked, upright PNG) and accent colour (cover rule and section
+//!   headings).
 //! - Every later page has the guide title as a header and "page / total" as
 //!   a footer.
 //! - Intro, then a prerequisites heading with its text. Sections are level 1
@@ -84,6 +86,7 @@ use typst_pdf::Timestamp;
 use super::ast::{plain_text, Block, Inline};
 use super::docx::Paper;
 use super::md::Labels;
+pub use super::md::{Branding, CheckedBranding};
 use super::raster::{render_step_image, ImageOptions};
 use super::render::{RenderGuide, RenderItem};
 use super::report::ExportReport;
@@ -108,18 +111,8 @@ pub const MAX_URL_LEN: usize = 8000;
 /// the heading and the first description block on the same page.
 pub const MAX_IMAGE_HEIGHT_RATIO: f64 = 0.5;
 
-/// Accent colour when [`Branding::accent`] is unset.
+/// Accent colour when [`CheckedBranding::accent`] is unset.
 const DEFAULT_ACCENT: [u8; 3] = [0x1a, 0x73, 0xe8];
-
-/// Optional branding. Off by default.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Branding {
-    /// Logo image (PNG, JPEG, GIF, WebP or SVG bytes) shown at the top of
-    /// the cover page.
-    pub logo: Option<Vec<u8>>,
-    /// Accent colour (RGB) of the cover rule and section headings.
-    pub accent: Option<[u8; 3]>,
-}
 
 /// Options for [`export`] and [`render`].
 #[derive(Debug, Clone, PartialEq)]
@@ -138,7 +131,7 @@ pub struct PdfOptions {
     /// Fixed words; `None` uses [`Labels::for_language`] of the guide's
     /// language.
     pub labels: Option<Labels>,
-    pub branding: Branding,
+    pub branding: CheckedBranding,
 }
 
 impl Default for PdfOptions {
@@ -152,7 +145,7 @@ impl Default for PdfOptions {
             timestamp: None,
             paper: Paper::default(),
             labels: None,
-            branding: Branding::default(),
+            branding: CheckedBranding::default(),
         }
     }
 }
@@ -214,6 +207,8 @@ pub fn export(
 
 /// Typesets `guide` in memory. [`export`] is this plus writing the file.
 pub fn render(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> Result<PdfOutput> {
+    let branding = &opts.branding;
+    let accent = branding.accent().unwrap_or(DEFAULT_ACCENT);
     let mut report = ExportReport::default();
     let labels = opts
         .labels
@@ -221,10 +216,20 @@ pub fn render(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> R
         .unwrap_or_else(|| Labels::for_language(&guide.language));
     let now = typst_datetime(opts.timestamp);
     let mut files = Vec::new();
-    let data = guide_data(guide, handle, opts, &labels, &now, &mut files, &mut report);
+    let data = guide_data(
+        guide,
+        handle,
+        opts,
+        &labels,
+        &now,
+        accent,
+        branding.logo().map(|l| (l.width(), l.height())),
+        &mut files,
+        &mut report,
+    );
     files.push(("/guide.json".to_owned(), data.to_string().into_bytes()));
-    if let Some(logo) = &opts.branding.logo {
-        files.push(("/logo".to_owned(), logo.clone()));
+    if let Some(logo) = branding.logo() {
+        files.push(("/logo".to_owned(), logo.png().to_vec()));
     }
 
     let started = Instant::now();
@@ -318,12 +323,15 @@ fn write_atomically(out_path: &Path, bytes: &[u8], overwrite: bool) -> Result<()
 
 /// The `/guide.json` the template reads, rendering step images into `files`
 /// as `/steps/N.png`.
+#[allow(clippy::too_many_arguments)]
 fn guide_data(
     guide: &RenderGuide,
     handle: &GuideHandle,
     opts: &PdfOptions,
     labels: &Labels,
     now: &Datetime,
+    accent: [u8; 3],
+    logo: Option<(u32, u32)>,
     files: &mut Vec<(String, Vec<u8>)>,
     report: &mut ExportReport,
 ) -> Value {
@@ -370,7 +378,7 @@ fn guide_data(
     let intro = cx.blocks(&guide.intro);
     let prerequisites = cx.blocks(&guide.prerequisites);
     report.notes.append(&mut cx.notes);
-    let [r, g, b] = opts.branding.accent.unwrap_or(DEFAULT_ACCENT);
+    let [r, g, b] = accent;
     let (_, text_height) = text_area_pt(opts.paper);
     let title = match clean(&guide.title).trim() {
         "" => untitled(&guide.language).to_owned(),
@@ -394,7 +402,11 @@ fn guide_data(
             Paper::Letter => "us-letter",
         },
         "accent": format!("#{r:02x}{g:02x}{b:02x}"),
-        "logo": opts.branding.logo.as_ref().map(|_| "/logo"),
+        "logo": logo.map(|(width, height)| json!({
+            "path": "/logo",
+            "width": width,
+            "height": height,
+        })),
         "max_image_height": (text_height * MAX_IMAGE_HEIGHT_RATIO).round(),
         "labels": {
             "prerequisites": clean(&labels.prerequisites),

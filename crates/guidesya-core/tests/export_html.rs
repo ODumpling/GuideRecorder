@@ -10,8 +10,8 @@ mod support;
 
 use std::fs;
 
-use guidesya_core::export::html::{self, Branding, HtmlOptions, Logo, LogoMime, CSP};
-use guidesya_core::export::md::{self, ExportError};
+use guidesya_core::export::html::{self, Branding, HtmlOptions, CSP};
+use guidesya_core::export::md::{self, BrandingError, ExportError};
 use guidesya_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guidesya_core::library::{GuideHandle, Library, PixelBuffer, StepImageVariant};
 use guidesya_core::model::*;
@@ -377,33 +377,62 @@ fn branding_is_off_by_default_and_validated() {
 
     let opts = HtmlOptions {
         branding: Branding {
-            logo: Some(Logo {
-                mime: LogoMime::Png,
-                bytes: b"\x89PNG fake".to_vec(),
-            }),
-            accent: Some("#c0ffee".into()),
-        },
+            logo: Some(PNG_1X1.to_vec()),
+            accent: Some("#C0FFEE".into()),
+        }
+        .check()
+        .unwrap(),
         ..HtmlOptions::default()
     };
     let (branded, _) = render(guide, handle, &opts);
     assert_safe(&branded);
-    assert!(branded
-        .contains("<img class=\"logo\" src=\"data:image/png;base64,iVBORyBmYWtl\" alt=\"\">"));
+    // The re-encoded PNG, not the bytes as given.
+    assert!(branded.contains("<img class=\"logo\" src=\"data:image/png;base64,iVBORw0KGgo"));
     assert!(branded.contains(":root { --accent: #c0ffee; }"));
 
-    let bad = HtmlOptions {
-        branding: Branding {
-            accent: Some("red;}</style><script>".into()),
+    // Hostile accents and logos never reach the writer: only `check` makes
+    // the branding the options take.
+    let hostile = Branding {
+        accent: Some("red;}</style><script>".into()),
+        ..Branding::default()
+    };
+    assert!(matches!(hostile.check(), Err(BrandingError::Accent(_))));
+    for logo in [&b"<svg/>"[..], b"\x89PNG fake", b"GIF89a"] {
+        let bad = Branding {
+            logo: Some(logo.to_vec()),
             ..Branding::default()
-        },
+        };
+        assert!(bad.check().is_err());
+    }
+}
+
+#[test]
+fn branded_fixture_goldens() {
+    let fixtures = fixtures();
+    let opts = HtmlOptions {
+        branding: Branding {
+            logo: Some(PNG_1X1.to_vec()),
+            accent: Some("#aa1122".into()),
+        }
+        .check()
+        .unwrap(),
         ..HtmlOptions::default()
     };
-    let render_guide = RenderGuide::new(guide, handle);
-    let out = tempfile::tempdir().unwrap();
-    let target = out.path().join("never");
-    assert!(matches!(
-        html::export(&render_guide, handle, &target, &bad),
-        Err(ExportError::Html(_))
-    ));
-    assert!(!target.exists());
+    for (handle, guide) in &fixtures.guides {
+        let (html, _) = render(guide, handle, &opts);
+        assert_safe(&html);
+        assert_golden_text(
+            &format!("html/branded/{}.golden", md::slug(&guide.title)),
+            &strip_data(&html),
+        );
+    }
 }
+
+/// A valid 1×1 RGBA PNG.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];

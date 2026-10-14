@@ -1,12 +1,13 @@
 //! `guidesya` CLI. See design scratchpad #441 ("CLI").
 //!
-//! `list`, `search` and `validate` are readers: they go through
+//! `list`, `search`, `validate` and `export` are readers: they go through
 //! [`Library::read`] and read-only index opens, and never write to the
-//! library or the index. `reindex` is the only writer. `export` lands in
-//! #353.
+//! library or the index (`export` writes only its `--out` target, which may
+//! not be inside the bundle). `reindex` is the only command that writes to
+//! an index.
 //!
 //! Exit codes: 0 on success, 1 on an error (or a `validate` that found
-//! errors), 2 on a usage error. A closed stdout (e.g. `guidesya list | head`)
+//! errors, or an `export --strict` with warnings), 2 on a usage error. A closed stdout (e.g. `guidesya list | head`)
 //! is not an error: output stops and the exit code is 0.
 //!
 //! `--json` output is one pretty-printed object per run. Its keys are
@@ -14,21 +15,25 @@
 //! may be added, existing ones keep their name and type.
 
 use std::collections::BTreeSet;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::builder::RangedU64ValueParser;
 use clap::error::ErrorKind;
-use clap::{Args, CommandFactory, Parser, Subcommand};
-use guidesya_core::export::{render_step_image, ImageOptions, RenderWarning};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use guidesya_core::export::md::{Branding, MAX_LOGO_BYTES};
+use guidesya_core::export::{
+    docx, html, md, pdf, render_step_image, ExportReport, ImageOptions, RenderGuide, RenderWarning,
+};
 use guidesya_core::index::{
     list_library, list_with_fallback, search_library, search_with_fallback, Index, IndexError,
     IndexedGuide, ListFilter, Source, StepHit, SyncReport,
 };
 use guidesya_core::library::{Library, LoadedGuide};
-use guidesya_core::SCHEMA_VERSION;
+use guidesya_core::{Ulid, SCHEMA_VERSION};
 use serde_json::{json, Value};
 
 /// Environment variable naming the library folder when `--library` is not
@@ -103,11 +108,59 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Export a guide (not yet implemented).
-    Export {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        args: Vec<String>,
-    },
+    /// Export a guide as Markdown, HTML, DOCX or PDF.
+    ///
+    /// Reads the guide without changing the library. Markdown and HTML
+    /// write into the `--out` folder (`guide.md` plus `images/`, or
+    /// `guide.html`); DOCX and PDF write the `--out` file. Image problems
+    /// become placeholders and warnings, not errors.
+    Export(ExportArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExportArgs {
+    /// A `.guidesya` bundle folder, or a guide id in the library.
+    #[arg(value_name = "BUNDLE|ID")]
+    guide: String,
+    #[arg(long, value_enum)]
+    format: Format,
+    /// Output folder (md, html) or file (docx, pdf).
+    #[arg(long, value_name = "PATH")]
+    out: PathBuf,
+    /// Replace an earlier export at `--out`.
+    #[arg(long)]
+    overwrite: bool,
+    /// Logo image (PNG or JPEG, at most 2 MB and 2000 px a side).
+    #[arg(long, value_name = "FILE")]
+    logo: Option<PathBuf>,
+    /// Accent colour, `#rgb` or `#rrggbb` (not used by Markdown).
+    #[arg(long, value_name = "#HEX")]
+    accent: Option<String>,
+    /// Exit with 1 when the export has warnings or notes (the export is
+    /// still written).
+    #[arg(long)]
+    strict: bool,
+    #[command(flatten)]
+    output: Output,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Format {
+    Md,
+    Html,
+    Docx,
+    Pdf,
+}
+
+impl Format {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Md => "md",
+            Self::Html => "html",
+            Self::Docx => "docx",
+            Self::Pdf => "pdf",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -195,9 +248,13 @@ fn run(cli: Cli, out: &mut impl Write) -> Result<ExitCode> {
             };
             print_reindex(out, &path, &report, output.json)?;
         }
-        Command::Export { .. } => {
-            eprintln!("guidesya export: not yet implemented");
-            return Ok(ExitCode::FAILURE);
+        Command::Export(args) => {
+            let export = export(&cli, args)?;
+            let failed = args.strict && export.has_warnings();
+            print_export(out, &export, args.output.json)?;
+            if failed {
+                return Ok(ExitCode::FAILURE);
+            }
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -550,6 +607,254 @@ fn print_validate(
                 }?;
             }
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// export
+
+/// A finished export, for printing.
+struct Export {
+    id: String,
+    title: String,
+    format: Format,
+    report: ExportReport,
+}
+
+impl Export {
+    fn has_warnings(&self) -> bool {
+        !self.report.warnings.is_empty() || !self.report.notes.is_empty()
+    }
+}
+
+fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
+    let (loaded, library_root) = resolve_guide(cli, &args.guide)?;
+    // Checked (and the logo decoded) once, before anything is written.
+    let branding = Branding {
+        logo: args.logo.as_deref().map(read_logo).transpose()?,
+        accent: args.accent.clone(),
+    }
+    .check()
+    .context("invalid branding")?;
+    check_out_path(&args.out, &loaded.handle.path, library_root.as_deref())?;
+
+    let LoadedGuide { handle, guide, .. } = loaded;
+    let render = RenderGuide::new(&guide, &handle);
+    let out = &args.out;
+    let overwrite = args.overwrite;
+    let timestamp = Some(guide.updated_at);
+    // The md and html writers create their folder; match that for files.
+    if matches!(args.format, Format::Docx | Format::Pdf) {
+        if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+    }
+    let report = match args.format {
+        Format::Md => {
+            let opts = md::MdOptions {
+                overwrite,
+                branding,
+                ..md::MdOptions::default()
+            };
+            md::export(&render, &handle, out, &opts)?
+        }
+        Format::Html => {
+            let opts = html::HtmlOptions {
+                overwrite,
+                branding,
+                ..html::HtmlOptions::default()
+            };
+            html::export(&render, &handle, out, &opts)?
+        }
+        Format::Docx => {
+            let opts = docx::DocxOptions {
+                overwrite,
+                timestamp,
+                branding,
+                ..docx::DocxOptions::default()
+            };
+            docx::export(&render, &handle, out, &opts)?
+        }
+        Format::Pdf => {
+            let opts = pdf::PdfOptions {
+                overwrite,
+                timestamp,
+                branding,
+                ..pdf::PdfOptions::default()
+            };
+            pdf::export(&render, &handle, out, &opts)?
+        }
+    };
+    Ok(Export {
+        id: guide.id.to_string(),
+        title: guide.title,
+        format: args.format,
+        report,
+    })
+}
+
+/// A bundle folder, or else a guide id looked up in the library. Also
+/// returns the library folder when it is known: the one the id was found
+/// in, or the one from `--library` / [`LIBRARY_ENV`].
+fn resolve_guide(cli: &Cli, guide: &str) -> Result<(LoadedGuide, Option<PathBuf>)> {
+    let path = Path::new(guide);
+    if path.is_dir() {
+        return Ok((read_bundle(path)?, library_root(cli)));
+    }
+    let Ok(id) = guide.parse::<Ulid>() else {
+        bail!("{guide}: no such bundle folder or guide id");
+    };
+    let library = open_library(cli)?;
+    match library.find(id)? {
+        Some(handle) => Ok((
+            library.read(&handle.path)?,
+            Some(library.root().to_path_buf()),
+        )),
+        None => bail!(
+            "{guide}: no guide with this id in {}",
+            library.root().display()
+        ),
+    }
+}
+
+/// The `--library` / [`LIBRARY_ENV`] folder, if given.
+fn library_root(cli: &Cli) -> Option<PathBuf> {
+    cli.library.clone().or_else(|| {
+        std::env::var_os(LIBRARY_ENV)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+/// Reads a regular file of at most [`MAX_LOGO_BYTES`]. Devices and FIFOs
+/// are refused before they are opened (a FIFO would block, `/dev/zero`
+/// never ends), and the read stops one byte past the limit.
+fn read_logo(path: &Path) -> Result<Vec<u8>> {
+    let context = || format!("--logo {}", path.display());
+    let not_a_file = || anyhow!("--logo {}: not a regular file", path.display());
+    if !std::fs::metadata(path).with_context(context)?.is_file() {
+        return Err(not_a_file());
+    }
+    let file = File::open(path).with_context(context)?;
+    // The path may have been swapped since the check above.
+    if !file.metadata().with_context(context)?.is_file() {
+        return Err(not_a_file());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_LOGO_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(context)?;
+    if bytes.len() > MAX_LOGO_BYTES {
+        bail!(
+            "--logo {}: the logo is over {MAX_LOGO_BYTES} bytes (2 MB)",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
+/// Refuses an output path inside this guide's bundle, inside any
+/// `.guidesya` folder, or inside the library folder when it is known, so an
+/// export can never change a library. The check uses the real location
+/// [`resolve_out`] finds, so symlinks and `..` can't get around it.
+fn check_out_path(out: &Path, bundle: &Path, library: Option<&Path>) -> Result<()> {
+    let resolved = resolve_out(out)?;
+    let refuse = |place: &str, folder: &Path| {
+        bail!(
+            "--out {}: inside {place} {}; export somewhere else",
+            out.display(),
+            folder.display()
+        )
+    };
+    let bundle = std::fs::canonicalize(bundle)
+        .with_context(|| format!("{}: cannot resolve path", bundle.display()))?;
+    if resolved.starts_with(&bundle) {
+        return refuse("the guide bundle", &bundle);
+    }
+    let is_bundle = |p: &&Path| {
+        p.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("guidesya"))
+    };
+    if let Some(other) = resolved.ancestors().find(is_bundle) {
+        return refuse("the guide bundle", other);
+    }
+    if let Some(library) = library.and_then(|l| std::fs::canonicalize(l).ok()) {
+        if resolved.starts_with(&library) {
+            return refuse("the library", &library);
+        }
+    }
+    Ok(())
+}
+
+/// The real location `out` names: its deepest part that exists (or is a
+/// link) canonicalized, so the OS resolves symlinks and `..` in it, plus
+/// the rest, which must be plain names. A dangling link is refused.
+fn resolve_out(out: &Path) -> Result<PathBuf> {
+    let cannot = || format!("--out {}: cannot resolve path", out.display());
+    let absolute = std::path::absolute(out).with_context(cannot)?;
+    let components: Vec<Component> = absolute.components().collect();
+    let mut split = components.len();
+    while split > 1 {
+        let prefix: PathBuf = components[..split].iter().collect();
+        if prefix.symlink_metadata().is_ok() {
+            break;
+        }
+        split -= 1;
+    }
+    let prefix: PathBuf = components[..split].iter().collect();
+    let mut resolved = std::fs::canonicalize(&prefix).with_context(cannot)?;
+    for component in &components[split..] {
+        match component {
+            Component::Normal(name) => resolved.push(name),
+            _ => bail!(
+                "--out {}: `..` after a folder that does not exist; give a plain path",
+                out.display()
+            ),
+        }
+    }
+    Ok(resolved)
+}
+
+fn print_export(out: &mut impl Write, export: &Export, as_json: bool) -> io::Result<()> {
+    let warnings: Vec<Problem> = export
+        .report
+        .warnings
+        .iter()
+        .map(|(step, warning)| Problem {
+            step: Some(step.to_string()),
+            message: warning.to_string(),
+        })
+        .collect();
+    if as_json {
+        let value = json!({
+            "id": export.id,
+            "title": export.title,
+            "format": export.format.as_str(),
+            "files": export.report.files.iter().map(|f| path_str(f)).collect::<Vec<_>>(),
+            "warnings": warnings.iter().map(Problem::json).collect::<Vec<_>>(),
+            "notes": export.report.notes,
+        });
+        writeln!(out, "{value:#}")?;
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "Exported {} ({}) as {}:",
+        export.title,
+        export.id,
+        export.format.as_str()
+    )?;
+    for file in &export.report.files {
+        writeln!(out, "    {}", file.display())?;
+    }
+    for warning in &warnings {
+        let step = warning.step.as_deref().unwrap_or_default();
+        writeln!(out, "    warning: step {step}: {}", warning.message)?;
+    }
+    for note in &export.report.notes {
+        writeln!(out, "    note: {note}")?;
     }
     Ok(())
 }

@@ -17,8 +17,10 @@
 //!
 //! # Branding
 //!
-//! [`Branding`] (a logo and an accent colour) is off by default. The accent
-//! must be a hex colour, so it can't break out of the stylesheet.
+//! [`CheckedBranding`] (a logo and an accent colour, shared by every writer)
+//! is off by default. The logo is the checked, re-encoded PNG, embedded as a
+//! data URI above the title. The accent was parsed to RGB and is written
+//! back as `#rrggbb`, so it can't break out of the stylesheet.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -27,6 +29,7 @@ use minijinja::{context, AutoEscape, Environment, Value};
 
 use super::ast::{plain_text, Block, Inline};
 use super::md::{prepare_out_dir, ExportError, Labels, Result};
+pub use super::md::{Branding, CheckedBranding};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem};
 use crate::library::{write_atomic, Durability, GuideHandle};
 use crate::model::NoteKind;
@@ -52,7 +55,7 @@ pub struct HtmlOptions {
     pub overwrite: bool,
     /// Fixed labels; `None` picks them from the guide language.
     pub labels: Option<Labels>,
-    pub branding: Branding,
+    pub branding: CheckedBranding,
 }
 
 impl Default for HtmlOptions {
@@ -64,42 +67,7 @@ impl Default for HtmlOptions {
             },
             overwrite: false,
             labels: None,
-            branding: Branding::default(),
-        }
-    }
-}
-
-/// Optional branding; everything off by default.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Branding {
-    /// Shown above the title.
-    pub logo: Option<Logo>,
-    /// Hex colour (`#rgb` or `#rrggbb`) for step numbers, links and the
-    /// header rule.
-    pub accent: Option<String>,
-}
-
-/// A logo image to embed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Logo {
-    pub mime: LogoMime,
-    pub bytes: Vec<u8>,
-}
-
-/// Raster formats a logo may have. SVG is left out on purpose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogoMime {
-    Png,
-    Jpeg,
-    Webp,
-}
-
-impl LogoMime {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Png => "image/png",
-            Self::Jpeg => "image/jpeg",
-            Self::Webp => "image/webp",
+            branding: CheckedBranding::default(),
         }
     }
 }
@@ -114,10 +82,8 @@ pub fn export(
     opts: &HtmlOptions,
 ) -> Result<ExportReport> {
     let out_dir = out_dir.as_ref();
-    // Validate branding before touching the file system.
-    let css = stylesheet(&opts.branding)?;
     prepare_out_dir(out_dir, opts.overwrite)?;
-    let (html, mut report) = render_with_css(guide, handle, opts, css)?;
+    let (html, mut report) = render_string(guide, handle, opts)?;
     let path = out_dir.join(GUIDE_FILE);
     write_atomic(&path, html.as_bytes(), Durability::RenameOnly)?;
     report.files.push(path);
@@ -131,16 +97,7 @@ pub fn render_string(
     handle: &GuideHandle,
     opts: &HtmlOptions,
 ) -> Result<(String, ExportReport)> {
-    let css = stylesheet(&opts.branding)?;
-    render_with_css(guide, handle, opts, css)
-}
-
-fn render_with_css(
-    guide: &RenderGuide,
-    handle: &GuideHandle,
-    opts: &HtmlOptions,
-    css: String,
-) -> Result<(String, ExportReport)> {
+    let branding = &opts.branding;
     let labels = opts
         .labels
         .clone()
@@ -184,11 +141,9 @@ fn render_with_css(
         });
     }
 
-    let logo = opts
-        .branding
-        .logo
-        .as_ref()
-        .map(|logo| Value::from_safe_string(data_uri(logo.mime.as_str(), &logo.bytes)));
+    let logo = branding
+        .logo()
+        .map(|logo| Value::from_safe_string(data_uri("image/png", logo.png())));
     // Steps sit under section headings when there are any.
     let has_sections = guide
         .items
@@ -200,7 +155,7 @@ fn render_with_css(
         csp => CSP,
         title => &guide.title,
         summary => &guide.summary,
-        css => Value::from_safe_string(css),
+        css => Value::from_safe_string(stylesheet(branding)),
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,
@@ -224,24 +179,14 @@ fn render_with_css(
     Ok((html, report))
 }
 
-/// The default stylesheet plus the accent override, if any.
-fn stylesheet(branding: &Branding) -> Result<String> {
+/// The default stylesheet plus the accent override, if any. The accent is
+/// the checked RGB value, written as `#rrggbb`.
+fn stylesheet(branding: &CheckedBranding) -> String {
     let mut css = STYLE.to_owned();
-    if let Some(accent) = &branding.accent {
-        if !is_hex_colour(accent) {
-            return Err(ExportError::Html(format!(
-                "accent {accent:?} is not a hex colour (#rgb or #rrggbb)"
-            )));
-        }
+    if let Some(accent) = branding.accent_hex() {
         let _ = writeln!(css, ":root {{ --accent: {accent}; }}");
     }
-    Ok(css)
-}
-
-fn is_hex_colour(value: &str) -> bool {
-    value
-        .strip_prefix('#')
-        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    css
 }
 
 /// The language tag if it looks like BCP 47 (letters, digits, `-`), else
@@ -439,15 +384,6 @@ mod tests {
         assert_eq!(b64(b"fooba"), "Zm9vYmE=");
         assert_eq!(b64(b"foobar"), "Zm9vYmFy");
         assert_eq!(b64(&[0xff, 0xfe, 0xfd]), "//79");
-    }
-
-    #[test]
-    fn hex_colours() {
-        assert!(is_hex_colour("#abc"));
-        assert!(is_hex_colour("#A1B2C3"));
-        assert!(!is_hex_colour("red"));
-        assert!(!is_hex_colour("#abcd"));
-        assert!(!is_hex_colour("#fff;}</style><script>"));
     }
 
     #[test]

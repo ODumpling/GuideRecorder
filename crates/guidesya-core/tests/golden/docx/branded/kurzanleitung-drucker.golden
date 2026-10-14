@@ -1,0 +1,17 @@
+Normal | [image 9525x9525]
+Title | Kurzanleitung Drucker
+Normal | Für den Drucker im **2. Stock**.
+Heading2 | 1. Papierfach **2** öffnen
+Normal | [image 609600x381000]
+Normal | Fach ganz herausziehen.↵Dann Papier einlegen.
+Normal num=2/0 | A4
+Normal num=2/0 | A5
+Normal | Hinweis
+Normal | Nicht **überfüllen**.
+Normal shd=E8F0FE | **Hinweis: **Mehr dazu im [Handbuch](handbuch.pdf) und unter [https://example.com/drucker](https://example.com/drucker).
+=== styles ===
+Subtitle color=595959
+Heading1 color=AA1122
+Heading2 color=AA1122
+=== note borders ===
+AA1122

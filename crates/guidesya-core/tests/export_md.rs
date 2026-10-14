@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use guidesya_core::export::ast::{parse_inlines, plain_text};
-use guidesya_core::export::md::{self, ExportError, MdOptions};
+use guidesya_core::export::md::{self, Branding, BrandingError, ExportError, MdOptions};
 use guidesya_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guidesya_core::library::{GuideHandle, Library, PixelBuffer, StepImageVariant};
 use guidesya_core::model::*;
@@ -144,6 +144,94 @@ fn fixture_goldens() {
         let name = format!("md/{}.golden", md::slug(&guide.title));
         assert_golden_text(&name, &golden);
     }
+}
+
+/// A valid 1×1 RGBA PNG.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+fn branded() -> MdOptions {
+    MdOptions {
+        branding: Branding {
+            logo: Some(PNG_1X1.to_vec()),
+            accent: Some("#aa1122".into()),
+        }
+        .check()
+        .unwrap(),
+        ..MdOptions::default()
+    }
+}
+
+#[test]
+fn branded_fixture_goldens() {
+    let fixtures = fixtures();
+    for (handle, guide) in &fixtures.guides {
+        let out = tempfile::tempdir().unwrap();
+        let report = export(guide, handle, out.path(), &branded());
+        let markdown = fs::read_to_string(out.path().join(md::GUIDE_FILE)).unwrap();
+        let mut golden = markdown.clone();
+        golden.push_str("\n<!-- files -->\n");
+        for file in &report.files {
+            golden.push_str(&format!("{}\n", relative(out.path(), file)));
+        }
+        let name = format!("md/branded/{}.golden", md::slug(&guide.title));
+        assert_golden_text(&name, &golden);
+
+        // The logo is the first image, the checked PNG; the accent leaves
+        // no trace.
+        let logo = out.path().join("images/logo.png");
+        let checked = branded().branding;
+        assert_eq!(fs::read(&logo).unwrap(), checked.logo().unwrap().png());
+        let pixmap = decode_png(&logo);
+        assert_eq!((pixmap.width(), pixmap.height()), (1, 1));
+        assert_eq!(report.files[1], logo);
+        assert_eq!(image_urls(&markdown)[0], "images/logo.png");
+        assert!(!markdown.contains("aa1122"));
+        // Without the logo, the rest is the same document.
+        let plain = tempfile::tempdir().unwrap();
+        export(guide, handle, plain.path(), &MdOptions::default());
+        let plain = fs::read_to_string(plain.path().join(md::GUIDE_FILE)).unwrap();
+        assert_eq!(markdown.replacen("![](images/logo.png)\n\n", "", 1), plain);
+    }
+}
+
+#[test]
+fn jpeg_logos_become_png() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let render = RenderGuide::new(guide, handle);
+
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(4, 3, image::Rgb([200, 10, 10]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let opts = MdOptions {
+        branding: Branding {
+            logo: Some(jpeg),
+            accent: None,
+        }
+        .check()
+        .unwrap(),
+        ..MdOptions::default()
+    };
+    md::export(&render, handle, out.path(), &opts).unwrap();
+    let logo = decode_png(&out.path().join("images/logo.png"));
+    assert_eq!((logo.width(), logo.height()), (4, 3));
+
+    let svg = Branding {
+        logo: Some(b"<svg/>".to_vec()),
+        accent: None,
+    };
+    assert_eq!(svg.check().unwrap_err(), BrandingError::SvgLogo);
 }
 
 #[test]

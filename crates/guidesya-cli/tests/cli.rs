@@ -203,14 +203,6 @@ fn library_comes_from_the_environment() {
     assert_eq!(value["guides"].as_array().unwrap().len(), 3);
 }
 
-#[test]
-fn export_is_a_placeholder() {
-    let fx = Fixture::new();
-    let out = fx.run(&["export", "x", "--format", "md"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("not yet implemented"));
-}
-
 // ---------------------------------------------------------------------------
 // list
 
@@ -572,7 +564,463 @@ fn readers_leave_library_bytes_unchanged() {
         assert_success(&fx.run(&args));
         assert_eq!(fx.snapshot(), before, "{args:?} changed the library");
     }
+    let out_dir = fx.dir.path().join("exports");
+    let logo = fx.dir.path().join("logo.png");
+    fs::write(&logo, PNG_1X1).unwrap();
+    for (i, format) in ["md", "html", "docx", "pdf"].into_iter().enumerate() {
+        let target = out_dir.join(format!("{i}.{format}"));
+        let args = [
+            "export",
+            bundles[0].as_str(),
+            "--format",
+            format,
+            "--out",
+            target.to_str().unwrap(),
+            "--logo",
+            logo.to_str().unwrap(),
+            "--accent",
+            "#c0ffee",
+        ];
+        assert_success(&fx.run(&args));
+        assert_eq!(fx.snapshot(), before, "{args:?} changed the library");
+    }
     assert!(!fx.index().exists(), "readers never create the index");
+}
+
+// ---------------------------------------------------------------------------
+// export
+
+/// A valid 1×1 RGBA PNG.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+impl Fixture {
+    /// A path under the temp dir, outside the library.
+    fn out(&self, name: &str) -> PathBuf {
+        self.dir.path().join("out").join(name)
+    }
+
+    /// `export <bundle> --format <format> --out <out> <extra>`.
+    fn export(&self, bundle: &str, format: &str, out: &Path, extra: &[&str]) -> Output {
+        let bundle = self.bundle(bundle);
+        let mut args = vec![
+            "export",
+            bundle.to_str().unwrap(),
+            "--format",
+            format,
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        self.run(&args)
+    }
+
+    fn export_json(&self, bundle: &str, format: &str, out: &Path, extra: &[&str]) -> Value {
+        let mut extra = extra.to_vec();
+        extra.push("--json");
+        let out = self.export(bundle, format, out, &extra);
+        assert_success(&out);
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    fn logo(&self) -> PathBuf {
+        let path = self.dir.path().join("logo.png");
+        fs::write(&path, PNG_1X1).unwrap();
+        path
+    }
+}
+
+fn files(report: &Value) -> Vec<PathBuf> {
+    report["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| PathBuf::from(f.as_str().unwrap()))
+        .collect()
+}
+
+#[test]
+fn export_each_format() {
+    let fx = Fixture::new();
+    let before = fx.snapshot();
+    let cases = [
+        ("md", "md", "guide.md"),
+        ("html", "html", "guide.html"),
+        ("docx", "drucker.docx", ""),
+        ("pdf", "drucker.pdf", ""),
+    ];
+    for (format, out_name, main) in cases {
+        let out = fx.out(out_name);
+        let report = fx.export_json(DRUCKER, format, &out, &[]);
+        assert_eq!(
+            keys(&report),
+            ["files", "format", "id", "notes", "title", "warnings"]
+        );
+        assert_eq!(report["format"], format);
+        assert_eq!(report["title"], "Kurzanleitung Drucker");
+        assert_eq!(report["warnings"], serde_json::json!([]));
+        let files = files(&report);
+        let expected_main = if main.is_empty() {
+            out.clone()
+        } else {
+            out.join(main)
+        };
+        assert_eq!(files[0], expected_main, "{format}: main document first");
+        for file in &files {
+            assert!(file.is_file(), "{format}: {} missing", file.display());
+        }
+        if format == "md" {
+            assert!(files.len() > 1, "md writes step images");
+        }
+    }
+    let pdf = fs::read(fx.out("drucker.pdf")).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    let docx = fs::read(fx.out("drucker.docx")).unwrap();
+    assert!(docx.starts_with(b"PK"));
+    assert_eq!(fx.snapshot(), before, "export changed the library");
+}
+
+#[test]
+fn export_by_id_and_human_output() {
+    let fx = Fixture::new();
+    let list = fx.json(&["list", "--json"]);
+    let guide = list["guides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["title"] == "Kurzanleitung Drucker")
+        .unwrap();
+    let id = guide["id"].as_str().unwrap();
+    let target = fx.out("by-id");
+    let out = fx.run(&[
+        "export",
+        id,
+        "--format",
+        "html",
+        "--out",
+        target.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let text = stdout(&out);
+    assert!(
+        text.starts_with(&format!(
+            "Exported Kurzanleitung Drucker ({id}) as html:
+"
+        )),
+        "{text}"
+    );
+    assert!(text.contains(&target.join("guide.html").display().to_string()));
+    assert!(target.join("guide.html").is_file());
+
+    let out = fx.run(&[
+        "export",
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "--format",
+        "md",
+        "--out",
+        fx.out("x").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("no guide with this id"),
+        "{}",
+        stderr(&out)
+    );
+    let out = fx.run(&["export", "nope", "--format", "md", "--out", "x"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("no such bundle folder or guide id"));
+    assert!(!fx.out("x").exists());
+}
+
+#[test]
+fn export_usage_errors_exit_2() {
+    let fx = Fixture::new();
+    let out = fx.export(DRUCKER, "rtf", &fx.out("x"), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let bundle = fx.bundle(DRUCKER);
+    let out = fx.run(&["export", bundle.to_str().unwrap(), "--format", "md"]);
+    assert_eq!(out.status.code(), Some(2), "--out is required");
+}
+
+#[test]
+fn export_refuses_to_overwrite_unless_asked() {
+    let fx = Fixture::new();
+    for (format, name) in [
+        ("md", "md"),
+        ("html", "html"),
+        ("docx", "a.docx"),
+        ("pdf", "a.pdf"),
+    ] {
+        let out = fx.out(name);
+        fx.export_json(DRUCKER, format, &out, &[]);
+        let again = fx.export(DRUCKER, format, &out, &[]);
+        assert_eq!(again.status.code(), Some(1), "{format}");
+        assert!(
+            stderr(&again).contains("not empty") || stderr(&again).contains("already exists"),
+            "{format}: {}",
+            stderr(&again)
+        );
+        fx.export_json(DRUCKER, format, &out, &["--overwrite"]);
+    }
+}
+
+#[test]
+fn export_dates_come_from_the_guide() {
+    // DOCX and PDF take `updated_at`, so two runs give the same bytes.
+    let fx = Fixture::new();
+    for format in ["docx", "pdf"] {
+        let a = fx.out(&format!("a.{format}"));
+        let b = fx.out(&format!("b.{format}"));
+        fx.export_json(DRUCKER, format, &a, &[]);
+        fx.export_json(DRUCKER, format, &b, &[]);
+        assert_eq!(fs::read(&a).unwrap(), fs::read(&b).unwrap(), "{format}");
+    }
+}
+
+#[test]
+fn export_branding_flags() {
+    let fx = Fixture::new();
+    let logo = fx.logo();
+    let logo = logo.to_str().unwrap();
+
+    let out = fx.out("md");
+    let report = fx.export_json(
+        DRUCKER,
+        "md",
+        &out,
+        &["--logo", logo, "--accent", "#c0ffee"],
+    );
+    assert_eq!(files(&report)[1], out.join("images/logo.png"));
+    // Re-encoded (metadata dropped), still a 1×1 PNG: IHDR width and
+    // height are bytes 16..24.
+    let logo_png = fs::read(out.join("images/logo.png")).unwrap();
+    assert!(logo_png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(logo_png[16..24], [0, 0, 0, 1, 0, 0, 0, 1]);
+    let markdown = fs::read_to_string(out.join("guide.md")).unwrap();
+    assert!(
+        markdown.starts_with("# Kurzanleitung Drucker\n\n![](images/logo.png)\n"),
+        "{markdown}"
+    );
+
+    let out = fx.out("html");
+    fx.export_json(DRUCKER, "html", &out, &["--logo", logo, "--accent", "#C0F"]);
+    let html = fs::read_to_string(out.join("guide.html")).unwrap();
+    assert!(html.contains("<img class=\"logo\" src=\"data:image/png;base64,"));
+    assert!(html.contains(":root { --accent: #cc00ff; }"));
+
+    for format in ["docx", "pdf"] {
+        let plain = fx.out(&format!("plain.{format}"));
+        let branded = fx.out(&format!("branded.{format}"));
+        fx.export_json(DRUCKER, format, &plain, &[]);
+        fx.export_json(
+            DRUCKER,
+            format,
+            &branded,
+            &["--logo", logo, "--accent", "#aa1122"],
+        );
+        assert_ne!(fs::read(&plain).unwrap(), fs::read(&branded).unwrap());
+    }
+    let docx = fs::read(fx.out("branded.docx")).unwrap();
+    assert!(docx.windows(6).any(|w| w == b"AA1122"), "accent in DOCX");
+}
+
+#[test]
+fn export_refuses_bad_branding_before_writing() {
+    let fx = Fixture::new();
+    let svg = fx.dir.path().join("logo.svg");
+    fs::write(&svg, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+    let big = fx.dir.path().join("big.png");
+    let mut bytes = PNG_1X1.to_vec();
+    bytes.resize(2 * 1024 * 1024 + 1, 0);
+    fs::write(&big, bytes).unwrap();
+    let cases: [(&[&str], &str); 4] = [
+        (&["--accent", "red"], "not a hex colour"),
+        (&["--logo", svg.to_str().unwrap()], "SVG"),
+        (&["--logo", big.to_str().unwrap()], "2 MB"),
+        (&["--logo", "/nonexistent/logo.png"], "--logo"),
+    ];
+    for format in ["md", "html", "docx", "pdf"] {
+        for (extra, message) in cases {
+            let out = fx.out(&format!("bad.{format}"));
+            let result = fx.export(DRUCKER, format, &out, extra);
+            assert_eq!(result.status.code(), Some(1), "{format} {extra:?}");
+            assert!(
+                stderr(&result).contains(message),
+                "{format} {extra:?}: {}",
+                stderr(&result)
+            );
+            assert!(!out.exists(), "{format} {extra:?} wrote output");
+        }
+    }
+}
+
+#[test]
+fn export_warnings_and_strict() {
+    let fx = Fixture::new();
+    // The rotate fixture has a crop without a position: one warning.
+    let out = fx.out("rotate.html");
+    let report = fx.export_json(ROTATE, "html", &out, &[]);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{report:#}");
+    assert_eq!(keys(&warnings[0]), ["message", "step"]);
+    assert!(warnings[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("crop position unknown"));
+
+    let out = fx.out("rotate-text");
+    let result = fx.export(ROTATE, "md", &out, &[]);
+    assert_success(&result);
+    assert!(
+        stdout(&result).contains("    warning: step "),
+        "{}",
+        stdout(&result)
+    );
+
+    let strict = fx.out("strict");
+    let result = fx.export(ROTATE, "md", &strict, &["--strict"]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(strict.join("guide.md").is_file(), "strict still writes");
+    assert_success(&fx.export(DRUCKER, "md", &fx.out("clean"), &["--strict"]));
+}
+
+#[test]
+fn export_refuses_an_output_inside_the_bundle() {
+    let fx = Fixture::new();
+    let before = fx.snapshot();
+    let bundle = fx.bundle(DRUCKER);
+    for out in [
+        bundle.join("export"),
+        bundle.join("assets/../guide.pdf"),
+        fx.library().join("../library").join(DRUCKER).join("x.pdf"),
+    ] {
+        let result = fx.export(DRUCKER, "pdf", &out, &["--overwrite"]);
+        assert_eq!(result.status.code(), Some(1), "{}", out.display());
+        assert!(
+            stderr(&result).contains("inside the guide bundle"),
+            "{}",
+            stderr(&result)
+        );
+    }
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[test]
+#[cfg(unix)]
+fn export_refuses_a_symlink_dotdot_into_the_bundle() {
+    // RX3 #1: `link/..` is the parent of the link's target, so a lexical
+    // `..` would have let this overwrite the bundle's guide.json.
+    let fx = Fixture::new();
+    // Git doesn't keep empty folders, so a fresh checkout's bundle may have
+    // no steps/; the link must point at a real folder for this case.
+    let steps = fx.bundle(DRUCKER).join("steps");
+    std::fs::create_dir_all(&steps).unwrap();
+    let before = fx.snapshot();
+    let link = fx.dir.path().join("link");
+    std::os::unix::fs::symlink(&steps, &link).unwrap();
+    for (format, name) in [("pdf", "guide.json"), ("docx", "guide.json"), ("md", "x")] {
+        let out = link.join("..").join(name);
+        let result = fx.export(DRUCKER, format, &out, &["--overwrite"]);
+        assert_eq!(result.status.code(), Some(1), "{format}");
+        assert!(
+            stderr(&result).contains("inside the guide bundle"),
+            "{}",
+            stderr(&result)
+        );
+    }
+    assert_eq!(fx.snapshot(), before);
+    // The guide still exports.
+    fx.export_json(DRUCKER, "pdf", &fx.out("after.pdf"), &[]);
+}
+
+#[test]
+fn export_refuses_other_bundles_and_the_library() {
+    let fx = Fixture::new();
+    let before = fx.snapshot();
+    let list = fx.json(&["list", "--json"]);
+    let id = list["guides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["title"] == "Kurzanleitung Drucker")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cases = [
+        // Another guide's bundle, with the guide found by id.
+        (
+            fx.bundle(ROTATE).join("guide.json"),
+            "inside the guide bundle",
+        ),
+        // Any `.guidesya` folder, even outside the library.
+        (
+            fx.dir.path().join("Elsewhere.guidesya/x.pdf"),
+            "inside the guide bundle",
+        ),
+        // Anywhere in the library.
+        (fx.library().join("export.pdf"), "inside the library"),
+    ];
+    for (out, message) in &cases {
+        let result = fx.run(&[
+            "export",
+            &id,
+            "--format",
+            "pdf",
+            "--out",
+            out.to_str().unwrap(),
+            "--overwrite",
+        ]);
+        assert_eq!(result.status.code(), Some(1), "{}", out.display());
+        assert!(stderr(&result).contains(message), "{}", stderr(&result));
+    }
+    // The library is refused when given by path too.
+    let result = fx.export(DRUCKER, "md", &fx.library().join("md"), &[]);
+    assert!(
+        stderr(&result).contains("inside the library"),
+        "{}",
+        stderr(&result)
+    );
+    assert_eq!(fx.snapshot(), before);
+    assert!(!fx.dir.path().join("Elsewhere.guidesya").exists());
+}
+
+#[test]
+fn export_refuses_dotdot_after_a_missing_folder() {
+    let fx = Fixture::new();
+    let out = fx.out("missing/../x.pdf");
+    let result = fx.export(DRUCKER, "pdf", &out, &[]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(stderr(&result).contains("`..`"), "{}", stderr(&result));
+    assert!(!fx.out("x.pdf").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn export_logo_must_be_a_regular_file() {
+    // RX3 #2: /dev/zero never ends and a FIFO blocks on open; both are
+    // refused before they are read.
+    let fx = Fixture::new();
+    let fifo = fx.dir.path().join("logo.fifo");
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success());
+    let dir = fx.dir.path().to_path_buf();
+    for logo in [Path::new("/dev/zero"), fifo.as_path(), dir.as_path()] {
+        let out = fx.out("never.html");
+        let result = fx.export(DRUCKER, "html", &out, &["--logo", logo.to_str().unwrap()]);
+        assert_eq!(result.status.code(), Some(1), "{}", logo.display());
+        assert!(
+            stderr(&result).contains("not a regular file"),
+            "{}",
+            stderr(&result)
+        );
+        assert!(!out.exists());
+    }
 }
 
 // ---------------------------------------------------------------------------

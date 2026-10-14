@@ -13,6 +13,11 @@
 //! - Fixed words (prerequisites heading, note labels, "Step") come from
 //!   [`Labels`]: [`DocxOptions::labels`], or by default
 //!   [`Labels::for_language`] of the guide's language.
+//! - With a [`CheckedBranding`] logo (the checked, upright PNG), it sits
+//!   above the title, at most [`LOGO_HEIGHT_PX`] high (at 96 dpi) and the
+//!   text width wide. The accent colours the `Heading1` and `Heading2`
+//!   styles and the left border of neutral notes; tips and warnings keep
+//!   their green and orange, which carry meaning.
 //! - The Markdown subset maps to runs: bold, italic, code (monospace on a
 //!   grey background), hyperlinks (real `w:hyperlink` elements with an
 //!   external relationship), hard breaks, and bullet and numbered lists
@@ -46,7 +51,8 @@
 //!
 //! The same guide and options give the same bytes: paragraph, image and
 //! hyperlink ids are assigned per document here instead of by docx-rs'
-//! process-wide counters, the core-properties dates come from
+//! process-wide counters, hyperlink relationships (which docx-rs collects
+//! in a `HashMap`) are sorted by id, the core-properties dates come from
 //! [`DocxOptions::timestamp`] (1970-01-01 when unset), and zip entries carry
 //! the fixed 1980-01-01 date of the zip crate without its `time` feature.
 
@@ -55,7 +61,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::ast::{plain_text, Block, Inline};
-use super::md::Labels;
+pub use super::md::{Branding, CheckedBranding};
+use super::md::{Labels, Logo};
 use super::raster::{render_step_image, ImageOptions};
 use super::render::{RenderGuide, RenderItem, RenderNote, RenderStep};
 use super::report::ExportReport;
@@ -103,6 +110,7 @@ pub struct DocxOptions {
     /// Fixed words; `None` uses [`Labels::for_language`] of the guide's
     /// language.
     pub labels: Option<Labels>,
+    pub branding: CheckedBranding,
 }
 
 impl Default for DocxOptions {
@@ -116,6 +124,7 @@ impl Default for DocxOptions {
             timestamp: None,
             paper: Paper::default(),
             labels: None,
+            branding: CheckedBranding::default(),
         }
     }
 }
@@ -154,6 +163,8 @@ const LIST_HANGING: i32 = 360;
 const CODE_FONT: &str = "Consolas";
 const CODE_FILL: &str = "F2F2F2";
 const LINK_COLOR: &str = "0563C1";
+/// Largest displayed logo height, in pixels at 96 dpi (about 1.3 cm).
+pub const LOGO_HEIGHT_PX: u32 = 48;
 
 /// Writes `guide` as a DOCX file at `out_path`, reading step images from the
 /// bundle at `handle`. The file is written to a temporary file next to it
@@ -173,7 +184,8 @@ pub fn export(
         .labels
         .clone()
         .unwrap_or_else(|| Labels::for_language(&guide.language));
-    let docx = Writer::new(handle, opts, labels, &mut report).document(guide);
+    let docx = Writer::new(handle, opts, labels, &opts.branding, &mut report)
+        .document(guide, opts.branding.logo());
 
     let dir = match out_path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
@@ -183,7 +195,9 @@ pub fn export(
         .prefix(".guidesya-export-")
         .suffix(".docx.tmp")
         .tempfile_in(dir)?;
-    docx.pack(tmp.as_file_mut())
+    let mut xml = docx.build();
+    xml.document_rels = sort_hyperlink_rels(&xml.document_rels);
+    xml.pack(tmp.as_file_mut())
         .map_err(|e| DocxError::Package(e.to_string()))?;
     tmp.as_file().sync_all()?;
     if opts.overwrite {
@@ -207,6 +221,40 @@ pub fn export(
     Ok(report)
 }
 
+/// `word/_rels/document.xml.rels` with the `rIdHyperlinkN` relationships
+/// in `N` order after all others. docx-rs writes them in `HashMap` order,
+/// which changes from run to run.
+fn sort_hyperlink_rels(xml: &[u8]) -> Vec<u8> {
+    const OPEN: &str = "<Relationship ";
+    let Ok(text) = std::str::from_utf8(xml) else {
+        return xml.to_vec();
+    };
+    let (Some(first), Some(end)) = (text.find(OPEN), text.rfind("</Relationships>")) else {
+        return xml.to_vec();
+    };
+    let mut others = Vec::new();
+    let mut links = Vec::new();
+    for element in text[first..end].split(OPEN).filter(|e| !e.is_empty()) {
+        let number = element
+            .strip_prefix("Id=\"rIdHyperlink")
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|n| n.parse::<u64>().ok());
+        match number {
+            Some(n) => links.push((n, element)),
+            None => others.push(element),
+        }
+    }
+    links.sort_by_key(|(n, _)| *n);
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..first]);
+    for element in others.into_iter().chain(links.into_iter().map(|(_, e)| e)) {
+        out.push_str(OPEN);
+        out.push_str(element);
+    }
+    out.push_str(&text[end..]);
+    out.into_bytes()
+}
+
 /// Inline formatting in effect while walking the AST.
 #[derive(Debug, Clone, Copy, Default)]
 struct Format {
@@ -220,23 +268,25 @@ struct Format {
 #[derive(Debug, Clone, Copy)]
 struct NoteStyle {
     fill: &'static str,
-    border: &'static str,
+    /// Left border colour; `None` takes the accent.
+    border: Option<&'static str>,
 }
 
 impl NoteStyle {
-    fn of(kind: NoteKind) -> Self {
+    /// `accent`: whether a branding accent replaces the neutral border.
+    fn of(kind: NoteKind, accent: bool) -> Self {
         match kind {
             NoteKind::Tip => Self {
                 fill: "E8F5E9",
-                border: "2E7D32",
+                border: Some("2E7D32"),
             },
             NoteKind::Warning => Self {
                 fill: "FFF4E5",
-                border: "ED6C02",
+                border: Some("ED6C02"),
             },
             NoteKind::Note => Self {
                 fill: "E8F0FE",
-                border: "1A73E8",
+                border: (!accent).then_some("1A73E8"),
             },
         }
     }
@@ -266,6 +316,8 @@ struct Writer<'a> {
     handle: &'a GuideHandle,
     opts: &'a DocxOptions,
     labels: Labels,
+    /// Branding accent as `RRGGBB`.
+    accent: Option<String>,
     report: &'a mut ExportReport,
     docx: Docx,
     next_paragraph: u32,
@@ -282,6 +334,7 @@ impl<'a> Writer<'a> {
         handle: &'a GuideHandle,
         opts: &'a DocxOptions,
         labels: Labels,
+        branding: &CheckedBranding,
         report: &'a mut ExportReport,
     ) -> Self {
         let (page_w, page_h) = opts.paper.size();
@@ -306,11 +359,17 @@ impl<'a> Writer<'a> {
             .default_size(22)
             .add_abstract_numbering(list_levels(BULLET_ABSTRACT, false))
             .add_abstract_numbering(list_levels(DECIMAL_ABSTRACT, true));
-        let docx = styles().into_iter().fold(docx, Docx::add_style);
+        let accent = branding
+            .accent()
+            .map(|[r, g, b]| format!("{r:02X}{g:02X}{b:02X}"));
+        let docx = styles(accent.as_deref())
+            .into_iter()
+            .fold(docx, Docx::add_style);
         Self {
             handle,
             opts,
             labels,
+            accent,
             report,
             docx,
             next_paragraph: 1,
@@ -322,7 +381,10 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn document(mut self, guide: &RenderGuide) -> Docx {
+    fn document(mut self, guide: &RenderGuide, logo: Option<&Logo>) -> Docx {
+        if let Some(logo) = logo {
+            self.logo(logo);
+        }
         let title = self
             .paragraph()
             .style("Title")
@@ -405,6 +467,27 @@ impl<'a> Writer<'a> {
         self.push(p);
     }
 
+    fn logo(&mut self, logo: &Logo) {
+        let (px_w, px_h) = (u64::from(logo.width()), u64::from(logo.height()));
+        let mut height = px_h.min(u64::from(LOGO_HEIGHT_PX)) * EMU_PER_PX;
+        let mut width = height * px_w / px_h;
+        if width > self.text_width {
+            width = self.text_width;
+            height = (width * px_h / px_w).max(1);
+        }
+        let clamp = |v: u64| v.clamp(1, u64::from(u32::MAX)) as u32;
+        let id = self.next_image;
+        self.next_image += 1;
+        let pic = Pic::new_with_dimensions(logo.png().to_vec(), logo.width(), logo.height())
+            .id(format!("rIdImage{id}"))
+            .size(clamp(width), clamp(height));
+        let p = self
+            .paragraph()
+            .keep_next(true)
+            .add_run(Run::new().add_image(pic));
+        self.push(p);
+    }
+
     /// Displayed size in EMU: the text width, or the 96 dpi size if
     /// narrower, then shrunk to fit the height cap; aspect ratio kept.
     fn display_size(&self, px_w: u32, px_h: u32) -> (u32, u32) {
@@ -421,7 +504,7 @@ impl<'a> Writer<'a> {
     }
 
     fn note(&mut self, note: &RenderNote) {
-        let style = NoteStyle::of(note.kind);
+        let style = NoteStyle::of(note.kind, self.accent.is_some());
         let label = format!("{}: ", self.labels.note_kind(note.kind));
         let label = Piece::run(Run::new().bold().add_text(xml_text(&label)));
         let ctx = Context {
@@ -455,7 +538,7 @@ impl<'a> Writer<'a> {
                 .val(BorderType::Single)
                 .size(24)
                 .space(8)
-                .color(note.border);
+                .color(note.border.or(self.accent.as_deref()).unwrap_or_default());
             p.property = p
                 .property
                 .shading(
@@ -670,7 +753,8 @@ fn list_levels(id: usize, numbered: bool) -> AbstractNumbering {
     })
 }
 
-fn styles() -> Vec<Style> {
+/// The paragraph styles; headings take the accent (`RRGGBB`) if any.
+fn styles(accent: Option<&str>) -> Vec<Style> {
     let paragraph = |id: &str, name: &str| {
         Style::new(id, StyleType::Paragraph)
             .name(name)
@@ -678,20 +762,28 @@ fn styles() -> Vec<Style> {
             .next("Normal")
             .q_format(true)
     };
+    let heading = |style: Style| match accent {
+        Some(accent) => style.color(accent),
+        None => style,
+    };
     vec![
         paragraph("Title", "Title").size(52).bold(),
         paragraph("Subtitle", "Subtitle")
             .size(28)
             .italic()
             .color("595959"),
-        paragraph("Heading1", "heading 1")
-            .size(32)
-            .bold()
-            .outline_lvl(0),
-        paragraph("Heading2", "heading 2")
-            .size(26)
-            .bold()
-            .outline_lvl(1),
+        heading(
+            paragraph("Heading1", "heading 1")
+                .size(32)
+                .bold()
+                .outline_lvl(0),
+        ),
+        heading(
+            paragraph("Heading2", "heading 2")
+                .size(26)
+                .bold()
+                .outline_lvl(1),
+        ),
     ]
 }
 
@@ -711,8 +803,14 @@ mod tests {
             ..DocxOptions::default()
         };
         let mut report = ExportReport::default();
-        Writer::new(&handle, &opts, Labels::for_language("en"), &mut report)
-            .display_size(px.0, px.1)
+        Writer::new(
+            &handle,
+            &opts,
+            Labels::for_language("en"),
+            &CheckedBranding::default(),
+            &mut report,
+        )
+        .display_size(px.0, px.1)
     }
 
     #[test]
@@ -741,6 +839,31 @@ mod tests {
         let (w, h) = writer_size(Paper::A4, (1000, 10000));
         assert_eq!(h, max_height);
         assert_eq!(w, max_height / 10);
+    }
+
+    #[test]
+    fn hyperlink_rels_are_sorted() {
+        let rels = concat!(
+            r#"<?xml version="1.0"?><Relationships xmlns="x">"#,
+            r#"<Relationship Id="rId1" Target="styles.xml" />"#,
+            r#"<Relationship Id="rIdHyperlink10" Target="j" TargetMode="External" />"#,
+            r#"<Relationship Id="rIdImage1" Target="media/a.png" />"#,
+            r#"<Relationship Id="rIdHyperlink2" Target="b" TargetMode="External" />"#,
+            r#"</Relationships>"#,
+        );
+        let sorted = String::from_utf8(sort_hyperlink_rels(rels.as_bytes())).unwrap();
+        assert_eq!(
+            sorted,
+            concat!(
+                r#"<?xml version="1.0"?><Relationships xmlns="x">"#,
+                r#"<Relationship Id="rId1" Target="styles.xml" />"#,
+                r#"<Relationship Id="rIdImage1" Target="media/a.png" />"#,
+                r#"<Relationship Id="rIdHyperlink2" Target="b" TargetMode="External" />"#,
+                r#"<Relationship Id="rIdHyperlink10" Target="j" TargetMode="External" />"#,
+                r#"</Relationships>"#,
+            )
+        );
+        assert_eq!(sort_hyperlink_rels(b"\xff"), b"\xff");
     }
 
     #[test]

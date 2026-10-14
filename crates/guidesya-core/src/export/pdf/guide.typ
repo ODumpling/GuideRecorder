@@ -142,8 +142,12 @@
 
 // Cover page.
 #{
+  // The logo is 1.6 cm high, or less if that would be wider than the page.
   if data.logo != none {
-    image(data.logo, height: 1.6cm)
+    layout(size => {
+      let ratio = data.logo.width / data.logo.height
+      image(data.logo.path, height: calc.min(1.6cm, size.width / ratio))
+    })
   }
   v(1fr)
   block(width: 100%, stroke: (left: 4pt + accent), inset: (left: 16pt, y: 4pt))[

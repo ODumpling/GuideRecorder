@@ -373,11 +373,15 @@ fn branding_hooks_are_off_by_default_and_work() {
     let opts = PdfOptions {
         branding: Branding {
             logo: Some(logo),
-            accent: Some([0xaa, 0x11, 0x22]),
-        },
+            accent: Some("#aa1122".into()),
+        }
+        .check()
+        .unwrap(),
         ..PdfOptions::default()
     };
     let branded = lib.render_with(&guide, opts);
+    assert!(cover_colours(&branded.pdf).contains("0.667 0.067 0.133"));
+    assert!(!cover_colours(&plain.pdf).contains("0.667 0.067 0.133"));
     assert!(
         branded.report.notes.is_empty(),
         "{:?}",
@@ -386,6 +390,60 @@ fn branding_hooks_are_off_by_default_and_work() {
     assert_eq!(branded.page_count(), plain.page_count());
     assert_ne!(branded.pdf, plain.pdf);
     assert!(count(&branded.pdf, b"/Subtype/Image") > images_plain);
+}
+
+#[test]
+fn branded_fixtures_match_text_goldens() {
+    let fixtures = Fixtures::new();
+    for (name, loaded) in fixtures.guides() {
+        let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+        let branding = Branding {
+            logo: Some(PNG_1X1.to_vec()),
+            accent: Some("#aa1122".into()),
+        };
+        let golden = branded_golden(&render, &loaded, branding);
+        // 1.6 cm square.
+        assert!(golden.contains("cover images: 45.35x45.35\n"), "{golden}");
+        assert_golden_text(&format!("pdf/branded/{}.golden", slug(&name)), &golden);
+    }
+
+    // A wide logo is scaled down to the text width (A4 minus 2 × 2 cm:
+    // 481.89 pt), keeping its 1900:40 ratio.
+    let (_, loaded) = fixtures.guide("Share a calendar event");
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    let mut wide = Vec::new();
+    image::RgbaImage::from_pixel(1900, 40, image::Rgba([0, 0, 0, 255]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut wide),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let branding = Branding {
+        logo: Some(wide),
+        accent: Some("#aa1122".into()),
+    };
+    let golden = branded_golden(&render, &loaded, branding);
+    assert!(golden.contains("cover images: 481.89x10.15\n"), "{golden}");
+    assert_golden_text("pdf/branded/wide-logo.golden", &golden);
+}
+
+/// The page dump plus image count, cover image sizes and cover colours.
+fn branded_golden(render: &RenderGuide, loaded: &LoadedGuide, branding: Branding) -> String {
+    let opts = PdfOptions {
+        branding: branding.check().unwrap(),
+        ..fixture_options(loaded)
+    };
+    let output = pdf::render(render, &loaded.handle, &opts).unwrap();
+    assert!(output.report.notes.is_empty(), "{:?}", output.report.notes);
+    check_pdf_structure(&output);
+    let mut golden = dump(&output);
+    golden += &format!(
+        "=== branding ===\nimages: {}\ncover images: {}\ncover colours: {}\n",
+        count(&output.pdf, b"/Subtype/Image"),
+        cover_images(&output.pdf),
+        cover_colours(&output.pdf),
+    );
+    golden
 }
 
 #[test]
@@ -693,6 +751,65 @@ fn assert_flows(output: &PdfOutput, tokens: &[String], prefix: &str, min_pages: 
             i + 1
         );
     }
+}
+
+/// A valid 1×1 RGBA PNG.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// The size (in pt, from the `cm` right before each `Do`) of every image
+/// drawn on the cover page, as `WxH`, joined by `; `.
+fn cover_images(pdf: &[u8]) -> String {
+    let doc = lopdf::Document::load_mem(pdf).expect("lopdf parses the PDF");
+    let (_, &cover) = doc.get_pages().iter().next().expect("a cover page");
+    let content = lopdf::content::Content::decode(&doc.get_page_content(cover)).unwrap();
+    let mut scale = None;
+    let mut sizes = Vec::new();
+    for op in content.operations {
+        match op.operator.as_str() {
+            "cm" if op.operands.len() == 6 => {
+                let f = |i: usize| op.operands[i].as_float().unwrap_or_default();
+                scale = Some((f(0), f(3)));
+            }
+            "Do" => {
+                let (w, h) = scale.unwrap_or_default();
+                sizes.push(format!("{:.2}x{:.2}", w.abs(), h.abs()));
+            }
+            _ => {}
+        }
+    }
+    sizes.join("; ")
+}
+
+/// The distinct RGB colours set on the cover page (three-operand `rg`,
+/// `sc` and `scn` operators, fill or stroke, rounded to three decimals),
+/// sorted and joined by `; `.
+fn cover_colours(pdf: &[u8]) -> String {
+    let doc = lopdf::Document::load_mem(pdf).expect("lopdf parses the PDF");
+    let (_, &cover) = doc.get_pages().iter().next().expect("a cover page");
+    let content = doc.get_page_content(cover);
+    let content = lopdf::content::Content::decode(&content).expect("content stream");
+    let mut colours = std::collections::BTreeSet::new();
+    for op in content.operations {
+        let colour_op = matches!(
+            op.operator.as_str(),
+            "rg" | "RG" | "sc" | "SC" | "scn" | "SCN"
+        );
+        if colour_op && op.operands.len() == 3 {
+            let rgb: Vec<String> = op
+                .operands
+                .iter()
+                .map(|o| format!("{:.3}", o.as_float().unwrap_or_default()))
+                .collect();
+            colours.insert(rgb.join(" "));
+        }
+    }
+    colours.into_iter().collect::<Vec<_>>().join("; ")
 }
 
 fn count(haystack: &[u8], needle: &[u8]) -> usize {

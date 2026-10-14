@@ -25,6 +25,11 @@
 //! > **Tip:** note body
 //! ```
 //!
+//! With a branding logo ([`CheckedBranding`]), it is written as
+//! `images/logo.png` (the checked, re-encoded PNG) and shown right under
+//! the title. The accent colour
+//! has no place in Markdown and is ignored (but still validated).
+//!
 //! # Escaping
 //!
 //! The [`ast`](super::ast) holds raw text, so every `Text` node is escaped
@@ -39,8 +44,10 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io;
+use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
+
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
 use super::ast::{plain_text, Block, Inline};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem};
@@ -51,6 +58,8 @@ use crate::model::NoteKind;
 pub const GUIDE_FILE: &str = "guide.md";
 /// Folder (inside the output folder) the step images are written to.
 pub const IMAGES_DIR: &str = "images";
+/// File name of the branding logo inside [`IMAGES_DIR`].
+pub const LOGO_FILE: &str = "logo.png";
 
 /// Options for [`export`].
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -62,6 +71,8 @@ pub struct MdOptions {
     pub overwrite: bool,
     /// Fixed labels; `None` picks them from the guide language.
     pub labels: Option<Labels>,
+    /// Logo under the title; off by default. The accent is not used.
+    pub branding: CheckedBranding,
 }
 
 /// Errors from [`export`] (and the HTML writer's file output).
@@ -74,7 +85,7 @@ pub enum ExportError {
     Io { path: PathBuf, source: io::Error },
     #[error(transparent)]
     Write(#[from] LibraryError),
-    /// Invalid HTML branding or a template failure.
+    /// An HTML template failure.
     #[error("html: {0}")]
     Html(String),
 }
@@ -123,13 +134,199 @@ impl Labels {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Branding
+
+/// Largest logo file accepted, in bytes.
+pub const MAX_LOGO_BYTES: usize = 2 * 1024 * 1024;
+/// Largest logo width or height accepted, in pixels.
+pub const MAX_LOGO_SIDE: u32 = 2000;
+
+/// Branding as given by the user: a logo and an accent colour. Turn it into
+/// a [`CheckedBranding`] with [`Branding::check`]; the writers' options take
+/// that, so a writer never sees an invalid logo and never decodes it again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Branding {
+    /// PNG or JPEG bytes, at most [`MAX_LOGO_BYTES`] and
+    /// [`MAX_LOGO_SIDE`] px on either side. SVG is refused: it can carry
+    /// scripts and external references, and not every format can show it.
+    pub logo: Option<Vec<u8>>,
+    /// Hex colour, `#rgb` or `#rrggbb`.
+    pub accent: Option<String>,
+}
+
+/// Why a [`Branding`] was refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BrandingError {
+    #[error("the logo is an SVG image; use a PNG or JPEG logo")]
+    SvgLogo,
+    #[error("the logo is not a PNG or JPEG image")]
+    LogoFormat,
+    #[error("the logo is {0} bytes; the limit is {MAX_LOGO_BYTES} bytes (2 MB)")]
+    LogoTooLarge(usize),
+    #[error("the logo is {width}×{height} px; the limit is {MAX_LOGO_SIDE} px on either side")]
+    LogoDimensions { width: u32, height: u32 },
+    #[error("the logo cannot be read: {0}")]
+    LogoUnreadable(String),
+    #[error("accent {0:?} is not a hex colour (#rgb or #rrggbb)")]
+    Accent(String),
+}
+
+/// A validated logo, re-encoded as PNG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Logo {
+    png: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+impl Logo {
+    /// PNG bytes: decoded once, turned upright by its EXIF orientation and
+    /// re-encoded, so no metadata (EXIF, text chunks) is carried along.
+    pub fn png(&self) -> &[u8] {
+        &self.png
+    }
+
+    /// Width in pixels, upright.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height in pixels, upright.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+/// Branding that passed [`Branding::check`], as every writer takes it.
+/// Off ([`Default`]) unless built by `check`.
+///
+/// Where each writer puts it:
+///
+/// - Markdown: the logo as `images/logo.png` under the title; no accent.
+/// - HTML: the logo above the title (a data URI); the accent on step
+///   numbers, links and the header rule.
+/// - DOCX: the logo above the title; the accent on headings and on the
+///   border of neutral notes (tips and warnings keep their green and
+///   orange, which carry meaning).
+/// - PDF: the logo at the top of the cover page; the accent on the cover
+///   rule and section headings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckedBranding {
+    logo: Option<Logo>,
+    accent: Option<[u8; 3]>,
+}
+
+impl CheckedBranding {
+    pub fn logo(&self) -> Option<&Logo> {
+        self.logo.as_ref()
+    }
+
+    /// The accent as RGB.
+    pub fn accent(&self) -> Option<[u8; 3]> {
+        self.accent
+    }
+
+    /// The accent as lowercase `#rrggbb`.
+    pub fn accent_hex(&self) -> Option<String> {
+        self.accent
+            .map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}"))
+    }
+}
+
+impl Branding {
+    /// Validates the accent colour and the logo (format, file size, pixel
+    /// size from the header before decoding), then decodes the logo once
+    /// and re-encodes it as an upright PNG.
+    pub fn check(&self) -> Result<CheckedBranding, BrandingError> {
+        let accent = self.accent.as_deref().map(parse_accent).transpose()?;
+        let logo = self.logo.as_deref().map(check_logo).transpose()?;
+        Ok(CheckedBranding { logo, accent })
+    }
+}
+
+/// `#rgb` or `#rrggbb` as RGB.
+fn parse_accent(value: &str) -> Result<[u8; 3], BrandingError> {
+    let invalid = || BrandingError::Accent(value.to_owned());
+    let hex = value.strip_prefix('#').ok_or_else(invalid)?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid());
+    }
+    let digit = |i: usize| u8::from_str_radix(&hex[i..=i], 16).map_err(|_| invalid());
+    match hex.len() {
+        3 => Ok([digit(0)? * 17, digit(1)? * 17, digit(2)? * 17]),
+        6 => {
+            let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| invalid());
+            Ok([byte(0)?, byte(2)?, byte(4)?])
+        }
+        _ => Err(invalid()),
+    }
+}
+
+fn check_logo(bytes: &[u8]) -> Result<Logo, BrandingError> {
+    if bytes.len() > MAX_LOGO_BYTES {
+        return Err(BrandingError::LogoTooLarge(bytes.len()));
+    }
+    let format = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        ImageFormat::Png
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        ImageFormat::Jpeg
+    } else if looks_like_svg(bytes) {
+        return Err(BrandingError::SvgLogo);
+    } else {
+        return Err(BrandingError::LogoFormat);
+    };
+    let unreadable = |e: image::ImageError| BrandingError::LogoUnreadable(e.to_string());
+    let mut reader = ImageReader::new(Cursor::new(bytes));
+    reader.set_format(format);
+    let mut decoder = reader.into_decoder().map_err(unreadable)?;
+    // The header first, so an oversized image is refused before decoding.
+    // A quarter turn swaps the sides, which the square limit doesn't mind.
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 || width > MAX_LOGO_SIDE || height > MAX_LOGO_SIDE {
+        return Err(BrandingError::LogoDimensions { width, height });
+    }
+    let orientation = decoder.orientation().map_err(unreadable)?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
+    image.apply_orientation(orientation);
+    let mut png = Vec::new();
+    if image
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .is_err()
+    {
+        // A colour type PNG can't hold (e.g. 32-bit float): store RGBA.
+        png.clear();
+        DynamicImage::ImageRgba8(image.to_rgba8())
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .map_err(unreadable)?;
+    }
+    Ok(Logo {
+        png,
+        width: image.width(),
+        height: image.height(),
+    })
+}
+
+/// An XML or SVG document: `<` after an optional BOM and whitespace.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    bytes
+        .iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|&b| b == b'<')
+}
+
+// ---------------------------------------------------------------------------
+// Export
+
 /// Writes `<out_dir>/guide.md` and `<out_dir>/images/NN-<slug>.png`, with
 /// step images read from the bundle at `handle` (normally `guide.handle`).
 ///
 /// Refuses a non-empty `out_dir` unless `opts.overwrite`; with it, earlier
 /// `NN-*.png` images this export did not write are removed, and nothing
-/// else is touched. A broken step image becomes a placeholder plus a
-/// warning in the report.
+/// else is touched (an earlier `images/logo.png` stays, unreferenced, when
+/// this export has no logo). A broken step image becomes a placeholder
+/// plus a warning in the report.
 pub fn export(
     guide: &RenderGuide,
     handle: &GuideHandle,
@@ -137,6 +334,7 @@ pub fn export(
     opts: &MdOptions,
 ) -> Result<ExportReport> {
     let out_dir = out_dir.as_ref();
+    let logo = opts.branding.logo().map(Logo::png);
     prepare_out_dir(out_dir, opts.overwrite)?;
     let images_dir = out_dir.join(IMAGES_DIR);
     fs::create_dir_all(&images_dir).map_err(io_err(&images_dir))?;
@@ -156,10 +354,18 @@ pub fn export(
         images.push(path);
     }
 
-    let markdown = render(guide, &names, &labels);
+    let logo_path = images_dir.join(LOGO_FILE);
+    if let Some(png) = &logo {
+        write_atomic(&logo_path, png, Durability::RenameOnly)?;
+    }
+
+    let markdown = render_with_logo(guide, &names, &labels, logo.is_some());
     let doc = out_dir.join(GUIDE_FILE);
     write_atomic(&doc, markdown.as_bytes(), Durability::RenameOnly)?;
     report.files.push(doc);
+    if logo.is_some() {
+        report.files.push(logo_path.clone());
+    }
     report.files.extend(images);
 
     if opts.overwrite {
@@ -172,10 +378,23 @@ pub fn export(
 /// `images/<names[i]>`. Exposed for tests and previews; [`export`] writes
 /// it.
 pub fn render(guide: &RenderGuide, image_names: &[String], labels: &Labels) -> String {
+    render_with_logo(guide, image_names, labels, false)
+}
+
+/// [`render`], plus `images/logo.png` right under the title when `logo`.
+pub fn render_with_logo(
+    guide: &RenderGuide,
+    image_names: &[String],
+    labels: &Labels,
+    logo: bool,
+) -> String {
     let mut out = Vec::new();
     let title = escape_line(&single_line(&guide.title));
     if !title.is_empty() {
         push_block(&mut out, &format!("# {}", heading_text(&title)));
+    }
+    if logo {
+        push_block(&mut out, &format!("![]({IMAGES_DIR}/{LOGO_FILE})"));
     }
     let summary = single_line(&guide.summary);
     if !summary.is_empty() {
@@ -626,6 +845,132 @@ fn quote(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::export::ast::parse_blocks;
+
+    #[test]
+    fn accents() {
+        assert_eq!(parse_accent("#abc"), Ok([0xaa, 0xbb, 0xcc]));
+        assert_eq!(parse_accent("#A1B2C3"), Ok([0xa1, 0xb2, 0xc3]));
+        for bad in [
+            "red",
+            "abc",
+            "#abcd",
+            "#ggg",
+            "#fff;}</style>",
+            "#+1+2+3",
+            "",
+        ] {
+            assert_eq!(
+                parse_accent(bad),
+                Err(BrandingError::Accent(bad.into())),
+                "{bad}"
+            );
+        }
+        let branding = Branding {
+            accent: Some("#C0F".into()),
+            logo: None,
+        };
+        assert_eq!(
+            branding.check().unwrap().accent_hex().as_deref(),
+            Some("#cc00ff")
+        );
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
+        let mut out = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    fn check(bytes: &[u8]) -> Result<Logo, BrandingError> {
+        let branding = Branding {
+            logo: Some(bytes.to_vec()),
+            accent: None,
+        };
+        branding.check().map(|b| b.logo.unwrap())
+    }
+
+    fn jpeg(width: u32, height: u32) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::RgbImage::from_pixel(width, height, image::Rgb([200, 0, 0]))
+            .write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
+            .unwrap();
+        jpeg
+    }
+
+    /// `jpeg` with an EXIF APP1 segment right after SOI, holding only an
+    /// orientation tag.
+    fn with_exif_orientation(jpeg: &[u8], orientation: u8) -> Vec<u8> {
+        let mut app1 = vec![0xff, 0xe1, 0x00, 34];
+        app1.extend_from_slice(b"Exif\0\0MM\0\x2a\0\0\0\x08");
+        app1.extend_from_slice(&[0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, orientation, 0, 0]);
+        app1.extend_from_slice(&[0, 0, 0, 0]);
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn logos_become_png() {
+        let logo = check(&png(40, 20)).unwrap();
+        assert!(logo.png().starts_with(b"\x89PNG"));
+        assert_eq!((logo.width(), logo.height()), (40, 20));
+        let decoded = image::load_from_memory(logo.png()).unwrap();
+        assert_eq!(decoded.to_rgba8().get_pixel(3, 3).0, [10, 20, 30, 255]);
+
+        let logo = check(&jpeg(8, 4)).unwrap();
+        assert!(logo.png().starts_with(b"\x89PNG"));
+        assert_eq!((logo.width(), logo.height()), (8, 4));
+    }
+
+    #[test]
+    fn exif_orientation_is_applied_and_metadata_dropped() {
+        // 6: rotate 90° clockwise to display.
+        let rotated = with_exif_orientation(&jpeg(8, 4), 6);
+        assert!(rotated.windows(4).any(|w| w == b"Exif"));
+        let logo = check(&rotated).unwrap();
+        assert_eq!((logo.width(), logo.height()), (4, 8));
+        let decoded = image::load_from_memory(logo.png()).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (4, 8));
+        assert!(!logo.png().windows(4).any(|w| w == b"Exif" || w == b"eXIf"));
+    }
+
+    #[test]
+    fn bad_logos_are_refused() {
+        assert_eq!(
+            check(b"\xef\xbb\xbf  <svg xmlns='http://www.w3.org/2000/svg'/>"),
+            Err(BrandingError::SvgLogo)
+        );
+        assert_eq!(
+            check(b"<?xml version='1.0'?><svg/>"),
+            Err(BrandingError::SvgLogo)
+        );
+        assert_eq!(check(b"GIF89a"), Err(BrandingError::LogoFormat));
+        assert_eq!(check(b""), Err(BrandingError::LogoFormat));
+        assert_eq!(
+            check(&png(2001, 10)),
+            Err(BrandingError::LogoDimensions {
+                width: 2001,
+                height: 10
+            })
+        );
+        assert!(check(&png(2000, 2000)).is_ok());
+        let mut big = png(4, 4);
+        big.resize(MAX_LOGO_BYTES + 1, 0);
+        assert_eq!(
+            check(&big),
+            Err(BrandingError::LogoTooLarge(MAX_LOGO_BYTES + 1))
+        );
+        let mut truncated = png(40, 20);
+        truncated.truncate(40);
+        assert!(matches!(
+            check(&truncated),
+            Err(BrandingError::LogoUnreadable(_))
+        ));
+    }
 
     #[test]
     fn slugs() {

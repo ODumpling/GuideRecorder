@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use guidesya_core::export::docx::{self, DocxError, DocxOptions, Paper};
+use guidesya_core::export::docx::{self, Branding, CheckedBranding, DocxError, DocxOptions, Paper};
 use guidesya_core::export::md::Labels;
 use guidesya_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guidesya_core::library::{GuideHandle, Library, LoadedGuide};
@@ -54,6 +54,195 @@ fn fixtures_match_text_goldens() {
             &package.text_dump(),
         );
     }
+}
+
+/// A valid 1×1 RGBA PNG.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+fn branding() -> CheckedBranding {
+    Branding {
+        logo: Some(PNG_1X1.to_vec()),
+        accent: Some("#aa1122".into()),
+    }
+    .check()
+    .unwrap()
+}
+
+/// A 1900×40 PNG logo, wider than the text width at 96 dpi.
+fn wide_logo() -> CheckedBranding {
+    let mut wide = Vec::new();
+    image::RgbaImage::from_pixel(1900, 40, image::Rgba([0, 0, 0, 255]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut wide),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    Branding {
+        logo: Some(wide),
+        accent: Some("#aa1122".into()),
+    }
+    .check()
+    .unwrap()
+}
+
+/// The text dump plus the branding-relevant formatting: style colours and
+/// the note border colours, in document order.
+fn branded_dump(package: &Package) -> String {
+    let mut out = package.text_dump();
+    out += "=== styles ===\n";
+    let styles = package.text("word/styles.xml");
+    let mut style = None;
+    for (name, tag) in tags(&styles) {
+        match name {
+            "w:style" => style = attr(tag, "w:styleId"),
+            "w:color" => {
+                if let (Some(style), Some(colour)) = (&style, attr(tag, "w:val")) {
+                    out += &format!("{style} color={colour}\n");
+                }
+            }
+            _ => {}
+        }
+    }
+    out += "=== note borders ===\n";
+    let doc = package.text("word/document.xml");
+    for (name, tag) in tags(&doc) {
+        if name == "w:left" {
+            if let Some(colour) = attr(tag, "w:color") {
+                out += &format!("{colour}\n");
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn branded_fixtures_match_text_goldens() {
+    let fixtures = Fixtures::new();
+    for (name, loaded) in fixtures.guides() {
+        let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+        let out = fixtures.out(&format!("{name}.branded.docx"));
+        let opts = DocxOptions {
+            timestamp: Some(loaded.guide.updated_at),
+            branding: branding(),
+            ..DocxOptions::default()
+        };
+        docx::export(&render, &loaded.handle, &out, &opts).unwrap();
+        let package = Package::open(&out);
+        let dump = branded_dump(&package);
+        // The logo paragraph comes first, at its 96 dpi size (1 px).
+        assert!(
+            dump.starts_with("Normal | [image 9525x9525]\nTitle | "),
+            "{dump}"
+        );
+        assert_golden_text(&format!("docx/branded/{}.golden", slug(&name)), &dump);
+    }
+
+    // A wide logo is scaled to the text width: A4 text width is 9026 twips
+    // = 5731510 EMU, and 40 px of 1900 at that width is 120663 EMU.
+    let (name, loaded) = fixtures.guide("Share a calendar event");
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    let out = fixtures.out(&format!("{name}.wide.docx"));
+    let opts = DocxOptions {
+        timestamp: Some(loaded.guide.updated_at),
+        branding: wide_logo(),
+        ..DocxOptions::default()
+    };
+    docx::export(&render, &loaded.handle, &out, &opts).unwrap();
+    let dump = branded_dump(&Package::open(&out));
+    assert!(
+        dump.starts_with("Normal | [image 5731510x120663]\nTitle | "),
+        "{dump}"
+    );
+    assert_golden_text("docx/branded/wide-logo.golden", &dump);
+}
+
+#[test]
+fn branding_is_off_by_default() {
+    let synthetic = Synthetic::new();
+    let mut guide = Guide::new("Plain", "en");
+    guide.items = vec![
+        Item::Section(Section {
+            id: Ulid::new(),
+            title: "Part".into(),
+        }),
+        step("Click A"),
+        Item::Note(Note {
+            id: Ulid::new(),
+            kind: NoteKind::Note,
+            body: "Hello".into(),
+        }),
+        Item::Note(Note {
+            id: Ulid::new(),
+            kind: NoteKind::Tip,
+            body: "Hi".into(),
+        }),
+    ];
+    let plain = branded_dump(&synthetic.export(&guide));
+    assert!(!plain.contains("Heading1 color="), "{plain}");
+    assert!(
+        plain.ends_with("=== note borders ===\n1A73E8\n2E7D32\n"),
+        "{plain}"
+    );
+
+    let (branded, _) = Synthetic::new().export_with_options(
+        &guide,
+        DocxOptions {
+            branding: Branding {
+                logo: None,
+                accent: Some("#Ab1".into()),
+            }
+            .check()
+            .unwrap(),
+            ..DocxOptions::default()
+        },
+    );
+    let branded = branded_dump(&branded);
+    assert!(
+        branded.contains("Heading1 color=AABB11\nHeading2 color=AABB11\n"),
+        "{branded}"
+    );
+    // Neutral notes take the accent; tips keep their green.
+    assert!(
+        branded.ends_with("=== note borders ===\nAABB11\n2E7D32\n"),
+        "{branded}"
+    );
+    assert!(!branded.contains("[image 9525x9525]"));
+}
+
+#[test]
+fn wide_logos_fit_the_text_width() {
+    let synthetic = Synthetic::new();
+    let mut wide = Vec::new();
+    image::RgbaImage::from_pixel(1900, 10, image::Rgba([0, 0, 0, 255]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut wide),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let (package, _) = synthetic.export_with_options(
+        &Guide::new("Wide", "en"),
+        DocxOptions {
+            branding: Branding {
+                logo: Some(wide),
+                accent: None,
+            }
+            .check()
+            .unwrap(),
+            ..DocxOptions::default()
+        },
+    );
+    // A4 text width is 9026 twips = 5731510 EMU; 10 px high → 30165 EMU.
+    let dump = package.text_dump();
+    assert!(
+        dump.starts_with("Normal | [image 5731510x30165]\n"),
+        "{dump}"
+    );
 }
 
 #[test]
