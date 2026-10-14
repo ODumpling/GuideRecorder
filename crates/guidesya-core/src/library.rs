@@ -613,10 +613,13 @@ impl Library {
     /// owns. An older schema is migrated in memory only
     /// ([`LoadedGuide::migrated_from`] is set, `backup` is not); any guide
     /// not at the current schema is [`LoadedGuide::read_only`].
+    ///
+    /// Unlike `load`, reading a duplicate copy does not make it the
+    /// canonical bundle for its id: readers (and the search index, which
+    /// reads every copy) must not change which copy `find` and `save` use.
     pub fn read(&self, path: impl AsRef<Path>) -> Result<LoadedGuide> {
         let (mut loaded, _) = self.open_guide(path.as_ref())?;
         loaded.read_only |= loaded.migrated_from.is_some();
-        self.remember(&loaded.handle);
         Ok(loaded)
     }
 
@@ -1974,6 +1977,25 @@ mod tests {
             Some(copy.clone())
         );
         assert_eq!(fresh.find(guide.id).unwrap().unwrap().path, copy);
+    }
+
+    #[test]
+    fn reading_a_duplicate_keeps_the_canonical_bundle() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Original", "en");
+        let handle = lib.create(&guide).unwrap();
+        let copy = duplicate(&handle, lib.root(), "Original copy.guidesya");
+
+        let fresh = Library::open(lib.root()).unwrap();
+        assert_eq!(fresh.find(guide.id).unwrap(), Some(handle.clone()));
+        assert_eq!(fresh.read(&copy).unwrap().handle.path, copy);
+        assert_eq!(fresh.find(guide.id).unwrap(), Some(handle.clone()));
+        let scanned = fresh.scan().unwrap();
+        let entry = scanned.iter().find(|(p, _)| *p == copy).unwrap();
+        assert_eq!(
+            entry.1.as_ref().unwrap().duplicate_of,
+            Some(handle.path.clone())
+        );
     }
 
     #[test]
