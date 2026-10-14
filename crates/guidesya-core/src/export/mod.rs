@@ -13,6 +13,8 @@ pub mod html;
 pub mod md;
 pub mod raster;
 pub mod render;
+pub mod report;
 
 pub use raster::{render_step_image, ImageOptions, RenderWarning, RenderedImage};
 pub use render::{RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep};
+pub use report::ExportReport;
