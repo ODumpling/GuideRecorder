@@ -1,0 +1,67 @@
+# Kurzanleitung Drucker
+intro
+  p "Für den Drucker im " strong["2. Stock"] "."
+prerequisites
+step 1: "Papierfach " strong["2"] " öffnen"
+  p "Fach ganz herausziehen." br "Dann Papier einlegen."
+  list start=None
+    item
+      p "A4"
+    item
+      p "A5"
+  p "Hinweis"
+  p "Nicht " strong["überfüllen"] "."
+note Note
+  p "Mehr dazu im " link("handbuch.pdf" "")["Handbuch"] " und unter " link("https://example.com/drucker" "")["https://example.com/drucker"] "."
+
+# Rotate an API key
+intro
+  p "Rotate keys every " em["90 days"] ", or right away if one leaks."
+prerequisites
+  p "Admin access to the console."
+note Warning
+  p "Creating a new key " strong["revokes"] " the old one immediately. Update these first:"
+  list start=Some(1)
+    item
+      p "The CI secret"
+    item
+      p "Local " code(".env") " files"
+step 1: "Open " strong["Settings → API keys"]
+step 2: "Enter your password to confirm"
+  p "Password input is masked while recording."
+step 3: "Click " strong["Create key"] " and copy the new key"
+  p "The key is shown " strong["once"] ". Store it in your password manager; see " link("https://example.com/docs/keys" "")["Managing keys"] "."
+step 4: "Drag the new key to " strong["Production"]
+step 5: "Check that the key works"
+  p "Run this in Terminal:"
+  p code("curl -H \"x-api-key: $KEY\" https://api.example.com/v1/ping")
+  p "It should print " em["pong"] "."
+
+# Share a calendar event
+intro
+  p "This guide shows how to invite someone to an event you " strong["already"] " created."
+prerequisites
+  list start=None
+    item
+      p "A Mac signed in to iCloud"
+    item
+      p "An existing event"
+section "Open the event"
+step 1: "Click " strong["Calendar"] " in the Dock"
+step 2: "Double-click the " em["Team sync"] " event"
+  p "The event opens in its own window."
+note Tip
+  p "You can also select the event and press " code("⌘O") " to open it."
+section "Invite people"
+step 3: "Type the guest's email in " strong["Add Invitees"]
+  p "Separate several guests with commas."
+  list start=None
+    item
+      p "Guests get an email invite"
+    item
+      p "You can remove them later"
+step 4: "Right-click the guest and choose " strong["Send Email"]
+step 5: "Press " code("⌘S") " to save"
+note Note
+  p "Guests see changes after they " link("https://support.apple.com/guide/calendar/welcome/mac" "")["refresh their calendar"] "."
+

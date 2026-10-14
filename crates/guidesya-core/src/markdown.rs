@@ -332,6 +332,10 @@ fn has_content(inline: &Inline) -> bool {
 ///
 /// URLs containing whitespace or control characters are rejected outright:
 /// browsers strip those, which could reveal a scheme such as `java\tscript:`.
+/// Protocol-relative URLs (`//host`, and the `\\`, `/\`, `\/` spellings that
+/// browsers treat the same) are rejected too: in an exported HTML file opened
+/// from disk they resolve to `file://host/...`, a network share fetch on
+/// Windows.
 fn is_allowed_url(url: &str) -> bool {
     if url.is_empty()
         || url
@@ -339,6 +343,11 @@ fn is_allowed_url(url: &str) -> bool {
             .any(|c| c.is_ascii_control() || c.is_whitespace())
     {
         return false;
+    }
+    if let [a, b, ..] = url.as_bytes() {
+        if matches!(a, b'/' | b'\\') && matches!(b, b'/' | b'\\') {
+            return false;
+        }
     }
     // Anything before a ':' that precedes the path, query or fragment is a scheme.
     match url.find([':', '/', '?', '#']) {
@@ -746,6 +755,23 @@ mod tests {
             assert!(!out.contains("]("), "link kept for {input:?}: {out:?}");
         }
         check("[x](< https://example.com >)", "[x](https://example.com)");
+    }
+
+    #[test]
+    fn rejects_protocol_relative_urls() {
+        for input in [
+            "[x](//evil.example/share)",
+            r"[x](\\\\evil.example\\share)",
+            r"[x](/\\evil.example)",
+            r"[x](\\/evil.example)",
+            "<//evil.example>",
+        ] {
+            let out = stable(input);
+            assert!(!out.contains("]("), "link kept for {input:?}: {out:?}");
+        }
+        check("[x](/docs/a)", "[x](/docs/a)");
+        check("[x](docs//a)", "[x](docs//a)");
+        check("[x](/)", "[x](/)");
     }
 
     #[test]
