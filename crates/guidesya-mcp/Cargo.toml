@@ -1,0 +1,10 @@
+[package]
+name = "guidesya-mcp"
+description = "Read-only stdio MCP server over a GuidesYa library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+guidesya-core.workspace = true

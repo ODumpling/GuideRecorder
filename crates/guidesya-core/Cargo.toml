@@ -1,0 +1,12 @@
+[package]
+name = "guidesya-core"
+description = "GuidesYa guide format, library, index, step detection, export and AI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

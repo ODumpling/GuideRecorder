@@ -1,0 +1,13 @@
+.DS_Store
+*.local.md
+
+# Rust
+/target/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tauri generated
+app/src-tauri/gen/

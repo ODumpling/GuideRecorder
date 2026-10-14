@@ -1,0 +1,11 @@
+[package]
+name = "guidesya-capture"
+description = "GuidesYa platform capture backends (macOS now, Windows later)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
