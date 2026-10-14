@@ -1,1 +1,3273 @@
-//! Recording session: event tap + frame stream + AX lookups wired together. Implemented in #336.
+//! Recording session (M0, todo #336): the event tap, the frame stream and
+//! AX lookups wired together, ending in a `.guidesya` bundle.
+//!
+//! # Threads
+//!
+//! ```text
+//!                                         ┌─▶ element thread (AX: element_at for clicks)
+//! event tap ──TargetedEvent──▶ router ────┼─▶ focus thread   (AX: focused element per key)
+//!                                         └─▶ encoder thread (snapshot frames → WebP)
+//! ```
+//!
+//! - The **tap thread** (see `event_tap`) only translates events.
+//! - The **router** does no AX work. It drops events aimed at our own pid
+//!   or at an excluded app, turns the manual-step hotkey into
+//!   [`CaptureEvent::ManualStep`], emits [`CaptureEvent::AppActivated`]
+//!   when the target pid of a click, key or manual step changes, and takes
+//!   a frame snapshot ([`FrameReader::frame_before`]) for every event that
+//!   can start a step, as soon as the event arrives. New snapshot frames go
+//!   to the encoder; the router keeps only their timestamps and geometry.
+//! - The **element thread** fills `MouseDown.element` from
+//!   [`ax::element_at`] and drops presses on excluded apps.
+//! - The **focus thread** fills `KeyDown.secure` and emits
+//!   [`CaptureEvent::FocusChanged`]. It is separate so a slow `element_at`
+//!   never delays a key's focus lookup.
+//! - The **encoder** writes each snapshot frame once, as lossless WebP, to
+//!   a hidden session folder (`.guidesya-session-<ulid>` in
+//!   [`SessionConfig::work_dir`], by default [`default_work_dir`], a local
+//!   cache that is not synced) and drops the frame. Its queue holds at most
+//!   [`ENCODER_QUEUE`] frames; a snapshot that finds it full is dropped and
+//!   counted, so memory stays bounded however slow encoding is. Session
+//!   folders a crash left behind are swept at the next start once older
+//!   than [`STALE_SESSION_MS`].
+//!
+//! No AX call runs on the main or tap thread (see `ax`'s `# Threading`).
+//! [`RecordingSession::stop`] stops the tap, drains and joins all threads,
+//! stops the frames, merges the events by timestamp and runs
+//! [`detect_steps`]. [`Recording::save_guide`] writes the bundle;
+//! dropping the [`Recording`] removes the session folder.
+//!
+//! # Secure keys (fail closed)
+//!
+//! Every non-repeat key press reads the system-wide focused element
+//! reference (one AX message). The full element (role, subrole, app) is
+//! read only when that reference is not the cached one (`CFEqual`), and
+//! the reference is read again afterwards: if focus moved in between, the
+//! key is secure and nothing is cached. The cached verdict
+//! ([`FocusCache`]) also expires on any click, Tab, Return, Esc, shortcut,
+//! pid change or idle gap over [`StepConfig::typing_idle_ms`].
+//!
+//! A key is secure unless the lookup gave a definite non-secure element
+//! ([`ax::must_mask_keys`]). It is also secure:
+//!
+//! - when the lookup ran more than [`STALE_LOOKUP_MS`] after the key
+//!   ([`apply_staleness`]): by then the focus may already have moved on.
+//!   This compares event timestamps with `event_tap::now()`, so it relies
+//!   on both being on the same clock: the hardware timestamp check
+//!   (`event_tap --raw-ts`, still open for a live run). If event `ts` were
+//!   read too large, the lag would saturate to 0 and no key would ever
+//!   count as stale;
+//! - within [`StepConfig::focus_settle_ms`] after Tab, Return, Esc, a ⌘ or
+//!   ⌃ shortcut or a click, until the focused element is seen to change
+//!   ([`SettleGuard`]): the tap sees a key before the app has moved focus.
+//!   Option-only chords type characters on many layouts and do not arm it
+//!   ([`moves_focus`]). For a click, the focus from before is read fresh
+//!   when the click is handled.
+//!
+//! When a key's full lookup finds a secure field, the plain keys stored
+//! before it are scrubbed after the fact ([`retro_scrub`]): every key since
+//! the last focus-moving key or click while keys stay within
+//! `typing_idle_ms` of each other (so an app that moved focus late cannot
+//! leave the start of the password in clear), or with no such boundary,
+//! the keys within `focus_settle_ms`, the step detector's late-focus rule. Key repeats
+//! reuse the previous key's verdict. The manual-step hotkey goes through
+//! the same thread and is dropped when the focused app is excluded. The characters of a secure key are replaced here
+//! ([`scrub_secure_key`]), so they never reach the events, the raw dump or
+//! the step detector. A key whose focused element belongs to an excluded
+//! app is dropped.
+//!
+//! # Snapshots
+//!
+//! A snapshot is taken for each `MouseDown`, `ManualStep`, shortcut, Return
+//! or Esc, and for the first key of a typing burst as the router sees it
+//! ([`KeyRunTracker`]). Snapshots of events dropped later (a click or key
+//! found to be in an excluded app) are removed at stop, with their latency
+//! samples and files. A step without a snapshot of its own uses the nearest
+//! one within 2 × [`StepConfig::typing_idle_ms`] ([`match_snapshot`]), or
+//! gets no image and counts as skipped.
+//!
+//! # Known gaps
+//!
+//! - No "after" frame yet.
+//! - The focus after a click is read when the focus thread handles the
+//!   click's `MouseUp`, which can be before the app has moved focus. This
+//!   only affects labels: each key does its own lookup.
+//! - Frames are captured for one display (or window/region); clicks on
+//!   another display get no point and no crop.
+
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use guidesya_core::events::{
+    AppRef, CaptureEvent, Key, Modifiers, RawElement, TimedEvent, Timestamp,
+};
+use guidesya_core::library::{
+    self, GuideHandle, Library, LibraryError, PixelBuffer, PixelFormat, StepImageVariant,
+};
+use guidesya_core::model::{
+    self, AppInfo, Guide, ImageShow, Item, Point, RecordingInfo, Rect, StepImage,
+};
+use guidesya_core::steps::{detect_steps, DraftStep, StepConfig};
+use guidesya_core::Ulid;
+use objc2_app_kit::NSRunningApplication;
+use objc2_application_services::{AXError, AXUIElement};
+use objc2_core_foundation::{CFRetained, CFString, CFType};
+
+use super::ax;
+use super::event_tap::{self, EventTap, TargetedEvent};
+use super::frames::{
+    self, CaptureTarget, Frame, FrameError, FrameGeometry, FrameReader, FrameStream,
+    FrameStreamConfig,
+};
+
+/// Frames kept in the ring during a session. More than the stream default,
+/// so a snapshot still finds the pre-click frame if the router falls behind.
+pub const SESSION_RING_CAPACITY: usize = 6;
+/// Default click crop in frame pixels (clamped to the frame).
+pub const DEFAULT_CROP_SIZE: (u32, u32) = (800, 500);
+/// A focus lookup that runs later than this after its key no longer says
+/// where the key went; the key is treated as secure.
+pub const STALE_LOOKUP_MS: u64 = 75;
+/// Prefix of the hidden per-session folder holding encoded snapshots.
+pub const SESSION_DIR_PREFIX: &str = ".guidesya-session-";
+/// Session folders older than this are swept when a session starts.
+pub const STALE_SESSION_MS: u64 = 6 * 60 * 60 * 1000;
+/// Frames waiting for the encoder at most; a snapshot that finds the queue
+/// full is dropped (see [`SessionMetrics::snapshots_dropped_queue_full`]).
+pub const ENCODER_QUEUE: usize = 4;
+
+const KEY_RETURN: u16 = 36;
+const KEY_TAB: u16 = 48;
+const KEY_ESCAPE: u16 = 53;
+const KEY_KEYPAD_ENTER: u16 = 76;
+/// `kVK_ANSI_S`.
+const KEY_S: u16 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("event tap: {0}")]
+    Tap(#[from] event_tap::Error),
+    #[error("frames: {0}")]
+    Frames(#[from] FrameError),
+    #[error("library: {0}")]
+    Library(#[from] LibraryError),
+    #[error("{path}: {source}")]
+    Io { path: String, source: io::Error },
+    #[error("could not spawn a session thread: {0}")]
+    Spawn(io::Error),
+    #[error("a session thread panicked")]
+    ThreadPanicked,
+}
+
+fn io_err(path: &Path) -> impl FnOnce(io::Error) -> SessionError + '_ {
+    move |source| SessionError::Io {
+        path: path.display().to_string(),
+        source,
+    }
+}
+
+/// A key plus exact modifiers (shift, control, option, command; function
+/// and caps lock are ignored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkey {
+    pub code: u16,
+    pub modifiers: Modifiers,
+}
+
+impl Hotkey {
+    /// ⌃⌥S, the default manual-step hotkey.
+    pub const MANUAL_STEP: Hotkey = Hotkey {
+        code: KEY_S,
+        modifiers: Modifiers {
+            shift: false,
+            control: true,
+            option: true,
+            command: false,
+            function: false,
+            caps_lock: false,
+        },
+    };
+
+    pub fn matches(&self, key: &Key, modifiers: Modifiers) -> bool {
+        let m = self.modifiers;
+        key.code == self.code
+            && modifiers.shift == m.shift
+            && modifiers.control == m.control
+            && modifiers.option == m.option
+            && modifiers.command == m.command
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    pub frames: FrameStreamConfig,
+    /// Bundle ids whose events are dropped and never snapshotted.
+    pub excluded_bundle_ids: Vec<String>,
+    /// Key press turned into a manual step (and not recorded as a key).
+    pub manual_hotkey: Option<Hotkey>,
+    pub steps: StepConfig,
+    /// Click crop in frame pixels.
+    pub crop_size: (u32, u32),
+    /// Where the hidden session folder with encoded snapshots goes. `None`
+    /// is [`default_work_dir`], a local cache that is not synced. Never use
+    /// a library root: libraries live in synced folders.
+    pub work_dir: Option<PathBuf>,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            frames: FrameStreamConfig {
+                ring_capacity: SESSION_RING_CAPACITY,
+                ..FrameStreamConfig::default()
+            },
+            excluded_bundle_ids: Vec::new(),
+            manual_hotkey: Some(Hotkey::MANUAL_STEP),
+            steps: StepConfig::default(),
+            crop_size: DEFAULT_CROP_SIZE,
+            work_dir: None,
+        }
+    }
+}
+
+/// `$HOME/Library/Caches/dev.guidesya.app/sessions`, or the same under the
+/// system temp folder without `$HOME`.
+pub fn default_work_dir() -> PathBuf {
+    match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        Some(home) => PathBuf::from(home).join("Library/Caches/dev.guidesya.app/sessions"),
+        None => std::env::temp_dir().join("dev.guidesya.app/sessions"),
+    }
+}
+
+/// True for a `.guidesya-session-<ulid>` name whose ULID is more than
+/// `max_age_ms` older than `now_ms` (Unix ms). Other names are never stale.
+pub fn is_stale_session_dir(name: &str, now_ms: u64, max_age_ms: u64) -> bool {
+    name.strip_prefix(SESSION_DIR_PREFIX)
+        .and_then(|id| Ulid::from_string(id).ok())
+        .is_some_and(|id| now_ms.saturating_sub(id.timestamp_ms()) > max_age_ms)
+}
+
+/// Removes session folders left behind by a crash or kill (no `Drop` ran).
+fn sweep_stale_sessions(work_dir: &Path) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let Ok(entries) = fs::read_dir(work_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        if is_dir && is_stale_session_dir(&name.to_string_lossy(), now_ms, STALE_SESSION_MS) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// A running recording. Stop it with [`RecordingSession::stop`]; dropping
+/// it stops everything and discards the recording and its session folder.
+pub struct RecordingSession {
+    tap: Option<EventTap>,
+    frames: Option<FrameStream>,
+    router: Option<JoinHandle<RouterOut>>,
+    element: Option<JoinHandle<ElementOut>>,
+    focus: Option<JoinHandle<FocusOut>>,
+    encoder: Option<JoinHandle<EncoderOut>>,
+    session_dir: Option<PathBuf>,
+    started: Instant,
+    cpu_start: Option<CpuTime>,
+    steps: StepConfig,
+    crop_size: (u32, u32),
+    display: Option<frames::DisplayInfo>,
+}
+
+impl RecordingSession {
+    /// Starts frames, then the threads, then the tap. Snapshots are encoded
+    /// into a new hidden folder in [`SessionConfig::work_dir`], after
+    /// folders older than [`STALE_SESSION_MS`] there are swept.
+    ///
+    /// Call it on the main thread (the tap loads the keyboard layout there;
+    /// see `event_tap`). Blocks for up to a few seconds while
+    /// ScreenCaptureKit starts.
+    pub fn start(cfg: SessionConfig) -> Result<Self, SessionError> {
+        let cpu_start = process_cpu_time();
+        let started = Instant::now();
+        let display = match cfg.frames.target {
+            CaptureTarget::Display { display_id } | CaptureTarget::Region { display_id, .. } => {
+                display_id.map_or_else(frames::DisplayInfo::main, frames::DisplayInfo::for_id)
+            }
+            CaptureTarget::Window { .. } => None,
+        };
+        let work_dir = cfg.work_dir.clone().unwrap_or_else(default_work_dir);
+        fs::create_dir_all(&work_dir).map_err(io_err(&work_dir))?;
+        sweep_stale_sessions(&work_dir);
+        let session_dir = work_dir.join(format!("{SESSION_DIR_PREFIX}{}", Ulid::new()));
+        fs::create_dir_all(&session_dir).map_err(io_err(&session_dir))?;
+        let mut session = Self {
+            tap: None,
+            frames: None,
+            router: None,
+            element: None,
+            focus: None,
+            encoder: None,
+            session_dir: Some(session_dir.clone()),
+            started,
+            cpu_start,
+            steps: cfg.steps.clone(),
+            crop_size: cfg.crop_size,
+            display,
+        };
+        // From here on, an error drops `session`, which joins whatever was
+        // started and removes the session folder.
+        let frames = FrameStream::start(cfg.frames.clone())?;
+        let reader = frames.reader();
+        session.frames = Some(frames);
+
+        let (tap_tx, tap_rx) = mpsc::channel::<TargetedEvent>();
+        let (element_tx, element_rx) = mpsc::channel::<TimedEvent>();
+        let (focus_tx, focus_rx) = mpsc::channel::<FocusMsg>();
+        let (encode_tx, encode_rx) = mpsc::sync_channel::<Frame>(ENCODER_QUEUE);
+        let backlog = Arc::new(AtomicUsize::new(0));
+
+        let mut encoder = Encoder::new(session_dir, Arc::clone(&backlog));
+        session.encoder = Some(spawn("guidesya-session-encode", move || {
+            encoder.run(encode_rx);
+            encoder.finish()
+        })?);
+        let mut element = ElementWorker::new(&cfg);
+        session.element = Some(spawn("guidesya-session-ax-element", move || {
+            element.run(element_rx);
+            element.finish()
+        })?);
+        let focus_cfg = cfg.clone();
+        session.focus = Some(spawn("guidesya-session-ax-focus", move || {
+            // Built here: its cached AX reference stays on this thread.
+            let mut focus = FocusWorker::new(&focus_cfg, AxFocus);
+            focus.run(focus_rx);
+            focus.finish()
+        })?);
+        let mut router = Router::new(
+            &cfg,
+            reader,
+            Outputs {
+                element: element_tx,
+                focus: focus_tx,
+                encode: encode_tx,
+                backlog,
+            },
+        );
+        session.router = Some(spawn("guidesya-session-router", move || {
+            router.run(tap_rx);
+            router.finish()
+        })?);
+
+        session.tap = Some(EventTap::start_with_target_pid(tap_tx)?);
+        Ok(session)
+    }
+
+    /// The frame stream, e.g. for a live preview.
+    pub fn frames(&self) -> Option<&FrameStream> {
+        self.frames.as_ref()
+    }
+
+    /// Stops recording and runs step detection.
+    pub fn stop(mut self) -> Result<Recording, SessionError> {
+        self.halt_input();
+        let router = join(self.router.take())?;
+        let element = join(self.element.take())?;
+        let focus = join(self.focus.take())?;
+        let encoder = join(self.encoder.take())?;
+        let mut frames_error = self.frames.as_ref().and_then(|f| f.reader().last_error());
+        if let Some(frames) = self.frames.take() {
+            // The snapshots are already taken; a failed stop is only reported.
+            if let Err(e) = frames.stop() {
+                frames_error.get_or_insert_with(|| e.to_string());
+            }
+        }
+        let wall = self.started.elapsed();
+        let (cpu_user, cpu_system) = match (self.cpu_start, process_cpu_time()) {
+            (Some(a), Some(b)) => (
+                b.user.saturating_sub(a.user),
+                b.system.saturating_sub(a.system),
+            ),
+            _ => (Duration::ZERO, Duration::ZERO),
+        };
+        let session_dir = self
+            .session_dir
+            .take()
+            .expect("session dir is set until stop");
+
+        let mut metas = router.snapshots;
+        let mut latency = router.latency_ns;
+        let dropped: Vec<Timestamp> = element
+            .dropped_ts
+            .iter()
+            .chain(&focus.dropped_ts)
+            .copied()
+            .collect();
+        prune_snapshots(&mut metas, &mut latency, &dropped);
+        let mut snapshots = BTreeMap::new();
+        let mut unencoded = 0;
+        for (ts, meta) in metas {
+            match encoder.written.get(&meta.frame_ts) {
+                Some(path) => {
+                    snapshots.insert(
+                        ts,
+                        SnapshotRef {
+                            frame_ts: meta.frame_ts,
+                            path: path.clone(),
+                            geometry: meta.geometry,
+                            width: meta.width,
+                            height: meta.height,
+                        },
+                    );
+                }
+                None => {
+                    latency.remove(&ts);
+                    unencoded += 1;
+                }
+            }
+        }
+        // Frames no snapshot uses any more (e.g. of excluded apps).
+        let used: HashSet<Timestamp> = snapshots.values().map(|s| s.frame_ts).collect();
+        for (frame_ts, path) in &encoder.written {
+            if !used.contains(frame_ts) {
+                let _ = fs::remove_file(path);
+            }
+        }
+
+        let mut events = router.events;
+        events.extend(element.events);
+        events.extend(focus.events);
+        // Stable: at equal ts, router events (AppActivated) come first, and
+        // each thread's own order is kept (FocusChanged before its key).
+        events.sort_by_key(|ev| ev.ts);
+        let drafts = detect_steps(&events, &self.steps);
+
+        let mut ax = element.ax;
+        ax.merge(&focus.ax);
+        let metrics = SessionMetrics {
+            wall,
+            cpu_user,
+            cpu_system,
+            events: events.len(),
+            dropped_own: router.dropped_own,
+            dropped_excluded: router.dropped_excluded
+                + element.dropped_ts.len()
+                + focus.dropped_ts.len(),
+            snapshots: snapshots.len(),
+            missing_frames: router.missing_frames,
+            unencoded_snapshots: unencoded,
+            frame_latency_ns: latency.into_values().collect(),
+            ax_lookups: ax.lookups,
+            ax_errors: ax.errors,
+            ax_total: ax.total,
+            ax_max: ax.max,
+            stale_masked: focus.stale_masked,
+            encoded_frames: encoder.written.len(),
+            encode_errors: encoder.errors,
+            encode_total: encoder.total,
+            encode_max: encoder.max,
+            encoder_max_backlog: router.max_backlog,
+            snapshots_dropped_queue_full: router.dropped_queue_full,
+            settle_masked: focus.settle_masked,
+            retro_scrubbed: focus.retro_scrubbed,
+            probes_skipped: focus.probes_skipped,
+            frames_error,
+        };
+        Ok(Recording {
+            events,
+            snapshots,
+            drafts,
+            metrics,
+            display: self.display,
+            crop_size: self.crop_size,
+            fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
+            session_dir,
+        })
+    }
+
+    fn halt_input(&mut self) {
+        if let Some(mut tap) = self.tap.take() {
+            // Joins the tap thread, which drops the router's sender; the
+            // router then drops the senders of the other threads.
+            tap.stop();
+        }
+    }
+}
+
+impl Drop for RecordingSession {
+    fn drop(&mut self) {
+        self.halt_input();
+        let _ = join(self.router.take());
+        let _ = join(self.element.take());
+        let _ = join(self.focus.take());
+        let _ = join(self.encoder.take());
+        if let Some(frames) = self.frames.take() {
+            let _ = frames.stop();
+        }
+        if let Some(dir) = self.session_dir.take() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn spawn<T: Send + 'static>(
+    name: &str,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<JoinHandle<T>, SessionError> {
+    thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .map_err(SessionError::Spawn)
+}
+
+fn join<T>(handle: Option<JoinHandle<T>>) -> Result<T, SessionError> {
+    handle
+        .ok_or(SessionError::ThreadPanicked)?
+        .join()
+        .map_err(|_| SessionError::ThreadPanicked)
+}
+
+/// An encoded snapshot frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnapshotRef {
+    pub frame_ts: Timestamp,
+    /// Lossless WebP in the session folder.
+    pub path: PathBuf,
+    pub geometry: FrameGeometry,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What a session recorded. Dropping it removes the session folder with
+/// the encoded snapshots.
+#[derive(Debug)]
+pub struct Recording {
+    /// Enriched events sorted by ts (secure keys already scrubbed).
+    pub events: Vec<TimedEvent>,
+    /// Snapshots keyed by the ts of the event that took them.
+    pub snapshots: BTreeMap<Timestamp, SnapshotRef>,
+    pub drafts: Vec<DraftStep>,
+    pub metrics: SessionMetrics,
+    /// The captured display, for [`RecordingInfo`].
+    pub display: Option<frames::DisplayInfo>,
+    pub crop_size: (u32, u32),
+    /// How far a step may be from the snapshot it borrows.
+    pub fallback_ms: u64,
+    session_dir: PathBuf,
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.session_dir);
+    }
+}
+
+/// The result of [`Recording::save_guide`].
+#[derive(Debug, Clone)]
+pub struct SavedGuide {
+    pub handle: GuideHandle,
+    pub guide: Guide,
+    /// Draft steps left out because no snapshot was close enough.
+    pub skipped: usize,
+}
+
+impl Recording {
+    /// The hidden folder holding the encoded snapshots.
+    pub fn session_dir(&self) -> &Path {
+        &self.session_dir
+    }
+
+    /// Writes a new bundle titled `title`. Each draft step gets its snapshot
+    /// ([`match_snapshot`]) as its own full image (`steps/<id>.webp`, a copy
+    /// of the encoded snapshot), a crop around the point when it is on the
+    /// frame (with [`StepImage::crop_rect`]), and its points in frame
+    /// pixels. If any write fails, the bundle is removed.
+    pub fn save_guide(&self, library: &Library, title: &str) -> Result<SavedGuide, SessionError> {
+        let mut guide = Guide::new(title, "en");
+        guide.recording = Some(self.recording_info());
+        let handle = library.create(&guide)?;
+        let filled = self.fill_steps(&handle, &mut guide).and_then(|skipped| {
+            library.save_to(&handle, &guide)?;
+            Ok(skipped)
+        });
+        match filled {
+            Ok(skipped) => Ok(SavedGuide {
+                handle,
+                guide,
+                skipped,
+            }),
+            Err(e) => {
+                let _ = library.delete(&handle);
+                Err(e)
+            }
+        }
+    }
+
+    fn fill_steps(&self, handle: &GuideHandle, guide: &mut Guide) -> Result<usize, SessionError> {
+        let max_gap_ns = self.fallback_ms.saturating_mul(1_000_000);
+        let mut skipped = 0;
+        // The last decoded frame (RGBA), for crops.
+        let mut decoded: Option<(Timestamp, u32, Vec<u8>)> = None;
+        for draft in &self.drafts {
+            let Some((_, snap)) = match_snapshot(&self.snapshots, draft.at, max_gap_ns) else {
+                skipped += 1;
+                continue;
+            };
+            let id = Ulid::new();
+            // Each step gets its own `steps/<id>.webp`, even when steps share a
+            // frame: a copy of the encoded snapshot (a clone on APFS).
+            let full = library::step_image_path(id, StepImageVariant::Full);
+            let dest = handle.resolve(&full)?;
+            fs::copy(&snap.path, &dest).map_err(io_err(&dest))?;
+            let (point, end_point) = step_points(&snap.geometry, draft);
+            let (crop, crop_rect_px) = match point {
+                Some(center) => {
+                    if decoded.as_ref().map(|d| d.0) != Some(snap.frame_ts) {
+                        let img = library::read_webp(&snap.path)?;
+                        decoded = Some((snap.frame_ts, img.width(), img.into_raw()));
+                    }
+                    let (_, width, rgba) = decoded.as_ref().expect("decoded above");
+                    let height = (rgba.len() / (*width as usize * 4).max(1)) as u32;
+                    let rect = crop_rect(center, *width, height, self.crop_size);
+                    let path = handle.write_step_image(
+                        id,
+                        StepImageVariant::Crop,
+                        &crop_view(rgba, *width, rect),
+                    )?;
+                    (Some(path), Some(rect.to_rect()))
+                }
+                None => (None, None),
+            };
+            let image = StepImage {
+                full,
+                show: if crop.is_some() {
+                    ImageShow::Crop
+                } else {
+                    ImageShow::Full
+                },
+                crop,
+                crop_rect: crop_rect_px,
+                after: None,
+            };
+            let mut step = draft.clone().into_step(id, image);
+            step.point = point;
+            step.end_point = end_point;
+            guide.items.push(Item::Step(step));
+        }
+        Ok(skipped)
+    }
+
+    /// Copies each distinct snapshot frame to `dir/frames/<frame ts>.webp`.
+    /// Returns the number written.
+    pub fn write_raw_frames(&self, dir: &Path) -> Result<usize, SessionError> {
+        let frames_dir = dir.join("frames");
+        fs::create_dir_all(&frames_dir).map_err(io_err(&frames_dir))?;
+        let mut seen = HashSet::new();
+        for snap in self.snapshots.values() {
+            if seen.insert(snap.frame_ts) {
+                let dest = frames_dir.join(format!("{}.webp", snap.frame_ts.0));
+                fs::copy(&snap.path, &dest).map_err(io_err(&dest))?;
+            }
+        }
+        Ok(seen.len())
+    }
+
+    fn recording_info(&self) -> RecordingInfo {
+        let mut apps: Vec<AppInfo> = Vec::new();
+        for ev in &self.events {
+            if let CaptureEvent::AppActivated { app } = &ev.event {
+                let name = app
+                    .name
+                    .clone()
+                    .or_else(|| app.bundle_id.clone())
+                    .unwrap_or_else(|| format!("pid {}", app.pid));
+                if !apps
+                    .iter()
+                    .any(|a| a.name == name && a.bundle_id == app.bundle_id)
+                {
+                    apps.push(AppInfo {
+                        name,
+                        bundle_id: app.bundle_id.clone(),
+                        version: None,
+                    });
+                }
+            }
+        }
+        let displays = self
+            .display
+            .iter()
+            .map(|d| {
+                let (width, height) = d.pixel_size();
+                model::DisplayInfo {
+                    id: d.id,
+                    name: None,
+                    width,
+                    height,
+                    scale: d.scale,
+                }
+            })
+            .collect();
+        RecordingInfo {
+            app_version: env!("CARGO_PKG_VERSION").to_owned(),
+            os_version: None,
+            apps,
+            displays,
+        }
+    }
+}
+
+/// Counters and timings for one session.
+#[derive(Debug, Clone, Default)]
+pub struct SessionMetrics {
+    pub wall: Duration,
+    /// Process CPU time (getrusage) during the session, all threads,
+    /// including whatever else the host process did.
+    pub cpu_user: Duration,
+    pub cpu_system: Duration,
+    /// Events kept, including the ones the session added.
+    pub events: usize,
+    pub dropped_own: usize,
+    /// Events of excluded apps (by target pid, clicked element or focused
+    /// element).
+    pub dropped_excluded: usize,
+    pub snapshots: usize,
+    /// Step-triggering events for which the ring had no earlier frame.
+    pub missing_frames: usize,
+    /// Snapshots lost because their frame could not be encoded.
+    pub unencoded_snapshots: usize,
+    /// For each kept snapshot: event ts minus the chosen frame's ts.
+    pub frame_latency_ns: Vec<u64>,
+    pub ax_lookups: usize,
+    pub ax_errors: usize,
+    pub ax_total: Duration,
+    pub ax_max: Duration,
+    /// Keys masked only because their focus lookup ran too late.
+    pub stale_masked: usize,
+    pub encoded_frames: usize,
+    pub encode_errors: usize,
+    pub encode_total: Duration,
+    pub encode_max: Duration,
+    /// Most frames waiting for the encoder at once (at most
+    /// [`ENCODER_QUEUE`]).
+    pub encoder_max_backlog: usize,
+    /// Snapshots dropped because the encoder queue was full.
+    pub snapshots_dropped_queue_full: usize,
+    /// Keys masked by the settle guard: typed within
+    /// [`StepConfig::focus_settle_ms`] of a focus-moving key or click,
+    /// before the focus was seen to move.
+    pub settle_masked: usize,
+    /// Plain keys scrubbed afterwards, when a secure field turned out to
+    /// have taken focus just after they were typed.
+    pub retro_scrubbed: usize,
+    /// Focus reads after a click skipped because keys were waiting.
+    pub probes_skipped: usize,
+    /// Why ScreenCaptureKit stopped the stream, or why stopping it failed.
+    pub frames_error: Option<String>,
+}
+
+impl SessionMetrics {
+    /// CPU time as a percentage of one core over the wall time.
+    pub fn cpu_percent(&self) -> f64 {
+        let wall = self.wall.as_secs_f64();
+        if wall > 0.0 {
+            (self.cpu_user + self.cpu_system).as_secs_f64() / wall * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn latency(&self) -> Option<LatencyStats> {
+        LatencyStats::from_ns(&self.frame_latency_ns)
+    }
+}
+
+/// Distribution of frame-to-event latencies, in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LatencyStats {
+    pub count: usize,
+    pub min_ms: f64,
+    pub median_ms: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+    pub mean_ms: f64,
+}
+
+impl LatencyStats {
+    /// Nearest-rank percentiles; `None` for no samples.
+    pub fn from_ns(samples: &[u64]) -> Option<Self> {
+        if samples.is_empty() {
+            return None;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let ms = |ns: u64| ns as f64 / 1e6;
+        let rank = |p: f64| {
+            let r = (p * sorted.len() as f64).ceil() as usize;
+            sorted[r.clamp(1, sorted.len()) - 1]
+        };
+        let sum: u128 = sorted.iter().map(|&n| u128::from(n)).sum();
+        Some(Self {
+            count: sorted.len(),
+            min_ms: ms(sorted[0]),
+            median_ms: ms(rank(0.5)),
+            p95_ms: ms(rank(0.95)),
+            max_ms: ms(sorted[sorted.len() - 1]),
+            mean_ms: sum as f64 / sorted.len() as f64 / 1e6,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Router thread
+
+/// Messages for the focus thread, in event order.
+enum FocusMsg {
+    Key {
+        event: Box<TimedEvent>,
+        pid: i32,
+    },
+    /// The manual-step hotkey, checked against the focused app's exclusion.
+    Manual(Timestamp),
+    /// A click at this ts: drop the cached verdict and arm the settle guard.
+    Invalidate(Timestamp),
+    /// Read the focus after a click's `MouseUp` at this ts.
+    Probe(Timestamp),
+}
+
+struct Outputs {
+    element: Sender<TimedEvent>,
+    focus: Sender<FocusMsg>,
+    encode: SyncSender<Frame>,
+    backlog: Arc<AtomicUsize>,
+}
+
+/// A snapshot before its frame is encoded.
+struct SnapshotMeta {
+    frame_ts: Timestamp,
+    geometry: FrameGeometry,
+    width: u32,
+    height: u32,
+}
+
+struct Router {
+    own_pid: i32,
+    excluded: Vec<String>,
+    hotkey: Option<Hotkey>,
+    filter: ExclusionFilter,
+    runs: KeyRunTracker,
+    apps: HashMap<i32, AppRef>,
+    app_pid: Option<i32>,
+    reader: FrameReader,
+    out: Outputs,
+    sent_frames: HashSet<Timestamp>,
+    events: Vec<TimedEvent>,
+    snapshots: BTreeMap<Timestamp, SnapshotMeta>,
+    latency_ns: BTreeMap<Timestamp, u64>,
+    missing_frames: usize,
+    max_backlog: usize,
+    dropped_queue_full: usize,
+    dropped_own: usize,
+    dropped_excluded: usize,
+}
+
+struct RouterOut {
+    events: Vec<TimedEvent>,
+    snapshots: BTreeMap<Timestamp, SnapshotMeta>,
+    latency_ns: BTreeMap<Timestamp, u64>,
+    missing_frames: usize,
+    max_backlog: usize,
+    dropped_queue_full: usize,
+    dropped_own: usize,
+    dropped_excluded: usize,
+}
+
+impl Router {
+    fn new(cfg: &SessionConfig, reader: FrameReader, out: Outputs) -> Self {
+        Self {
+            own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
+            excluded: cfg.excluded_bundle_ids.clone(),
+            hotkey: cfg.manual_hotkey,
+            filter: ExclusionFilter::default(),
+            runs: KeyRunTracker::new(cfg.steps.typing_idle_ms),
+            apps: HashMap::new(),
+            app_pid: None,
+            reader,
+            out,
+            sent_frames: HashSet::new(),
+            events: Vec::new(),
+            snapshots: BTreeMap::new(),
+            latency_ns: BTreeMap::new(),
+            missing_frames: 0,
+            max_backlog: 0,
+            dropped_queue_full: 0,
+            dropped_own: 0,
+            dropped_excluded: 0,
+        }
+    }
+
+    fn run(&mut self, rx: Receiver<TargetedEvent>) {
+        for targeted in rx {
+            self.route(targeted);
+        }
+    }
+
+    fn route(&mut self, targeted: TargetedEvent) {
+        let TargetedEvent {
+            target_pid,
+            mut event,
+        } = targeted;
+        // Any click may move focus, including clicks we drop.
+        if matches!(
+            event.event,
+            CaptureEvent::MouseDown { .. } | CaptureEvent::MouseUp { .. }
+        ) {
+            let _ = self.out.focus.send(FocusMsg::Invalidate(event.ts));
+        }
+        if target_pid == self.own_pid {
+            self.dropped_own += 1;
+            return;
+        }
+        let app = (target_pid > 0).then(|| {
+            self.apps
+                .entry(target_pid)
+                .or_insert_with(|| app_for_pid(target_pid))
+                .clone()
+        });
+        let excluded = app
+            .as_ref()
+            .is_some_and(|app| is_excluded_app(app, &self.excluded));
+        if !self.filter.keep(&event.event, excluded) {
+            self.dropped_excluded += 1;
+            return;
+        }
+        if let CaptureEvent::KeyDown {
+            key,
+            modifiers,
+            is_repeat,
+            ..
+        } = &event.event
+        {
+            if self.hotkey.is_some_and(|h| h.matches(key, *modifiers)) {
+                if *is_repeat {
+                    return;
+                }
+                event.event = CaptureEvent::ManualStep;
+            }
+        }
+        if matches!(
+            event.event,
+            CaptureEvent::MouseDown { .. }
+                | CaptureEvent::KeyDown { .. }
+                | CaptureEvent::ManualStep
+        ) {
+            self.note_app(event.ts, target_pid, app);
+        }
+        if self.runs.should_snapshot(&event, target_pid) {
+            self.snapshot(event.ts);
+        }
+        match event.event {
+            CaptureEvent::MouseDown { .. } | CaptureEvent::MouseDragged { .. } => {
+                let _ = self.out.element.send(event);
+            }
+            CaptureEvent::MouseUp { .. } => {
+                let ts = event.ts;
+                let _ = self.out.element.send(event);
+                let _ = self.out.focus.send(FocusMsg::Probe(ts));
+            }
+            CaptureEvent::KeyDown { .. } => {
+                let _ = self.out.focus.send(FocusMsg::Key {
+                    event: Box::new(event),
+                    pid: target_pid,
+                });
+            }
+            CaptureEvent::ManualStep => {
+                let _ = self.out.focus.send(FocusMsg::Manual(event.ts));
+            }
+            _ => self.events.push(event),
+        }
+    }
+
+    /// Emits `AppActivated` when the target app of a click or key changes.
+    fn note_app(&mut self, ts: Timestamp, pid: i32, app: Option<AppRef>) {
+        if pid <= 0 || self.app_pid == Some(pid) {
+            return;
+        }
+        self.app_pid = Some(pid);
+        self.events.push(TimedEvent {
+            ts,
+            event: CaptureEvent::AppActivated {
+                app: app.unwrap_or(AppRef {
+                    pid,
+                    ..AppRef::default()
+                }),
+            },
+        });
+    }
+
+    fn snapshot(&mut self, ts: Timestamp) {
+        let Some(frame) = self.reader.frame_before(ts) else {
+            self.missing_frames += 1;
+            return;
+        };
+        let meta = SnapshotMeta {
+            frame_ts: frame.ts,
+            geometry: frame.geometry,
+            width: frame.width,
+            height: frame.height,
+        };
+        let latency = ts.0.saturating_sub(frame.ts.0);
+        if !self.sent_frames.contains(&frame.ts) {
+            let waiting = self.out.backlog.fetch_add(1, Ordering::SeqCst) + 1;
+            // The encoder now owns the only extra reference to the frame.
+            // Never wait for it: a full queue drops this snapshot, and the
+            // step borrows a neighbour within the gap or is skipped.
+            match self.out.encode.try_send(frame) {
+                Ok(()) => {
+                    self.max_backlog = self.max_backlog.max(waiting);
+                    self.sent_frames.insert(meta.frame_ts);
+                }
+                Err(TrySendError::Full(_)) => {
+                    self.out.backlog.fetch_sub(1, Ordering::SeqCst);
+                    self.dropped_queue_full += 1;
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.out.backlog.fetch_sub(1, Ordering::SeqCst);
+                    return;
+                }
+            }
+        }
+        self.latency_ns.insert(ts, latency);
+        self.snapshots.entry(ts).or_insert(meta);
+    }
+
+    fn finish(self) -> RouterOut {
+        // `self.out` is dropped here, which ends the other threads.
+        RouterOut {
+            events: self.events,
+            snapshots: self.snapshots,
+            latency_ns: self.latency_ns,
+            missing_frames: self.missing_frames,
+            max_backlog: self.max_backlog,
+            dropped_queue_full: self.dropped_queue_full,
+            dropped_own: self.dropped_own,
+            dropped_excluded: self.dropped_excluded,
+        }
+    }
+}
+
+/// Name and bundle id of a running app.
+fn app_for_pid(pid: i32) -> AppRef {
+    objc2::rc::autoreleasepool(|_| {
+        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
+        AppRef {
+            pid,
+            name: app
+                .as_ref()
+                .and_then(|a| a.localizedName())
+                .map(|s| s.to_string()),
+            bundle_id: app
+                .as_ref()
+                .and_then(|a| a.bundleIdentifier())
+                .map(|s| s.to_string()),
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// AX threads
+
+#[derive(Debug, Default, Clone)]
+struct AxStats {
+    lookups: usize,
+    errors: usize,
+    total: Duration,
+    max: Duration,
+}
+
+impl AxStats {
+    fn time<T, E>(&mut self, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let start = Instant::now();
+        let result = f();
+        let took = start.elapsed();
+        self.lookups += 1;
+        self.errors += usize::from(result.is_err());
+        self.total += took;
+        self.max = self.max.max(took);
+        result
+    }
+
+    fn merge(&mut self, other: &AxStats) {
+        self.lookups += other.lookups;
+        self.errors += other.errors;
+        self.total += other.total;
+        self.max = self.max.max(other.max);
+    }
+}
+
+/// Mouse events: fills `MouseDown.element` and drops presses on excluded
+/// apps that the router could not see (target pid 0 or another pid).
+struct ElementWorker {
+    excluded: Vec<String>,
+    filter: ExclusionFilter,
+    events: Vec<TimedEvent>,
+    dropped_ts: Vec<Timestamp>,
+    ax: AxStats,
+}
+
+struct ElementOut {
+    events: Vec<TimedEvent>,
+    dropped_ts: Vec<Timestamp>,
+    ax: AxStats,
+}
+
+impl ElementWorker {
+    fn new(cfg: &SessionConfig) -> Self {
+        Self {
+            excluded: cfg.excluded_bundle_ids.clone(),
+            filter: ExclusionFilter::default(),
+            events: Vec::new(),
+            dropped_ts: Vec::new(),
+            ax: AxStats::default(),
+        }
+    }
+
+    fn run(&mut self, rx: Receiver<TimedEvent>) {
+        for event in rx {
+            self.handle(event);
+        }
+    }
+
+    fn handle(&mut self, mut event: TimedEvent) {
+        let mut found = None;
+        let mut excluded = false;
+        if let CaptureEvent::MouseDown { point, .. } = &event.event {
+            let point = *point;
+            found = self.ax.time(|| ax::element_at(point)).ok().flatten();
+            excluded = found
+                .as_ref()
+                .is_some_and(|el| is_excluded_app(&el.app, &self.excluded));
+        }
+        if !self.filter.keep(&event.event, excluded) {
+            self.dropped_ts.push(event.ts);
+            return;
+        }
+        if let CaptureEvent::MouseDown { element, .. } = &mut event.event {
+            *element = found;
+        }
+        self.events.push(event);
+    }
+
+    fn finish(self) -> ElementOut {
+        ElementOut {
+            events: self.events,
+            dropped_ts: self.dropped_ts,
+            ax: self.ax,
+        }
+    }
+}
+
+/// What to do with a key press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyVerdict {
+    /// A definite non-secure element: keep the characters.
+    Plain,
+    /// Secure, or unknown: scrub the characters.
+    Secure,
+    /// The focused element belongs to an excluded app: drop the key.
+    Excluded,
+}
+
+/// The verdict for a full focused-element lookup.
+pub fn key_verdict(focused: &ax::Result<Option<RawElement>>, excluded: &[String]) -> KeyVerdict {
+    if let Ok(Some(el)) = focused {
+        if is_excluded_app(&el.app, excluded) {
+            return KeyVerdict::Excluded;
+        }
+    }
+    if ax::must_mask_keys(focused) {
+        KeyVerdict::Secure
+    } else {
+        KeyVerdict::Plain
+    }
+}
+
+/// A plain verdict from a lookup that ran `lag_ns` after its key becomes
+/// secure once the lag exceeds `max_lag_ns`: the focus may have moved since.
+pub fn apply_staleness(verdict: KeyVerdict, lag_ns: u64, max_lag_ns: u64) -> KeyVerdict {
+    if verdict == KeyVerdict::Plain && lag_ns > max_lag_ns {
+        KeyVerdict::Secure
+    } else {
+        verdict
+    }
+}
+
+/// A focused-element reference compared with `CFEqual`.
+#[derive(Clone)]
+struct AxRef(CFRetained<AXUIElement>);
+
+impl PartialEq for AxRef {
+    fn eq(&self, other: &Self) -> bool {
+        let a: &CFType = &self.0;
+        let b: &CFType = &other.0;
+        a == b
+    }
+}
+
+/// The system-wide focused element reference (one AX message), or `None`
+/// when there is none or the lookup failed.
+fn focused_ref() -> Option<AxRef> {
+    // SAFETY: no arguments; returns a +1 element wrapped by the binding.
+    let system = unsafe { AXUIElement::new_system_wide() };
+    // SAFETY: valid element. A failure only means the default timeout stays.
+    let _ = unsafe { system.set_messaging_timeout(ax::MESSAGING_TIMEOUT_SECS) };
+    let name = CFString::from_static_str("AXFocusedUIElement");
+    let mut out: *const CFType = std::ptr::null();
+    // SAFETY: valid element and out-pointer; on success `out` is +1.
+    let err = unsafe { system.copy_attribute_value(&name, NonNull::from(&mut out)) };
+    let value = NonNull::new(out.cast_mut())
+        // SAFETY: a non-null `out` holds a +1 reference we now own (also
+        // released this way on failure, which leaves it null in practice).
+        .map(|p| unsafe { CFRetained::from_raw(p) })?;
+    if err != AXError::Success {
+        return None;
+    }
+    value.downcast::<AXUIElement>().ok().map(AxRef)
+}
+
+/// Where the focus thread reads the focus: AX in a session, a script in
+/// tests.
+trait FocusSource {
+    type Ref: PartialEq + Clone;
+    /// The focused element's identity (one cheap read), `None` if unknown.
+    fn focused_ref(&mut self) -> Option<Self::Ref>;
+    fn focused_element(&mut self) -> ax::Result<Option<RawElement>>;
+    /// The clock event timestamps are on.
+    fn now(&self) -> Timestamp;
+}
+
+struct AxFocus;
+
+impl FocusSource for AxFocus {
+    type Ref = AxRef;
+
+    fn focused_ref(&mut self) -> Option<AxRef> {
+        focused_ref()
+    }
+
+    fn focused_element(&mut self) -> ax::Result<Option<RawElement>> {
+        ax::focused_element()
+    }
+
+    fn now(&self) -> Timestamp {
+        event_tap::now()
+    }
+}
+
+/// True for keys that can move focus: Tab, Return, Enter, Esc and ⌘ or ⌃
+/// shortcuts. Option-only chords (with or without ⇧) are not: on many
+/// layouts they type characters (⌥L is "@" on German), as the step
+/// detector also assumes.
+pub fn moves_focus(code: u16, modifiers: Modifiers) -> bool {
+    modifiers.command
+        || modifiers.control
+        || matches!(code, KEY_TAB | KEY_RETURN | KEY_KEYPAD_ENTER | KEY_ESCAPE)
+}
+
+/// Fail-closed window after a focus-moving key or a click.
+///
+/// The tap sees an event before the target app does, so the first keys
+/// after Tab or a click can be looked up while the old field is still
+/// focused. For `settle_ms` after [`SettleGuard::arm`], a key is held
+/// secure until the focused element is seen to differ from the one focused
+/// before (`before`; unknown holds for the whole window).
+#[derive(Debug, Clone)]
+pub struct SettleGuard<K> {
+    settle_ms: u64,
+    armed: Option<(Timestamp, Option<K>)>,
+}
+
+impl<K: PartialEq> SettleGuard<K> {
+    pub fn new(settle_ms: u64) -> Self {
+        Self {
+            settle_ms,
+            armed: None,
+        }
+    }
+
+    pub fn arm(&mut self, ts: Timestamp, before: Option<K>) {
+        self.armed = Some((ts, before));
+    }
+
+    /// True if a key at `ts`, with `current` focused (`None`: unknown),
+    /// must be treated as secure.
+    pub fn holds(&mut self, ts: Timestamp, current: Option<&K>) -> bool {
+        let Some((at, before)) = &self.armed else {
+            return false;
+        };
+        if ts < *at {
+            return false;
+        }
+        if ts.millis_since(*at) > self.settle_ms {
+            self.armed = None;
+            return false;
+        }
+        match (before, current) {
+            (Some(before), Some(current)) if before != current => {
+                self.armed = None;
+                false
+            }
+            _ => true,
+        }
+    }
+}
+
+/// Masks plain `KeyDown`s typed before a secure field was found focused at
+/// `secure_at`, walking back from it. Returns the number scrubbed.
+///
+/// - With `since` (the last focus-moving key or click): every key after
+///   it, as long as consecutive keys are at most `idle_ms` apart. The
+///   boundary explains the run, so a stalled app that moved focus late
+///   cannot leave earlier characters of the run in clear.
+/// - Without: keys at most `settle_ms` before `secure_at`, the step
+///   detector's late-secure-focus rule.
+pub fn retro_scrub(
+    events: &mut [TimedEvent],
+    since: Option<Timestamp>,
+    secure_at: Timestamp,
+    settle_ms: u64,
+    idle_ms: u64,
+) -> usize {
+    let settle_ns = settle_ms.saturating_mul(1_000_000);
+    let idle_ns = idle_ms.saturating_mul(1_000_000);
+    let mut newer = secure_at;
+    let mut scrubbed = 0;
+    for ev in events.iter_mut().rev() {
+        if ev.ts > secure_at {
+            continue;
+        }
+        let past = match since {
+            Some(since) => ev.ts <= since,
+            None => secure_at.0 - ev.ts.0 > settle_ns,
+        };
+        if past {
+            break;
+        }
+        if let CaptureEvent::KeyDown { key, secure, .. } = &mut ev.event {
+            if since.is_some() && newer.0 - ev.ts.0 > idle_ns {
+                break;
+            }
+            newer = ev.ts;
+            if !*secure {
+                *secure = true;
+                scrub_secure_key(key);
+                scrubbed += 1;
+            }
+        }
+    }
+    scrubbed
+}
+
+/// One key's lookup.
+struct Lookup<R> {
+    verdict: KeyVerdict,
+    /// How long after the key the focus was sampled.
+    lag_ns: u64,
+    /// The verdict came from a full read, not the cache.
+    miss: bool,
+    current: Option<R>,
+}
+
+/// Keys and manual steps: fills `KeyDown.secure`, scrubs secure keys, drops
+/// keys and manual steps focused on excluded apps, and emits
+/// `FocusChanged`.
+struct FocusWorker<S: FocusSource> {
+    source: S,
+    excluded: Vec<String>,
+    settle_ms: u64,
+    idle_ms: u64,
+    cache: FocusCache<S::Ref>,
+    guard: SettleGuard<S::Ref>,
+    /// The focus seen at the last key lookup.
+    last_ref: Option<S::Ref>,
+    /// The last focus-moving key or click.
+    boundary: Option<Timestamp>,
+    last_verdict: Option<KeyVerdict>,
+    /// Last focused element reported; outer `None` until the first lookup.
+    focus: Option<Option<RawElement>>,
+    events: Vec<TimedEvent>,
+    dropped_ts: Vec<Timestamp>,
+    stale_masked: usize,
+    settle_masked: usize,
+    retro_scrubbed: usize,
+    probes_skipped: usize,
+    ax: AxStats,
+}
+
+struct FocusOut {
+    events: Vec<TimedEvent>,
+    dropped_ts: Vec<Timestamp>,
+    stale_masked: usize,
+    settle_masked: usize,
+    retro_scrubbed: usize,
+    probes_skipped: usize,
+    ax: AxStats,
+}
+
+impl<S: FocusSource> FocusWorker<S> {
+    fn new(cfg: &SessionConfig, source: S) -> Self {
+        Self {
+            source,
+            excluded: cfg.excluded_bundle_ids.clone(),
+            settle_ms: cfg.steps.focus_settle_ms,
+            idle_ms: cfg.steps.typing_idle_ms,
+            cache: FocusCache::new(cfg.steps.typing_idle_ms),
+            guard: SettleGuard::new(cfg.steps.focus_settle_ms),
+            last_ref: None,
+            boundary: None,
+            last_verdict: None,
+            focus: None,
+            events: Vec::new(),
+            dropped_ts: Vec::new(),
+            stale_masked: 0,
+            settle_masked: 0,
+            retro_scrubbed: 0,
+            probes_skipped: 0,
+            ax: AxStats::default(),
+        }
+    }
+
+    fn run(&mut self, rx: Receiver<FocusMsg>) {
+        let mut pending = VecDeque::new();
+        loop {
+            let msg = match pending.pop_front() {
+                Some(msg) => msg,
+                None => match rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                },
+            };
+            if matches!(msg, FocusMsg::Probe(_)) {
+                pending.extend(rx.try_iter());
+            }
+            let keys_waiting = pending.iter().any(|m| matches!(m, FocusMsg::Key { .. }));
+            self.handle(msg, keys_waiting);
+        }
+    }
+
+    fn handle(&mut self, msg: FocusMsg, keys_waiting: bool) {
+        match msg {
+            FocusMsg::Key { event, pid } => self.key(*event, pid),
+            FocusMsg::Manual(ts) => self.manual(ts),
+            FocusMsg::Invalidate(ts) => {
+                self.cache.invalidate();
+                // A fresh read: `last_ref` is only as new as the last key.
+                // This runs before the app has handled the click, so it is
+                // the old focus; if it is already the new one, the guard
+                // holds for the whole window, which is safe.
+                let source = &mut self.source;
+                let before = self.ax.time(|| source.focused_ref().ok_or(())).ok();
+                self.arm(ts, before);
+            }
+            FocusMsg::Probe(ts) => {
+                // Only for labels; never delay waiting keys with it.
+                if keys_waiting {
+                    self.probes_skipped += 1;
+                    return;
+                }
+                let source = &mut self.source;
+                let focused = self.ax.time(|| source.focused_element());
+                self.note_focus(ts, &focused);
+            }
+        }
+    }
+
+    /// Arms the settle guard at `ts` with the focus from before the move.
+    fn arm(&mut self, ts: Timestamp, before: Option<S::Ref>) {
+        self.guard.arm(ts, before);
+        self.boundary = Some(ts);
+    }
+
+    /// Keeps the manual step unless the focused app is excluded.
+    fn manual(&mut self, ts: Timestamp) {
+        let source = &mut self.source;
+        let focused = self.ax.time(|| source.focused_element());
+        if key_verdict(&focused, &self.excluded) == KeyVerdict::Excluded {
+            self.dropped_ts.push(ts);
+            return;
+        }
+        self.events.push(TimedEvent {
+            ts,
+            event: CaptureEvent::ManualStep,
+        });
+    }
+
+    fn key(&mut self, mut event: TimedEvent, pid: i32) {
+        let ts = event.ts;
+        let CaptureEvent::KeyDown {
+            key,
+            modifiers,
+            is_repeat,
+            secure,
+        } = &mut event.event
+        else {
+            return;
+        };
+        let lookup = if *is_repeat {
+            // Same key held: same verdict, unknown → secure.
+            Lookup {
+                verdict: self.last_verdict.unwrap_or(KeyVerdict::Secure),
+                lag_ns: self.source.now().0.saturating_sub(ts.0),
+                miss: false,
+                current: self.last_ref.clone(),
+            }
+        } else {
+            self.lookup(ts, pid)
+        };
+        let mut verdict = lookup.verdict;
+        if verdict == KeyVerdict::Plain && self.guard.holds(ts, lookup.current.as_ref()) {
+            verdict = KeyVerdict::Secure;
+            self.settle_masked += 1;
+        }
+        let staled = apply_staleness(verdict, lookup.lag_ns, STALE_LOOKUP_MS * 1_000_000);
+        if staled != verdict {
+            self.stale_masked += 1;
+            verdict = staled;
+        }
+        if lookup.miss && lookup.verdict == KeyVerdict::Secure {
+            // A secure field just took focus: keys typed just before may
+            // have gone to it already.
+            self.retro_scrubbed += retro_scrub(
+                &mut self.events,
+                self.boundary,
+                ts,
+                self.settle_ms,
+                self.idle_ms,
+            );
+        }
+        self.last_verdict = Some(verdict);
+        self.cache.after_key(key.code, *modifiers);
+        if moves_focus(key.code, *modifiers) {
+            // This key's own lookup saw the focus from before the move.
+            self.arm(ts, self.last_ref.clone());
+        }
+        match verdict {
+            KeyVerdict::Excluded => {
+                self.dropped_ts.push(ts);
+                return;
+            }
+            KeyVerdict::Secure => {
+                *secure = true;
+                scrub_secure_key(key);
+            }
+            KeyVerdict::Plain => *secure = false,
+        }
+        self.events.push(event);
+    }
+
+    /// The verdict for a key at `ts` to `pid`.
+    fn lookup(&mut self, ts: Timestamp, pid: i32) -> Lookup<S::Ref> {
+        let source = &mut self.source;
+        let focused = self.ax.time(|| source.focused_ref().ok_or(()));
+        let lag_ns = self.source.now().0.saturating_sub(ts.0);
+        let Ok(focused) = focused else {
+            // Nothing focused, or no answer: fail closed, cache nothing.
+            return Lookup {
+                verdict: KeyVerdict::Secure,
+                lag_ns,
+                miss: true,
+                current: None,
+            };
+        };
+        self.last_ref = Some(focused.clone());
+        if let Some(verdict) = self.cache.get(&focused, pid, ts) {
+            return Lookup {
+                verdict,
+                lag_ns,
+                miss: false,
+                current: Some(focused),
+            };
+        }
+        let source = &mut self.source;
+        let full = self.ax.time(|| source.focused_element());
+        // The full read re-reads the focus; trust it only if focus did not
+        // move in between.
+        let source = &mut self.source;
+        let again = self.ax.time(|| source.focused_ref().ok_or(())).ok();
+        let confirmed = again.as_ref() == Some(&focused);
+        self.note_focus(ts, &full);
+        let verdict = if confirmed {
+            let verdict = key_verdict(&full, &self.excluded);
+            self.cache.store(focused.clone(), pid, ts, verdict);
+            verdict
+        } else {
+            KeyVerdict::Secure
+        };
+        Lookup {
+            verdict,
+            lag_ns,
+            miss: true,
+            current: Some(focused),
+        }
+    }
+
+    /// Emits `FocusChanged` when a definite lookup differs from the last
+    /// one. Elements of excluded apps are never reported.
+    fn note_focus(&mut self, ts: Timestamp, focused: &ax::Result<Option<RawElement>>) {
+        let Ok(element) = focused else {
+            return;
+        };
+        if element
+            .as_ref()
+            .is_some_and(|el| is_excluded_app(&el.app, &self.excluded))
+        {
+            return;
+        }
+        if self.focus.as_ref() == Some(element) {
+            return;
+        }
+        self.focus = Some(element.clone());
+        self.events.push(TimedEvent {
+            ts,
+            event: CaptureEvent::FocusChanged {
+                element: element.clone(),
+            },
+        });
+    }
+
+    fn finish(self) -> FocusOut {
+        FocusOut {
+            events: self.events,
+            dropped_ts: self.dropped_ts,
+            stale_masked: self.stale_masked,
+            settle_masked: self.settle_masked,
+            retro_scrubbed: self.retro_scrubbed,
+            probes_skipped: self.probes_skipped,
+            ax: self.ax,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Encoder thread
+
+struct Encoder {
+    dir: PathBuf,
+    backlog: Arc<AtomicUsize>,
+    written: HashMap<Timestamp, PathBuf>,
+    errors: usize,
+    total: Duration,
+    max: Duration,
+}
+
+struct EncoderOut {
+    written: HashMap<Timestamp, PathBuf>,
+    errors: usize,
+    total: Duration,
+    max: Duration,
+}
+
+impl Encoder {
+    fn new(dir: PathBuf, backlog: Arc<AtomicUsize>) -> Self {
+        Self {
+            dir,
+            backlog,
+            written: HashMap::new(),
+            errors: 0,
+            total: Duration::ZERO,
+            max: Duration::ZERO,
+        }
+    }
+
+    fn run(&mut self, rx: Receiver<Frame>) {
+        for frame in rx {
+            self.encode(&frame);
+            drop(frame);
+            self.backlog.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn encode(&mut self, frame: &Frame) {
+        if self.written.contains_key(&frame.ts) {
+            return;
+        }
+        let start = Instant::now();
+        let path = self.dir.join(format!("{}.webp", frame.ts.0));
+        let pixels = PixelBuffer::bgra(frame.width, frame.height, &frame.pixels);
+        match library::write_webp(&path, &pixels) {
+            Ok(()) => {
+                self.written.insert(frame.ts, path);
+            }
+            Err(_) => self.errors += 1,
+        }
+        let took = start.elapsed();
+        self.total += took;
+        self.max = self.max.max(took);
+    }
+
+    fn finish(self) -> EncoderOut {
+        EncoderOut {
+            written: self.written,
+            errors: self.errors,
+            total: self.total,
+            max: self.max,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+
+/// True if `app`'s bundle id is in `excluded`.
+pub fn is_excluded_app(app: &AppRef, excluded: &[String]) -> bool {
+    app.bundle_id
+        .as_deref()
+        .is_some_and(|id| excluded.iter().any(|e| e == id))
+}
+
+/// Drops events of excluded apps, plus the drag and release of a press
+/// that started in one (even if the pointer leaves it).
+#[derive(Debug, Default, Clone)]
+pub struct ExclusionFilter {
+    in_excluded_press: bool,
+}
+
+impl ExclusionFilter {
+    /// `excluded`: the event's app is known to be excluded.
+    pub fn keep(&mut self, event: &CaptureEvent, excluded: bool) -> bool {
+        match event {
+            CaptureEvent::MouseDown { .. } => {
+                self.in_excluded_press = excluded;
+                !excluded
+            }
+            CaptureEvent::MouseDragged { .. } => !excluded && !self.in_excluded_press,
+            CaptureEvent::MouseUp { .. } => {
+                let keep = !excluded && !self.in_excluded_press;
+                self.in_excluded_press = false;
+                keep
+            }
+            _ => !excluded,
+        }
+    }
+}
+
+/// Decides which events get a frame snapshot: clicks, manual steps,
+/// shortcuts, Return and Esc, and the first key of a typing burst (a new
+/// app, or more than `idle_ms` since the last key, or after any of the
+/// former).
+#[derive(Debug, Clone)]
+pub struct KeyRunTracker {
+    idle_ms: u64,
+    last_key: Option<(Timestamp, i32)>,
+}
+
+impl KeyRunTracker {
+    pub fn new(idle_ms: u64) -> Self {
+        Self {
+            idle_ms,
+            last_key: None,
+        }
+    }
+
+    pub fn should_snapshot(&mut self, ev: &TimedEvent, pid: i32) -> bool {
+        match &ev.event {
+            CaptureEvent::MouseDown { .. } => {
+                self.last_key = None;
+                true
+            }
+            CaptureEvent::ManualStep => true,
+            CaptureEvent::KeyDown {
+                key,
+                modifiers,
+                is_repeat,
+                ..
+            } => {
+                if *is_repeat {
+                    return false;
+                }
+                if modifiers.is_shortcut()
+                    || matches!(key.code, KEY_RETURN | KEY_KEYPAD_ENTER | KEY_ESCAPE)
+                {
+                    self.last_key = None;
+                    return true;
+                }
+                if key.code == KEY_TAB {
+                    self.last_key = None;
+                    return false;
+                }
+                let new_run = match self.last_key {
+                    Some((last, last_pid)) => {
+                        last_pid != pid || ev.ts.millis_since(last) > self.idle_ms
+                    }
+                    None => true,
+                };
+                self.last_key = Some((ev.ts, pid));
+                new_run
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The key verdict for the focused element `K`.
+///
+/// A hit needs the same element (`K: PartialEq`, `CFEqual` for AX), the
+/// same pid, a ts no earlier than the last key and no gap over `idle_ms`.
+/// [`FocusCache::invalidate`] (clicks) and [`FocusCache::after_key`] (Tab,
+/// Return, Esc, shortcuts) drop it.
+#[derive(Debug, Clone)]
+pub struct FocusCache<K> {
+    idle_ms: u64,
+    entry: Option<(K, i32, Timestamp, KeyVerdict)>,
+}
+
+impl<K: PartialEq> FocusCache<K> {
+    pub fn new(idle_ms: u64) -> Self {
+        Self {
+            idle_ms,
+            entry: None,
+        }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.entry = None;
+    }
+
+    /// The cached verdict for a key at `ts` to `pid` with `element`
+    /// focused. A hit extends the burst to `ts`; a miss drops the entry.
+    pub fn get(&mut self, element: &K, pid: i32, ts: Timestamp) -> Option<KeyVerdict> {
+        let (cached, cached_pid, last, verdict) = self.entry.as_mut()?;
+        if cached != element
+            || *cached_pid != pid
+            || ts < *last
+            || ts.millis_since(*last) > self.idle_ms
+        {
+            self.entry = None;
+            return None;
+        }
+        *last = ts;
+        Some(*verdict)
+    }
+
+    pub fn store(&mut self, element: K, pid: i32, ts: Timestamp, verdict: KeyVerdict) {
+        self.entry = Some((element, pid, ts, verdict));
+    }
+
+    /// Call after each key: keys that can move focus drop the entry.
+    pub fn after_key(&mut self, code: u16, modifiers: Modifiers) {
+        if moves_focus(code, modifiers) {
+            self.invalidate();
+        }
+    }
+}
+
+/// Removes the characters of a key typed into a secure field. A key that
+/// typed text keeps one `•` so the detector still counts it as typing;
+/// non-printing keys (arrows, function keys) keep none.
+pub fn scrub_secure_key(key: &mut Key) {
+    let typed = key.characters.as_deref().is_some_and(|s| {
+        s.chars()
+            .any(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c))
+    });
+    key.characters = typed.then(|| "•".to_owned());
+    key.characters_ignoring_modifiers = None;
+}
+
+/// Removes the snapshots (and latency samples) of events that were dropped
+/// after the router took them.
+pub fn prune_snapshots<T>(
+    snapshots: &mut BTreeMap<Timestamp, T>,
+    latency_ns: &mut BTreeMap<Timestamp, u64>,
+    dropped: &[Timestamp],
+) {
+    for ts in dropped {
+        snapshots.remove(ts);
+        latency_ns.remove(ts);
+    }
+}
+
+/// The snapshot for a step at `at`: taken exactly then, else the newest
+/// one before, else the oldest one after, but only within `max_gap_ns`.
+pub fn match_snapshot<T>(
+    snapshots: &BTreeMap<Timestamp, T>,
+    at: Timestamp,
+    max_gap_ns: u64,
+) -> Option<(Timestamp, &T)> {
+    let before = snapshots
+        .range(..=at)
+        .next_back()
+        .filter(|(ts, _)| at.0 - ts.0 <= max_gap_ns);
+    before
+        .or_else(|| {
+            snapshots
+                .range(at..)
+                .next()
+                .filter(|(ts, _)| ts.0 - at.0 <= max_gap_ns)
+        })
+        .map(|(ts, v)| (*ts, v))
+}
+
+/// A draft step's point and end point in frame pixels; `None` if off the
+/// frame (e.g. on another display).
+pub fn step_points(geometry: &FrameGeometry, draft: &DraftStep) -> (Option<Point>, Option<Point>) {
+    let map = |p: Option<Point>| p.and_then(|p| geometry.point_to_pixel_checked(p));
+    (map(draft.point), map(draft.end_point))
+}
+
+/// A pixel rectangle within a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CropRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CropRect {
+    /// As a model [`Rect`] in full-screenshot pixels, for
+    /// [`StepImage::crop_rect`].
+    pub fn to_rect(self) -> Rect {
+        Rect {
+            x: f64::from(self.x),
+            y: f64::from(self.y),
+            width: f64::from(self.width),
+            height: f64::from(self.height),
+        }
+    }
+}
+
+/// A `size` crop centred on `center` (frame pixels), shifted to stay inside
+/// a `frame_w`×`frame_h` frame, and shrunk if the frame is smaller.
+pub fn crop_rect(center: Point, frame_w: u32, frame_h: u32, size: (u32, u32)) -> CropRect {
+    let width = size.0.min(frame_w);
+    let height = size.1.min(frame_h);
+    let axis = |c: f64, len: u32, frame: u32| {
+        let start = (c - f64::from(len) / 2.0).round();
+        // NaN casts to 0.
+        (start.max(0.0) as u32).min(frame - len)
+    };
+    CropRect {
+        x: axis(center.x, width, frame_w),
+        y: axis(center.y, height, frame_h),
+        width,
+        height,
+    }
+}
+
+/// A view of `rect` inside a packed RGBA image `width` pixels wide.
+fn crop_view(rgba: &[u8], width: u32, rect: CropRect) -> PixelBuffer<'_> {
+    let stride = width as usize * 4;
+    let start = rect.y as usize * stride + rect.x as usize * 4;
+    PixelBuffer {
+        width: rect.width,
+        height: rect.height,
+        bytes_per_row: stride,
+        format: PixelFormat::Rgba,
+        data: &rgba[start..],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CPU time
+
+#[derive(Debug, Clone, Copy)]
+struct CpuTime {
+    user: Duration,
+    system: Duration,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct Timeval {
+    tv_sec: i64,
+    /// `suseconds_t` is `i32` on Darwin.
+    tv_usec: i32,
+}
+
+/// Darwin `struct rusage`: two timevals and 14 longs.
+#[repr(C)]
+#[derive(Default)]
+struct Rusage {
+    ru_utime: Timeval,
+    ru_stime: Timeval,
+    rest: [i64; 14],
+}
+
+const _: () = assert!(std::mem::size_of::<Rusage>() == 144);
+
+const RUSAGE_SELF: i32 = 0;
+
+extern "C" {
+    fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+}
+
+fn process_cpu_time() -> Option<CpuTime> {
+    let mut usage = Rusage::default();
+    // SAFETY: `usage` is a valid, correctly sized out-pointer.
+    if unsafe { getrusage(RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    let dur = |t: &Timeval| {
+        Duration::from_secs(t.tv_sec.max(0) as u64) + Duration::from_micros(t.tv_usec.max(0) as u64)
+    };
+    Some(CpuTime {
+        user: dur(&usage.ru_utime),
+        system: dur(&usage.ru_stime),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use guidesya_core::events::MouseButton;
+    use guidesya_core::model::StepKind;
+
+    use super::*;
+
+    const MS: u64 = 1_000_000;
+
+    fn mods() -> Modifiers {
+        Modifiers::default()
+    }
+
+    fn cmd() -> Modifiers {
+        Modifiers {
+            command: true,
+            ..Modifiers::default()
+        }
+    }
+
+    fn key(code: u16, chars: Option<&str>) -> Key {
+        Key {
+            code,
+            characters: chars.map(str::to_owned),
+            characters_ignoring_modifiers: chars.map(str::to_owned),
+        }
+    }
+
+    fn key_down(ts_ms: u64, code: u16, chars: &str, modifiers: Modifiers) -> TimedEvent {
+        TimedEvent {
+            ts: Timestamp(ts_ms * MS),
+            event: CaptureEvent::KeyDown {
+                key: key(code, Some(chars)),
+                modifiers,
+                is_repeat: false,
+                secure: false,
+            },
+        }
+    }
+
+    fn mouse_down(ts_ms: u64) -> TimedEvent {
+        TimedEvent {
+            ts: Timestamp(ts_ms * MS),
+            event: CaptureEvent::MouseDown {
+                point: Point { x: 10.0, y: 10.0 },
+                button: MouseButton::Left,
+                click_count: 1,
+                modifiers: mods(),
+                element: None,
+            },
+        }
+    }
+
+    fn mouse(kind: &str) -> CaptureEvent {
+        let point = Point { x: 0.0, y: 0.0 };
+        match kind {
+            "down" => CaptureEvent::MouseDown {
+                point,
+                button: MouseButton::Left,
+                click_count: 1,
+                modifiers: mods(),
+                element: None,
+            },
+            "drag" => CaptureEvent::MouseDragged {
+                point,
+                button: MouseButton::Left,
+            },
+            _ => CaptureEvent::MouseUp {
+                point,
+                button: MouseButton::Left,
+                click_count: 1,
+                modifiers: mods(),
+            },
+        }
+    }
+
+    /// BGRA frame whose pixel (x, y) is B=x, G=y, R=0, A=255.
+    fn frame(ts: u64, width: u32, height: u32, geometry: FrameGeometry) -> Frame {
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        for (i, px) in pixels.chunks_exact_mut(4).enumerate() {
+            let (x, y) = (i as u32 % width, i as u32 / width);
+            px.copy_from_slice(&[x as u8, y as u8, 0, 255]);
+        }
+        Frame {
+            ts: Timestamp(ts),
+            width,
+            height,
+            geometry,
+            pixels: Arc::new(pixels),
+        }
+    }
+
+    fn geometry(w_pt: f64, h_pt: f64, w_px: u32, h_px: u32) -> FrameGeometry {
+        FrameGeometry::from_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: w_pt,
+                height: h_pt,
+            },
+            w_px,
+            h_px,
+        )
+    }
+
+    #[test]
+    fn hotkey_matches_exact_modifiers() {
+        let hk = Hotkey::MANUAL_STEP;
+        let ctrl_opt = Modifiers {
+            control: true,
+            option: true,
+            ..mods()
+        };
+        assert!(hk.matches(&key(KEY_S, Some("s")), ctrl_opt));
+        let with_caps = Modifiers {
+            caps_lock: true,
+            ..ctrl_opt
+        };
+        assert!(hk.matches(&key(KEY_S, None), with_caps));
+        let with_cmd = Modifiers {
+            command: true,
+            ..ctrl_opt
+        };
+        assert!(!hk.matches(&key(KEY_S, None), with_cmd));
+        assert!(!hk.matches(&key(KEY_S, None), cmd()));
+        assert!(!hk.matches(&key(2, None), ctrl_opt));
+    }
+
+    #[test]
+    fn exclusion_filter_drops_whole_press() {
+        let mut f = ExclusionFilter::default();
+        assert!(!f.keep(&mouse("down"), true));
+        // The pointer left the excluded app mid-drag: still dropped.
+        assert!(!f.keep(&mouse("drag"), false));
+        assert!(!f.keep(&mouse("up"), false));
+        // The next press in another app is kept.
+        assert!(f.keep(&mouse("down"), false));
+        assert!(f.keep(&mouse("drag"), false));
+        assert!(f.keep(&mouse("up"), false));
+        assert!(!f.keep(&CaptureEvent::ManualStep, true));
+        assert!(f.keep(&CaptureEvent::ManualStep, false));
+    }
+
+    #[test]
+    fn excluded_app_by_bundle_id() {
+        let list = vec!["com.1password.1password".to_owned()];
+        let app = |id: Option<&str>| AppRef {
+            pid: 1,
+            name: None,
+            bundle_id: id.map(str::to_owned),
+        };
+        assert!(is_excluded_app(
+            &app(Some("com.1password.1password")),
+            &list
+        ));
+        assert!(!is_excluded_app(&app(Some("com.apple.finder")), &list));
+        assert!(!is_excluded_app(&app(None), &list));
+    }
+
+    #[test]
+    fn key_runs_snapshot_first_key_only() {
+        let mut t = KeyRunTracker::new(1500);
+        assert!(t.should_snapshot(&key_down(0, 0, "a", mods()), 7));
+        assert!(!t.should_snapshot(&key_down(100, 11, "b", mods()), 7));
+        // Idle gap.
+        assert!(t.should_snapshot(&key_down(2000, 0, "a", mods()), 7));
+        // Other app.
+        assert!(t.should_snapshot(&key_down(2100, 0, "a", mods()), 8));
+        // Tab ends the run without a snapshot; the next key starts one.
+        assert!(!t.should_snapshot(&key_down(2200, KEY_TAB, "\t", mods()), 8));
+        assert!(t.should_snapshot(&key_down(2300, 0, "a", mods()), 8));
+        // Shortcut and Return always, and they end the run.
+        assert!(t.should_snapshot(&key_down(2400, KEY_S, "s", cmd()), 8));
+        assert!(t.should_snapshot(&key_down(2500, 0, "a", mods()), 8));
+        assert!(t.should_snapshot(&key_down(2600, KEY_RETURN, "\r", mods()), 8));
+        assert!(t.should_snapshot(&key_down(2650, 0, "a", mods()), 8));
+        assert!(!t.should_snapshot(&key_down(2660, 0, "a", mods()), 8));
+        // Clicks always, and they end the run.
+        assert!(t.should_snapshot(&mouse_down(2700), 8));
+        assert!(t.should_snapshot(&key_down(2800, 0, "a", mods()), 8));
+        let repeat = TimedEvent {
+            ts: Timestamp(5000 * MS),
+            event: CaptureEvent::KeyDown {
+                key: key(0, Some("a")),
+                modifiers: mods(),
+                is_repeat: true,
+                secure: false,
+            },
+        };
+        assert!(!t.should_snapshot(&repeat, 8));
+        let manual = TimedEvent {
+            ts: Timestamp(0),
+            event: CaptureEvent::ManualStep,
+        };
+        assert!(t.should_snapshot(&manual, 8));
+    }
+
+    #[test]
+    fn focus_cache_is_per_element() {
+        use KeyVerdict::*;
+        let ts = |ms: u64| Timestamp(ms * MS);
+        let mut c: FocusCache<u32> = FocusCache::new(1500);
+        assert_eq!(c.get(&1, 7, ts(0)), None);
+        c.store(1, 7, ts(0), Plain);
+        assert_eq!(c.get(&1, 7, ts(100)), Some(Plain));
+        // Each hit extends the burst.
+        assert_eq!(c.get(&1, 7, ts(1500)), Some(Plain));
+        assert_eq!(c.get(&1, 7, ts(2900)), Some(Plain));
+        // Focus moved to another element mid-burst (e.g. the app moved it):
+        // miss, and the old entry is gone.
+        assert_eq!(c.get(&2, 7, ts(3000)), None);
+        assert_eq!(c.get(&1, 7, ts(3010)), None);
+        // Idle gap.
+        c.store(1, 7, ts(4000), Plain);
+        assert_eq!(c.get(&1, 7, ts(5600)), None);
+        // Other pid.
+        c.store(1, 7, ts(6000), Secure);
+        assert_eq!(c.get(&1, 8, ts(6100)), None);
+        // Clicks invalidate.
+        c.store(1, 7, ts(7000), Plain);
+        c.invalidate();
+        assert_eq!(c.get(&1, 7, ts(7100)), None);
+        // Keys that can move focus.
+        for (code, m) in [
+            (KEY_TAB, mods()),
+            (KEY_RETURN, mods()),
+            (KEY_KEYPAD_ENTER, mods()),
+            (KEY_ESCAPE, mods()),
+            (KEY_S, cmd()),
+        ] {
+            c.store(1, 7, ts(8000), Plain);
+            c.after_key(code, m);
+            assert_eq!(c.get(&1, 7, ts(8100)), None, "key {code}");
+        }
+        c.store(1, 7, ts(9000), Excluded);
+        c.after_key(0, mods());
+        assert_eq!(c.get(&1, 7, ts(9100)), Some(Excluded));
+        // Out-of-order ts does not reuse the verdict.
+        assert_eq!(c.get(&1, 7, ts(8000)), None);
+    }
+
+    #[test]
+    fn key_verdict_fails_closed_and_excludes() {
+        let excluded = vec!["com.1password.1password".to_owned()];
+        let el = |secure: bool, bundle: &str| RawElement {
+            is_secure: secure,
+            app: AppRef {
+                pid: 3,
+                name: None,
+                bundle_id: Some(bundle.to_owned()),
+            },
+            ..RawElement::default()
+        };
+        assert_eq!(
+            key_verdict(&Ok(Some(el(false, "com.apple.TextEdit"))), &excluded),
+            KeyVerdict::Plain
+        );
+        assert_eq!(
+            key_verdict(&Ok(Some(el(true, "com.apple.Safari"))), &excluded),
+            KeyVerdict::Secure
+        );
+        assert_eq!(key_verdict(&Ok(None), &excluded), KeyVerdict::Secure);
+        assert_eq!(
+            key_verdict(&Err(ax::AxError::Timeout), &excluded),
+            KeyVerdict::Secure
+        );
+        // Excluded wins over plain and secure.
+        for secure in [false, true] {
+            assert_eq!(
+                key_verdict(&Ok(Some(el(secure, "com.1password.1password"))), &excluded),
+                KeyVerdict::Excluded
+            );
+        }
+    }
+
+    #[test]
+    fn stale_lookups_mask() {
+        let max = STALE_LOOKUP_MS * MS;
+        assert_eq!(
+            apply_staleness(KeyVerdict::Plain, 10 * MS, max),
+            KeyVerdict::Plain
+        );
+        assert_eq!(
+            apply_staleness(KeyVerdict::Plain, max, max),
+            KeyVerdict::Plain
+        );
+        assert_eq!(
+            apply_staleness(KeyVerdict::Plain, max + 1, max),
+            KeyVerdict::Secure
+        );
+        assert_eq!(
+            apply_staleness(KeyVerdict::Secure, 0, max),
+            KeyVerdict::Secure
+        );
+        assert_eq!(
+            apply_staleness(KeyVerdict::Excluded, 10 * max, max),
+            KeyVerdict::Excluded
+        );
+    }
+
+    #[test]
+    fn scrub_keeps_only_a_dot() {
+        let mut k = key(0, Some("p"));
+        scrub_secure_key(&mut k);
+        assert_eq!(k.characters.as_deref(), Some("•"));
+        assert_eq!(k.characters_ignoring_modifiers, None);
+        // Arrow keys (AppKit function-key range) and control characters
+        // type nothing.
+        let mut arrow = key(123, Some("\u{F702}"));
+        scrub_secure_key(&mut arrow);
+        assert_eq!(arrow.characters, None);
+        let mut ret = key(KEY_RETURN, Some("\r"));
+        scrub_secure_key(&mut ret);
+        assert_eq!(ret.characters, None);
+        let mut none = key(0, None);
+        scrub_secure_key(&mut none);
+        assert_eq!(none.characters, None);
+    }
+
+    #[test]
+    fn scrubbed_secure_typing_still_detected_and_masked() {
+        let mut events = Vec::new();
+        for (i, c) in "hunter2".chars().enumerate() {
+            let mut k = key(0, Some(&c.to_string()));
+            scrub_secure_key(&mut k);
+            events.push(TimedEvent {
+                ts: Timestamp(i as u64 * 100 * MS),
+                event: CaptureEvent::KeyDown {
+                    key: k,
+                    modifiers: mods(),
+                    is_repeat: false,
+                    secure: true,
+                },
+            });
+        }
+        let json = format!("{events:?}");
+        assert!(!json.contains("hunter"));
+        let steps = detect_steps(&events, &StepConfig::default());
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].kind, StepKind::Type);
+        assert_eq!(
+            steps[0].keystrokes.as_deref(),
+            Some(guidesya_core::steps::SECURE_MASK)
+        );
+    }
+
+    #[test]
+    fn snapshot_matching_within_gap() {
+        let gap = 3000 * MS;
+        let at = |ms: u64| Timestamp(ms * MS);
+        let mut snaps = BTreeMap::new();
+        assert_eq!(
+            match_snapshot(&snaps, at(5), gap),
+            None::<(Timestamp, &u32)>
+        );
+        snaps.insert(at(10), 1u32);
+        snaps.insert(at(20), 2);
+        snaps.insert(at(30), 3);
+        assert_eq!(match_snapshot(&snaps, at(20), gap), Some((at(20), &2)));
+        assert_eq!(match_snapshot(&snaps, at(25), gap), Some((at(20), &2)));
+        // Before every snapshot: the oldest one after.
+        assert_eq!(match_snapshot(&snaps, at(1), gap), Some((at(10), &1)));
+        // Within the gap after the last one.
+        assert_eq!(match_snapshot(&snaps, at(3030), gap), Some((at(30), &3)));
+        // Too far from any snapshot: none.
+        assert_eq!(match_snapshot(&snaps, at(3031), gap), None);
+        let mut late = BTreeMap::new();
+        late.insert(at(5000), 9u32);
+        assert_eq!(match_snapshot(&late, at(1000), gap), None);
+        assert_eq!(match_snapshot(&late, at(2000), gap), Some((at(5000), &9)));
+    }
+
+    #[test]
+    fn prune_removes_dropped_snapshots_and_latency() {
+        let mut snaps: BTreeMap<Timestamp, &str> = [
+            (Timestamp(1), "a"),
+            (Timestamp(2), "b"),
+            (Timestamp(3), "c"),
+        ]
+        .into();
+        let mut latency: BTreeMap<Timestamp, u64> =
+            [(Timestamp(1), 10), (Timestamp(2), 20), (Timestamp(3), 30)].into();
+        prune_snapshots(&mut snaps, &mut latency, &[Timestamp(2), Timestamp(9)]);
+        assert_eq!(snaps.keys().map(|t| t.0).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(latency.values().copied().collect::<Vec<_>>(), vec![10, 30]);
+    }
+
+    #[test]
+    fn crop_is_centred_and_clamped() {
+        let size = (800, 500);
+        let c = crop_rect(
+            Point {
+                x: 1000.0,
+                y: 600.0,
+            },
+            2880,
+            1800,
+            size,
+        );
+        assert_eq!(
+            c,
+            CropRect {
+                x: 600,
+                y: 350,
+                width: 800,
+                height: 500
+            }
+        );
+        // Near the top-left corner.
+        let c = crop_rect(Point { x: 5.0, y: 5.0 }, 2880, 1800, size);
+        assert_eq!((c.x, c.y), (0, 0));
+        // Near the bottom-right corner.
+        let c = crop_rect(
+            Point {
+                x: 2879.0,
+                y: 1799.0,
+            },
+            2880,
+            1800,
+            size,
+        );
+        assert_eq!((c.x, c.y), (2080, 1300));
+        // Frame smaller than the crop.
+        let c = crop_rect(Point { x: 50.0, y: 50.0 }, 640, 400, size);
+        assert_eq!(
+            c,
+            CropRect {
+                x: 0,
+                y: 0,
+                width: 640,
+                height: 400
+            }
+        );
+        let c = crop_rect(
+            Point {
+                x: f64::NAN,
+                y: 50.0,
+            },
+            2880,
+            1800,
+            size,
+        );
+        assert_eq!(c.x, 0);
+        assert_eq!(
+            CropRect {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4
+            }
+            .to_rect(),
+            Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0
+            }
+        );
+    }
+
+    #[test]
+    fn crop_view_reads_the_right_pixels() {
+        let (w, h) = (100u32, 60u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            px.copy_from_slice(&[x as u8, y as u8, 7, 255]);
+        }
+        // Bottom-right corner: the view must pass the length check.
+        let rect = crop_rect(Point { x: 99.0, y: 59.0 }, w, h, (20, 10));
+        let out = crop_view(&rgba, w, rect).to_rgba().unwrap();
+        assert_eq!(out.len(), 20 * 10 * 4);
+        assert_eq!(&out[..4], &[rect.x as u8, rect.y as u8, 7, 255]);
+        assert_eq!(&out[out.len() - 4..], &[99, 59, 7, 255]);
+    }
+
+    #[test]
+    fn points_map_to_frame_pixels() {
+        // Retina secondary display left of the main one.
+        let geometry = FrameGeometry::from_rect(
+            Rect {
+                x: -1440.0,
+                y: 0.0,
+                width: 1440.0,
+                height: 900.0,
+            },
+            2880,
+            1800,
+        );
+        let draft = DraftStep {
+            kind: StepKind::Drag,
+            at: Timestamp(0),
+            point: Some(Point {
+                x: -1430.0,
+                y: 20.0,
+            }),
+            end_point: Some(Point { x: 10.0, y: 20.0 }),
+            element: None,
+            app: None,
+            keystrokes: None,
+            title: "Drag".into(),
+        };
+        let (p, end) = step_points(&geometry, &draft);
+        assert_eq!(p, Some(Point { x: 20.0, y: 40.0 }));
+        // On the main display, not in this frame.
+        assert_eq!(end, None);
+    }
+
+    #[test]
+    fn latency_stats() {
+        assert_eq!(LatencyStats::from_ns(&[]), None);
+        let samples: Vec<u64> = (1..=100).map(|i| i * MS).collect();
+        let s = LatencyStats::from_ns(&samples).unwrap();
+        assert_eq!(s.count, 100);
+        assert_eq!(s.min_ms, 1.0);
+        assert_eq!(s.median_ms, 50.0);
+        assert_eq!(s.p95_ms, 95.0);
+        assert_eq!(s.max_ms, 100.0);
+        assert!((s.mean_ms - 50.5).abs() < 1e-9);
+        let one = LatencyStats::from_ns(&[3 * MS]).unwrap();
+        assert_eq!((one.median_ms, one.p95_ms), (3.0, 3.0));
+    }
+
+    #[test]
+    fn cpu_time_is_readable() {
+        let a = process_cpu_time().expect("getrusage");
+        let mut x = 0u64;
+        for i in 0..2_000_000u64 {
+            x = x.wrapping_add(i * i);
+        }
+        std::hint::black_box(x);
+        let b = process_cpu_time().expect("getrusage");
+        assert!(b.user + b.system >= a.user + a.system);
+        assert!(b.user < Duration::from_secs(3600));
+    }
+
+    /// Scratch folder under `target/`, removed on drop.
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new() -> Self {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/session-tests")
+                .join(Ulid::new().to_string());
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+            // Also the parent, once the last test is done with it.
+            let _ = fs::remove_dir(self.0.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn encoder_writes_each_frame_once() {
+        let scratch = ScratchDir::new();
+        let backlog = Arc::new(AtomicUsize::new(0));
+        let mut enc = Encoder::new(scratch.0.clone(), Arc::clone(&backlog));
+        let (tx, rx) = mpsc::channel();
+        let f = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        for _ in 0..2 {
+            backlog.fetch_add(1, Ordering::SeqCst);
+            tx.send(f.clone()).unwrap();
+        }
+        drop(tx);
+        enc.run(rx);
+        let out = enc.finish();
+        assert_eq!(out.written.len(), 1);
+        assert_eq!(out.errors, 0);
+        assert_eq!(backlog.load(Ordering::SeqCst), 0);
+        let img = library::read_webp(&out.written[&Timestamp(5 * MS)]).unwrap();
+        assert_eq!(img.dimensions(), (16, 10));
+        // BGRA (x, y, 0, 255) is stored as RGBA (0, y, x, 255).
+        assert_eq!(img.get_pixel(3, 2).0, [0, 2, 3, 255]);
+        // The encoder kept no reference to the frame.
+        assert_eq!(Arc::strong_count(&f.pixels), 1);
+    }
+
+    /// A recording whose snapshots are encoded into `scratch/session`.
+    fn recording(
+        scratch: &ScratchDir,
+        events: Vec<TimedEvent>,
+        frames: &[(u64, &Frame)],
+    ) -> Recording {
+        let session_dir = scratch.0.join("session");
+        fs::create_dir_all(&session_dir).unwrap();
+        let mut snapshots = BTreeMap::new();
+        for (event_ms, f) in frames {
+            let path = session_dir.join(format!("{}.webp", f.ts.0));
+            if !path.exists() {
+                library::write_webp(&path, &PixelBuffer::bgra(f.width, f.height, &f.pixels))
+                    .unwrap();
+            }
+            snapshots.insert(
+                Timestamp(event_ms * MS),
+                SnapshotRef {
+                    frame_ts: f.ts,
+                    path,
+                    geometry: f.geometry,
+                    width: f.width,
+                    height: f.height,
+                },
+            );
+        }
+        let drafts = detect_steps(&events, &StepConfig::default());
+        Recording {
+            events,
+            snapshots,
+            drafts,
+            metrics: SessionMetrics::default(),
+            display: None,
+            crop_size: (40, 20),
+            fallback_ms: 3000,
+            session_dir,
+        }
+    }
+
+    fn click(ts_ms: u64, x: f64, y: f64) -> [TimedEvent; 2] {
+        let point = Point { x, y };
+        [
+            TimedEvent {
+                ts: Timestamp(ts_ms * MS),
+                event: CaptureEvent::MouseDown {
+                    point,
+                    button: MouseButton::Left,
+                    click_count: 1,
+                    modifiers: mods(),
+                    element: Some(RawElement {
+                        role: Some("AXButton".into()),
+                        title: Some("Save".into()),
+                        ..RawElement::default()
+                    }),
+                },
+            },
+            TimedEvent {
+                ts: Timestamp((ts_ms + 50) * MS),
+                event: CaptureEvent::MouseUp {
+                    point,
+                    button: MouseButton::Left,
+                    click_count: 1,
+                    modifiers: mods(),
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn save_guide_writes_bundle_with_images() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 160, 100, geometry(80.0, 50.0, 160, 100));
+        let mut events = click(10, 40.0, 25.0).to_vec();
+        events.push(key_down(500, KEY_S, "s", cmd()));
+        let rec = recording(&scratch, events, &[(10, &f1), (500, &f1)]);
+        assert_eq!(rec.drafts.len(), 2);
+
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Session test").unwrap();
+        assert_eq!(saved.skipped, 0);
+        let loaded = lib.load(&saved.handle.path).unwrap();
+        let steps: Vec<_> = loaded.guide.steps().cloned().collect();
+        assert_eq!(steps.len(), 2);
+
+        let click = &steps[0];
+        assert_eq!(click.kind, StepKind::Click);
+        assert_eq!(click.point, Some(Point { x: 80.0, y: 50.0 }));
+        assert_eq!(click.image.show, ImageShow::Crop);
+        let full = saved.handle.read_image(&click.image.full).unwrap();
+        assert_eq!(full.dimensions(), (160, 100));
+        let crop = saved
+            .handle
+            .read_image(click.image.crop.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(crop.dimensions(), (40, 20));
+        // Crop top-left is pixel (60, 40): RGBA (0, y, x, 255).
+        assert_eq!(crop.get_pixel(0, 0).0, [0, 40, 60, 255]);
+        // cropRect in guide.json is the exact cut, in full-screenshot pixels.
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(saved.handle.guide_json()).unwrap()).unwrap();
+        let cut = &json["items"][0]["image"]["cropRect"];
+        assert_eq!(cut["x"], 60.0);
+        assert_eq!(cut["y"], 40.0);
+        assert_eq!(cut["width"].as_f64(), Some(f64::from(crop.width())));
+        assert_eq!(cut["height"].as_f64(), Some(f64::from(crop.height())));
+        assert_eq!(
+            click.image.crop_rect,
+            Some(Rect {
+                x: 60.0,
+                y: 40.0,
+                width: 40.0,
+                height: 20.0
+            })
+        );
+
+        let shortcut = &steps[1];
+        assert_eq!(shortcut.kind, StepKind::Shortcut);
+        assert_eq!(shortcut.point, None);
+        assert_eq!(shortcut.image.crop, None);
+        assert_eq!(shortcut.image.crop_rect, None);
+        assert_eq!(shortcut.image.show, ImageShow::Full);
+        // Both steps show the same frame, but each has its own file.
+        assert_eq!(
+            click.image.full,
+            library::step_image_path(click.id, StepImageVariant::Full)
+        );
+        assert_eq!(
+            shortcut.image.full,
+            library::step_image_path(shortcut.id, StepImageVariant::Full)
+        );
+        let read = |rel: &str| fs::read(saved.handle.resolve(rel).unwrap()).unwrap();
+        assert_eq!(read(&click.image.full), read(&shortcut.image.full));
+
+        let raw = scratch.0.join("raw");
+        assert_eq!(rec.write_raw_frames(&raw).unwrap(), 1);
+        assert!(raw.join(format!("frames/{}.webp", 5 * MS)).exists());
+
+        // Dropping the recording removes its session folder.
+        let session_dir = rec.session_dir().to_path_buf();
+        drop(rec);
+        assert!(!session_dir.exists());
+    }
+
+    #[test]
+    fn save_guide_skips_steps_without_a_close_snapshot() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let mut events = click(10, 4.0, 2.5).to_vec();
+        // 10 s later, with no snapshot of its own (e.g. a missing frame).
+        events.extend(click(10_000, 4.0, 2.5));
+        let rec = recording(&scratch, events, &[(10, &f1)]);
+        assert_eq!(rec.drafts.len(), 2);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Gap").unwrap();
+        assert_eq!(saved.skipped, 1);
+        assert_eq!(saved.guide.steps().count(), 1);
+    }
+
+    #[test]
+    fn failed_save_removes_the_bundle() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let rec = recording(&scratch, click(10, 4.0, 2.5).to_vec(), &[(10, &f1)]);
+        // The encoded snapshot is gone, so copying the full image fails.
+        fs::remove_file(&rec.snapshots.values().next().unwrap().path).unwrap();
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        assert!(rec.save_guide(&lib, "Broken").is_err());
+        assert!(lib.list().unwrap().is_empty());
+    }
+
+    /// A scripted focus: `current` is what AX would report right now.
+    struct FakeFocus {
+        current: Option<(u32, RawElement)>,
+        clock: Timestamp,
+    }
+
+    impl FocusSource for FakeFocus {
+        type Ref = u32;
+
+        fn focused_ref(&mut self) -> Option<u32> {
+            self.current.as_ref().map(|(id, _)| *id)
+        }
+
+        fn focused_element(&mut self) -> ax::Result<Option<RawElement>> {
+            Ok(self.current.as_ref().map(|(_, el)| el.clone()))
+        }
+
+        fn now(&self) -> Timestamp {
+            self.clock
+        }
+    }
+
+    fn field(title: &str, secure: bool, bundle: &str) -> RawElement {
+        RawElement {
+            role: Some("AXTextField".into()),
+            subrole: secure.then(|| "AXSecureTextField".into()),
+            title: Some(title.into()),
+            is_secure: secure,
+            app: AppRef {
+                pid: 5,
+                name: Some("Safari".into()),
+                bundle_id: Some(bundle.into()),
+            },
+            ..RawElement::default()
+        }
+    }
+
+    fn worker(focus: Option<(u32, RawElement)>) -> FocusWorker<FakeFocus> {
+        let cfg = SessionConfig {
+            excluded_bundle_ids: vec!["com.1password.1password".into()],
+            ..SessionConfig::default()
+        };
+        FocusWorker::new(
+            &cfg,
+            FakeFocus {
+                current: focus,
+                clock: Timestamp(0),
+            },
+        )
+    }
+
+    /// Feeds a key typed at `ms`, looked up 1 ms later.
+    fn type_key(w: &mut FocusWorker<FakeFocus>, ms: u64, code: u16, chars: &str) {
+        w.source.clock = Timestamp((ms + 1) * MS);
+        w.handle(
+            FocusMsg::Key {
+                event: Box::new(key_down(ms, code, chars, mods())),
+                pid: 5,
+            },
+            false,
+        );
+    }
+
+    fn typed(events: &[TimedEvent]) -> Vec<(u64, Option<String>, bool)> {
+        events
+            .iter()
+            .filter_map(|ev| match &ev.event {
+                CaptureEvent::KeyDown { key, secure, .. } => {
+                    Some((ev.ts.0 / MS, key.characters.clone(), *secure))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn username_tab_password_never_stores_password_characters() {
+        let user = field("Username", false, "com.apple.Safari");
+        let pass = field("Password", true, "com.apple.Safari");
+        let mut w = worker(Some((1, user)));
+        for (i, c) in ["b", "o", "b"].iter().enumerate() {
+            type_key(&mut w, i as u64 * 100, 0, c);
+        }
+        type_key(&mut w, 300, KEY_TAB, "\t");
+        // The app has not moved focus yet: the first password key is
+        // looked up while the username field is still focused.
+        type_key(&mut w, 310, 0, "x");
+        w.source.current = Some((2, pass));
+        type_key(&mut w, 330, 0, "y");
+        type_key(&mut w, 340, 0, "z");
+        let out = w.finish();
+        assert_eq!(out.settle_masked, 1);
+
+        let keys = typed(&out.events);
+        assert_eq!(
+            keys[..3],
+            [
+                (0, Some("b".into()), false),
+                (100, Some("o".into()), false),
+                (200, Some("b".into()), false)
+            ]
+        );
+        for (ms, chars, secure) in &keys[4..] {
+            assert!(secure, "key at {ms} ms");
+            assert_eq!(chars.as_deref(), Some("•"));
+        }
+        // Nothing of the password reaches the raw dump (events.jsonl).
+        let json = serde_json::to_string(&out.events).unwrap();
+        for c in ["\"x\"", "\"y\"", "\"z\""] {
+            assert!(!json.contains(c), "{c} in {json}");
+        }
+        // The guide: the username stays, the password is masked.
+        let steps = detect_steps(&out.events, &StepConfig::default());
+        let shown: Vec<_> = steps
+            .iter()
+            .filter_map(|s| s.keystrokes.as_deref())
+            .collect();
+        assert_eq!(shown, ["bob", guidesya_core::steps::SECURE_MASK]);
+    }
+
+    #[test]
+    fn late_secure_focus_scrubs_keys_already_stored() {
+        // No Tab or click: the page moved focus to the password field by
+        // itself while the user kept typing.
+        let user = field("Username", false, "com.apple.Safari");
+        let pass = field("Password", true, "com.apple.Safari");
+        let mut w = worker(Some((1, user)));
+        type_key(&mut w, 0, 0, "a");
+        type_key(&mut w, 1000, 0, "p");
+        w.source.current = Some((2, pass));
+        type_key(&mut w, 1100, 0, "q");
+        let out = w.finish();
+        assert_eq!(out.retro_scrubbed, 1);
+        let keys = typed(&out.events);
+        // Outside focus_settle_ms: kept. Within it: scrubbed.
+        assert_eq!(keys[0], (0, Some("a".into()), false));
+        assert_eq!(keys[1], (1000, Some("•".into()), true));
+        assert_eq!(keys[2], (1100, Some("•".into()), true));
+    }
+
+    #[test]
+    fn click_guard_masks_until_focus_moves() {
+        let a = field("Search", false, "com.apple.Safari");
+        let b = field("Name", false, "com.apple.Safari");
+        let mut w = worker(Some((1, a)));
+        type_key(&mut w, 0, 0, "s");
+        // Click into another field at 1000; the app moves focus a bit later.
+        w.handle(FocusMsg::Invalidate(Timestamp(1000 * MS)), false);
+        type_key(&mut w, 1050, 0, "n");
+        w.source.current = Some((2, b));
+        type_key(&mut w, 1080, 0, "m");
+        let keys = typed(&w.finish().events);
+        assert_eq!(keys[1], (1050, Some("•".into()), true));
+        assert_eq!(keys[2], (1080, Some("m".into()), false));
+    }
+
+    #[test]
+    fn manual_step_in_excluded_app_is_dropped() {
+        let vault = field("Search", false, "com.1password.1password");
+        let mut w = worker(Some((1, vault)));
+        w.handle(FocusMsg::Manual(Timestamp(5 * MS)), false);
+        w.source.current = Some((2, field("Doc", false, "com.apple.TextEdit")));
+        w.handle(FocusMsg::Manual(Timestamp(9 * MS)), false);
+        let out = w.finish();
+        assert_eq!(out.dropped_ts, vec![Timestamp(5 * MS)]);
+        assert_eq!(out.events.len(), 1);
+        assert_eq!(out.events[0].event, CaptureEvent::ManualStep);
+        assert_eq!(out.events[0].ts, Timestamp(9 * MS));
+    }
+
+    #[test]
+    fn probe_is_skipped_when_keys_wait() {
+        let mut w = worker(Some((1, field("Doc", false, "com.apple.TextEdit"))));
+        let (tx, rx) = mpsc::channel();
+        tx.send(FocusMsg::Probe(Timestamp(MS))).unwrap();
+        tx.send(FocusMsg::Key {
+            event: Box::new(key_down(2, 0, "a", mods())),
+            pid: 5,
+        })
+        .unwrap();
+        tx.send(FocusMsg::Probe(Timestamp(3 * MS))).unwrap();
+        drop(tx);
+        w.source.clock = Timestamp(3 * MS);
+        w.run(rx);
+        let out = w.finish();
+        assert_eq!(out.probes_skipped, 1);
+        // The key was still handled, and the last probe ran.
+        assert_eq!(typed(&out.events).len(), 1);
+    }
+
+    #[test]
+    fn settle_guard_rules() {
+        let at = |ms: u64| Timestamp(ms * MS);
+        let mut g: SettleGuard<u32> = SettleGuard::new(300);
+        assert!(!g.holds(at(0), Some(&1)));
+        g.arm(at(100), Some(1));
+        assert!(g.holds(at(150), Some(&1)));
+        assert!(g.holds(at(160), None));
+        // Focus seen to move: released for good.
+        assert!(!g.holds(at(170), Some(&2)));
+        assert!(!g.holds(at(180), Some(&1)));
+        // Window over.
+        g.arm(at(1000), Some(1));
+        assert!(!g.holds(at(1301), Some(&1)));
+        // Unknown "before": holds for the whole window.
+        g.arm(at(2000), None);
+        assert!(g.holds(at(2100), Some(&5)));
+        assert!(g.holds(at(2300), Some(&6)));
+        assert!(!g.holds(at(2301), Some(&6)));
+        // Keys from before the arming are not held.
+        g.arm(at(3000), Some(1));
+        assert!(!g.holds(at(2990), Some(&1)));
+    }
+
+    #[test]
+    fn retro_scrub_respects_boundary_and_window() {
+        let mut events = vec![
+            key_down(0, 0, "a", mods()),
+            key_down(500, 0, "b", mods()),
+            key_down(600, KEY_TAB, "\t", mods()),
+            key_down(700, 0, "c", mods()),
+            key_down(800, 0, "d", mods()),
+        ];
+        // Tab at 600 is the boundary: only "c" and "d" qualify.
+        assert_eq!(
+            retro_scrub(
+                &mut events,
+                Some(Timestamp(600 * MS)),
+                Timestamp(850 * MS),
+                300,
+                1500
+            ),
+            2
+        );
+        let keys = typed(&events);
+        assert_eq!(keys[1], (500, Some("b".into()), false));
+        assert_eq!(keys[3], (700, Some("•".into()), true));
+        assert_eq!(keys[4], (800, Some("•".into()), true));
+        // No boundary: limited by the window only.
+        let mut events = vec![key_down(0, 0, "a", mods()), key_down(500, 0, "b", mods())];
+        assert_eq!(
+            retro_scrub(&mut events, None, Timestamp(700 * MS), 300, 1500),
+            1
+        );
+        assert!(!typed(&events)[0].2);
+        // With a boundary: back to it, while keys stay within idle_ms of each
+        // other, however long ago the boundary was.
+        let mut events = vec![
+            key_down(0, 0, "a", mods()),
+            key_down(100, KEY_TAB, "\t", mods()),
+            key_down(400, 0, "b", mods()),
+            key_down(1500, 0, "c", mods()),
+            key_down(2600, 0, "d", mods()),
+        ];
+        assert_eq!(
+            retro_scrub(
+                &mut events,
+                Some(Timestamp(100 * MS)),
+                Timestamp(2700 * MS),
+                300,
+                1500
+            ),
+            3
+        );
+        // A gap over idle_ms between keys ends the run.
+        let mut events = vec![
+            key_down(100, KEY_TAB, "\t", mods()),
+            key_down(200, 0, "b", mods()),
+            key_down(5000, 0, "c", mods()),
+        ];
+        assert_eq!(
+            retro_scrub(
+                &mut events,
+                Some(Timestamp(100 * MS)),
+                Timestamp(5100 * MS),
+                300,
+                1500
+            ),
+            1
+        );
+        assert_eq!(typed(&events)[1], (200, Some("b".into()), false));
+    }
+
+    #[test]
+    fn moves_focus_keys() {
+        for code in [KEY_TAB, KEY_RETURN, KEY_KEYPAD_ENTER, KEY_ESCAPE] {
+            assert!(moves_focus(code, mods()));
+        }
+        assert!(moves_focus(0, cmd()));
+        let ctrl = Modifiers {
+            control: true,
+            ..mods()
+        };
+        assert!(moves_focus(0, ctrl));
+        assert!(!moves_focus(0, mods()));
+        // ⌥L types "@" on German layouts; ⌥⇧ chords type too.
+        let opt = Modifiers {
+            option: true,
+            ..mods()
+        };
+        assert!(!moves_focus(37, opt));
+        assert!(!moves_focus(37, Modifiers { shift: true, ..opt }));
+        assert!(moves_focus(
+            37,
+            Modifiers {
+                command: true,
+                ..opt
+            }
+        ));
+    }
+
+    #[test]
+    fn option_typing_stays_plain() {
+        // "jürgen@firma.de" on a German layout: "@" is ⌥L.
+        let mut w = worker(Some((1, field("E-Mail", false, "com.apple.Safari"))));
+        let opt = Modifiers {
+            option: true,
+            ..mods()
+        };
+        for (i, c) in "jürgen@firma.de".chars().enumerate() {
+            let ms = i as u64 * 80;
+            let (modifiers, ignoring) = if c == '@' {
+                (opt, "l".to_owned())
+            } else {
+                (mods(), c.to_string())
+            };
+            w.source.clock = Timestamp((ms + 1) * MS);
+            w.handle(
+                FocusMsg::Key {
+                    event: Box::new(TimedEvent {
+                        ts: Timestamp(ms * MS),
+                        event: CaptureEvent::KeyDown {
+                            key: Key {
+                                code: if c == '@' { 37 } else { 0 },
+                                characters: Some(c.to_string()),
+                                characters_ignoring_modifiers: Some(ignoring),
+                            },
+                            modifiers,
+                            is_repeat: false,
+                            secure: false,
+                        },
+                    }),
+                    pid: 5,
+                },
+                false,
+            );
+        }
+        let out = w.finish();
+        assert_eq!(out.settle_masked, 0);
+        assert!(typed(&out.events).iter().all(|(_, _, secure)| !secure));
+        let steps = detect_steps(&out.events, &StepConfig::default());
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].keystrokes.as_deref(), Some("jürgen@firma.de"));
+    }
+
+    #[test]
+    fn stalled_app_after_tab_scrubs_the_whole_password() {
+        let user = field("Username", false, "com.apple.Safari");
+        let pass = field("Password", true, "com.apple.Safari");
+        let mut w = worker(Some((1, user)));
+        type_key(&mut w, 0, 0, "b");
+        type_key(&mut w, 300, KEY_TAB, "\t");
+        // The app stalls for 500 ms: these keys are looked up while the
+        // username field is still focused, past the 300 ms guard window.
+        type_key(&mut w, 400, 0, "x");
+        type_key(&mut w, 650, 0, "y");
+        type_key(&mut w, 800, 0, "z");
+        w.source.current = Some((2, pass));
+        type_key(&mut w, 1000, 0, "w");
+        let out = w.finish();
+        let keys = typed(&out.events);
+        assert_eq!(keys[0], (0, Some("b".into()), false));
+        for (ms, chars, secure) in &keys[2..] {
+            assert!(secure, "key at {ms} ms");
+            assert_eq!(chars.as_deref(), Some("•"));
+        }
+        let json = serde_json::to_string(&out.events).unwrap();
+        for c in ["\"x\"", "\"y\"", "\"z\"", "\"w\""] {
+            assert!(!json.contains(c), "{c} in {json}");
+        }
+    }
+
+    #[test]
+    fn click_guard_reads_fresh_focus() {
+        // Typed in A, then clicked C without typing (last_ref is still A),
+        // then clicked password field P and typed before the app moved focus.
+        let mut w = worker(Some((1, field("A", false, "com.apple.Safari"))));
+        type_key(&mut w, 0, 0, "a");
+        w.source.current = Some((3, field("C", false, "com.apple.Safari")));
+        w.handle(FocusMsg::Invalidate(Timestamp(2000 * MS)), false);
+        w.handle(FocusMsg::Invalidate(Timestamp(4000 * MS)), false);
+        // The app has not handled the click on P yet: focus is still C.
+        type_key(&mut w, 4050, 0, "p");
+        let out = w.finish();
+        assert_eq!(out.settle_masked, 1);
+        assert_eq!(typed(&out.events)[1], (4050, Some("•".into()), true));
+    }
+
+    #[test]
+    fn stale_session_dirs() {
+        let id = Ulid::from_parts(1_000_000, 7);
+        let name = format!("{SESSION_DIR_PREFIX}{id}");
+        let hour = 60 * 60 * 1000;
+        assert!(!is_stale_session_dir(
+            &name,
+            1_000_000 + 5 * hour,
+            STALE_SESSION_MS
+        ));
+        assert!(is_stale_session_dir(
+            &name,
+            1_000_000 + 7 * hour,
+            STALE_SESSION_MS
+        ));
+        assert!(!is_stale_session_dir(
+            "Recipes.guidesya",
+            u64::MAX,
+            STALE_SESSION_MS
+        ));
+        assert!(!is_stale_session_dir(
+            &format!("{SESSION_DIR_PREFIX}nope"),
+            u64::MAX,
+            STALE_SESSION_MS
+        ));
+        assert!(default_work_dir().ends_with("dev.guidesya.app/sessions"));
+    }
+
+    #[test]
+    fn stale_sessions_are_swept() {
+        let scratch = ScratchDir::new();
+        let old = scratch
+            .0
+            .join(format!("{SESSION_DIR_PREFIX}{}", Ulid::from_parts(1, 1)));
+        let fresh = scratch
+            .0
+            .join(format!("{SESSION_DIR_PREFIX}{}", Ulid::new()));
+        let other = scratch.0.join("keep");
+        for dir in [&old, &fresh, &other] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        sweep_stale_sessions(&scratch.0);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert!(other.exists());
+    }
+
+    #[test]
+    fn full_encoder_queue_drops_snapshots() {
+        let reader = FrameReader::detached(4);
+        reader.push(frame(5 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let (element, _er) = mpsc::channel();
+        let (focus, _fr) = mpsc::channel();
+        let (encode, encode_rx) = mpsc::sync_channel(1);
+        let mut router = Router::new(
+            &SessionConfig::default(),
+            reader.clone(),
+            Outputs {
+                element,
+                focus,
+                encode,
+                backlog: Arc::new(AtomicUsize::new(0)),
+            },
+        );
+        router.snapshot(Timestamp(10 * MS));
+        // A new frame, but the queue (size 1) is still full.
+        reader.push(frame(15 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        router.snapshot(Timestamp(20 * MS));
+        let out = router.finish();
+        assert_eq!(out.dropped_queue_full, 1);
+        assert_eq!(
+            out.snapshots.keys().copied().collect::<Vec<_>>(),
+            [Timestamp(10 * MS)]
+        );
+        assert_eq!(out.latency_ns.len(), 1);
+        assert_eq!(encode_rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    #[ignore = "needs Screen Recording, Input Monitoring and Accessibility (TCC)"]
+    fn live_session_starts_and_stops() {
+        let scratch = ScratchDir::new();
+        let cfg = SessionConfig {
+            work_dir: Some(scratch.0.clone()),
+            ..SessionConfig::default()
+        };
+        let session = RecordingSession::start(cfg).expect("start");
+        thread::sleep(Duration::from_millis(500));
+        let recording = session.stop().expect("stop");
+        assert!(recording.metrics.wall >= Duration::from_millis(500));
+        assert!(recording.session_dir().starts_with(&scratch.0));
+    }
+}

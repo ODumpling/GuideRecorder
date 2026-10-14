@@ -19,9 +19,9 @@ Each example runs for a few seconds, prints what it sees, and exits.
 
   | Permission       | Needed by                  | Settings link                                                              |
   | ---------------- | -------------------------- | -------------------------------------------------------------------------- |
-  | Input Monitoring | `event_tap` (keyboard)     | `x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent` |
-  | Accessibility    | `ax`, `event_tap` (some versions) | `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` |
-  | Screen Recording | `frames`                   | `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture` |
+  | Input Monitoring | `event_tap` (keyboard), `record` | `x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent` |
+  | Accessibility    | `ax`, `record`, `event_tap` (some versions) | `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` |
+  | Screen Recording | `frames`, `record`         | `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture` |
 
 - [ ] Quit and reopen the terminal after granting. Most grants only take
       effect for newly started processes.
@@ -77,13 +77,37 @@ are at the top level, and the event itself is under `event`, tagged by
       "one-Mississippi") should have `ts` values about 1 000 000 000 apart.
       `ts` is already converted to host nanoseconds by the tap, so this
       only shows that the conversion works.
-- [ ] **Hardware timestamp unit (open check on #336): blocked.** This needs
-      a raw-ts flag in the event_tap example. The tap reads the raw
-      `CGEventGetTimestamp` value as both mach ticks and nanoseconds and
-      keeps whichever is closer to now, so the printed `ts` can't show
-      which unit the hardware used. Skip this until the example can print
-      the raw value next to the normalised one.
 - [ ] After 10 s it prints `stopped` and exits by itself.
+
+### 1b. Hardware timestamp unit: `cargo run -p guidesya-capture --example event_tap -- --raw-ts`
+
+This is an open check on #336. `--raw-ts` runs its own minimal tap for
+10 s. For each event it prints a line like this:
+
+```text
+leftMouseDown raw=4410337711250 reading=ticks ts=183764071302083 latency_us=412 (as_ns_us=179353733 / as_ticks_us=412)
+```
+
+- `raw` is the unmodified `CGEventGetTimestamp`.
+- `reading` is the interpretation `event_timestamp` picked: `ticks` (mach
+  absolute time), `ns`, or `same` when both readings are equal (Intel, or
+  a 1:1 timebase).
+- `latency_us` is now minus the picked `ts`. The two values in brackets
+  are the latency under each reading, so the wrong one is obviously off.
+
+At the end it prints a summary with counts per reading and the maximum
+latency.
+
+- [ ] Use **real hardware**: a trackpad or mouse click and a keyboard press
+      in another app. Note `reading` for each kind. On Apple silicon,
+      hardware events are expected to read as `ticks`; on Intel, `same`.
+- [ ] `latency_us` is small and positive: under a few ms, and never
+      negative by more than a few µs. If the picked reading has a large
+      latency and the other reading a small one, the picker is wrong:
+      report it on #336.
+- [ ] Optional: send a synthetic event (for example with a small
+      `CGEventPost` tool or an automation app) and note its `reading`.
+      It is expected to be `ns`.
 
 ## 2. Frames: `cargo run -p guidesya-capture --example frames [fps]`
 
@@ -153,21 +177,121 @@ focused element, with how long the lookups took.
 - [ ] Focus something that times out or has no focused element. `mask
       keys` is `true`: masking fails closed.
 
-## 4. Integration checks from #336 (once the capture session exists)
+## 4. Record: `cargo run --release -p guidesya-capture --example record -- --seconds 20 [--raw DIR]`
 
-These need the M0 session that combines the tap, frames and AX. Tick them
-off when that lands:
+This runs the M0 recording session: tap, frames and AX together. It needs
+all three permissions. Use `--release`: snapshot frames are encoded to
+WebP while recording, and a debug build encodes too slowly to keep up
+(see the `encoder:` line in the output). It records for `--seconds` (default 20) and then
+writes a `.guidesya` bundle to `--library` (default
+`target/record/library`). It prints:
 
-- [ ] The session fills `MouseDown.element` from an AX lookup at the click
-      point, and `KeyDown.secure` from the focused element.
-- [ ] Pressing the manual-step hotkey (⌃⌥S) records a manual step and does
-      **not** also produce a "Press ⌃⌥S" step.
+- the bundle path;
+- the steps (kind, whether a crop was written, and the title);
+- event counts (kept, dropped because they targeted our own pid, excluded);
+- snapshots, and how many events found no earlier frame;
+- the frame-to-event latency distribution (event ts minus the ts of the
+  frame used, in ms);
+- AX lookup counts and times;
+- process CPU time over the session.
+
+With `--raw DIR` it also writes:
+
+- `events.jsonl`: the enriched events;
+- `snapshots.jsonl`: event ts, frame ts and latency for each snapshot;
+- `drafts.json`: the detected draft steps;
+- `frames/<frame ts>.webp`: the snapshot frames.
+
+Other options:
+
+- `--title TEXT` sets the guide title.
+- `--fps N` sets the capture rate.
+- `--exclude BUNDLE_ID` drops one app's events. It can be repeated.
+
+Suggested script for one run, with the Finder and TextEdit open:
+
+1. Click a Finder sidebar item.
+2. Double-click a folder.
+3. Right-click a file.
+4. Drag a file a short way.
+5. In TextEdit, type a sentence and press Return.
+6. Press ⌘S.
+7. Press ⌃⌥S.
+8. In a Safari login page, type into the username field, press Tab, then
+   type into the password field.
+
+- [ ] Without a permission, it prints a `warning:` line for it.
+      If Screen Recording or the tap is refused, it prints `error: could
+      not start recording: …` and exits with status 1. It must not hang.
+- [ ] Each action above gives one step with a sensible title, for example
+      "Click **Documents** in Finder", "Type `…` into …", "Press **⌘S**",
+      a drag with an end point, and a manual step.
+- [ ] **Manual hotkey:** ⌃⌥S gives a `Manual` step and **no** "Press
+      ⌃⌥S" step.
+- [ ] **Elements:** in `events.jsonl`, `mouseDown` has `element` filled
+      (role, label or title, app) for normal controls.
+- [ ] **Secure fields:** the password step's keystrokes are `••••••••`. In
+      `events.jsonl`, the password's `keyDown` events have `"secure":true`,
+      `characters` is `"•"`, and `charactersIgnoringModifiers` is absent.
+      Grep the raw dump for the password: it must not appear anywhere. The
+      username typed before Tab stays plain.
+- [ ] **Fast Tab into a password field:** type the username, press Tab and
+      type the password **immediately**. Grep `events.jsonl` for each
+      password character: none may appear. The `masking:` line counts the
+      keys held by the settle guard (typed within 300 ms of Tab or a click,
+      before focus moved) and those scrubbed after the fact.
+- [ ] **Masking when the session falls behind:** keys whose focus lookup
+      ran more than 75 ms late are masked too, and counted in the "keys
+      masked because their focus lookup was late" line. Note that count.
+      If it is high on a normal run, typing will look masked in the guide.
+      This check compares event `ts` with the host clock, so it is only
+      trustworthy once the `--raw-ts` check in section 1b has passed.
+- [ ] **Encoder:** the `encoder:` line shows the frames encoded, errors,
+      snapshots lost, snapshots dropped because the queue (4 frames) was
+      full, mean and max encode time, and the maximum backlog. In a
+      release build expect no queue-full drops at a normal pace. Note the
+      count after a burst of quick clicks.
+- [ ] **Session folder:** snapshots are written to
+      `~/Library/Caches/dev.guidesya.app/sessions/.guidesya-session-<ulid>`,
+      never to the library. After the run, no `.guidesya-session-*` folder
+      is left there or in the library. Kill a run with ⌃C partway through:
+      its folder stays, and it is removed at a later start once it is more
+      than 6 hours old.
+- [ ] `focusChanged` and `appActivated` events appear when you move between
+      fields and apps.
+- [ ] **Exclusion:** run again with `--exclude com.apple.TextEdit`.
+      TextEdit clicks and typing give no steps and count as excluded.
+- [ ] **Own pid:** the `own-pid dropped` count is 0 for a terminal-only
+      run. The example has no windows; check this again with the app's
+      toolbar when it exists.
+- [ ] **Frame-to-click accuracy:** open a few step images (`steps/<id>.webp`
+      and `.crop.webp` in the bundle). Each must show the screen **before**
+      the click: a menu you opened by that click is not open yet. **Judge
+      accuracy by what the images show, not by the latency figure.**
+      ScreenCaptureKit sends no frames while the screen is static, so on a
+      quiet screen "event ts − frame ts" can be seconds even though the
+      frame is exactly right.
+- [ ] **Latency figure:** only meaningful while the screen is changing
+      (play a video or scroll a page while you click). Then, at 12 fps,
+      expect a median under ~85 ms. Note the median, p95 and max, and the
+      number of "no earlier frame" events (expect few or none).
+- [ ] The crops are centred on the click point and are 800×500 px, or
+      smaller near the screen edges.
+- [ ] **CPU:** note the CPU % printed at the default fps and at `--fps 30`,
+      with a mostly static screen and with a busy one. This number is for
+      the whole process.
+- [ ] Move a window between clicks and confirm that the crops are still
+      centred on the clicked control (display capture, so this should
+      hold).
+- [ ] Copy one `events.jsonl` from a good run into
+      `crates/guidesya-core/testdata/traces/`, with the secure parts
+      checked, as a step-detection fixture (the coordinator lands it).
+
+## 5. Other integration checks from #336
+
 - [ ] Clicking GuidesYa's own recording toolbar: check that `targetPid` is
-      filled in, and that those clicks are left out of the guide.
-- [ ] Frame-to-click accuracy: the step screenshot shows the screen as it was
-      at the moment of the click, not the next one. Record the measured delay.
-- [ ] Record a few real event traces and save them as step-detection
-      fixtures (`crates/guidesya-core/testdata/traces/`).
+      filled in, and that those clicks are left out of the guide (needs the
+      app).
 - [ ] **TCC survives rebuilds:** grant Screen Recording to the signed app
       bundle (see [signing.md](signing.md)), rebuild, launch again. The grant
       must still be there and capture must start without a new prompt.
@@ -179,9 +303,10 @@ Copy this block into the todo or PR you are testing for:
 ```text
 Date / commit:
 macOS / Mac / displays:
-event_tap: pass/fail, targetPid ok?, ts unit (Δ for ~1 s):
+event_tap: pass/fail, targetPid ok?, ts unit (Δ for ~1 s), --raw-ts reading (mouse/key):
 frames: pass/fail, fps default/30 (static, busy), CPU % default/30:
 ax: pass/fail, worst lookup time (app), secure field masked?:
+record: steps ok?, latency median/p95/max ms, CPU % default/30 fps, secure masked?:
 #336 integration checks:
 Notes:
 ```
