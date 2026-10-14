@@ -11,6 +11,7 @@ pub mod blur;
 pub mod docx;
 pub mod html;
 pub mod md;
+pub mod pdf;
 pub mod raster;
 pub mod render;
 pub mod report;
