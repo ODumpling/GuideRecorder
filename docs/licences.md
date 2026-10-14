@@ -17,9 +17,12 @@ permissive licences are acceptable; nothing GPL/LGPL/AGPL is linked.
 
 ## Frontend (`pnpm licenses list --prod`)
 
-87 packages: 83 MIT, plus 0BSD (tslib), Apache-2.0
-(class-variance-authority), Apache-2.0 OR MIT (@tauri-apps/api) and ISC
-(lucide-react).
+129 packages (updated with the TipTap editor): 123 MIT, plus 0BSD (tslib),
+Apache-2.0 (class-variance-authority), Apache-2.0 OR MIT (@tauri-apps/api),
+ISC (lucide-react), BSD-2-Clause (entities, via markdown-it) and PSF-2.0
+(argparse, only used by markdown-it's CLI and not in the app bundle). All
+permissive. Direct additions: 13 TipTap 3.32 packages and markdown-it 15
+(MIT).
 
 ## Bundled assets
 

@@ -8,6 +8,7 @@ import {
   PatchError,
   renameGuide,
   setImageShow,
+  setItemText,
   setItemTitle,
   type Command,
 } from "@/editor/commands";
@@ -61,6 +62,24 @@ describe("commands", () => {
       title: "Begin",
     });
     expect(() => setItemTitle(guide(), "N1", "x")).toThrow(PatchError);
+  });
+
+  it("edit step descriptions and note bodies, marking steps edited", () => {
+    const after = roundTrip(setItemText(guide(), "A", "description", "Then **save**."));
+    expect(after.items[1]).toMatchObject({ description: "Then **save**.", aiState: { status: "edited" } });
+    expect(roundTrip(setItemText(guide(), "N1", "body", "- a")).items[3]).toMatchObject({ body: "- a" });
+    expect(() => setItemText(guide(), "S1", "description", "x")).toThrow(PatchError);
+    expect(() => setItemText(guide(), "A", "body", "x")).toThrow(PatchError);
+  });
+
+  it("keep the edited status when typing coalesces", () => {
+    const g = guide();
+    const first = setItemText(g, "A", "description", "a");
+    const second = setItemText(applyPatches(g, first.forward), "A", "description", "ab");
+    const merged = coalesce(first, second)!;
+    const after = applyPatches(g, merged.forward);
+    expect(after.items[1]).toMatchObject({ description: "ab", aiState: { status: "edited" } });
+    expect(applyPatches(after, merged.inverse)).toEqual(g);
   });
 
   it("move items both ways", () => {

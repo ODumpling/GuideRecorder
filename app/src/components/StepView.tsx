@@ -1,10 +1,14 @@
+import { lazy, Suspense } from "react";
 import { ImageOff } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { useStepImage } from "@/components/useStepImage";
-import { setItemTitle } from "@/editor/commands";
+import { setItemText, type TextField } from "@/editor/commands";
 import { editorStore, useEditor, useSelectedItem } from "@/editor/editor";
 import type { Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { markdownToPlainText } from "@/text/markdown";
+
+// TipTap is most of the bundle; load it with the first opened guide.
+const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const variant = step.image.show === "crop" && step.image.crop ? "crop" : "full";
@@ -28,17 +32,58 @@ function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   );
 }
 
-function TitleInput({ id, value, readOnly, large }: { id: string; value: string; readOnly: boolean; large?: boolean }) {
+/** A Markdown field of an item, edited through store commands. */
+function TextEditor({
+  id,
+  field,
+  value,
+  readOnly,
+  label,
+  placeholder,
+  singleLine,
+  className,
+}: {
+  id: string;
+  field: TextField;
+  value: string;
+  readOnly: boolean;
+  label: string;
+  placeholder: string;
+  singleLine?: boolean;
+  className?: string;
+}) {
+  const fallback = (
+    <div
+      aria-label={label}
+      className={cn(
+        "rounded-md border border-input px-2.5 py-1.5 whitespace-pre-wrap",
+        !singleLine && "min-h-16",
+        !value && "text-muted-foreground",
+        className,
+      )}
+    >
+      {markdownToPlainText(value) || placeholder}
+    </div>
+  );
   return (
-    <Input
-      aria-label="Title"
-      value={value}
-      disabled={readOnly}
-      className={cn(large ? "h-10 text-lg font-semibold" : "font-medium")}
-      onChange={(e) =>
-        editorStore.getState().dispatch(setItemTitle(editorStore.getState().doc!.guide, id, e.target.value))
-      }
-    />
+    <Suspense fallback={fallback}>
+      <MarkdownEditor
+        // A fresh editor per item, so the cursor never carries over.
+        key={`${id}.${field}`}
+        value={value}
+        readOnly={readOnly}
+        label={label}
+        placeholder={placeholder}
+        singleLine={singleLine}
+        className={className}
+        onChange={(markdown) => {
+          const { doc, dispatch } = editorStore.getState();
+          return !!doc && dispatch(setItemText(doc.guide, id, field, markdown));
+        }}
+        onUndo={() => editorStore.getState().undo()}
+        onRedo={() => editorStore.getState().redo()}
+      />
+    </Suspense>
   );
 }
 
@@ -65,18 +110,51 @@ export function StepView() {
       {item.type === "step" && (
         <>
           <StepImage guideId={doc.guide.id} step={item} />
-          <TitleInput id={item.id} value={item.title} readOnly={doc.readOnly} />
-          {/* Rich text editing comes with TipTap (#362). */}
-          <p className="text-sm whitespace-pre-wrap text-muted-foreground">
-            {item.description || "No description"}
-          </p>
+          <TextEditor
+            id={item.id}
+            field="title"
+            value={item.title}
+            readOnly={doc.readOnly}
+            label="Step title"
+            placeholder="Step title"
+            singleLine
+            className="font-medium"
+          />
+          <TextEditor
+            id={item.id}
+            field="description"
+            value={item.description}
+            readOnly={doc.readOnly}
+            label="Step description"
+            placeholder="Add a description"
+            className="text-sm"
+          />
         </>
       )}
-      {item.type === "section" && <TitleInput id={item.id} value={item.title} readOnly={doc.readOnly} large />}
+      {item.type === "section" && (
+        <TextEditor
+          id={item.id}
+          field="title"
+          value={item.title}
+          readOnly={doc.readOnly}
+          label="Section title"
+          placeholder="Section title"
+          singleLine
+          className="text-lg font-semibold"
+        />
+      )}
       {item.type === "note" && (
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{item.kind}</p>
-          <p className="text-sm whitespace-pre-wrap">{item.body}</p>
+          <TextEditor
+            id={item.id}
+            field="body"
+            value={item.body}
+            readOnly={doc.readOnly}
+            label={`${item.kind} text`}
+            placeholder="Write the note"
+            className="text-sm"
+          />
         </div>
       )}
     </div>

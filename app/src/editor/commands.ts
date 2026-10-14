@@ -98,16 +98,37 @@ export function renameGuide(guide: Guide, title: string): Command {
   };
 }
 
+/** The Markdown text fields of items. */
+export type TextField = "title" | "description" | "body";
+
+const TEXT_LABELS: Record<Item["type"], Partial<Record<TextField, string>>> = {
+  step: { title: "Edit step title", description: "Edit step description" },
+  section: { title: "Edit section title" },
+  note: { body: "Edit note" },
+};
+
+/**
+ * Sets a text field (Markdown): a step's title or description, a section's
+ * title or a note's body. Editing a step's text marks it `edited`, so AI
+ * passes no longer overwrite it.
+ */
+export function setItemText(guide: Guide, id: string, field: TextField, value: string): Command {
+  const item = findItem(guide, id);
+  const label = TEXT_LABELS[item.type][field];
+  if (!label) throw new PatchError(`${item.type} ${id} has no ${field}`);
+  const forward: Patch[] = [{ op: "setItem", id, key: field, value }];
+  const inverse: Patch[] = [{ op: "setItem", id, key: field, value: (item as unknown as Record<TextField, string>)[field] }];
+  if (item.type === "step") {
+    // Always in `forward`: a coalesced command keeps only the last forward.
+    forward.push({ op: "setItem", id, key: "aiState", value: { ...item.aiState, status: "edited" } });
+    inverse.push({ op: "setItem", id, key: "aiState", value: item.aiState });
+  }
+  return { label, forward, inverse, coalesceKey: `item.${id}.${field}` };
+}
+
 /** Sets an item's title (steps and sections). */
 export function setItemTitle(guide: Guide, id: string, title: string): Command {
-  const item = findItem(guide, id);
-  if (item.type === "note") throw new PatchError(`note ${id} has no title`);
-  return {
-    label: item.type === "step" ? "Edit step title" : "Edit section title",
-    forward: [{ op: "setItem", id, key: "title", value: title }],
-    inverse: [{ op: "setItem", id, key: "title", value: item.title }],
-    coalesceKey: `item.${id}.title`,
-  };
+  return setItemText(guide, id, "title", title);
 }
 
 /** Moves an item to `to` (its index after the move). */

@@ -6,15 +6,30 @@ import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
 import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
 import type { Item } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { markdownToPlainText } from "@/text/markdown";
+
+// Plain-text labels by Markdown source. The outline re-renders on every
+// keystroke, but only the edited item's text changes.
+const plainLabels = new Map<string, string>();
+
+function plainLabel(markdown: string): string {
+  let label = plainLabels.get(markdown);
+  if (label === undefined) {
+    if (plainLabels.size >= 1000) plainLabels.clear();
+    label = markdownToPlainText(markdown).replace(/\n/g, " ");
+    plainLabels.set(markdown, label);
+  }
+  return label;
+}
 
 function itemLabel(item: Item): string {
   switch (item.type) {
     case "step":
-      return item.title || "Untitled step";
+      return plainLabel(item.title) || "Untitled step";
     case "section":
-      return item.title || "Untitled section";
+      return plainLabel(item.title) || "Untitled section";
     case "note":
-      return item.body || `Empty ${item.kind}`;
+      return plainLabel(item.body) || `Empty ${item.kind}`;
   }
 }
 

@@ -6,6 +6,7 @@ use tauri::{Manager, RunEvent};
 
 mod commands;
 mod editor;
+mod navigation;
 
 use editor::{AppError, ErrorKind, Session, SessionCell};
 
@@ -29,6 +30,7 @@ fn app_info() -> AppInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(navigation::guard())
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
             let cell = Arc::new(SessionCell::default());

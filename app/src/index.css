@@ -133,3 +133,30 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* Guide text in the TipTap editors (components/MarkdownEditor.tsx). */
+@layer components {
+  .markdown-text p + p,
+  .markdown-text p + ul,
+  .markdown-text p + ol,
+  .markdown-text ul + p,
+  .markdown-text ol + p {
+    @apply mt-2;
+  }
+  .markdown-text ul {
+    @apply list-disc pl-5;
+  }
+  .markdown-text ol {
+    @apply list-decimal pl-5;
+  }
+  .markdown-text a {
+    @apply text-[var(--status-info)] underline underline-offset-2;
+  }
+  .markdown-text code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.9em];
+  }
+  .markdown-text p.is-editor-empty:first-child::before {
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+    content: attr(data-placeholder);
+  }
+}
