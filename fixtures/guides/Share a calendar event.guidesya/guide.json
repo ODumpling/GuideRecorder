@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "id": "01M4WT7MM000000000000002G0",
+  "title": "Share a calendar event",
+  "summary": "Invite a colleague to an existing Calendar event.",
+  "tags": [
+    "calendar",
+    "macos"
+  ],
+  "intro": "This guide shows how to invite someone to an event you **already** created.",
+  "prerequisites": "- A Mac signed in to iCloud\n- An existing event\n",
+  "audience": "beginner",
+  "language": "en",
+  "createdAt": "2026-10-14T09:00:00Z",
+  "updatedAt": "2026-10-14T09:25:00Z",
+  "recording": {
+    "appVersion": "0.1.0",
+    "osVersion": "macOS 26.1",
+    "apps": [
+      {
+        "name": "Dock",
+        "bundleId": "com.apple.dock",
+        "version": "1.8"
+      },
+      {
+        "name": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "version": "15.0"
+      }
+    ],
+    "displays": [
+      {
+        "id": 1,
+        "name": "Built-in Retina Display",
+        "width": 3024,
+        "height": 1964,
+        "scale": 2.0
+      }
+    ]
+  },
+  "items": [
+    {
+      "type": "section",
+      "id": "01M4WT7MM000000000000002G1",
+      "title": "Open the event"
+    },
+    {
+      "type": "step",
+      "id": "01M4WT7MM000000000000002G4",
+      "title": "Click **Calendar** in the Dock",
+      "description": "",
+      "kind": "click",
+      "point": {
+        "x": 30.0,
+        "y": 36.0
+      },
+      "element": {
+        "role": "AXDockItem",
+        "label": "Calendar",
+        "app": "Dock",
+        "bundleId": "com.apple.dock"
+      },
+      "image": {
+        "full": "steps/01M4WT7MM000000000000002G4.webp",
+        "crop": "steps/01M4WT7MM000000000000002G4.crop.webp",
+        "after": "steps/01M4WT7MM000000000000002G4.after.webp",
+        "show": "crop"
+      },
+      "annotations": [
+        {
+          "id": "01M4WT7MM000000000000002G2",
+          "type": "arrow",
+          "geometry": {
+            "from": {
+              "x": 4.0,
+              "y": 4.0
+            },
+            "to": {
+              "x": 14.0,
+              "y": 10.0
+            }
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 2.0
+          }
+        },
+        {
+          "id": "01M4WT7MM000000000000002G3",
+          "type": "box",
+          "geometry": {
+            "x": 12.0,
+            "y": 6.0,
+            "width": 16.0,
+            "height": 10.0
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 2.0
+          }
+        }
+      ],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WT7MM000000000000002G7",
+      "title": "Double-click the *Team sync* event",
+      "description": "The event opens in its own window.",
+      "kind": "doubleClick",
+      "point": {
+        "x": 22.0,
+        "y": 14.0
+      },
+      "element": {
+        "role": "AXStaticText",
+        "label": "Team sync",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Calendar"
+      },
+      "image": {
+        "full": "steps/01M4WT7MM000000000000002G7.webp",
+        "crop": "steps/01M4WT7MM000000000000002G7.crop.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01M4WT7MM000000000000002G5",
+          "type": "highlight",
+          "geometry": {
+            "x": 2.0,
+            "y": 6.0,
+            "width": 28.0,
+            "height": 6.0
+          },
+          "style": {
+            "fill": "#ffcc00",
+            "opacity": 0.4
+          }
+        },
+        {
+          "id": "01M4WT7MM000000000000002G6",
+          "type": "callout",
+          "geometry": {
+            "x": 36.0,
+            "y": 2.0,
+            "width": 24.0,
+            "height": 10.0,
+            "anchor": {
+              "x": 20.0,
+              "y": 12.0
+            },
+            "text": "Your event"
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 2.0,
+            "fontSize": 6.0
+          }
+        }
+      ],
+      "aiState": {
+        "status": "edited",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "note",
+      "id": "01M4WT7MM000000000000002G8",
+      "kind": "tip",
+      "body": "You can also select the event and press `⌘O` to open it."
+    },
+    {
+      "type": "section",
+      "id": "01M4WT7MM000000000000002G9",
+      "title": "Invite people"
+    },
+    {
+      "type": "step",
+      "id": "01M4WT7MM000000000000002GA",
+      "title": "Type the guest's email in **Add Invitees**",
+      "description": "Separate several guests with commas.\n\n- Guests get an email invite\n- You can remove them later\n",
+      "kind": "type",
+      "point": {
+        "x": 40.0,
+        "y": 20.0
+      },
+      "element": {
+        "role": "AXTextField",
+        "label": "Add Invitees",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Team sync"
+      },
+      "keystrokes": "alex@example.com⏎",
+      "image": {
+        "full": "steps/01M4WT7MM000000000000002GA.webp",
+        "crop": "steps/01M4WT7MM000000000000002GA.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "template"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WT7MM000000000000002GC",
+      "title": "Right-click the guest and choose **Send Email**",
+      "description": "",
+      "kind": "rightClick",
+      "point": {
+        "x": 40.0,
+        "y": 24.0
+      },
+      "element": {
+        "role": "AXStaticText",
+        "label": "alex@example.com",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Team sync"
+      },
+      "image": {
+        "full": "steps/01M4WT7MM000000000000002GC.webp",
+        "crop": "steps/01M4WT7MM000000000000002GC.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [
+        {
+          "id": "01M4WT7MM000000000000002GB",
+          "type": "callout",
+          "geometry": {
+            "x": 4.0,
+            "y": 26.0,
+            "width": 30.0,
+            "height": 10.0,
+            "text": "Opens a menu"
+          },
+          "style": {}
+        }
+      ],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WT7MM000000000000002GD",
+      "title": "Press `⌘S` to save",
+      "description": "",
+      "kind": "shortcut",
+      "keystrokes": "⌘S",
+      "image": {
+        "full": "steps/01M4WT7MM000000000000002GD.webp",
+        "crop": "steps/01M4WT7MM000000000000002GD.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "generating"
+      }
+    },
+    {
+      "type": "note",
+      "id": "01M4WT7MM000000000000002GE",
+      "kind": "note",
+      "body": "Guests see changes after they [refresh their calendar](https://support.apple.com/guide/calendar/welcome/mac)."
+    }
+  ]
+}

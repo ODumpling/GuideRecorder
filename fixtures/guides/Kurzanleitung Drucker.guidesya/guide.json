@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "01M4TZVZ000000000000000300",
+  "title": "Kurzanleitung Drucker",
+  "summary": "",
+  "tags": [],
+  "intro": "Für den Drucker im **2. Stock**.",
+  "prerequisites": "",
+  "audience": "beginner",
+  "language": "de",
+  "createdAt": "2026-10-13T16:00:00Z",
+  "updatedAt": "2026-10-13T16:25:00Z",
+  "items": [
+    {
+      "type": "step",
+      "id": "01M4TZVZ000000000000000301",
+      "title": "Papierfach **2** öffnen",
+      "description": "Fach ganz herausziehen.  \nDann Papier einlegen.\n\n* A4\n* A5\n\n# Hinweis\n\nNicht __überfüllen__.",
+      "kind": "manual",
+      "image": {
+        "full": "assets/drucker-fach.webp",
+        "show": "full"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "template"
+      }
+    },
+    {
+      "type": "note",
+      "id": "01M4TZVZ000000000000000302",
+      "kind": "note",
+      "body": "Mehr dazu im [Handbuch](handbuch.pdf) und unter <https://example.com/drucker>."
+    }
+  ]
+}

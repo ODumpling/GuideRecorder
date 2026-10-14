@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 1,
+  "id": "01M4WZCE2000000000000002R0",
+  "title": "Rotate an API key",
+  "summary": "Replace a leaked or expiring API key without downtime.",
+  "tags": [
+    "security",
+    "api",
+    "console"
+  ],
+  "intro": "Rotate keys every *90 days*, or right away if one leaks.",
+  "prerequisites": "Admin access to the console.",
+  "audience": "expert",
+  "language": "en",
+  "createdAt": "2026-10-14T10:30:00Z",
+  "updatedAt": "2026-10-14T10:55:00Z",
+  "recording": {
+    "appVersion": "0.1.0",
+    "osVersion": "macOS 26.1",
+    "apps": [
+      {
+        "name": "Safari",
+        "bundleId": "com.apple.Safari",
+        "version": "26.1"
+      }
+    ],
+    "displays": [
+      {
+        "id": 1,
+        "name": "Built-in Retina Display",
+        "width": 3024,
+        "height": 1964,
+        "scale": 2.0
+      }
+    ]
+  },
+  "items": [
+    {
+      "type": "note",
+      "id": "01M4WZCE2000000000000002R1",
+      "kind": "warning",
+      "body": "Creating a new key **revokes** the old one immediately. Update these first:\n\n1. The CI secret\n2. Local `.env` files\n"
+    },
+    {
+      "type": "step",
+      "id": "01M4WZCE2000000000000002R2",
+      "title": "Open **Settings → API keys**",
+      "description": "",
+      "kind": "click",
+      "point": {
+        "x": 10.0,
+        "y": 8.0
+      },
+      "element": {
+        "role": "AXLink",
+        "label": "API keys",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "image": {
+        "full": "steps/01M4WZCE2000000000000002R2.webp",
+        "crop": "steps/01M4WZCE2000000000000002R2.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WZCE2000000000000002R4",
+      "title": "Enter your password to confirm",
+      "description": "Password input is masked while recording.",
+      "kind": "type",
+      "point": {
+        "x": 16.0,
+        "y": 10.0
+      },
+      "element": {
+        "role": "AXSecureTextField",
+        "label": "Password",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "keystrokes": "••••••••⏎",
+      "image": {
+        "full": "steps/01M4WZCE2000000000000002R4.webp",
+        "crop": "steps/01M4WZCE2000000000000002R4.crop.webp",
+        "show": "crop"
+      },
+      "annotations": [
+        {
+          "id": "01M4WZCE2000000000000002R3",
+          "type": "blur",
+          "geometry": {
+            "x": 4.0,
+            "y": 8.0,
+            "width": 24.0,
+            "height": 6.0
+          },
+          "style": {
+            "blurMode": "blur",
+            "blurAmount": 8.0
+          }
+        }
+      ],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WZCE2000000000000002R8",
+      "title": "Click **Create key** and copy the new key",
+      "description": "The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).",
+      "kind": "click",
+      "point": {
+        "x": 50.0,
+        "y": 32.0
+      },
+      "element": {
+        "role": "AXButton",
+        "label": "Create key",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "image": {
+        "full": "steps/01M4WZCE2000000000000002R8.webp",
+        "crop": "steps/01M4WZCE2000000000000002R8.crop.webp",
+        "after": "steps/01M4WZCE2000000000000002R8.after.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01M4WZCE2000000000000002R5",
+          "type": "blur",
+          "geometry": {
+            "x": 8.0,
+            "y": 18.0,
+            "width": 48.0,
+            "height": 6.0
+          },
+          "style": {
+            "blurMode": "pixelate",
+            "blurAmount": 6.0
+          }
+        },
+        {
+          "id": "01M4WZCE2000000000000002R6",
+          "type": "crop",
+          "geometry": {
+            "x": 0.0,
+            "y": 10.0,
+            "width": 64.0,
+            "height": 20.0
+          },
+          "style": {}
+        },
+        {
+          "id": "01M4WZCE2000000000000002R7",
+          "type": "box",
+          "geometry": {
+            "x": 40.0,
+            "y": 28.0,
+            "width": 20.0,
+            "height": 8.0
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 2.0
+          }
+        }
+      ],
+      "aiState": {
+        "status": "edited",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WZCE2000000000000002RA",
+      "title": "Drag the new key to **Production**",
+      "description": "",
+      "kind": "drag",
+      "point": {
+        "x": 10.0,
+        "y": 10.0
+      },
+      "endPoint": {
+        "x": 50.0,
+        "y": 30.0
+      },
+      "element": {
+        "role": "AXRow",
+        "label": "New key",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "image": {
+        "full": "steps/01M4WZCE2000000000000002RA.webp",
+        "crop": "steps/01M4WZCE2000000000000002RA.crop.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01M4WZCE2000000000000002R9",
+          "type": "arrow",
+          "geometry": {
+            "from": {
+              "x": 10.0,
+              "y": 10.0
+            },
+            "to": {
+              "x": 50.0,
+              "y": 30.0
+            }
+          },
+          "style": {
+            "color": "#ff3b30",
+            "strokeWidth": 2.0
+          }
+        }
+      ],
+      "aiState": {
+        "status": "template"
+      }
+    },
+    {
+      "type": "step",
+      "id": "01M4WZCE2000000000000002RB",
+      "title": "Check that the key works",
+      "description": "Run this in Terminal:\n\n`curl -H \"x-api-key: $KEY\" https://api.example.com/v1/ping`\n\nIt should print *pong*.",
+      "kind": "manual",
+      "image": {
+        "full": "steps/01M4WZCE2000000000000002RB.webp",
+        "show": "full"
+      },
+      "annotations": [],
+      "aiState": {
+        "status": "ai",
+        "model": "claude-sonnet-5-5",
+        "promptVersion": "step.v1"
+      }
+    }
+  ]
+}

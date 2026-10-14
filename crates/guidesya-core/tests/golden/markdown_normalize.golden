@@ -1,0 +1,68 @@
+=== Kurzanleitung Drucker :: intro
+Für den Drucker im **2. Stock**.
+=== Kurzanleitung Drucker :: items[0].title
+Papierfach **2** öffnen
+=== Kurzanleitung Drucker :: items[0].description
+Fach ganz herausziehen.\
+Dann Papier einlegen.
+- A4
+- A5
+
+Hinweis
+
+Nicht **überfüllen**.
+=== Kurzanleitung Drucker :: items[1].body
+Mehr dazu im [Handbuch](handbuch.pdf) und unter [https://example.com/drucker](https://example.com/drucker).
+=== Rotate an API key :: intro
+Rotate keys every *90 days*, or right away if one leaks.
+=== Rotate an API key :: prerequisites
+Admin access to the console.
+=== Rotate an API key :: items[0].body
+Creating a new key **revokes** the old one immediately. Update these first:
+1. The CI secret
+2. Local `.env` files
+=== Rotate an API key :: items[1].title
+Open **Settings → API keys**
+=== Rotate an API key :: items[2].title
+Enter your password to confirm
+=== Rotate an API key :: items[2].description
+Password input is masked while recording.
+=== Rotate an API key :: items[3].title
+Click **Create key** and copy the new key
+=== Rotate an API key :: items[3].description
+The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
+=== Rotate an API key :: items[4].title
+Drag the new key to **Production**
+=== Rotate an API key :: items[5].title
+Check that the key works
+=== Rotate an API key :: items[5].description
+Run this in Terminal:
+
+`curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`
+
+It should print *pong*.
+=== Share a calendar event :: intro
+This guide shows how to invite someone to an event you **already** created.
+=== Share a calendar event :: prerequisites
+- A Mac signed in to iCloud
+- An existing event
+=== Share a calendar event :: items[1].title
+Click **Calendar** in the Dock
+=== Share a calendar event :: items[2].title
+Double-click the *Team sync* event
+=== Share a calendar event :: items[2].description
+The event opens in its own window.
+=== Share a calendar event :: items[3].body
+You can also select the event and press `⌘O` to open it.
+=== Share a calendar event :: items[5].title
+Type the guest's email in **Add Invitees**
+=== Share a calendar event :: items[5].description
+Separate several guests with commas.
+- Guests get an email invite
+- You can remove them later
+=== Share a calendar event :: items[6].title
+Right-click the guest and choose **Send Email**
+=== Share a calendar event :: items[7].title
+Press `⌘S` to save
+=== Share a calendar event :: items[8].body
+Guests see changes after they [refresh their calendar](https://support.apple.com/guide/calendar/welcome/mac).
