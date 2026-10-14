@@ -4,6 +4,8 @@
 
 pub mod ai;
 pub mod events;
+pub mod export;
+pub mod index;
 pub mod library;
 pub mod markdown;
 pub mod migrate;

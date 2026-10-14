@@ -4,3 +4,4 @@ pub mod ax;
 pub mod event_tap;
 pub mod frames;
 pub mod permissions;
+pub mod session;
