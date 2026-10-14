@@ -11,9 +11,18 @@ import {
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 import type { EditorApi } from "@/lib/ipc";
+import type { Step, StepImage } from "@/lib/types";
 
 const images = vi.hoisted(() => ({ insertImageSteps: vi.fn() }));
 vi.mock("@/editor/images", async (importOriginal) => ({ ...(await importOriginal<object>()), ...images }));
+const ipc = vi.hoisted(() => ({
+  copyStepImages: vi.fn(async (_guide: string, image: StepImage, id: string): Promise<StepImage> => ({
+    ...image,
+    full: `steps/${id}.webp`,
+    crop: image.crop && `steps/${id}.crop.webp`,
+  })),
+}));
+vi.mock("@/lib/ipc", async (importOriginal) => ({ ...(await importOriginal<object>()), ...ipc }));
 
 async function store(readOnly = false) {
   const api = {
@@ -54,18 +63,38 @@ describe("actions", () => {
     expect(canMergeSelected(s)).toBe(false); // a note follows
     expect(mergeSelected(s)).toBe(false);
 
-    expect(splitSelected(s, ["", ""], "A2")).toBe(true);
+    expect(await splitSelected(s, ["", ""], "A2")).toBe(true);
     expect(ids(s)).toEqual(["S1", "A", "A2", "N1", "C"]);
     expect(s.getState().selectedId).toBe("A2");
 
     expect(deleteSelected(s)).toBe(true);
     expect(ids(s)).toEqual(["S1", "A", "N1", "C"]);
     expect(s.getState().selectedId).toBe("N1");
-    expect(splitSelected(s, ["", ""], "X")).toBe(false); // a note is selected
+    expect(await splitSelected(s, ["", ""], "X")).toBe(false); // a note is selected
 
     s.getState().undo();
     s.getState().undo();
     s.getState().undo();
+    expect(ids(s)).toEqual(guide().items.map((item) => item.id));
+  });
+
+  it("split gives the new step its own copy of the screenshot", async () => {
+    const s = await store();
+    s.getState().select("A");
+    expect(await splitSelected(s, ["", "Later."], "A2")).toBe(true);
+    const original = guide().items[1] as Step;
+    expect(ipc.copyStepImages).toHaveBeenLastCalledWith("G1", original.image, "A2");
+    const added = s.getState().doc!.guide.items[2] as Step;
+    expect(added.image).toEqual({ ...original.image, full: "steps/A2.webp", crop: "steps/A2.crop.webp" });
+    expect(s.getState().doc!.guide.items[1]).toEqual(original);
+  });
+
+  it("split reports a failed copy and changes nothing", async () => {
+    const s = await store();
+    s.getState().select("A");
+    ipc.copyStepImages.mockRejectedValueOnce({ kind: "io", message: "disk full" });
+    expect(await splitSelected(s, ["", ""], "A2")).toBe(false);
+    expect(s.getState().notice).toBe("Could not split the step: disk full");
     expect(ids(s)).toEqual(guide().items.map((item) => item.id));
   });
 

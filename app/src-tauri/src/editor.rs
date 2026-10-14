@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use guidesya_core::index::{self, Index, IndexedGuide, ListFilter};
 use guidesya_core::library::{
-    GuideHandle, Library, LibraryError, PixelBuffer, StepImageVariant, MAX_WEBP_DIMENSION,
-    STEPS_DIR,
+    step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError, PixelBuffer,
+    StepImageVariant, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
 use guidesya_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
 use guidesya_core::Ulid;
@@ -307,14 +307,7 @@ impl Session {
     /// the path inside the bundle.
     pub fn step_image(&self, guide_id: &str, path: &str) -> Result<Vec<u8>> {
         let guide_id = parse_id(guide_id)?;
-        let allowed =
-            (path.starts_with("steps/") || path.starts_with("assets/")) && path.ends_with(".webp");
-        if !allowed {
-            return Err(AppError::new(
-                ErrorKind::Invalid,
-                format!("not a step image path: {path:?}"),
-            ));
-        }
+        check_image_path(path)?;
         let handle = {
             let open = self.open.lock().unwrap();
             let entry = open.get(&guide_id).ok_or_else(|| {
@@ -332,6 +325,8 @@ impl Session {
     /// undoable edit, and saves it with the guide.
     pub fn add_image_step(&self, guide_id: &str, png: &[u8]) -> Result<Step> {
         let guide_id = parse_id(guide_id)?;
+        // Cheap refusals first; the decode is not.
+        self.writable_handle(guide_id)?;
         let image = decode_png(png)?;
         let (width, height) = image.dimensions();
         let rgba = image.as_raw();
@@ -365,6 +360,62 @@ impl Session {
         })
     }
 
+    /// Copies a step's image files (the paths in `image`) to the files of
+    /// the new step `new_step`, and returns the new step's `StepImage`.
+    ///
+    /// Splitting a step uses this, so the two steps never share files: a
+    /// later change to one step's images (a re-capture, a new crop) can't
+    /// change the other's. Sources must be WebP files under `steps/` or
+    /// `assets/`, read through [`GuideHandle::resolve`]; existing files of
+    /// `new_step` are never overwritten.
+    pub fn copy_step_images(
+        &self,
+        guide_id: &str,
+        image: &StepImage,
+        new_step: &str,
+    ) -> Result<StepImage> {
+        let guide_id = parse_id(guide_id)?;
+        let new_step = parse_id(new_step)?;
+        let lock = self.guide_lock(guide_id);
+        let _guard = lock.lock().unwrap();
+        let handle = self.writable_handle(guide_id)?;
+        let copy = |source: &str, variant: StepImageVariant| -> Result<String> {
+            let bytes = read_bundle_image(&handle, source)?;
+            let target = step_image_path(new_step, variant);
+            let path = handle.resolve(&target)?;
+            if std::fs::symlink_metadata(&path).is_ok() {
+                return Err(AppError::new(
+                    ErrorKind::Conflict,
+                    format!("{target} already exists"),
+                ));
+            }
+            // `resolve` refused a symlinked `steps/`; a missing one is made.
+            let steps = handle.steps_dir();
+            match std::fs::create_dir(&steps) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(file_error(&steps, e)),
+            }
+            write_atomic(&path, &bytes, Durability::RenameOnly)?;
+            Ok(target)
+        };
+        Ok(StepImage {
+            full: copy(&image.full, StepImageVariant::Full)?,
+            crop: image
+                .crop
+                .as_deref()
+                .map(|crop| copy(crop, StepImageVariant::Crop))
+                .transpose()?,
+            crop_rect: image.crop_rect,
+            after: image
+                .after
+                .as_deref()
+                .map(|after| copy(after, StepImageVariant::After))
+                .transpose()?,
+            show: image.show,
+        })
+    }
+
     /// Forgets an opened guide and deletes the step images that its saved
     /// `guide.json` no longer uses. Editing keeps every image (undo may
     /// bring a deleted step back); closing is the point where they can go.
@@ -387,6 +438,36 @@ impl Session {
         }
         sweep_step_images(&entry.handle)
     }
+}
+
+/// Step image paths the editor may name: WebP files under `steps/` or
+/// `assets/` (then resolved inside the bundle).
+fn check_image_path(path: &str) -> Result<()> {
+    let allowed =
+        (path.starts_with("steps/") || path.starts_with("assets/")) && path.ends_with(".webp");
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("not a step image path: {path:?}"),
+        ))
+    }
+}
+
+/// Reads a step image file of the bundle: a checked path, a regular file
+/// (not a symlink), at most [`MAX_PNG_BYTES`].
+fn read_bundle_image(handle: &GuideHandle, relative: &str) -> Result<Vec<u8>> {
+    check_image_path(relative)?;
+    let path = handle.resolve(relative)?;
+    let meta = std::fs::symlink_metadata(&path).map_err(|e| file_error(&path, e))?;
+    if !meta.is_file() || meta.len() > MAX_PNG_BYTES as u64 {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("{relative} is not a usable image file"),
+        ));
+    }
+    std::fs::read(&path).map_err(|e| file_error(&path, e))
 }
 
 /// Decodes a step image PNG. The size in its header is checked before any
@@ -1208,9 +1289,97 @@ mod tests {
             .path();
         let link = bundle.join(format!("steps/{}.webp", Ulid::new()));
         std::os::unix::fs::symlink(&target, &link).unwrap();
+        // A real orphan beside it proves the sweep ran.
+        let orphan = format!("steps/{}.webp", Ulid::new());
+        fs::write(bundle.join(&orphan), b"x").unwrap();
         session.open_guide(&id).unwrap();
-        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert_eq!(session.close_guide(&id).unwrap(), vec![orphan]);
         assert!(target.exists() && fs::symlink_metadata(&link).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copies_step_images_for_a_split_step() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let bundle = root.join(FIXTURE);
+        let guide = session.open_guide(&id).unwrap().guide;
+        let step = guide
+            .steps()
+            .find(|s| s.image.crop.is_some())
+            .unwrap()
+            .clone();
+        let new = Ulid::new();
+        let copied = session
+            .copy_step_images(&id, &step.image, &new.to_string())
+            .unwrap();
+        assert_eq!(copied.full, format!("steps/{new}.webp"));
+        assert_eq!(copied.crop, Some(format!("steps/{new}.crop.webp")));
+        assert_eq!(copied.crop_rect, step.image.crop_rect);
+        assert_eq!(copied.show, step.image.show);
+        assert_eq!(
+            fs::read(bundle.join(&copied.full)).unwrap(),
+            fs::read(bundle.join(&step.image.full)).unwrap()
+        );
+        assert_eq!(
+            fs::read(bundle.join(copied.crop.as_ref().unwrap())).unwrap(),
+            fs::read(bundle.join(step.image.crop.as_ref().unwrap())).unwrap()
+        );
+
+        // Never over existing files, never from odd paths.
+        let again = session.copy_step_images(&id, &step.image, &new.to_string());
+        assert_eq!(again.unwrap_err().kind, ErrorKind::Conflict);
+        for bad in ["guide.json", "steps/../guide.json", "/etc/x.webp"] {
+            let image = StepImage {
+                full: bad.into(),
+                ..step.image.clone()
+            };
+            let err = session
+                .copy_step_images(&id, &image, &Ulid::new().to_string())
+                .unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid, "{bad}");
+        }
+        let missing = StepImage {
+            full: format!("steps/{}.webp", Ulid::new()),
+            crop: None,
+            ..step.image.clone()
+        };
+        let err = session
+            .copy_step_images(&id, &missing, &Ulid::new().to_string())
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotFound);
+        let unopened = session.copy_step_images(
+            &Ulid::new().to_string(),
+            &step.image,
+            &Ulid::new().to_string(),
+        );
+        assert_eq!(unopened.unwrap_err().kind, ErrorKind::NotOpen);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_refuses_symlinked_sources() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let bundle = root.join(FIXTURE);
+        let secret = root.join("secret.webp");
+        fs::write(&secret, b"outside").unwrap();
+        let link = format!("steps/{}.webp", Ulid::new());
+        std::os::unix::fs::symlink(&secret, bundle.join(&link)).unwrap();
+        let guide = session.open_guide(&id).unwrap().guide;
+        let image = StepImage {
+            full: link,
+            crop: None,
+            after: None,
+            ..guide.steps().next().unwrap().image.clone()
+        };
+        let err = session
+            .copy_step_images(&id, &image, &Ulid::new().to_string())
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Invalid);
         fs::remove_dir_all(root).unwrap();
     }
 

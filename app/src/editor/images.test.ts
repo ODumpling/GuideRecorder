@@ -84,7 +84,11 @@ describe("insertImageSteps", () => {
     expect(text(await toPng(new Blob(["3x2"])))).toBe("image/png 3x2");
     const big = fitSize(20000, 9000);
     expect(text(await toPng(new Blob(["20000x9000"])))).toBe(`image/png ${big.width}x${big.height}`);
-    expect(bitmaps.at(-1)?.options).toMatchObject({ resizeWidth: big.width, resizeHeight: big.height });
+    expect(bitmaps.at(-1)?.options).toMatchObject({
+      resizeWidth: big.width,
+      resizeHeight: big.height,
+      imageOrientation: "from-image",
+    });
     // Too many pixels to decode at all: refused before any bitmap.
     await expect(toPng(new Blob(["16000x16000"]))).rejects.toThrow("too large");
     await expect(toPng(new Blob(["not an image"]))).rejects.toThrow("not an image");

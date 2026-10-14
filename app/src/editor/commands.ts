@@ -1,4 +1,5 @@
-import type { Guide, ImageShow, Item, NoteKind, Step } from "@/lib/types";
+import type { Guide, ImageShow, Item, NoteKind, Step, StepImage } from "@/lib/types";
+import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@/text/markdown";
 
 /**
@@ -89,7 +90,7 @@ function findItem(guide: Guide, id: string): Item {
   return guide.items[indexOf(guide, id)];
 }
 
-function findStep(guide: Guide, id: string): Step {
+export function findStep(guide: Guide, id: string): Step {
   const item = findItem(guide, id);
   if (item.type !== "step") throw new PatchError(`item ${id} is not a step`);
   return item;
@@ -270,9 +271,23 @@ export function mergeWithNext(guide: Guide, id: string): Command {
 /**
  * Splits a step in two at a point in its description: the step keeps its
  * title and `before`; a new manual step `newId` right after it gets `after`
- * and shows the same screenshot (the image files are shared).
+ * and shows the same screenshot. Pass `image`, the step's images copied for
+ * `newId` (`copyStepImages`), so the steps never share files; without it
+ * they do.
+ *
+ * The new step gets a copy of every annotation (with new ids from
+ * `makeId`): it shows the same screenshot, so it must keep the same
+ * redactions and crop, or the export would reveal what was blurred.
  */
-export function splitStep(guide: Guide, id: string, newId: string, before: string, after: string): Command {
+export function splitStep(
+  guide: Guide,
+  id: string,
+  newId: string,
+  before: string,
+  after: string,
+  image?: StepImage,
+  makeId: () => string = ulid,
+): Command {
   const step = findStep(guide, id);
   if (guide.items.some((item) => item.id === newId)) throw new PatchError(`item ${newId} exists`);
   const added: Step = {
@@ -281,8 +296,8 @@ export function splitStep(guide: Guide, id: string, newId: string, before: strin
     title: "",
     description: after,
     kind: "manual",
-    image: { ...step.image },
-    annotations: [],
+    image: image ?? { ...step.image },
+    annotations: step.annotations.map((annotation) => ({ ...structuredClone(annotation), id: makeId() })),
     // Text the user wrote is theirs; an empty step is left to the AI.
     aiState: { status: after.trim() ? "edited" : "template" },
   };

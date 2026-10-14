@@ -5,12 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use guidesya_core::model::{Guide, Step};
+use guidesya_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::editor::{
     AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
+    MAX_PNG_BYTES,
 };
 
 /// Runs `f` with the session on the blocking pool.
@@ -90,7 +91,7 @@ pub async fn add_image_step(
                 format!("missing {GUIDE_ID_HEADER} header"),
             )
         })?;
-    let png = body_bytes(request.body())?;
+    let png = body_bytes(request.body(), MAX_PNG_BYTES)?;
     with_session(cell, move |s| s.add_image_step(&guide_id, &png)).await
 }
 
@@ -98,8 +99,22 @@ pub async fn add_image_step(
 /// they arrive raw; after Tauri falls back to postMessage they arrive as a
 /// JSON array of numbers (or, from a plain `JSON.stringify`, an object with
 /// index keys).
-fn body_bytes(body: &InvokeBody) -> Result<Vec<u8>> {
+///
+/// Bodies longer than `max` bytes are refused before any copy is made.
+fn body_bytes(body: &InvokeBody, max: usize) -> Result<Vec<u8>> {
     let invalid = || AppError::new(ErrorKind::Invalid, "expected image bytes");
+    let len = match body {
+        InvokeBody::Raw(bytes) => bytes.len(),
+        InvokeBody::Json(serde_json::Value::Array(items)) => items.len(),
+        InvokeBody::Json(serde_json::Value::Object(map)) => map.len(),
+        InvokeBody::Json(_) => 0,
+    };
+    if len > max {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("the image is too large ({} MB)", len / 1024 / 1024),
+        ));
+    }
     let byte = |value: &serde_json::Value| {
         value
             .as_u64()
@@ -114,6 +129,21 @@ fn body_bytes(body: &InvokeBody) -> Result<Vec<u8>> {
             .collect(),
         InvokeBody::Json(_) => Err(invalid()),
     }
+}
+
+/// Copies a step's image files for a new step (see
+/// [`Session::copy_step_images`]); returns the new step's image.
+#[tauri::command]
+pub async fn copy_step_images(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    image: StepImage,
+    new_step_id: String,
+) -> Result<StepImage> {
+    with_session(cell, move |s| {
+        s.copy_step_images(&guide_id, &image, &new_step_id)
+    })
+    .await
 }
 
 /// The bytes of an image file the user dropped on the window (Tauri gives
@@ -195,13 +225,13 @@ mod tests {
     #[test]
     fn body_bytes_from_raw_and_postmessage_bodies() {
         let png = vec![0x89, b'P', b'N', b'G', 0, 255];
-        assert_eq!(body_bytes(&InvokeBody::Raw(png.clone())).unwrap(), png);
+        assert_eq!(body_bytes(&InvokeBody::Raw(png.clone()), 100).unwrap(), png);
         assert_eq!(
-            body_bytes(&InvokeBody::Json(json!([137, 80, 78, 71, 0, 255]))).unwrap(),
+            body_bytes(&InvokeBody::Json(json!([137, 80, 78, 71, 0, 255])), 100).unwrap(),
             png
         );
         assert_eq!(
-            body_bytes(&InvokeBody::Json(json!({"1": 80, "0": 137}))).unwrap(),
+            body_bytes(&InvokeBody::Json(json!({"1": 80, "0": 137})), 100).unwrap(),
             vec![137, 80]
         );
         for bad in [
@@ -212,8 +242,16 @@ mod tests {
             json!({"guideId": "x"}),
             json!(null),
         ] {
-            let err = body_bytes(&InvokeBody::Json(bad.clone())).unwrap_err();
+            let err = body_bytes(&InvokeBody::Json(bad.clone()), 100).unwrap_err();
             assert_eq!(err.kind, ErrorKind::Invalid, "{bad}");
+        }
+        // Too long: refused on the length alone.
+        for body in [
+            InvokeBody::Raw(vec![0; 101]),
+            InvokeBody::Json(json!(vec![0; 101])),
+        ] {
+            let err = body_bytes(&body, 100).unwrap_err();
+            assert!(err.message.contains("too large"), "{}", err.message);
         }
     }
 }

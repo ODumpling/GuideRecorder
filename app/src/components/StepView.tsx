@@ -12,6 +12,8 @@ import { markdownToPlainText } from "@/text/markdown";
 
 // TipTap is most of the bundle; load it with the first opened guide.
 const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
+// The annotation layer, likewise; the plain image shows until it loads.
+const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
@@ -154,7 +156,7 @@ export function StepView() {
   const split = () => {
     if (item.type !== "step") return;
     // Until the editor has loaded, the whole description stays.
-    splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
+    void splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
   };
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
@@ -165,7 +167,10 @@ export function StepView() {
       )}
       {item.type === "step" && (
         <>
-          <StepImage guideId={doc.guide.id} step={item} />
+          <Suspense fallback={<StepImage guideId={doc.guide.id} step={item} />}>
+            {/* Fresh tools and selection per step. */}
+            <AnnotationEditor key={item.id} guideId={doc.guide.id} step={item} readOnly={doc.readOnly} />
+          </Suspense>
           <TextEditor
             id={item.id}
             field="title"

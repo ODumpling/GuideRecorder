@@ -20,7 +20,7 @@ import {
   type Command,
 } from "@/editor/commands";
 import { guide, step } from "@/editor/test-fixtures";
-import type { Step } from "@/lib/types";
+import type { Annotation, Step } from "@/lib/types";
 
 const ids = (g: ReturnType<typeof guide>) => g.items.map((item) => item.id);
 
@@ -182,7 +182,7 @@ describe("item operations", () => {
       keystrokes: "staging",
       element: { role: "AXTextField", label: "Env" },
       point: { x: 1, y: 2 },
-      annotations: [{ type: "box" }],
+      annotations: [{ id: "N1", type: "box", geometry: { x: 1, y: 2, width: 3, height: 4 } }],
     });
     Object.assign(second, {
       kind: "shortcut",
@@ -190,7 +190,7 @@ describe("item operations", () => {
       element: { role: "AXButton", label: "OK" },
       point: { x: 9, y: 9 },
       endPoint: { x: 10, y: 10 },
-      annotations: [{ type: "arrow" }],
+      annotations: [{ id: "N2", type: "arrow", geometry: { from: { x: 0, y: 0 }, to: { x: 5, y: 5 } } }],
     });
     const command = mergeWithNext(g, "A");
     const merged = applyPatches(g, command.forward).items[1] as Step;
@@ -200,7 +200,7 @@ describe("item operations", () => {
       element: { role: "AXTextField", label: "Env" },
       point: { x: 1, y: 2 },
       image: first.image,
-      annotations: [{ type: "box" }],
+      annotations: [{ id: "N1", type: "box", geometry: { x: 1, y: 2, width: 3, height: 4 } }],
     });
     expect(merged.endPoint).toBeUndefined();
     expect(applyPatches(applyPatches(g, command.forward), command.inverse)).toEqual(g);
@@ -227,8 +227,8 @@ describe("item operations", () => {
   it("split a step, sharing its screenshot", () => {
     const g = guide();
     (g.items[1] as Step).description = "Before.\n\nAfter.";
-    (g.items[1] as Step).annotations = [{ type: "arrow" }];
-    const command = splitStep(g, "A", "A2", "Before.", "After.");
+    (g.items[1] as Step).annotations = [{ id: "N2", type: "arrow", geometry: { from: { x: 0, y: 0 }, to: { x: 5, y: 5 } } }];
+    const command = splitStep(g, "A", "A2", "Before.", "After.", undefined, () => "N3");
     const after = applyPatches(g, command.forward);
     expect(ids(after)).toEqual(["S1", "A", "A2", "B", "N1", "C"]);
     expect(after.items[1]).toMatchObject({ description: "Before.", aiState: { status: "edited" } });
@@ -239,11 +239,44 @@ describe("item operations", () => {
       description: "After.",
       kind: "manual",
       image: (g.items[1] as Step).image,
-      annotations: [],
+      annotations: [{ id: "N3", type: "arrow", geometry: { from: { x: 0, y: 0 }, to: { x: 5, y: 5 } } }],
       aiState: { status: "edited" },
     });
     expect(applyPatches(after, command.inverse)).toEqual(g);
     expect(command.select).toEqual({ forward: "A2", inverse: "A" });
+  });
+
+  it("split keeps every redaction on both halves", () => {
+    const g = guide();
+    const annotations: Annotation[] = [
+      { id: "R1", type: "blur", geometry: { x: 10, y: 10, width: 80, height: 20 } },
+      { id: "R2", type: "blur", geometry: { x: 10, y: 40, width: 80, height: 20 }, style: { blurMode: "pixelate", blurAmount: 12 } },
+      { id: "K1", type: "crop", geometry: { x: 0, y: 0, width: 300, height: 200 } },
+      { id: "C1", type: "callout", geometry: { x: 5, y: 5, width: 50, height: 20, text: "Hi", anchor: { x: 1, y: 1 } } },
+    ];
+    (g.items[1] as Step).annotations = annotations;
+    let n = 0;
+    const after = applyPatches(g, splitStep(g, "A", "A2", "", "", undefined, () => `NEW${++n}`).forward);
+    const [first, second] = [after.items[1] as Step, after.items[2] as Step];
+    expect(first.annotations).toEqual(annotations);
+    // Same shapes and styles, own ids.
+    expect(second.annotations.map(({ id, ...rest }) => rest)).toEqual(annotations.map(({ id, ...rest }) => rest));
+    expect(second.annotations.map((a) => a.id)).toEqual(["NEW1", "NEW2", "NEW3", "NEW4"]);
+    // Copies, not shared objects: editing one half leaves the other alone.
+    expect(second.annotations[3].geometry).not.toBe(first.annotations[3].geometry);
+    // Default ids are fresh ULIDs.
+    const auto = applyPatches(g, splitStep(g, "A", "A3", "", "").forward).items[2] as Step;
+    expect(new Set(auto.annotations.map((a) => a.id)).size).toBe(4);
+    expect(auto.annotations.every((a) => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(a.id))).toBe(true);
+  });
+
+  it("undo split restores the original annotations", () => {
+    const g = guide();
+    (g.items[1] as Step).annotations = [{ id: "R1", type: "blur", geometry: { x: 1, y: 2, width: 3, height: 4 } }];
+    const command = splitStep(g, "A", "A2", "x", "y");
+    const after = applyPatches(g, command.forward);
+    expect(applyPatches(after, command.inverse)).toEqual(g);
+    expect(applyPatches(applyPatches(after, command.inverse), command.forward)).toEqual(after);
   });
 
   it("split at the end adds an empty step and leaves the first alone", () => {

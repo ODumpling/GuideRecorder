@@ -59,7 +59,13 @@ export async function toPng(blob: Blob): Promise<Uint8Array> {
   const { width, height } = fitSize(source.width, source.height);
   let bitmap: ImageBitmap;
   try {
-    bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeHeight: height, resizeQuality: "high" });
+    bitmap = await createImageBitmap(blob, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "high",
+      // `<img>` reports the EXIF-rotated size, so decode rotated too.
+      imageOrientation: "from-image",
+    });
   } catch {
     throw new Error("This file is not an image the app can read");
   }

@@ -13,8 +13,8 @@ import {
 } from "@/editor/commands";
 import { insertImageSteps } from "@/editor/images";
 import type { EditorStore } from "@/editor/store";
-import { errorMessage } from "@/lib/ipc";
-import type { NoteKind } from "@/lib/types";
+import { copyStepImages, errorMessage } from "@/lib/ipc";
+import type { NoteKind, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 
 function current(store: EditorStore) {
@@ -53,11 +53,27 @@ export function mergeSelected(store: EditorStore): boolean {
   return state.dispatch(mergeWithNext(state.guide, state.selected.id));
 }
 
-/** Splits the selected step; `split` gives its description before and after the cut. */
-export function splitSelected(store: EditorStore, split: [string, string], id = ulid()): boolean {
+/**
+ * Splits the selected step; `split` gives its description before and after
+ * the cut. The new step gets its own copy of the screenshot files first, so
+ * the two steps never share files. Failures end up in the store's notice.
+ */
+export async function splitSelected(store: EditorStore, split: [string, string], id = ulid()): Promise<boolean> {
   const state = current(store);
   if (state?.selected?.type !== "step") return false;
-  return state.dispatch(splitStep(state.guide, state.selected.id, id, split[0], split[1]));
+  const { guide, selected } = state;
+  let image: StepImage;
+  try {
+    image = await copyStepImages(guide.id, selected.image, id);
+  } catch (error) {
+    store.getState().notify(`Could not split the step: ${errorMessage(error)}`);
+    return false;
+  }
+  // The guide may have changed meanwhile; split what is there now.
+  const now = current(store);
+  const step = now?.guide.items.find((item) => item.id === selected.id);
+  if (!now || now.guide.id !== guide.id || step?.type !== "step") return false;
+  return now.dispatch(splitStep(now.guide, step.id, id, split[0], split[1], image));
 }
 
 /**

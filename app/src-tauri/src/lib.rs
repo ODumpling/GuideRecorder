@@ -73,6 +73,7 @@ pub fn run() {
             commands::close_guide,
             commands::step_image,
             commands::add_image_step,
+            commands::copy_step_images,
             commands::read_image_file,
             commands::quit_ack,
             commands::quit_app,

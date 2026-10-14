@@ -41,6 +41,46 @@ export interface StepImage {
   show: ImageShow;
 }
 
+export type BlurMode = "blur" | "pixelate";
+
+/** Visual style; unset fields use the renderer's defaults (core `export/annotate.rs`). */
+export interface AnnotationStyle {
+  /** CSS colour: hex or a CSS colour name. */
+  color?: string;
+  fill?: string;
+  strokeWidth?: number;
+  opacity?: number;
+  fontSize?: number;
+  /** Blur annotations only. */
+  blurMode?: BlurMode;
+  /** Blur radius or pixel block size, in image pixels. */
+  blurAmount?: number;
+}
+
+export interface ArrowGeometry {
+  from: Point;
+  to: Point;
+}
+
+export interface CalloutGeometry extends Rect {
+  /** Point the callout's pointer targets, if any. */
+  anchor?: Point;
+  /** Plain text. */
+  text: string;
+}
+
+/**
+ * Mirrors core's `Annotation` (`{ id, type, geometry, style }`). Geometry is
+ * in full-screenshot pixels.
+ */
+export type Annotation = { id: Ulid; style?: AnnotationStyle } & (
+  | { type: "arrow"; geometry: ArrowGeometry }
+  | { type: "box" | "highlight" | "blur" | "crop"; geometry: Rect }
+  | { type: "callout"; geometry: CalloutGeometry }
+);
+
+export type AnnotationType = Annotation["type"];
+
 export interface AiState {
   status: "template" | "generating" | "ai" | "edited";
   model?: string;
@@ -58,8 +98,7 @@ export interface Step {
   element?: ElementInfo;
   keystrokes?: string;
   image: StepImage;
-  // Annotations are edited later (#351); kept as opaque JSON here.
-  annotations: unknown[];
+  annotations: Annotation[];
   aiState: AiState;
 }
 

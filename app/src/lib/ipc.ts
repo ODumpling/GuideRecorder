@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppError, Guide, GuideListItem, OpenedGuide, Step } from "@/lib/types";
+import type { AppError, Guide, GuideListItem, OpenedGuide, Step, StepImage } from "@/lib/types";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
 export interface EditorApi {
@@ -44,6 +44,11 @@ export function toArrayBuffer(response: ArrayBuffer | ArrayBufferView | number[]
  */
 export function addImageStep(guideId: string, png: Uint8Array): Promise<Step> {
   return invoke("add_image_step", png, { headers: { "guidesya-guide-id": guideId } });
+}
+
+/** Copies a step's image files for the new step `newStepId`; returns its image. */
+export function copyStepImages(guideId: string, image: StepImage, newStepId: string): Promise<StepImage> {
+  return invoke("copy_step_images", { guideId, image, newStepId });
 }
 
 /** The bytes of an image file dropped on the window (only those). */
