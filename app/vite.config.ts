@@ -29,5 +29,12 @@ export default defineConfig({
   build: {
     // Safari is the WebView engine on macOS.
     target: "safari15",
+    rollupOptions: {
+      // The main window, and the floating toolbar shown while recording.
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        toolbar: fileURLToPath(new URL("./toolbar.html", import.meta.url)),
+      },
+    },
   },
 });

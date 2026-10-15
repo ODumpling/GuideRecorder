@@ -1,0 +1,11 @@
+/* The toolbar window is transparent; only the rounded bar shows. */
+html.toolbar-window,
+html.toolbar-window body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+html.toolbar-window #root {
+  height: 100%;
+}

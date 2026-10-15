@@ -17,7 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 guidesya-core.workspace = true
 guidesya-capture.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -25,3 +25,4 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"

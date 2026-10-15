@@ -363,6 +363,10 @@ pub struct SessionConfig {
     pub excluded_bundle_ids: Vec<String>,
     /// Key press turned into a manual step (and not recorded as a key).
     pub manual_hotkey: Option<Hotkey>,
+    /// Key presses the host handles itself (e.g. its global start/stop and
+    /// pause hotkeys): dropped, repeats included, and never recorded or
+    /// snapshotted. Empty by default.
+    pub control_hotkeys: Vec<Hotkey>,
     pub steps: StepConfig,
     /// Click crop in frame pixels.
     pub crop_size: (u32, u32),
@@ -458,6 +462,7 @@ impl Default for SessionConfig {
             },
             excluded_bundle_ids: Vec::new(),
             manual_hotkey: Some(Hotkey::MANUAL_STEP),
+            control_hotkeys: Vec::new(),
             steps: StepConfig::default(),
             crop_size: DEFAULT_CROP_SIZE,
             work_dir: None,
@@ -776,6 +781,29 @@ impl RecordingSession {
         self.excluded_app().is_some()
     }
 
+    /// Adds a manual step now, as the manual-step hotkey does (e.g. from a
+    /// toolbar button): a [`CaptureEvent::ManualStep`] stamped now goes
+    /// through the router like the hotkey's, so it takes a snapshot and is
+    /// dropped while an excluded app is in front or focused. Returns false,
+    /// adding nothing, while paused or once input has stopped.
+    pub fn manual_step(&self) -> bool {
+        if self.is_paused() {
+            return false;
+        }
+        let Some(tx) = &self.tap_tx else {
+            return false;
+        };
+        // No target app (pid 0): the step is aimed at no window.
+        tx.send(TargetedEvent {
+            target_pid: 0,
+            event: TimedEvent {
+                ts: event_tap::now(),
+                event: CaptureEvent::ManualStep,
+            },
+        })
+        .is_ok()
+    }
+
     /// Pauses recording: stops the tap (joining its thread, so every event
     /// it saw is already on its way to the router), notes the time, from
     /// which on the router drops any event, and stops the frame streams so
@@ -952,6 +980,7 @@ impl RecordingSession {
             cpu_system,
             events: events.len(),
             dropped_own: router.dropped_own,
+            dropped_hotkeys: router.dropped_hotkeys,
             dropped_excluded: router.dropped_excluded
                 + element.dropped_ts.len()
                 + focus.dropped_ts.len()
@@ -1360,6 +1389,8 @@ pub struct SessionMetrics {
     /// Events kept, including the ones the session added.
     pub events: usize,
     pub dropped_own: usize,
+    /// Presses of [`SessionConfig::control_hotkeys`].
+    pub dropped_hotkeys: usize,
     /// Events of excluded apps (by target pid, clicked element or focused
     /// element), or from while an excluded app was frontmost.
     pub dropped_excluded: usize,
@@ -1510,6 +1541,7 @@ struct Router {
     own_pid: i32,
     excluded: Vec<String>,
     hotkey: Option<Hotkey>,
+    control_hotkeys: Vec<Hotkey>,
     filter: ExclusionFilter,
     runs: KeyRunTracker,
     apps: HashMap<i32, AppRef>,
@@ -1527,6 +1559,7 @@ struct Router {
     max_backlog: usize,
     dropped_queue_full: usize,
     dropped_own: usize,
+    dropped_hotkeys: usize,
     dropped_excluded: usize,
     excluded_frames: usize,
     pause: SharedPause,
@@ -1544,6 +1577,7 @@ struct RouterOut {
     max_backlog: usize,
     dropped_queue_full: usize,
     dropped_own: usize,
+    dropped_hotkeys: usize,
     dropped_excluded: usize,
     excluded_frames: usize,
     dropped_paused: usize,
@@ -1561,6 +1595,7 @@ impl Router {
             own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
             excluded: cfg.excluded_bundle_ids.clone(),
             hotkey: cfg.manual_hotkey,
+            control_hotkeys: cfg.control_hotkeys.clone(),
             filter: ExclusionFilter::default(),
             runs: KeyRunTracker::new(cfg.steps.typing_idle_ms),
             apps: HashMap::new(),
@@ -1576,6 +1611,7 @@ impl Router {
             max_backlog: 0,
             dropped_queue_full: 0,
             dropped_own: 0,
+            dropped_hotkeys: 0,
             dropped_excluded: 0,
             excluded_frames: 0,
             pause,
@@ -1613,6 +1649,17 @@ impl Router {
         if target_pid == self.own_pid {
             self.dropped_own += 1;
             return;
+        }
+        // The host's own hotkeys (start/stop, pause) never become steps.
+        if let CaptureEvent::KeyDown { key, modifiers, .. } = &event.event {
+            if self
+                .control_hotkeys
+                .iter()
+                .any(|h| h.matches(key, *modifiers))
+            {
+                self.dropped_hotkeys += 1;
+                return;
+            }
         }
         let app = (target_pid > 0).then(|| {
             self.apps
@@ -1790,6 +1837,7 @@ impl Router {
             max_backlog: self.max_backlog,
             dropped_queue_full: self.dropped_queue_full,
             dropped_own: self.dropped_own,
+            dropped_hotkeys: self.dropped_hotkeys,
             dropped_excluded: self.dropped_excluded,
             excluded_frames: self.excluded_frames,
             dropped_paused: self.dropped_paused,
@@ -5413,6 +5461,165 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn manual_step_is_the_hotkeys_step_and_respects_pause_and_exclusion() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, snaps, _changes) = excluding_cfg();
+        let (mut session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        // Well before the excluded app comes to the front below, so the
+        // head margin does not withhold it.
+        let shot = Timestamp(t0.0 - (EXCLUDED_FRAME_HEAD_MS + 50) * MS);
+        reader.push(frame(shot.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        assert!(session.manual_step());
+
+        // Paused: nothing is added.
+        session.pause().unwrap();
+        assert!(!session.manual_step());
+        session.resume().unwrap();
+
+        // An excluded app in front: sent, but dropped as the hotkey's is.
+        session
+            .front
+            .activated(event_tap::now(), Some(ONE_PASSWORD));
+        assert!(session.manual_step());
+        drop(tx);
+        let rec = session.stop().unwrap();
+
+        assert_eq!(count(&rec, |ev| matches!(ev, CaptureEvent::ManualStep)), 1);
+        assert_eq!(rec.metrics.dropped_excluded, 1);
+        assert_eq!(rec.metrics.dropped_paused, 0);
+        let manual: Vec<_> = rec
+            .drafts
+            .iter()
+            .filter(|d| d.kind == StepKind::Manual)
+            .collect();
+        assert_eq!(manual.len(), 1, "{:?}", rec.drafts);
+        assert!(manual[0].at >= t0);
+        assert_eq!(rec.snapshots.len(), 1);
+        assert_eq!(rec.snapshots[&manual[0].at].frame_ts, shot);
+        // Reported live as the hotkey's step is (the toolbar counts these).
+        let reported: Vec<Timestamp> = lock(&snaps).iter().map(|s| s.ts).collect();
+        assert_eq!(reported, [manual[0].at]);
+    }
+
+    /// ⌃⌥P and ⌃⌥R, as the app registers them (kVK_ANSI_P, kVK_ANSI_R).
+    const CONTROL_HOTKEYS: [Hotkey; 2] = [
+        Hotkey {
+            code: 35,
+            modifiers: Hotkey::MANUAL_STEP.modifiers,
+        },
+        Hotkey {
+            code: 15,
+            modifiers: Hotkey::MANUAL_STEP.modifiers,
+        },
+    ];
+
+    fn control_key_at(ts: Timestamp, hotkey: Hotkey, is_repeat: bool) -> TargetedEvent {
+        event_at(
+            ts,
+            CaptureEvent::KeyDown {
+                key: key(hotkey.code, Some("π")),
+                modifiers: hotkey.modifiers,
+                is_repeat,
+                secure: false,
+            },
+        )
+    }
+
+    fn control_session(
+        scratch: &ScratchDir,
+        reader: FrameReader,
+    ) -> (RecordingSession, Sender<TargetedEvent>) {
+        let cfg = SessionConfig {
+            control_hotkeys: CONTROL_HOTKEYS.to_vec(),
+            ..SessionConfig::default()
+        };
+        headless_session_with(scratch, reader, cfg)
+    }
+
+    #[test]
+    fn pause_hotkey_before_pause_makes_no_step() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (mut session, tx) = control_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let a = Timestamp(t0.0 + 1);
+        tx.send(key_at(a, "a")).unwrap();
+        // ⌃⌥P (and its auto-repeat), then the pause it triggers.
+        let p = CONTROL_HOTKEYS[0];
+        // Stamped before the pause begins, so they reach the hotkey check.
+        tx.send(control_key_at(Timestamp(t0.0 + 2), p, false))
+            .unwrap();
+        tx.send(control_key_at(Timestamp(t0.0 + 3), p, true))
+            .unwrap();
+        session.pause().unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.dropped_hotkeys, 2);
+        assert_eq!(rec.metrics.dropped_paused, 0);
+        assert_eq!(typed_text(&rec), "a");
+        assert_eq!(
+            count(&rec, |ev| matches!(ev, CaptureEvent::KeyDown { .. })),
+            1
+        );
+        assert_eq!(rec.drafts.len(), 1, "{:?}", rec.drafts);
+        assert_eq!(rec.snapshots.keys().copied().collect::<Vec<_>>(), [a]);
+    }
+
+    #[test]
+    fn stop_hotkey_before_stop_makes_no_trailing_step() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (session, tx) = control_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let a = Timestamp(t0.0 + 1);
+        tx.send(key_at(a, "a")).unwrap();
+        tx.send(control_key_at(
+            Timestamp(t0.0 + 10 * MS),
+            CONTROL_HOTKEYS[1],
+            false,
+        ))
+        .unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.dropped_hotkeys, 1);
+        assert_eq!(typed_text(&rec), "a");
+        assert_eq!(rec.drafts.len(), 1, "{:?}", rec.drafts);
+        assert_eq!(rec.drafts[0].at, a);
+        assert_eq!(rec.snapshots.len(), 1);
+    }
+
+    #[test]
+    fn control_hotkeys_are_off_by_default() {
+        assert!(SessionConfig::default().control_hotkeys.is_empty());
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (session, tx) = headless_session(&scratch, reader);
+        tx.send(control_key_at(event_tap::now(), CONTROL_HOTKEYS[1], false))
+            .unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.dropped_hotkeys, 0);
+        assert_eq!(
+            count(&rec, |ev| matches!(ev, CaptureEvent::KeyDown { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn manual_step_after_stop_of_input_adds_nothing() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (mut session, tx) = headless_session(&scratch, reader);
+        drop(tx);
+        session.halt_input();
+        assert!(!session.manual_step());
     }
 
     #[test]

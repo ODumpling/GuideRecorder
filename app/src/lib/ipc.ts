@@ -200,3 +200,14 @@ export const RECORDING_STATUS_EVENT = "recording://status";
 export const RECORDING_SAVED_EVENT = "recording://saved";
 /** Emitted with a `RecordingSnapshot` for each screenshot the running recording takes. */
 export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";
+
+/**
+ * Adds a step from the screen as it is now (the toolbar's Manual step).
+ * Rejects with `invalid` unless a recording is running (paused counts as not).
+ */
+export function addManualStep(): Promise<void> {
+  return invoke("add_manual_step");
+}
+
+/** The floating recording toolbar's window (app/toolbar.html), made by the Rust side while recording. */
+export const TOOLBAR_WINDOW_LABEL = "toolbar";

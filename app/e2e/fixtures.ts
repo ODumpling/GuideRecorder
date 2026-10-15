@@ -35,3 +35,15 @@ export async function saved(page: Page) {
 export async function emitEvent(page: Page, event: string, payload: unknown) {
   await page.evaluate(([e, p]) => window.__guidesyaEmit(e as string, p), [event, payload] as const);
 }
+
+/**
+ * Loads the floating recording toolbar (toolbar.html) in place of the app,
+ * against the same backend. Start a recording on `backend` first: the
+ * toolbar reads the recorder's state once at load.
+ */
+export async function openToolbar(page: Page) {
+  await page.goto("/e2e/index.html?page=toolbar");
+  const toolbar = page.getByRole("toolbar", { name: "Recording toolbar" });
+  await expect(toolbar).toBeVisible();
+  return toolbar;
+}

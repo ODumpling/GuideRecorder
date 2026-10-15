@@ -36,11 +36,16 @@
 //! Quitting the app drops any session still running ([`discard_on_quit`]),
 //! as `cancel_recording` would; the frontend stops and saves first.
 //!
+//! The tray menu and the global hotkeys drive the same code as the
+//! commands through [`control`]; every status sent also updates the tray
+//! icon and opens or closes the recording toolbar window.
+//!
 //! Not in this slice: after-frames per step (the capture crate has no
 //! support yet) and the Window and Region capture areas (they need the
 //! picker from #357 and fall back to the display).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::{DateTime, Local, SecondsFormat, Utc};
@@ -53,7 +58,8 @@ use guidesya_core::events::Modifiers;
 use guidesya_core::model::Point;
 use serde::Serialize;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
@@ -188,6 +194,9 @@ fn is_snapshot_id(id: &str) -> bool {
 pub struct Recorder {
     session: Mutex<Option<RecordingSession>>,
     status: Mutex<StampedStatus>,
+    /// A [`control`] is running; another one meanwhile is ignored (a
+    /// double press must not start a second recording or show an error).
+    controlling: AtomicBool,
 }
 
 impl Recorder {
@@ -280,11 +289,15 @@ fn emit_status<R: Runtime>(
     stamped
 }
 
-/// Sends `status` as [`STATUS_EVENT`] (the caller has stored it).
+/// Sends `status` as [`STATUS_EVENT`] (the caller has stored it), and
+/// brings the tray icon and the toolbar window in line with the stored
+/// status (read again, so a status sent late never wins).
 fn emit<R: Runtime>(app: &AppHandle<R>, status: &StampedStatus) {
     if let Err(e) = app.emit(STATUS_EVENT, status) {
         eprintln!("guidesya: cannot emit {STATUS_EVENT}: {e}");
     }
+    crate::tray::refresh(app);
+    crate::toolbar::sync(app);
 }
 
 fn session_error(e: SessionError) -> AppError {
@@ -294,8 +307,18 @@ fn session_error(e: SessionError) -> AppError {
     }
 }
 
+const NOT_RECORDING: &str = "no recording is running";
+const ALREADY_RUNNING: &str = "a recording is already running";
+
 fn not_recording() -> AppError {
-    AppError::new(ErrorKind::Invalid, "no recording is running")
+    AppError::new(ErrorKind::Invalid, NOT_RECORDING)
+}
+
+/// True for the refusal of an action that lost a race to another one (a
+/// start finding a recording already running, a pause or stop finding none
+/// left): the state it was resolved from is gone, so it is a no-op.
+fn lost_race(e: &AppError) -> bool {
+    e.kind == ErrorKind::Invalid && (e.message == ALREADY_RUNNING || e.message == NOT_RECORDING)
 }
 
 /// `status` with its `recording`/`paused` state set by `paused` at
@@ -509,6 +532,8 @@ fn session_config(settings: &Settings) -> (SessionConfig, bool) {
     cfg.excluded_bundle_ids = recording.excluded_apps.clone();
     cfg.steps.typing_idle_ms = u64::from(recording.typing_idle_ms);
     cfg.manual_hotkey = manual_hotkey(&recording.hotkeys.manual_step);
+    // Handled by the app (start/stop, pause): never steps.
+    cfg.control_hotkeys = crate::hotkeys::capture_hotkeys();
     cfg.work_dir = None;
     (cfg, fallback)
 }
@@ -532,47 +557,52 @@ pub async fn start_recording<R: Runtime>(
     let recorder = Arc::clone(&recorder);
     let store = Arc::clone(&store);
     let cell = Arc::clone(&cell);
+    blocking(move || start(&app, &recorder, &store, &cell, title)).await
+}
+
+/// The body of `start_recording` (blocking), also run from [`control`].
+fn start<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Arc<Recorder>,
+    store: &SettingsStore,
+    cell: &SessionCell,
+    title: Option<String>,
+) -> Result<StampedStatus> {
     let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
-    blocking(move || {
-        let mut slot = recorder.slot();
-        if slot.is_some() || recorder.status().status != RecordingStatus::Idle {
-            return Err(AppError::new(
-                ErrorKind::Invalid,
-                "a recording is already running",
-            ));
+    let mut slot = recorder.slot();
+    if slot.is_some() || recorder.status().status != RecordingStatus::Idle {
+        return Err(AppError::new(ErrorKind::Invalid, ALREADY_RUNNING));
+    }
+    // Waits for the library still starting; refuses if it did not open.
+    cell.get()?;
+    settings_commands::ensure_can_record()?;
+    let (mut cfg, capture_area_fallback) = session_config(&store.get());
+    let emitter = app.clone();
+    cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
+        if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
+            eprintln!("guidesya: cannot emit {SNAPSHOT_EVENT}: {e}");
         }
-        // Waits for the library still starting; refuses if it did not open.
-        cell.get()?;
-        settings_commands::ensure_can_record()?;
-        let (mut cfg, capture_area_fallback) = session_config(&store.get());
-        let emitter = app.clone();
-        cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
-            if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
-                eprintln!("guidesya: cannot emit {SNAPSHOT_EVENT}: {e}");
-            }
-        }));
-        cfg.on_excluded = Some(exclusion_sink(&app, &recorder));
-        let session = RecordingSession::start(cfg).map_err(session_error)?;
-        let status = emit_status(
-            &app,
-            &recorder,
-            RecordingStatus::Recording {
-                started_at: now_rfc3339(),
-                title,
-                capture_area_fallback,
-                paused_ms: 0,
-                excluded_app: None,
-            },
-        );
-        // The sink's initial read came while the status was still idle, so
-        // it was ignored; from here on the sink applies its changes. Read
-        // the session's state now, inside the status lock, so a change the
-        // sink reports meanwhile is never overwritten by an older one.
-        let status = sync_excluded(&app, &recorder, &session).unwrap_or(status);
-        *slot = Some(session);
-        Ok(status)
-    })
-    .await
+    }));
+    cfg.on_excluded = Some(exclusion_sink(app, recorder));
+    let session = RecordingSession::start(cfg).map_err(session_error)?;
+    let status = emit_status(
+        app,
+        recorder,
+        RecordingStatus::Recording {
+            started_at: now_rfc3339(),
+            title,
+            capture_area_fallback,
+            paused_ms: 0,
+            excluded_app: None,
+        },
+    );
+    // The sink's initial read came while the status was still idle, so
+    // it was ignored; from here on the sink applies its changes. Read
+    // the session's state now, inside the status lock, so a change the
+    // sink reports meanwhile is never overwritten by an older one.
+    let status = sync_excluded(app, recorder, &session).unwrap_or(status);
+    *slot = Some(session);
+    Ok(status)
 }
 
 /// Sets the status's `excludedApp` to the session's, read inside the
@@ -678,40 +708,57 @@ fn set_paused<R: Runtime>(
 #[tauri::command]
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
+    window: WebviewWindow<R>,
     recorder: State<'_, Arc<Recorder>>,
     cell: State<'_, Arc<SessionCell>>,
 ) -> Result<RecordingSaved> {
     let recorder = Arc::clone(&recorder);
     let cell = Arc::clone(&cell);
-    blocking(move || {
-        let mut slot = recorder.slot();
-        let session = slot.take().ok_or_else(not_recording)?;
-        let (started_at, title) = match recorder.status().status {
-            RecordingStatus::Recording {
-                started_at, title, ..
-            }
-            | RecordingStatus::Paused {
-                started_at, title, ..
-            } => (started_at, title),
-            _ => (now_rfc3339(), None),
-        };
-        emit_status(
-            &app,
-            &recorder,
-            RecordingStatus::Saving {
-                started_at,
-                title: title.clone(),
-            },
-        );
-        let saved = save(session, cell, title.unwrap_or_else(default_title));
-        emit_status(&app, &recorder, RecordingStatus::Idle);
-        let saved = saved?;
-        if let Err(e) = app.emit(SAVED_EVENT, &saved) {
-            eprintln!("guidesya: cannot emit {SAVED_EVENT}: {e}");
+    // From the toolbar: the main window's editor opens the saved guide, so
+    // show it, as a stop from the tray or a hotkey does.
+    if shows_main_on_stop(window.label()) {
+        crate::tray::show_main(&app);
+    }
+    blocking(move || stop(&app, &recorder, cell)).await
+}
+
+/// True when a stop from the window `label` shows the main window first.
+fn shows_main_on_stop(label: &str) -> bool {
+    label == crate::toolbar::LABEL
+}
+
+/// The body of `stop_recording` (blocking), also run from [`control`].
+fn stop<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Recorder,
+    cell: Arc<SessionCell>,
+) -> Result<RecordingSaved> {
+    let mut slot = recorder.slot();
+    let session = slot.take().ok_or_else(not_recording)?;
+    let (started_at, title) = match recorder.status().status {
+        RecordingStatus::Recording {
+            started_at, title, ..
         }
-        Ok(saved)
-    })
-    .await
+        | RecordingStatus::Paused {
+            started_at, title, ..
+        } => (started_at, title),
+        _ => (now_rfc3339(), None),
+    };
+    emit_status(
+        app,
+        recorder,
+        RecordingStatus::Saving {
+            started_at,
+            title: title.clone(),
+        },
+    );
+    let saved = save(session, cell, title.unwrap_or_else(default_title));
+    emit_status(app, recorder, RecordingStatus::Idle);
+    let saved = saved?;
+    if let Err(e) = app.emit(SAVED_EVENT, &saved) {
+        eprintln!("guidesya: cannot emit {SAVED_EVENT}: {e}");
+    }
+    Ok(saved)
 }
 
 /// Stops `session`, writes its guide into the library and indexes it.
@@ -793,6 +840,120 @@ pub async fn recording_snapshot(
 #[tauri::command]
 pub fn recording_status(recorder: State<'_, Arc<Recorder>>) -> StampedStatus {
     recorder.status()
+}
+
+/// Adds a manual step from the screen as it is now, as the manual-step
+/// hotkey does (see `RecordingSession::manual_step`; dropped while an
+/// excluded app is in front). `invalid` ("no recording is running") unless
+/// a recording is running: idle, paused and saving all refuse.
+#[tauri::command]
+pub async fn add_manual_step(recorder: State<'_, Arc<Recorder>>) -> Result<()> {
+    let recorder = Arc::clone(&recorder);
+    blocking(move || manual_step(&recorder)).await
+}
+
+/// The body of `add_manual_step`. Holds the slot, so it waits for a
+/// start, pause or resume in progress.
+fn manual_step(recorder: &Recorder) -> Result<()> {
+    let slot = recorder.slot();
+    match slot.as_ref() {
+        Some(session) if !session.is_paused() && session.manual_step() => Ok(()),
+        _ => Err(not_recording()),
+    }
+}
+
+/// A recording action from outside the webview: the tray menu or a global
+/// hotkey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    Start,
+    Pause,
+    Resume,
+    Stop,
+    /// Start when idle, stop when recording or paused.
+    ToggleRecording,
+    /// Pause when recording, resume when paused.
+    TogglePause,
+}
+
+impl Control {
+    /// What `self` does in `status`: a toggle becomes the action it stands
+    /// for; `None` when nothing applies (e.g. a stale menu item, or any
+    /// action while saving), so nothing runs and no error is shown.
+    pub fn resolve(self, status: &RecordingStatus) -> Option<Control> {
+        use RecordingStatus as S;
+        match (self, status) {
+            (Control::Start | Control::ToggleRecording, S::Idle) => Some(Control::Start),
+            (Control::Pause | Control::TogglePause, S::Recording { .. }) => Some(Control::Pause),
+            (Control::Resume | Control::TogglePause, S::Paused { .. }) => Some(Control::Resume),
+            (Control::Stop | Control::ToggleRecording, S::Recording { .. } | S::Paused { .. }) => {
+                Some(Control::Stop)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Runs `control` on the blocking pool through the same code as the
+/// commands, so statuses (and `recording://saved`) are sent as usual. A
+/// start uses the stored settings and no title. A stop shows the main
+/// window, whose editor opens the saved guide. Errors are shown in a
+/// dialog. Ignored while another control is still running.
+pub fn control<R: Runtime>(app: &AppHandle<R>, control: Control) {
+    let recorder = Arc::clone(app.state::<Arc<Recorder>>().inner());
+    if recorder.controlling.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = run_control(&app, &recorder, control);
+        recorder.controlling.store(false, Ordering::SeqCst);
+        if let Err(e) = result {
+            eprintln!("guidesya: {control:?} failed: {}", e.message);
+            app.dialog()
+                .message(e.message)
+                .title("GuidesYa")
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+        }
+    });
+}
+
+/// Runs `control` for the current status. An action that lost a race to
+/// another (see [`lost_race`]) is a no-op, not an error.
+fn run_control<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Arc<Recorder>,
+    control: Control,
+) -> Result<()> {
+    let Some(action) = control.resolve(&recorder.status().status) else {
+        return Ok(());
+    };
+    match run_action(app, recorder, action) {
+        Err(e) if lost_race(&e) => Ok(()),
+        result => result,
+    }
+}
+
+fn run_action<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Arc<Recorder>,
+    action: Control,
+) -> Result<()> {
+    let cell = Arc::clone(app.state::<Arc<SessionCell>>().inner());
+    match action {
+        Control::Start => {
+            let store = Arc::clone(app.state::<Arc<SettingsStore>>().inner());
+            start(app, recorder, &store, &cell, None).map(drop)
+        }
+        Control::Pause => set_paused(app, recorder, true).map(drop),
+        Control::Resume => set_paused(app, recorder, false).map(drop),
+        _ => {
+            // Shown first, so the save is seen in progress.
+            crate::tray::show_main(app);
+            stop(app, recorder, cell).map(drop)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -932,6 +1093,8 @@ mod tests {
         assert_eq!(cfg.excluded_bundle_ids, ["com.apple.keychainaccess"]);
         assert_eq!(cfg.steps.typing_idle_ms, 700);
         assert_eq!(cfg.manual_hotkey, Some(Hotkey::MANUAL_STEP));
+        assert_eq!(cfg.control_hotkeys, crate::hotkeys::capture_hotkeys());
+        assert_eq!(cfg.control_hotkeys.len(), 2);
         assert_eq!(cfg.work_dir, None);
 
         settings.recording.capture_area = CaptureArea::Window;
@@ -1306,6 +1469,85 @@ mod tests {
             RecordingStatus::Saving { .. }
         ));
         drop(slot);
+    }
+
+    #[test]
+    fn add_manual_step_refuses_without_a_running_recording() {
+        let recorder = Recorder::default();
+        let err = manual_step(&recorder).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Invalid);
+        assert_eq!(err.message, "no recording is running");
+        // Saving: the session is out of the slot.
+        recorder.set_status(RecordingStatus::Saving {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: None,
+        });
+        assert_eq!(
+            manual_step(&recorder).unwrap_err().message,
+            "no recording is running"
+        );
+    }
+
+    #[test]
+    fn only_raced_refusals_are_ignored() {
+        assert!(lost_race(&not_recording()));
+        assert!(lost_race(&AppError::new(
+            ErrorKind::Invalid,
+            ALREADY_RUNNING
+        )));
+        // A missing permission or library is still shown.
+        assert!(!lost_race(&AppError::new(
+            ErrorKind::Invalid,
+            "Screen Recording permission is missing"
+        )));
+        assert!(!lost_race(&AppError::new(ErrorKind::Io, NOT_RECORDING)));
+    }
+
+    #[test]
+    fn stop_from_the_toolbar_shows_the_main_window() {
+        assert!(shows_main_on_stop(crate::toolbar::LABEL));
+        assert!(!shows_main_on_stop("main"));
+    }
+
+    #[test]
+    fn controls_resolve_per_status() {
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        };
+        let paused = with_paused(recording.clone(), true, Utc::now());
+        let saving = RecordingStatus::Saving {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+        };
+        use Control::*;
+        let all = [Start, Pause, Resume, Stop, ToggleRecording, TogglePause];
+        let table = |status: &RecordingStatus| -> Vec<Option<Control>> {
+            all.iter().map(|c| c.resolve(status)).collect()
+        };
+        assert_eq!(
+            table(&RecordingStatus::Idle),
+            [Some(Start), None, None, None, Some(Start), None]
+        );
+        assert_eq!(
+            table(&recording),
+            [None, Some(Pause), None, Some(Stop), Some(Stop), Some(Pause)]
+        );
+        assert_eq!(
+            table(&paused),
+            [
+                None,
+                None,
+                Some(Resume),
+                Some(Stop),
+                Some(Stop),
+                Some(Resume)
+            ]
+        );
+        assert_eq!(table(&saving), [None; 6]);
     }
 
     #[test]

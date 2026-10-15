@@ -9,10 +9,13 @@ mod blocking;
 mod commands;
 mod editor;
 mod export;
+mod hotkeys;
 mod navigation;
 mod recording;
 mod settings;
 mod settings_commands;
+mod toolbar;
+mod tray;
 
 use editor::{DroppedFiles, SessionCell};
 
@@ -77,6 +80,7 @@ pub fn run() {
         // Dialogs and Reveal run from Rust only: no capability grants them
         // to the webview.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(hotkeys::plugin())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -85,6 +89,11 @@ pub fn run() {
             app.manage(Arc::new(commands::QuitGate::default()));
             app.manage(Arc::new(DroppedFiles::default()));
             app.manage(Arc::new(recording::Recorder::default()));
+            if let Err(e) = tray::create(app.handle()) {
+                eprintln!("guidesya: cannot create the tray icon: {e}");
+            }
+            hotkeys::register(app.handle());
+            toolbar::sync(app.handle());
             // A few kB, read once before the library is chosen.
             let store = settings::SettingsStore::load(settings::default_path());
             let stored = store.get();
@@ -172,6 +181,7 @@ pub fn run() {
             recording::cancel_recording,
             recording::recording_status,
             recording::recording_snapshot,
+            recording::add_manual_step,
             commands::quit_ack,
             commands::quit_app,
         ])

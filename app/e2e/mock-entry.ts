@@ -18,7 +18,10 @@ declare global {
 
 window.__guidesyaEmit = (event, payload) => emit(event, payload);
 
-mockWindows("main");
+// `?page=toolbar` loads the floating recording toolbar (toolbar.html) instead of the app.
+const page = new URLSearchParams(location.search).get("page");
+if (page === "toolbar") mockWindows("toolbar", "main");
+else mockWindows("main");
 mockIPC(
   async (cmd, args) => {
     // Raw-body commands (add_image_step) pass bytes; they don't survive the
@@ -44,4 +47,5 @@ internals.invoke = (cmd, args, options) => {
   return mockedInvoke(cmd, args, options);
 };
 
-void import("../src/main.tsx");
+if (page === "toolbar") void import("../src/toolbar/main.tsx");
+else void import("../src/main.tsx");

@@ -150,6 +150,10 @@ export class Backend {
   readonly recordings: RecordingSaved[] = [];
   /** Screenshots `recording_snapshot` serves (any fixture image), by id. */
   readonly snapshots = new Map<string, RecordingSnapshot>();
+  /** How many manual steps `add_manual_step` added. */
+  manualSteps = 0;
+  /** What the next `add_manual_step` fails with, if anything. */
+  manualStepError: AppError | null = null;
   /** Events the next command reply carries; mock-entry.ts emits them before resolving it. */
   private events: EmittedEvent[] = [];
 
@@ -474,6 +478,13 @@ export class Backend {
         return null;
       case "recording_status":
         return this.stamped();
+      case "add_manual_step": {
+        // Like the Rust side: only while running (paused counts as not).
+        if (this.recording.state !== "recording") fail("invalid", "nothing is recording");
+        if (this.manualStepError) fail(this.manualStepError.kind, this.manualStepError.message);
+        this.manualSteps += 1;
+        return null;
+      }
       case "recording_snapshot": {
         const id = String(args.id);
         if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");
