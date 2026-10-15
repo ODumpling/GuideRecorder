@@ -37,6 +37,29 @@
 //! [`detect_steps`]. [`Recording::save_guide`] writes the bundle;
 //! dropping the [`Recording`] removes the session folder.
 //!
+//! # Pause
+//!
+//! [`RecordingSession::pause`] stops the tap (joining its thread, so every
+//! event it saw is already queued for the router), notes the time and
+//! stops the frame stream, so capture CPU drops to idle; the four threads
+//! stay up, idle. [`RecordingSession::resume`] restarts the frames (the
+//! ring is cleared and the display re-read, as at start), notes the time
+//! and starts a new tap. The router compares event timestamps with the
+//! pause and resume times the session shares with it (`PauseState`, same
+//! clock as the events), so queue lag cannot reorder them: an event from
+//! after the pause began is dropped, and the first event from after a
+//! resume resets the key-run tracker, the current app (so `AppActivated`
+//! is emitted again) and the exclusion filter, and tells the focus thread
+//! (`FocusMsg::Resume`) to drop its cache and settle guard, report the
+//! focus again and move the scrub boundary to the resume. A pre-pause
+//! event still queued when `resume()` clears the frame ring may find no
+//! frame and count in `missing_frames`; its step then borrows a neighbour's
+//! snapshot or is skipped, as for any event without one. At stop, events
+//! inside a pause are removed and [`detect_steps`] runs separately on each
+//! stretch between pauses (`detect_steps_between_pauses`), so no typing run
+//! or drag is joined across a pause. Stopping while paused works; that
+//! pause then ends at stop.
+//!
 //! # Secure keys (fail closed)
 //!
 //! Every non-repeat key press reads the system-wide focused element
@@ -102,7 +125,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -276,6 +299,9 @@ fn sweep_stale_sessions(work_dir: &Path) {
 /// it stops everything and discards the recording and its session folder.
 pub struct RecordingSession {
     tap: Option<EventTap>,
+    /// The router's input, kept so the router outlives the tap across a
+    /// pause; dropped at stop, which ends the router.
+    tap_tx: Option<Sender<TargetedEvent>>,
     frames: Option<FrameStream>,
     router: Option<JoinHandle<RouterOut>>,
     element: Option<JoinHandle<ElementOut>>,
@@ -287,6 +313,16 @@ pub struct RecordingSession {
     steps: StepConfig,
     crop_size: (u32, u32),
     display: Option<frames::DisplayInfo>,
+    /// No tap is ever started: tests feed events through `tap_tx` and
+    /// frames through the router's reader.
+    #[cfg(test)]
+    headless: bool,
+    /// Shared with the router (see the module docs on pausing).
+    pause: SharedPause,
+    /// When the current pause began.
+    paused_at: Option<Timestamp>,
+    /// Pauses over, in order.
+    pauses: Vec<PauseSpan>,
 }
 
 impl RecordingSession {
@@ -298,39 +334,59 @@ impl RecordingSession {
     /// see `event_tap`). Blocks for up to a few seconds while
     /// ScreenCaptureKit starts.
     pub fn start(cfg: SessionConfig) -> Result<Self, SessionError> {
-        let cpu_start = process_cpu_time();
-        let started = Instant::now();
-        let display = match cfg.frames.target {
-            CaptureTarget::Display { display_id } | CaptureTarget::Region { display_id, .. } => {
-                display_id.map_or_else(frames::DisplayInfo::main, frames::DisplayInfo::for_id)
-            }
-            CaptureTarget::Window { .. } => None,
-        };
+        let mut session = Self::new(&cfg, display_for(cfg.frames.target));
         let work_dir = cfg.work_dir.clone().unwrap_or_else(default_work_dir);
         fs::create_dir_all(&work_dir).map_err(io_err(&work_dir))?;
         sweep_stale_sessions(&work_dir);
         let session_dir = work_dir.join(format!("{SESSION_DIR_PREFIX}{}", Ulid::new()));
         fs::create_dir_all(&session_dir).map_err(io_err(&session_dir))?;
-        let mut session = Self {
-            tap: None,
-            frames: None,
-            router: None,
-            element: None,
-            focus: None,
-            encoder: None,
-            session_dir: Some(session_dir.clone()),
-            started,
-            cpu_start,
-            steps: cfg.steps.clone(),
-            crop_size: cfg.crop_size,
-            display,
-        };
+        session.session_dir = Some(session_dir);
         // From here on, an error drops `session`, which joins whatever was
         // started and removes the session folder.
         let frames = FrameStream::start(cfg.frames.clone())?;
         let reader = frames.reader();
         session.frames = Some(frames);
+        session.spawn_threads(&cfg, reader, || AxFocus)?;
+        session.start_tap()?;
+        Ok(session)
+    }
 
+    /// A session with nothing running and no session folder yet.
+    fn new(cfg: &SessionConfig, display: Option<frames::DisplayInfo>) -> Self {
+        Self {
+            tap: None,
+            tap_tx: None,
+            frames: None,
+            router: None,
+            element: None,
+            focus: None,
+            encoder: None,
+            session_dir: None,
+            started: Instant::now(),
+            cpu_start: process_cpu_time(),
+            steps: cfg.steps.clone(),
+            crop_size: cfg.crop_size,
+            display,
+            #[cfg(test)]
+            headless: false,
+            pause: SharedPause::default(),
+            paused_at: None,
+            pauses: Vec::new(),
+        }
+    }
+
+    /// Starts the encoder, element, focus and router threads. `make_focus`
+    /// runs on the focus thread (AX references stay there).
+    fn spawn_threads<S: FocusSource + 'static>(
+        &mut self,
+        cfg: &SessionConfig,
+        reader: FrameReader,
+        make_focus: impl FnOnce() -> S + Send + 'static,
+    ) -> Result<(), SessionError> {
+        let session_dir = self
+            .session_dir
+            .clone()
+            .expect("the session folder is created before the threads start");
         let (tap_tx, tap_rx) = mpsc::channel::<TargetedEvent>();
         let (element_tx, element_rx) = mpsc::channel::<TimedEvent>();
         let (focus_tx, focus_rx) = mpsc::channel::<FocusMsg>();
@@ -338,24 +394,24 @@ impl RecordingSession {
         let backlog = Arc::new(AtomicUsize::new(0));
 
         let mut encoder = Encoder::new(session_dir, Arc::clone(&backlog));
-        session.encoder = Some(spawn("guidesya-session-encode", move || {
+        self.encoder = Some(spawn("guidesya-session-encode", move || {
             encoder.run(encode_rx);
             encoder.finish()
         })?);
-        let mut element = ElementWorker::new(&cfg);
-        session.element = Some(spawn("guidesya-session-ax-element", move || {
+        let mut element = ElementWorker::new(cfg);
+        self.element = Some(spawn("guidesya-session-ax-element", move || {
             element.run(element_rx);
             element.finish()
         })?);
         let focus_cfg = cfg.clone();
-        session.focus = Some(spawn("guidesya-session-ax-focus", move || {
+        self.focus = Some(spawn("guidesya-session-ax-focus", move || {
             // Built here: its cached AX reference stays on this thread.
-            let mut focus = FocusWorker::new(&focus_cfg, AxFocus);
+            let mut focus = FocusWorker::new(&focus_cfg, make_focus());
             focus.run(focus_rx);
             focus.finish()
         })?);
         let mut router = Router::new(
-            &cfg,
+            cfg,
             reader,
             Outputs {
                 element: element_tx,
@@ -363,14 +419,28 @@ impl RecordingSession {
                 encode: encode_tx,
                 backlog,
             },
+            Arc::clone(&self.pause),
         );
-        session.router = Some(spawn("guidesya-session-router", move || {
+        self.router = Some(spawn("guidesya-session-router", move || {
             router.run(tap_rx);
             router.finish()
         })?);
+        self.tap_tx = Some(tap_tx);
+        Ok(())
+    }
 
-        session.tap = Some(EventTap::start_with_target_pid(tap_tx)?);
-        Ok(session)
+    /// Starts a tap feeding the router (none in a headless test session).
+    fn start_tap(&mut self) -> Result<(), SessionError> {
+        #[cfg(test)]
+        if self.headless {
+            return Ok(());
+        }
+        let tx = self
+            .tap_tx
+            .clone()
+            .expect("the threads are spawned before the tap");
+        self.tap = Some(EventTap::start_with_target_pid(tx)?);
+        Ok(())
     }
 
     /// The frame stream, e.g. for a live preview.
@@ -378,8 +448,84 @@ impl RecordingSession {
         self.frames.as_ref()
     }
 
-    /// Stops recording and runs step detection.
+    /// True between [`RecordingSession::pause`] and
+    /// [`RecordingSession::resume`].
+    pub fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    /// Pauses recording: stops the tap (joining its thread, so every event
+    /// it saw is already on its way to the router), notes the time, from
+    /// which on the router drops any event, and stops the frame stream so
+    /// capture CPU drops to idle. Pausing while paused is a no-op.
+    ///
+    /// The session is paused even if stopping the frame stream fails (the
+    /// stream is then abandoned, see [`FrameStream::pause`]); the error is
+    /// returned.
+    pub fn pause(&mut self) -> Result<(), SessionError> {
+        if self.paused_at.is_some() {
+            return Ok(());
+        }
+        if let Some(mut tap) = self.tap.take() {
+            tap.stop();
+        }
+        let at = event_tap::now();
+        self.paused_at = Some(at);
+        lock(&self.pause).paused_at = Some(at);
+        if let Some(frames) = self.frames.as_mut() {
+            frames.pause()?;
+        }
+        Ok(())
+    }
+
+    /// Resumes after [`RecordingSession::pause`]: restarts the frame
+    /// stream (which clears its ring and re-reads the display, as at
+    /// start), notes the time and starts a new tap. The first event after
+    /// that time resets what would link it to the events from before the
+    /// pause (see the module docs). Resuming while not paused is a no-op.
+    /// On error the session stays paused.
+    pub fn resume(&mut self) -> Result<(), SessionError> {
+        let Some(paused_at) = self.paused_at else {
+            return Ok(());
+        };
+        if let Some(frames) = self.frames.as_mut() {
+            frames.resume()?;
+            self.display = display_for(frames.config().target);
+        }
+        let at = event_tap::now();
+        let before = std::mem::replace(
+            &mut *lock(&self.pause),
+            PauseState {
+                paused_at: None,
+                resumed_at: Some(at),
+            },
+        );
+        if let Err(e) = self.start_tap() {
+            // The tap never started, so no event from after `at` exists.
+            *lock(&self.pause) = before;
+            if let Some(frames) = self.frames.as_mut() {
+                let _ = frames.pause();
+            }
+            return Err(e);
+        }
+        self.paused_at = None;
+        self.pauses.push(PauseSpan {
+            paused_at,
+            resumed_at: Some(at),
+        });
+        Ok(())
+    }
+
+    /// Stops recording and runs step detection. Works while paused: that
+    /// pause ends here.
     pub fn stop(mut self) -> Result<Recording, SessionError> {
+        if let Some(paused_at) = self.paused_at.take() {
+            self.pauses.push(PauseSpan {
+                paused_at,
+                resumed_at: None,
+            });
+        }
+        let stopped_at = event_tap::now();
         self.halt_input();
         let router = join(self.router.take())?;
         let element = join(self.element.take())?;
@@ -414,6 +560,9 @@ impl RecordingSession {
             .copied()
             .collect();
         prune_snapshots(&mut metas, &mut latency, &dropped);
+        // Nothing routed from inside a pause (there should be none).
+        metas.retain(|ts, _| !in_pause(&self.pauses, *ts));
+        latency.retain(|ts, _| !in_pause(&self.pauses, *ts));
         let mut snapshots = BTreeMap::new();
         let mut unencoded = 0;
         for (ts, meta) in metas {
@@ -450,7 +599,8 @@ impl RecordingSession {
         // Stable: at equal ts, router events (AppActivated) come first, and
         // each thread's own order is kept (FocusChanged before its key).
         events.sort_by_key(|ev| ev.ts);
-        let drafts = detect_steps(&events, &self.steps);
+        let dropped_paused = router.dropped_paused + remove_paused(&mut events, &self.pauses);
+        let drafts = detect_steps_between_pauses(&events, &self.pauses, &self.steps);
 
         let mut ax = element.ax;
         ax.merge(&focus.ax);
@@ -482,6 +632,8 @@ impl RecordingSession {
             retro_scrubbed: focus.retro_scrubbed,
             probes_skipped: focus.probes_skipped,
             frames_error,
+            dropped_paused,
+            paused: self.pauses.iter().map(|p| p.duration(stopped_at)).sum(),
         };
         Ok(Recording {
             events,
@@ -491,16 +643,18 @@ impl RecordingSession {
             display: self.display,
             crop_size: self.crop_size,
             fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
+            pauses: std::mem::take(&mut self.pauses),
             session_dir,
         })
     }
 
+    /// Stops the tap (joining its thread) and drops the router's input, so
+    /// the router ends and drops the senders of the other threads.
     fn halt_input(&mut self) {
         if let Some(mut tap) = self.tap.take() {
-            // Joins the tap thread, which drops the router's sender; the
-            // router then drops the senders of the other threads.
             tap.stop();
         }
+        self.tap_tx = None;
     }
 }
 
@@ -537,6 +691,17 @@ fn join<T>(handle: Option<JoinHandle<T>>) -> Result<T, SessionError> {
         .map_err(|_| SessionError::ThreadPanicked)
 }
 
+/// The display a target captures, for [`RecordingInfo`]; `None` for a
+/// window. Read again when the frame stream restarts after a pause.
+fn display_for(target: CaptureTarget) -> Option<frames::DisplayInfo> {
+    match target {
+        CaptureTarget::Display { display_id } | CaptureTarget::Region { display_id, .. } => {
+            display_id.map_or_else(frames::DisplayInfo::main, frames::DisplayInfo::for_id)
+        }
+        CaptureTarget::Window { .. } => None,
+    }
+}
+
 /// An encoded snapshot frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotRef {
@@ -563,6 +728,8 @@ pub struct Recording {
     pub crop_size: (u32, u32),
     /// How far a step may be from the snapshot it borrows.
     pub fallback_ms: u64,
+    /// The pauses, in order; one still open at stop has no `resumed_at`.
+    pub pauses: Vec<PauseSpan>,
     session_dir: PathBuf,
 }
 
@@ -773,6 +940,11 @@ pub struct SessionMetrics {
     pub probes_skipped: usize,
     /// Why ScreenCaptureKit stopped the stream, or why stopping it failed.
     pub frames_error: Option<String>,
+    /// Events dropped for being from while paused (the tap is stopped
+    /// first, so normally none), plus any found inside a pause at stop.
+    pub dropped_paused: usize,
+    /// Time spent paused, within `wall`.
+    pub paused: Duration,
 }
 
 impl SessionMetrics {
@@ -842,6 +1014,9 @@ enum FocusMsg {
     Invalidate(Timestamp),
     /// Read the focus after a click's `MouseUp` at this ts.
     Probe(Timestamp),
+    /// The session resumed at this ts: nothing from before the pause says
+    /// where the next key goes.
+    Resume(Timestamp),
 }
 
 struct Outputs {
@@ -878,6 +1053,10 @@ struct Router {
     dropped_queue_full: usize,
     dropped_own: usize,
     dropped_excluded: usize,
+    pause: SharedPause,
+    /// The resume already applied, so it is applied once.
+    resumed_at: Option<Timestamp>,
+    dropped_paused: usize,
 }
 
 struct RouterOut {
@@ -889,10 +1068,11 @@ struct RouterOut {
     dropped_queue_full: usize,
     dropped_own: usize,
     dropped_excluded: usize,
+    dropped_paused: usize,
 }
 
 impl Router {
-    fn new(cfg: &SessionConfig, reader: FrameReader, out: Outputs) -> Self {
+    fn new(cfg: &SessionConfig, reader: FrameReader, out: Outputs, pause: SharedPause) -> Self {
         Self {
             own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
             excluded: cfg.excluded_bundle_ids.clone(),
@@ -912,6 +1092,9 @@ impl Router {
             dropped_queue_full: 0,
             dropped_own: 0,
             dropped_excluded: 0,
+            pause,
+            resumed_at: None,
+            dropped_paused: 0,
         }
     }
 
@@ -926,6 +1109,10 @@ impl Router {
             target_pid,
             mut event,
         } = targeted;
+        if !self.admit(event.ts) {
+            self.dropped_paused += 1;
+            return;
+        }
         // Any click may move focus, including clicks we drop.
         if matches!(
             event.event,
@@ -997,6 +1184,29 @@ impl Router {
         }
     }
 
+    /// False for an event from while paused. The first event from after a
+    /// resume resets what links events across the pause: the next key
+    /// starts a new run (with a snapshot), `AppActivated` is emitted again
+    /// for the detector's new stretch, no press is half excluded, and the
+    /// focus thread forgets what it knew.
+    fn admit(&mut self, ts: Timestamp) -> bool {
+        let PauseState {
+            paused_at,
+            resumed_at,
+        } = *lock(&self.pause);
+        if paused_at.is_some_and(|at| ts >= at) {
+            return false;
+        }
+        if let Some(at) = resumed_at.filter(|at| ts >= *at && self.resumed_at != Some(*at)) {
+            self.resumed_at = Some(at);
+            self.runs.reset();
+            self.app_pid = None;
+            self.filter = ExclusionFilter::default();
+            let _ = self.out.focus.send(FocusMsg::Resume(at));
+        }
+        true
+    }
+
     /// Emits `AppActivated` when the target app of a click or key changes.
     fn note_app(&mut self, ts: Timestamp, pid: i32, app: Option<AppRef>) {
         if pid <= 0 || self.app_pid == Some(pid) {
@@ -1062,6 +1272,7 @@ impl Router {
             dropped_queue_full: self.dropped_queue_full,
             dropped_own: self.dropped_own,
             dropped_excluded: self.dropped_excluded,
+            dropped_paused: self.dropped_paused,
         }
     }
 }
@@ -1489,6 +1700,17 @@ impl<S: FocusSource> FocusWorker<S> {
                 let focused = self.ax.time(|| source.focused_element());
                 self.note_focus(ts, &focused);
             }
+            FocusMsg::Resume(ts) => {
+                // The next key gets a full lookup, the focus is reported
+                // again for the detector's new stretch, and no scrub
+                // reaches back across the pause.
+                self.cache.invalidate();
+                self.guard = SettleGuard::new(self.settle_ms);
+                self.last_ref = None;
+                self.last_verdict = None;
+                self.focus = None;
+                self.boundary = Some(ts);
+            }
         }
     }
 
@@ -1726,6 +1948,81 @@ impl Encoder {
 }
 
 // ---------------------------------------------------------------------------
+// Pauses
+
+/// One pause of a session, in event time. `resumed_at` is `None` for a
+/// pause still open when the session stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PauseSpan {
+    pub paused_at: Timestamp,
+    pub resumed_at: Option<Timestamp>,
+}
+
+impl PauseSpan {
+    /// True if `ts` falls inside the pause: from `paused_at` up to, not
+    /// including, `resumed_at` (or forever, for an open pause).
+    pub fn contains(&self, ts: Timestamp) -> bool {
+        ts >= self.paused_at && self.resumed_at.is_none_or(|resumed| ts < resumed)
+    }
+
+    /// How long the pause lasted; an open one lasts until `end`.
+    pub fn duration(&self, end: Timestamp) -> Duration {
+        let to = self.resumed_at.unwrap_or(end);
+        Duration::from_nanos(to.0.saturating_sub(self.paused_at.0))
+    }
+}
+
+/// True if `ts` falls inside any of `pauses`.
+fn in_pause(pauses: &[PauseSpan], ts: Timestamp) -> bool {
+    pauses.iter().any(|p| p.contains(ts))
+}
+
+/// Removes the events inside any of `pauses`; returns how many.
+fn remove_paused(events: &mut Vec<TimedEvent>, pauses: &[PauseSpan]) -> usize {
+    let before = events.len();
+    events.retain(|ev| !in_pause(pauses, ev.ts));
+    before - events.len()
+}
+
+/// Runs [`detect_steps`] separately on each stretch of `events` (sorted by
+/// ts, the events inside pauses already removed) between `pauses` (in
+/// order), so no typing run, drag or late-focus rule reaches across a
+/// pause. Returns the drafts in order.
+fn detect_steps_between_pauses(
+    events: &[TimedEvent],
+    pauses: &[PauseSpan],
+    cfg: &StepConfig,
+) -> Vec<DraftStep> {
+    let mut drafts = Vec::new();
+    let mut rest = events;
+    for pause in pauses {
+        let cut = rest.partition_point(|ev| ev.ts < pause.paused_at);
+        let (before, after) = rest.split_at(cut);
+        drafts.extend(detect_steps(before, cfg));
+        rest = after;
+    }
+    drafts.extend(detect_steps(rest, cfg));
+    drafts
+}
+
+/// Pause times the session shares with the router, which compares them
+/// with event timestamps (same clock, see `event_tap::now`), so queue lag
+/// cannot reorder a pause and the events around it: an event at or after
+/// `paused_at` is dropped; the first event at or after `resumed_at` resets
+/// the state that would link it to the events before the pause.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PauseState {
+    paused_at: Option<Timestamp>,
+    resumed_at: Option<Timestamp>,
+}
+
+type SharedPause = Arc<Mutex<PauseState>>;
+
+fn lock(pause: &Mutex<PauseState>) -> MutexGuard<'_, PauseState> {
+    pause.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+// ---------------------------------------------------------------------------
 // Pure helpers
 
 /// True if `app`'s bundle id is in `excluded`.
@@ -1777,6 +2074,11 @@ impl KeyRunTracker {
             idle_ms,
             last_key: None,
         }
+    }
+
+    /// Forgets the current run: the next key starts a new one.
+    pub fn reset(&mut self) {
+        self.last_key = None;
     }
 
     pub fn should_snapshot(&mut self, ev: &TimedEvent, pid: i32) -> bool {
@@ -2645,6 +2947,7 @@ mod tests {
             display: None,
             crop_size: (40, 20),
             fallback_ms: 3000,
+            pauses: Vec::new(),
             session_dir,
         }
     }
@@ -3241,6 +3544,7 @@ mod tests {
                 encode,
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
+            SharedPause::default(),
         );
         router.snapshot(Timestamp(10 * MS));
         // A new frame, but the queue (size 1) is still full.
@@ -3254,6 +3558,313 @@ mod tests {
         );
         assert_eq!(out.latency_ns.len(), 1);
         assert_eq!(encode_rx.try_iter().count(), 1);
+    }
+
+    fn targeted(event: TimedEvent) -> TargetedEvent {
+        TargetedEvent {
+            target_pid: 5,
+            event,
+        }
+    }
+
+    #[test]
+    fn paused_router_drops_events_and_takes_no_snapshots() {
+        let reader = FrameReader::detached(4);
+        reader.push(frame(5 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let pause = SharedPause::default();
+        lock(&pause).paused_at = Some(Timestamp(50 * MS));
+        let (element, element_rx) = mpsc::channel();
+        let (focus, focus_rx) = mpsc::channel();
+        let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let mut router = Router::new(
+            &SessionConfig::default(),
+            reader.clone(),
+            Outputs {
+                element,
+                focus,
+                encode,
+                backlog: Arc::new(AtomicUsize::new(0)),
+            },
+            Arc::clone(&pause),
+        );
+        // From after the pause began: dropped, and no AX work asked for.
+        router.route(targeted(key_down(60, 0, "a", mods())));
+        router.route(targeted(mouse_down(70)));
+        assert!(element_rx.try_recv().is_err());
+        assert!(focus_rx.try_recv().is_err());
+        assert!(encode_rx.try_recv().is_err());
+        // From before the pause (queued before the tap stopped): kept.
+        router.route(targeted(key_down(40, 0, "a", mods())));
+        assert!(matches!(
+            focus_rx.try_recv(),
+            Ok(FocusMsg::Key { pid: 5, .. })
+        ));
+        assert_eq!(encode_rx.try_recv().map(|f| f.ts), Ok(Timestamp(5 * MS)));
+        // Resumed: the first event after the resume starts a new run even
+        // though the last key was less than `typing_idle_ms` ago, and the
+        // focus thread is told first.
+        *lock(&pause) = PauseState {
+            paused_at: None,
+            resumed_at: Some(Timestamp(100 * MS)),
+        };
+        reader.push(frame(90 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        router.route(targeted(key_down(110, 11, "b", mods())));
+        assert!(matches!(
+            focus_rx.try_recv(),
+            Ok(FocusMsg::Resume(at)) if at == Timestamp(100 * MS)
+        ));
+        assert!(matches!(focus_rx.try_recv(), Ok(FocusMsg::Key { .. })));
+        // The resume is applied once.
+        router.route(targeted(key_down(120, 11, "c", mods())));
+        assert!(matches!(focus_rx.try_recv(), Ok(FocusMsg::Key { .. })));
+        assert!(focus_rx.try_recv().is_err());
+        let out = router.finish();
+        assert_eq!(out.dropped_paused, 2);
+        assert_eq!(
+            out.snapshots.keys().copied().collect::<Vec<_>>(),
+            [Timestamp(40 * MS), Timestamp(110 * MS)]
+        );
+        // `AppActivated` again after the resume, for the detector's new
+        // stretch.
+        let apps: Vec<u64> = out
+            .events
+            .iter()
+            .filter(|ev| matches!(ev.event, CaptureEvent::AppActivated { .. }))
+            .map(|ev| ev.ts.0 / MS)
+            .collect();
+        assert_eq!(apps, [40, 110]);
+    }
+
+    #[test]
+    fn resume_drops_focus_state_and_bounds_the_scrub() {
+        let mut w = worker(Some((1, field("Search", false, "com.apple.Safari"))));
+        type_key(&mut w, 0, 0, "a");
+        let full = w.ax.lookups;
+        type_key(&mut w, 100, 11, "b");
+        assert_eq!(w.ax.lookups, full + 1, "cache hit");
+        // A click just before the pause armed the settle guard (one read).
+        w.handle(FocusMsg::Invalidate(Timestamp(150 * MS)), false);
+        w.handle(FocusMsg::Resume(Timestamp(200 * MS)), false);
+        // After the resume: a full lookup (three reads), the focus reported
+        // again, and the guard no longer holds.
+        type_key(&mut w, 300, 8, "c");
+        assert_eq!(w.ax.lookups, full + 5);
+        let focus_changes: Vec<u64> = w
+            .events
+            .iter()
+            .filter(|ev| matches!(ev.event, CaptureEvent::FocusChanged { .. }))
+            .map(|ev| ev.ts.0 / MS)
+            .collect();
+        assert_eq!(focus_changes, [0, 300]);
+        // A secure field found next scrubs back only to the resume: "b"
+        // (within `focus_settle_ms`, but before the pause) stays plain.
+        w.source.current = Some((2, field("Password", true, "com.apple.Safari")));
+        type_key(&mut w, 350, 0, "p");
+        assert_eq!(
+            typed(&w.events),
+            vec![
+                (0, Some("a".to_owned()), false),
+                (100, Some("b".to_owned()), false),
+                (300, Some("•".to_owned()), true),
+                (350, Some("•".to_owned()), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn key_run_reset_starts_a_new_run() {
+        let mut t = KeyRunTracker::new(1500);
+        assert!(t.should_snapshot(&key_down(0, 0, "a", mods()), 7));
+        assert!(!t.should_snapshot(&key_down(100, 11, "b", mods()), 7));
+        t.reset();
+        assert!(t.should_snapshot(&key_down(200, 8, "c", mods()), 7));
+    }
+
+    #[test]
+    fn steps_are_detected_per_stretch_between_pauses() {
+        let cfg = StepConfig::default();
+        let mut events = vec![
+            key_down(0, 0, "a", mods()),
+            key_down(100, 11, "b", mods()),
+            key_down(170, 7, "x", mods()),
+            key_down(300, 8, "c", mods()),
+            key_down(400, 2, "d", mods()),
+        ];
+        let pause = PauseSpan {
+            paused_at: Timestamp(150 * MS),
+            resumed_at: Some(Timestamp(200 * MS)),
+        };
+        assert!(pause.contains(Timestamp(150 * MS)));
+        assert!(!pause.contains(Timestamp(200 * MS)));
+        assert_eq!(
+            pause.duration(Timestamp(1000 * MS)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(remove_paused(&mut events, &[pause]), 1);
+        assert_eq!(events.len(), 4);
+        // Without the pause the four keys are one typing step.
+        assert_eq!(detect_steps(&events, &cfg).len(), 1);
+        let typed = |drafts: &[DraftStep]| -> Vec<(u64, String)> {
+            drafts
+                .iter()
+                .map(|d| (d.at.0 / MS, d.keystrokes.clone().unwrap_or_default()))
+                .collect()
+        };
+        let drafts = detect_steps_between_pauses(&events, &[pause], &cfg);
+        assert_eq!(
+            typed(&drafts),
+            [(0, "ab".to_owned()), (300, "cd".to_owned())]
+        );
+        // A pause still open at stop removes everything after it.
+        let open = PauseSpan {
+            paused_at: Timestamp(350 * MS),
+            resumed_at: None,
+        };
+        assert!(open.contains(Timestamp(u64::MAX)));
+        assert_eq!(
+            open.duration(Timestamp(1000 * MS)),
+            Duration::from_millis(650)
+        );
+        assert_eq!(remove_paused(&mut events, &[open]), 1);
+        let drafts = detect_steps_between_pauses(&events, &[pause, open], &cfg);
+        assert_eq!(
+            typed(&drafts),
+            [(0, "ab".to_owned()), (300, "c".to_owned())]
+        );
+    }
+
+    /// A session with no tap and no frame stream: events are fed through
+    /// the returned sender (as the tap would), frames through `reader`.
+    fn headless_session(
+        scratch: &ScratchDir,
+        reader: FrameReader,
+    ) -> (RecordingSession, Sender<TargetedEvent>) {
+        let cfg = SessionConfig::default();
+        let session_dir = scratch.0.join(format!("{SESSION_DIR_PREFIX}headless"));
+        fs::create_dir_all(&session_dir).unwrap();
+        let mut session = RecordingSession::new(&cfg, None);
+        session.headless = true;
+        session.session_dir = Some(session_dir);
+        let focus = field("Search", false, "com.apple.Safari");
+        session
+            .spawn_threads(&cfg, reader, move || FakeFocus {
+                current: Some((1, focus)),
+                clock: Timestamp(0),
+            })
+            .unwrap();
+        let tx = session.tap_tx.clone().unwrap();
+        (session, tx)
+    }
+
+    fn key_at(ts: Timestamp, chars: &str) -> TargetedEvent {
+        targeted(TimedEvent {
+            ts,
+            event: CaptureEvent::KeyDown {
+                key: key(0, Some(chars)),
+                modifiers: mods(),
+                is_repeat: false,
+                secure: false,
+            },
+        })
+    }
+
+    fn typed_text(rec: &Recording) -> String {
+        typed(&rec.events)
+            .into_iter()
+            .filter_map(|(_, chars, _)| chars)
+            .collect()
+    }
+
+    fn count(rec: &Recording, f: impl Fn(&CaptureEvent) -> bool) -> usize {
+        rec.events.iter().filter(|ev| f(&ev.event)).count()
+    }
+
+    #[test]
+    fn pause_halts_input_and_resume_starts_a_fresh_typing_run() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (mut session, tx) = headless_session(&scratch, reader.clone());
+        assert!(!session.is_paused());
+        // Not paused: a no-op.
+        session.resume().unwrap();
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let a = Timestamp(t0.0 + 1);
+        tx.send(key_at(a, "a")).unwrap();
+        tx.send(key_at(Timestamp(t0.0 + 2), "b")).unwrap();
+        session.pause().unwrap();
+        // Twice: a no-op.
+        session.pause().unwrap();
+        assert!(session.is_paused());
+        // Typed while paused (as if the tap were still running): dropped.
+        tx.send(key_at(event_tap::now(), "x")).unwrap();
+        session.resume().unwrap();
+        session.resume().unwrap();
+        assert!(!session.is_paused());
+        // The restarted stream's first frame.
+        let t1 = event_tap::now();
+        reader.push(frame(t1.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let c = Timestamp(t1.0 + 1);
+        tx.send(key_at(c, "c")).unwrap();
+        tx.send(key_at(Timestamp(t1.0 + 2), "d")).unwrap();
+        // As the tap does when it stops: let the router see the end.
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.pauses.len(), 1);
+        assert!(rec.pauses[0].resumed_at.is_some());
+        assert!(rec.metrics.paused > Duration::ZERO);
+        assert_eq!(typed_text(&rec), "abcd");
+        assert_eq!(rec.metrics.dropped_paused, 1);
+        // Two typing steps, though the keys are microseconds apart.
+        let steps: Vec<(StepKind, Timestamp, String)> = rec
+            .drafts
+            .iter()
+            .map(|d| (d.kind, d.at, d.keystrokes.clone().unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                (StepKind::Type, a, "ab".to_owned()),
+                (StepKind::Type, c, "cd".to_owned()),
+            ]
+        );
+        // A snapshot for the first key of each run, from the frame before.
+        assert_eq!(rec.snapshots.keys().copied().collect::<Vec<_>>(), [a, c]);
+        assert_eq!(rec.snapshots[&c].frame_ts, t1);
+        assert_eq!(rec.metrics.snapshots, 2);
+        // The app and the focus are reported again after the resume.
+        assert_eq!(
+            count(&rec, |ev| matches!(ev, CaptureEvent::AppActivated { .. })),
+            2
+        );
+        assert_eq!(
+            count(&rec, |ev| matches!(ev, CaptureEvent::FocusChanged { .. })),
+            2
+        );
+        // Strictly ordered.
+        assert!(rec.events.windows(2).all(|w| w[0].ts <= w[1].ts));
+    }
+
+    #[test]
+    fn stop_while_paused_produces_a_recording() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (mut session, tx) = headless_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        tx.send(key_at(Timestamp(t0.0 + 1), "a")).unwrap();
+        session.pause().unwrap();
+        tx.send(key_at(event_tap::now(), "x")).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.pauses.len(), 1);
+        assert_eq!(rec.pauses[0].resumed_at, None);
+        assert!(rec.metrics.paused > Duration::ZERO);
+        assert_eq!(typed_text(&rec), "a");
+        assert_eq!(rec.metrics.dropped_paused, 1);
+        assert_eq!(rec.drafts.len(), 1);
+        assert_eq!(rec.snapshots.len(), 1);
+        assert!(rec.session_dir().starts_with(&scratch.0));
     }
 
     #[test]
