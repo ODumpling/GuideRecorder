@@ -194,6 +194,7 @@ pub fn run() {
             picker::finish_region_pick,
             ai::ai_generate,
             ai::ai_cancel,
+            ai::ai_rewrite_step,
             commands::quit_ack,
             commands::quit_app,
             commands::quit_cancel,

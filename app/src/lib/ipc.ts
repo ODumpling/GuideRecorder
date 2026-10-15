@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AiRewriteResult,
   AppError,
   CaptureTargetArg,
   CaptureWindow,
@@ -17,6 +18,7 @@ import type {
   RecordingSaved,
   Rect,
   RegionPick,
+  RewriteStyleArg,
   Settings,
   SettingsView,
   StampedStatus,
@@ -267,14 +269,29 @@ export interface AiApi {
    * every step that is not `edited`, and the guide pass. Rejects with
    * `invalid` when AI is off, no key is set or a run is already going.
    */
-  generate(guideId: string, options?: { stepIds?: string[]; guidePass?: boolean }): Promise<{ runId: number }>;
+  generate(guideId: string, options?: AiGenerateOptions): Promise<{ runId: number }>;
   /** Stops a run; nothing if it is over. */
   cancel(runId: number): Promise<void>;
+  /**
+   * Rewrites one step of the guide as last saved, edited or not, and
+   * returns the result (no events). Rejects like `generate`; an unknown
+   * step or a bad custom instruction is `invalid`.
+   */
+  rewriteStep(guideId: string, stepId: string, style: RewriteStyleArg): Promise<AiRewriteResult>;
+}
+
+export interface AiGenerateOptions {
+  /** The steps to write; `[]`: none (only the guide pass). Default: every step. */
+  stepIds?: string[];
+  guidePass?: boolean;
+  /** The listed steps (and, with `guidePass`, the guide fields) count as not edited. */
+  force?: boolean;
 }
 
 export const tauriAiApi: AiApi = {
   generate: (guideId, options) => invoke("ai_generate", options ? { guideId, options } : { guideId }),
   cancel: (runId) => invoke("ai_cancel", { runId }),
+  rewriteStep: (guideId, stepId, style) => invoke("ai_rewrite_step", { guideId, stepId, style }),
 };
 
 /** `AiStartedEvent`. */

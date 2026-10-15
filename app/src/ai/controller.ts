@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Patch } from "@/editor/commands";
+import type { Command, Patch } from "@/editor/commands";
 import type { EditorStore } from "@/editor/store";
 import {
   AI_FINISHED_EVENT,
@@ -9,7 +9,18 @@ import {
   errorMessage,
   type AiApi,
 } from "@/lib/ipc";
-import type { AiFinishedEvent, AiGuideEvent, AiStartedEvent, AiStepEvent, Guide, Settings, Step } from "@/lib/types";
+import type {
+  AiFinishedEvent,
+  AiGuideEvent,
+  AiRewriteResult,
+  AiStartedEvent,
+  AiState,
+  AiStepEvent,
+  Guide,
+  RewriteStyleArg,
+  Settings,
+  Step,
+} from "@/lib/types";
 
 /**
  * Runs AI writing for the open guide (`ai_generate`) and applies its
@@ -23,9 +34,40 @@ import type { AiFinishedEvent, AiGuideEvent, AiStartedEvent, AiStepEvent, Guide,
  * field the user has edited, and `applyUntracked` drops the undo and redo
  * entries for the fields it writes, so undo never brings older text back
  * over AI text.
+ *
+ * Explicit actions (Regenerate a step, Rewrite a step, Regenerate the guide
+ * details) are the user's request: they may replace edited text, and their
+ * result is ONE tracked change (`dispatch`), which Undo reverts with the
+ * step's or guide's previous `aiState` (so `edited` comes back too).
+ *
+ * A later background run may still write a step or the guide details an
+ * explicit action wrote: they are `ai`, not `edited`, so the 603e000 rule
+ * applies and `applyUntracked` drops that action's undo entry, so undo
+ * never brings the older text back over the newer AI text. By design.
+ *
+ * An explicit action belongs to the guide as it was open when it started:
+ * closing it, or opening another, ends the action at once (a Regenerate
+ * run is cancelled), and a late result is dropped even if the same guide
+ * was reopened meanwhile.
+ *
+ * Conflict rule: one AI action per editor at a time. Explicit actions are
+ * refused (and disabled, with a hint: {@link BUSY_HINT}) while a background
+ * run is going, and "Write with AI" is refused (disabled) while an explicit
+ * action is waiting. Nothing is queued.
  */
 
 export type AiPhase = "idle" | "starting" | "running" | "stopping";
+
+/** An explicit AI action waiting for its result. */
+export interface ExplicitAction {
+  kind: "regenerate" | "rewrite" | "guide";
+  guideId: string;
+  /** The step (null for the guide details). */
+  stepId: string | null;
+}
+
+/** Why explicit actions are disabled while a background run is going. */
+export const BUSY_HINT = "AI is writing this guide. Wait for it to finish, or stop it.";
 
 export interface AiRunState {
   phase: AiPhase;
@@ -34,11 +76,19 @@ export interface AiRunState {
   runId: number | null;
   /** Steps still being written: UI state only, never written into the guide. */
   generating: ReadonlySet<string>;
+  /** The explicit action waiting for its result, if any (it may also be the run). */
+  explicit: ExplicitAction | null;
   /**
-   * Writes the open guide: saves it, then starts a run. Resolves to whether
-   * a run started.
+   * Writes the open guide in the background: saves it, then starts a run.
+   * Resolves to whether a run started.
    */
   start(options?: StartOptions): Promise<boolean>;
+  /** Regenerates one step, edited or not, as one undoable change. Resolves to whether it started. */
+  regenerateStep(stepId: string): Promise<boolean>;
+  /** Regenerates the guide details (title, intro, …), edited or not, as one undoable change. */
+  regenerateGuide(): Promise<boolean>;
+  /** Rewrites one step in `style`, as one undoable change. Resolves to whether it was applied. */
+  rewriteStep(stepId: string, style: RewriteStyleArg): Promise<boolean>;
   /**
    * Stops the run (Stop); the summary follows when it has stopped, or after
    * `stopTimeoutMs` if the backend never says so. While the run is still
@@ -75,7 +125,13 @@ export interface AiOptions {
 /** The message `ai_generate` rejects with when no API key is set. */
 export const NO_KEY_MESSAGE = "Add an API key in Settings to write with AI.";
 
-const idle = { phase: "idle", guideId: null, runId: null, generating: new Set<string>() } satisfies Partial<AiRunState>;
+const idle = {
+  phase: "idle",
+  guideId: null,
+  runId: null,
+  generating: new Set<string>(),
+  explicit: null,
+} satisfies Partial<AiRunState>;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -98,6 +154,8 @@ interface Tally {
   keptLive: Set<string>;
   guideWritten: boolean;
   guideError: string | null;
+  /** The last step error, for an explicit action's notice. */
+  stepError: string | null;
 }
 
 /** `skippedEdited`: the backend's count of steps it left alone as edited (from `ai://finished`). */
@@ -123,6 +181,18 @@ export function summary(counts: RunCounts, cancelled: boolean): string {
   if (counts.guideError) parts.push(`The guide details failed: ${counts.guideError.replace(/\.?$/, ".")}`);
   if (counts.kept) parts.push(`Kept your edits to ${plural(counts.kept, "step")}.`);
   return parts.join(" ");
+}
+
+const UNSAVED_MESSAGE = "Save the guide before writing with AI: it could not be saved.";
+
+/** The notice after an explicit action; null when it went through. */
+function explicitNotice(action: ExplicitAction, tally: Tally, cancelled: boolean): string | null {
+  if (cancelled) return "Stopped writing.";
+  const reason = (error: string | null) => (error ? `: ${error.replace(/\.?$/, ".")}` : ".");
+  if (action.kind === "guide") {
+    return tally.guideWritten ? null : `AI could not write the guide details${reason(tally.guideError)}`;
+  }
+  return tally.written.size ? null : tally.failed.size ? `AI could not write this step${reason(tally.stepError)}` : null;
 }
 
 function findStep(guide: Guide, id: string): Step | null {
@@ -172,6 +242,45 @@ export function guidePatches(live: Guide, event: AiGuideEvent): Patch[] | null {
   return null;
 }
 
+/** The step's text and `aiState` as one undoable command (an explicit action's result). */
+export function stepResultCommand(
+  live: Step,
+  label: string,
+  result: { title: string; description: string; aiState: AiState },
+): Command {
+  const id = live.id;
+  return {
+    label,
+    forward: [
+      { op: "setItem", id, key: "title", value: result.title },
+      { op: "setItem", id, key: "description", value: result.description },
+      { op: "setItem", id, key: "aiState", value: result.aiState },
+    ],
+    inverse: [
+      { op: "setItem", id, key: "aiState", value: live.aiState },
+      { op: "setItem", id, key: "description", value: live.description },
+      { op: "setItem", id, key: "title", value: live.title },
+    ],
+    select: { forward: id, inverse: id },
+  };
+}
+
+/** The guide pass's fields and `aiState` as one undoable command. */
+export function guideResultCommand(live: Guide, event: AiGuideEvent & { fields: NonNullable<AiGuideEvent["fields"]> }): Command {
+  const keys = ["title", "intro", "prerequisites", "summary", "tags"] as const;
+  return {
+    label: "Regenerate guide details",
+    forward: [
+      ...keys.map((key): Patch => ({ op: "setGuide", key, value: event.fields[key] })),
+      { op: "setGuide", key: "aiState", value: event.aiState },
+    ],
+    inverse: [
+      { op: "setGuide", key: "aiState", value: live.aiState },
+      ...keys.map((key): Patch => ({ op: "setGuide", key, value: live[key] })),
+    ],
+  };
+}
+
 /** A run being started or running. */
 interface Run {
   guideId: string;
@@ -184,6 +293,13 @@ interface Run {
   tally: Tally;
   /** Stops watching the editor for the guide closing. */
   unwatch: Unlisten;
+  /** Set for an explicit (forced) run: results are tracked, edited or not. */
+  explicit: ExplicitAction | null;
+}
+
+interface LaunchOptions extends StartOptions {
+  force?: boolean;
+  explicit?: ExplicitAction;
 }
 
 export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: AiOptions): AiStore {
@@ -222,7 +338,32 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
       if (doc?.guide.id !== event.guideId) return;
       const live = findStep(doc.guide, event.stepId);
       const tally = run.tally;
-      if (event.outcome === "failed") tally.failed.add(event.stepId);
+      if (event.outcome === "failed") {
+        tally.failed.add(event.stepId);
+        tally.stepError = event.error;
+      }
+      if (run.explicit) {
+        if (live && event.outcome === "applied" && event.step) {
+          const result = {
+            title: event.step.title,
+            description: event.step.description,
+            aiState: {
+              ...event.step.aiState,
+              redactionSuggestions: event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
+            },
+          };
+          if (editor.getState().dispatch(stepResultCommand(live, "Regenerate step", result))) {
+            tally.written.add(event.stepId);
+          }
+          return;
+        }
+        // Failed: the text stays and keeps its status; only the error is recorded.
+        if (live && event.outcome === "failed") {
+          const error = event.step?.aiState.error ?? event.error;
+          editor.getState().applyUntracked([{ op: "setItem", id: live.id, key: "aiState", value: { ...live.aiState, error } }]);
+        }
+        return;
+      }
       // Edited here during the run (`skippedEdited` ones are in the backend's count).
       if (event.outcome === "applied" && live?.aiState.status === "edited") tally.keptLive.add(event.stepId);
       const patches = stepPatches(live, event);
@@ -236,6 +377,16 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
       const doc = editor.getState().doc;
       if (doc?.guide.id !== event.guideId) return;
       if (event.error) run.tally.guideError = event.error;
+      if (run.explicit) {
+        if (event.fields) {
+          const command = guideResultCommand(doc.guide, event as Parameters<typeof guideResultCommand>[1]);
+          if (editor.getState().dispatch(command)) run.tally.guideWritten = true;
+        } else if (event.error) {
+          const aiState = { ...(doc.guide.aiState ?? { status: "template" as const }), error: event.error };
+          editor.getState().applyUntracked([{ op: "setGuide", key: "aiState", value: aiState }]);
+        }
+        return;
+      }
       const patches = guidePatches(doc.guide, event);
       if (patches && editor.getState().applyUntracked(patches) && event.fields) run.tally.guideWritten = true;
     }
@@ -254,8 +405,14 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
     /** Ends the run with its notice; `skippedEdited` unknown (0) when no finish came. */
     function finish(cancelled: boolean, skippedEdited = 0) {
       if (!run) return;
-      const tally = run.tally;
+      const { tally, explicit } = run;
       end();
+      if (explicit) {
+        // The change shows for itself; only a failure is worth a notice.
+        const message = explicitNotice(explicit, tally, cancelled);
+        if (message) editor.getState().notify(message);
+        return;
+      }
       editor.getState().notify(summary(counts(tally, skippedEdited), cancelled));
     }
 
@@ -308,75 +465,166 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
       }
     }
 
+    /** Starts a run: a background one, or an explicit (forced) one. */
+    async function launch({ auto = false, guideId: wanted, stepIds, guidePass, force, explicit }: LaunchOptions) {
+      const doc = editor.getState().doc;
+      // One AI action at a time (see the conflict rule above).
+      if (run || get().explicit || !doc || doc.readOnly) return false;
+      const guideId = doc.guide.id;
+      if (wanted !== undefined && wanted !== guideId) return false;
+      const current: Run = {
+        guideId,
+        runId: null,
+        early: [],
+        unlisten: [],
+        stopTimer: null,
+        tally: {
+          written: new Set(),
+          failed: new Set(),
+          keptLive: new Set(),
+          guideWritten: false,
+          guideError: null,
+          stepError: null,
+        },
+        unwatch: editor.subscribe((state) => {
+          if (run === current && state.doc?.guide.id !== guideId) abandon();
+        }),
+        explicit: explicit ?? null,
+      };
+      run = current;
+      // Until `ai://started` names them: the steps asked for (default: all) that are not edited (unless forced).
+      const pending = doc.guide.items.filter(
+        (item) =>
+          item.type === "step" &&
+          (force || item.aiState.status !== "edited") &&
+          (!stepIds || stepIds.includes(item.id)),
+      );
+      set({
+        phase: "starting",
+        guideId,
+        runId: null,
+        generating: new Set(pending.map((item) => item.id)),
+        explicit: explicit ?? null,
+      });
+
+      const fail = (message: string | null) => {
+        if (run !== current) return false;
+        end();
+        if (message) editor.getState().notify(message);
+        return false;
+      };
+
+      // The backend writes the guide as last saved.
+      if (!(await editor.getState().flush())) return fail(auto ? null : UNSAVED_MESSAGE);
+      if (run !== current) return false;
+      try {
+        current.unlisten = await Promise.all(
+          Object.keys(handlers).map((event) =>
+            listen<{ runId: number; guideId: string }>(event, (payload) => receive(event, payload, current)),
+          ),
+        );
+      } catch (error) {
+        return fail(`Could not write with AI: ${errorMessage(error)}`);
+      }
+      if (run !== current) {
+        for (const stop of current.unlisten) stop();
+        return false;
+      }
+      let runId: number;
+      const options =
+        stepIds === undefined && guidePass === undefined && !force
+          ? undefined
+          : { ...(stepIds && { stepIds }), ...(guidePass !== undefined && { guidePass }), ...(force && { force }) };
+      try {
+        ({ runId } = await (options ? api.generate(guideId, options) : api.generate(guideId)));
+      } catch (error) {
+        const message = errorMessage(error);
+        return fail(auto && message === NO_KEY_MESSAGE ? null : message);
+      }
+      if (run !== current) {
+        // Closed or stopped while starting.
+        cancelRun(runId);
+        return false;
+      }
+      begin(runId, current);
+      return true;
+    }
+
     return {
       ...idle,
 
-      async start({ auto = false, guideId: wanted, stepIds, guidePass } = {}) {
+      start: (options = {}) => launch(options),
+
+      regenerateStep(stepId) {
         const doc = editor.getState().doc;
-        if (run || !doc || doc.readOnly) return false;
+        if (!doc || !findStep(doc.guide, stepId)) return Promise.resolve(false);
+        return launch({
+          stepIds: [stepId],
+          guidePass: false,
+          force: true,
+          explicit: { kind: "regenerate", guideId: doc.guide.id, stepId },
+        });
+      },
+
+      regenerateGuide() {
+        const doc = editor.getState().doc;
+        if (!doc) return Promise.resolve(false);
+        return launch({
+          stepIds: [],
+          guidePass: true,
+          force: true,
+          explicit: { kind: "guide", guideId: doc.guide.id, stepId: null },
+        });
+      },
+
+      async rewriteStep(stepId, style) {
+        const doc = editor.getState().doc;
+        if (run || get().explicit || !doc || doc.readOnly || !findStep(doc.guide, stepId)) return false;
         const guideId = doc.guide.id;
-        if (wanted !== undefined && wanted !== guideId) return false;
-        const current: Run = {
-          guideId,
-          runId: null,
-          early: [],
-          unlisten: [],
-          stopTimer: null,
-          tally: { written: new Set(), failed: new Set(), keptLive: new Set(), guideWritten: false, guideError: null },
-          unwatch: editor.subscribe((state) => {
-            if (run === current && state.doc?.guide.id !== guideId) abandon();
-          }),
+        const action: ExplicitAction = { kind: "rewrite", guideId, stepId };
+        set({ explicit: action, generating: new Set([stepId]) });
+        // The action holds while its guide stays open. Once the guide is
+        // closed or another opened (even if it is reopened later), it is
+        // over: the state clears at once, and a late result is dropped.
+        let current = true;
+        const leave = () => {
+          if (!current) return;
+          current = false;
+          unwatch();
+          if (get().explicit === action) set({ explicit: null, generating: new Set() });
         };
-        run = current;
-        // Until `ai://started` names them: the steps asked for (default: all) that are not edited.
-        const pending = doc.guide.items.filter(
-          (item) => item.type === "step" && item.aiState.status !== "edited" && (!stepIds || stepIds.includes(item.id)),
-        );
-        set({ phase: "starting", guideId, runId: null, generating: new Set(pending.map((item) => item.id)) });
-
-        const fail = (message: string | null) => {
-          if (run !== current) return false;
-          end();
+        const unwatch = editor.subscribe((state) => {
+          if (state.doc?.guide.id !== guideId) leave();
+        });
+        const done = (message: string | null) => {
+          if (!current) return;
+          leave();
           if (message) editor.getState().notify(message);
-          return false;
         };
-
-        // The backend writes the guide as last saved.
+        // The backend rewrites the step as last saved.
         if (!(await editor.getState().flush())) {
-          return fail(auto ? null : "Save the guide before writing with AI: it could not be saved.");
+          done(UNSAVED_MESSAGE);
+          return false;
         }
-        if (run !== current) return false;
+        if (!current) return false;
+        let result: AiRewriteResult;
         try {
-          current.unlisten = await Promise.all(
-            Object.keys(handlers).map((event) =>
-              listen<{ runId: number; guideId: string }>(event, (payload) => receive(event, payload, current)),
-            ),
+          result = await api.rewriteStep(guideId, stepId, style);
+        } catch (error) {
+          done(errorMessage(error));
+          return false;
+        }
+        if (!current) return false;
+        const live = editor.getState().doc;
+        const step = live ? findStep(live.guide, stepId) : null;
+        // The step deleted meanwhile: nothing to apply it to.
+        const applied =
+          !!step &&
+          editor.getState().dispatch(
+            stepResultCommand(step, "Rewrite step", { ...result, description: result.description ?? "" }),
           );
-        } catch (error) {
-          return fail(`Could not write with AI: ${errorMessage(error)}`);
-        }
-        if (run !== current) {
-          for (const stop of current.unlisten) stop();
-          return false;
-        }
-        let runId: number;
-        const options =
-          stepIds === undefined && guidePass === undefined
-            ? undefined
-            : { ...(stepIds && { stepIds }), ...(guidePass !== undefined && { guidePass }) };
-        try {
-          ({ runId } = await (options ? api.generate(guideId, options) : api.generate(guideId)));
-        } catch (error) {
-          const message = errorMessage(error);
-          return fail(auto && message === NO_KEY_MESSAGE ? null : message);
-        }
-        if (run !== current) {
-          // Closed or stopped while starting.
-          cancelRun(runId);
-          return false;
-        }
-        begin(runId, current);
-        return true;
+        done(null);
+        return applied;
       },
 
       async stop() {

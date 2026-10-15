@@ -11,7 +11,13 @@ import {
   MoveUpRight,
   Square,
 } from "lucide-react";
-import { addAnnotation, removeAnnotation, updateAnnotation } from "@/annotations/commands";
+import {
+  acceptBlurSuggestion,
+  addAnnotation,
+  rejectBlurSuggestion,
+  removeAnnotation,
+  updateAnnotation,
+} from "@/annotations/commands";
 import {
   activeCrop,
   bounds,
@@ -36,7 +42,7 @@ import { useStepImage } from "@/components/useStepImage";
 import { setImageShow, type Command } from "@/editor/commands";
 import { editorStore } from "@/editor/editor";
 import { verifyCrop } from "@/lib/ipc";
-import type { Annotation, Guide, Point, Step, StepImage } from "@/lib/types";
+import type { Annotation, Guide, Point, RedactionSuggestion, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { cn } from "@/lib/utils";
 
@@ -133,6 +139,7 @@ function Layer({
   onToolDone,
   selectedId,
   select,
+  focusedSuggestion,
 }: {
   guideId: string;
   step: Step;
@@ -141,6 +148,8 @@ function Layer({
   onToolDone(): void;
   selectedId: string | null;
   select(id: string | null): void;
+  /** The blur suggestion whose row has the pointer or focus, drawn stronger. */
+  focusedSuggestion: number | null;
 }) {
   // A crop is shown only once the Rust side has checked its `cropRect`
   // the way the exporter does (size, and pixels against the full
@@ -346,6 +355,7 @@ function Layer({
           <Shape key={annotation.id} annotation={annotation} backdrop={backdrop} />
         ))}
         {crop?.type === "crop" && <CropMask view={view} rect={crop.geometry} />}
+        <Suggestions suggestions={step.aiState.redactionSuggestions ?? []} unit={unit} focused={focusedSuggestion} />
 
         {/* Hit targets, in drawing order so the topmost shape wins. */}
         <g pointerEvents={tool === "select" ? "auto" : "none"}>
@@ -418,6 +428,112 @@ function Layer({
   );
 }
 
+/**
+ * AI blur suggestions as dashed, numbered proposals (full-screenshot pixels,
+ * like annotations). Editor-only: they are in `aiState`, never exported.
+ */
+function Suggestions({
+  suggestions,
+  unit,
+  focused,
+}: {
+  suggestions: RedactionSuggestion[];
+  unit: number;
+  focused: number | null;
+}) {
+  if (!suggestions.length) return null;
+  return (
+    <g pointerEvents="none" data-testid="blur-suggestions">
+      {suggestions.map(({ rect }, i) => (
+        <g key={i} data-suggestion={i}>
+          <rect
+            x={rect.x}
+            y={rect.y}
+            width={rect.width}
+            height={rect.height}
+            fill="var(--status-warning)"
+            fillOpacity={focused === i ? 0.25 : 0.1}
+            stroke="var(--status-warning)"
+            strokeWidth={focused === i ? 2.5 : 1.5}
+            strokeDasharray="6 4"
+            vectorEffect="non-scaling-stroke"
+          />
+          <rect x={rect.x} y={rect.y} width={16 * unit} height={16 * unit} fill="var(--status-warning)" />
+          <text
+            x={rect.x + 8 * unit}
+            y={rect.y + 12 * unit}
+            fontSize={11 * unit}
+            textAnchor="middle"
+            fill="white"
+            fontWeight={600}
+          >
+            {i + 1}
+          </text>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/** Accept or reject each blur suggestion; both are undoable. */
+function SuggestionList({
+  step,
+  readOnly,
+  onFocus,
+}: {
+  step: Step;
+  readOnly: boolean;
+  onFocus(index: number | null): void;
+}) {
+  const suggestions = step.aiState.redactionSuggestions ?? [];
+  if (!suggestions.length) return null;
+  return (
+    <ul className="flex flex-col gap-1 text-sm" aria-label="Blur suggestions">
+      {suggestions.map((suggestion, i) => (
+        <li
+          key={`${i}:${suggestion.rect.x},${suggestion.rect.y}`}
+          className="flex items-center gap-2 rounded-md border border-dashed border-[var(--status-warning)] px-2 py-1"
+          onPointerEnter={() => onFocus(i)}
+          onPointerLeave={() => onFocus(null)}
+          onFocus={() => onFocus(i)}
+          onBlur={() => onFocus(null)}
+        >
+          <span className="text-xs font-semibold text-[var(--status-warning)] tabular-nums">{i + 1}</span>
+          <span className="min-w-0 flex-1 truncate" title={suggestion.reason}>
+            Suggested blur: {suggestion.reason || "may be sensitive"}
+          </span>
+          {!readOnly && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label={`Accept blur suggestion ${i + 1}`}
+                onClick={() => {
+                  onFocus(null);
+                  run((guide) => acceptBlurSuggestion(guide, step.id, i, ulid()));
+                }}
+              >
+                Accept
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Reject blur suggestion ${i + 1}`}
+                onClick={() => {
+                  onFocus(null);
+                  run((guide) => rejectBlurSuggestion(guide, step.id, i));
+                }}
+              >
+                Reject
+              </Button>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Handles({
   annotation,
   size,
@@ -485,6 +601,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = step.annotations.find((a) => a.id === selectedId) ?? null;
   const select = useCallback((id: string | null) => setSelectedId(id), []);
+  const [focusedSuggestion, setFocusedSuggestion] = useState<number | null>(null);
 
   return (
     <div className="flex flex-col gap-2">
@@ -531,7 +648,9 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
         onToolDone={() => setTool("select")}
         selectedId={selected?.id ?? null}
         select={select}
+        focusedSuggestion={focusedSuggestion}
       />
+      <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />
       {selected && !readOnly && (
         <StyleBar stepId={step.id} annotation={selected} run={run} onDeleted={() => setSelectedId(null)} />
       )}

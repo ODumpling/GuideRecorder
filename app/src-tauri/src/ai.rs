@@ -1,7 +1,8 @@
 //! AI writing for an open guide (#350): `ai_generate` runs the core
 //! pipeline (`guidesya_core::ai::pipeline`) in the background on the guide
 //! as last saved and streams each result to the editor as `ai://` events;
-//! `ai_cancel` stops a run.
+//! `ai_cancel` stops a run. `ai_rewrite_step` rewrites one step's text and
+//! returns it (no events).
 //!
 //! The editor is the only writer of an open guide. It applies each result
 //! to its live copy, skipping steps that are `edited` there, and autosaves.
@@ -28,7 +29,7 @@ use guidesya_core::ai::claude::{ClaudeConfig, ClaudeProvider};
 use guidesya_core::ai::pipeline::{self, GuidePassOutcome, StepOutcome};
 use guidesya_core::ai::{
     keychain, AiError, AiProvider, ApiKey, CancelToken, ImageSource, PipelineEvent,
-    PipelineOptions, PipelineSummary, RedactionSuggestion,
+    PipelineOptions, PipelineSummary, RedactionSuggestion, RewriteInput, RewriteStyle,
 };
 use guidesya_core::library::GuideHandle;
 use guidesya_core::model::{AiState, AiStatus, Guide, Item, Step};
@@ -58,9 +59,13 @@ pub const RUN_FAILED: &str = "Writing stopped because of an internal error.";
 #[serde(rename_all = "camelCase", default)]
 pub struct GenerateOptions {
     /// Steps to write; others are left alone (and kept out of the guide
-    /// pass's consistency edits). `edited` steps are skipped either way.
+    /// pass's consistency edits). `edited` steps are skipped unless `force`.
+    /// Empty: no per-step pass.
     pub step_ids: Option<Vec<String>>,
     pub guide_pass: Option<bool>,
+    /// An explicit request from the user: the steps in `step_ids`, and with
+    /// the guide pass the guide's fields, are written even when `edited`.
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -307,7 +312,16 @@ pub fn begin(
     ai: &settings::Ai,
     sink: Arc<dyn EventSink>,
 ) -> Result<(u64, impl Future<Output = ()> + Send + 'static)> {
-    let unselected = select_steps(&mut guide, options.step_ids.as_deref())?;
+    let guide_pass = options.guide_pass.unwrap_or(true);
+    let (unselected, forced) =
+        select_steps(&mut guide, options.step_ids.as_deref(), options.force)?;
+    let forced = Forced {
+        guide: options.force && guide_pass && guide.ai_state.status == AiStatus::Edited,
+        ..forced
+    };
+    if forced.guide {
+        guide.ai_state.status = AiStatus::Template;
+    }
     if !ai.language.trim().is_empty() {
         guide.language = ai.language.clone();
     }
@@ -315,7 +329,7 @@ pub fn begin(
     let guard = runs.begin(guide.id)?;
     let run_id = guard.id;
     let pipeline_options = PipelineOptions {
-        guide_pass: options.guide_pass.unwrap_or(true),
+        guide_pass,
         ..PipelineOptions::default()
     };
     let task = drive(
@@ -324,18 +338,53 @@ pub fn begin(
         guide,
         images,
         pipeline_options,
-        unselected,
+        Selection { unselected, forced },
         sink,
     );
     Ok((run_id, task))
 }
 
+/// How the snapshot was changed for a run.
+struct Selection {
+    /// Steps left out by `stepIds`, marked `edited` for the run.
+    unselected: usize,
+    forced: Forced,
+}
+
+/// What `force` un-marked `edited` in the snapshot. A result that does not
+/// replace their text reports them `edited` again, as they are.
+#[derive(Default)]
+struct Forced {
+    steps: HashSet<Ulid>,
+    guide: bool,
+}
+
+impl Forced {
+    fn restore_step(&self, step: &mut Step) {
+        if self.steps.contains(&step.id) {
+            step.ai_state.status = AiStatus::Edited;
+        }
+    }
+
+    fn restore_guide(&self, ai_state: &mut AiState) {
+        if self.guide {
+            ai_state.status = AiStatus::Edited;
+        }
+    }
+}
+
 /// Marks the steps not in `step_ids` `edited` in the snapshot, so the
-/// pipeline neither writes them nor edits them for consistency. Returns how
-/// many steps that is.
-fn select_steps(guide: &mut Guide, step_ids: Option<&[String]>) -> Result<usize> {
+/// pipeline neither writes them nor edits them for consistency; with
+/// `force`, un-marks the ones in it. Returns how many steps were marked, and
+/// those un-marked.
+fn select_steps(
+    guide: &mut Guide,
+    step_ids: Option<&[String]>,
+    force: bool,
+) -> Result<(usize, Forced)> {
+    let mut forced = Forced::default();
     let Some(step_ids) = step_ids else {
-        return Ok(0);
+        return Ok((0, forced));
     };
     let mut wanted = HashSet::new();
     for id in step_ids {
@@ -354,10 +403,13 @@ fn select_steps(guide: &mut Guide, step_ids: Option<&[String]>) -> Result<usize>
             if !wanted.contains(&step.id) {
                 step.ai_state.status = AiStatus::Edited;
                 unselected += 1;
+            } else if force && step.ai_state.status == AiStatus::Edited {
+                step.ai_state.status = AiStatus::Template;
+                forced.steps.insert(step.id);
             }
         }
     }
-    Ok(unselected)
+    Ok((unselected, forced))
 }
 
 async fn drive(
@@ -366,22 +418,25 @@ async fn drive(
     mut guide: Guide,
     images: Arc<dyn ImageSource>,
     options: PipelineOptions,
-    unselected: usize,
+    selection: Selection,
     sink: Arc<dyn EventSink>,
 ) {
     let run_id = guard.id;
     let guide_id = guide.id.to_string();
     let cancel = guard.cancel.clone();
-    let ai_state = guide.ai_state.clone();
+    let mut ai_state = guide.ai_state.clone();
+    selection.forced.restore_guide(&mut ai_state);
+    let selection = Arc::new(selection);
     // On its own task, so a panic in the pipeline still ends the run with
     // `ai://guide` and `ai://finished`.
     let pipeline = tauri::async_runtime::spawn({
         let sink = Arc::clone(&sink);
         let guide_id = guide_id.clone();
         let cancel = cancel.clone();
+        let selection = Arc::clone(&selection);
         async move {
             let summary = pipeline::run(provider, &mut guide, images, &options, &cancel, |event| {
-                if let Some(event) = pipeline_event(run_id, &guide_id, event) {
+                if let Some(event) = pipeline_event(run_id, &guide_id, event, &selection.forced) {
                     sink.send(event);
                 }
             })
@@ -392,10 +447,10 @@ async fn drive(
     .await;
     let finished = match pipeline {
         Ok((guide, summary)) => {
-            for event in closing_events(run_id, &guide, &summary) {
+            for event in closing_events(run_id, &guide, &summary, &selection.forced) {
                 sink.send(event);
             }
-            finished(run_id, guide_id, &summary, unselected)
+            finished(run_id, guide_id, &summary, selection.unselected)
         }
         Err(e) => {
             eprintln!("guidesya: AI run {run_id} failed: {e}");
@@ -424,7 +479,12 @@ async fn drive(
 
 /// The event for a pipeline event; the guide pass is sent after the run
 /// (see [`closing_events`]), when the guide can be read.
-fn pipeline_event(run_id: u64, guide_id: &str, event: &PipelineEvent) -> Option<AiEvent> {
+fn pipeline_event(
+    run_id: u64,
+    guide_id: &str,
+    event: &PipelineEvent,
+    forced: &Forced,
+) -> Option<AiEvent> {
     match event {
         PipelineEvent::Started { step_ids } => Some(AiEvent::Started(StartedPayload {
             run_id,
@@ -438,12 +498,18 @@ fn pipeline_event(run_id: u64, guide_id: &str, event: &PipelineEvent) -> Option<
                 StepOutcome::Failed(e) => (Outcome::Failed, Some(e.to_string())),
                 StepOutcome::Cancelled => (Outcome::Cancelled, None),
             };
+            let mut payload_step = step.step.clone();
+            if outcome != Outcome::Applied {
+                if let Some(s) = &mut payload_step {
+                    forced.restore_step(s);
+                }
+            }
             Some(AiEvent::Step(StepPayload {
                 run_id,
                 guide_id: guide_id.to_owned(),
                 step_id: step.step_id.to_string(),
                 outcome,
-                step: step.step.clone(),
+                step: payload_step,
                 redaction_suggestions: step.redaction_suggestions.clone(),
                 error,
             }))
@@ -454,7 +520,12 @@ fn pipeline_event(run_id: u64, guide_id: &str, event: &PipelineEvent) -> Option<
 
 /// After the run: a step event for each consistency edit, then the guide
 /// event.
-fn closing_events(run_id: u64, guide: &Guide, summary: &PipelineSummary) -> Vec<AiEvent> {
+fn closing_events(
+    run_id: u64,
+    guide: &Guide,
+    summary: &PipelineSummary,
+    forced: &Forced,
+) -> Vec<AiEvent> {
     let guide_id = guide.id.to_string();
     let mut events = Vec::new();
     let (fields, error) = match &summary.guide {
@@ -484,11 +555,15 @@ fn closing_events(run_id: u64, guide: &Guide, summary: &PipelineSummary) -> Vec<
         GuidePassOutcome::Failed(e) => (None, Some(e.to_string())),
         GuidePassOutcome::NotRun | GuidePassOutcome::Cancelled => (None, None),
     };
+    let mut ai_state = guide.ai_state.clone();
+    if fields.is_none() {
+        forced.restore_guide(&mut ai_state);
+    }
     events.push(AiEvent::Guide(GuidePayload {
         run_id,
         guide_id,
         fields,
-        ai_state: guide.ai_state.clone(),
+        ai_state,
         error,
     }));
     events
@@ -514,6 +589,103 @@ fn finished(
         },
         error: None,
     }
+}
+
+/// Longest `custom` rewrite instruction, in characters after trimming.
+pub const MAX_INSTRUCTION_CHARS: usize = 500;
+
+/// `ai_rewrite_step`'s style, `{ "kind": "shorter" }` etc.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RewriteStyleArg {
+    Shorter,
+    Beginner,
+    Expert,
+    Custom { instruction: String },
+}
+
+impl RewriteStyleArg {
+    /// The core style; [`ErrorKind::Invalid`] for a `custom` instruction
+    /// that is empty or longer than [`MAX_INSTRUCTION_CHARS`] once trimmed.
+    fn style(self) -> Result<RewriteStyle> {
+        Ok(match self {
+            RewriteStyleArg::Shorter => RewriteStyle::Shorter,
+            RewriteStyleArg::Beginner => RewriteStyle::Beginner,
+            RewriteStyleArg::Expert => RewriteStyle::Expert,
+            RewriteStyleArg::Custom { instruction } => {
+                let instruction = instruction.trim();
+                let len = instruction.chars().count();
+                if len == 0 || len > MAX_INSTRUCTION_CHARS {
+                    return Err(AppError::new(
+                        ErrorKind::Invalid,
+                        format!("the instruction must be 1 to {MAX_INSTRUCTION_CHARS} characters"),
+                    ));
+                }
+                RewriteStyle::Custom(instruction.to_owned())
+            }
+        })
+    }
+}
+
+/// A rewritten step, for the editor to apply as one change.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rewritten {
+    pub title: String,
+    pub description: Option<String>,
+    /// `ai`, with the model and the rewrite prompt version, no error, and
+    /// the step's redaction suggestions.
+    pub ai_state: AiState,
+}
+
+/// Rewrites step `step_id` of `guide` (the saved snapshot), `edited` or
+/// not, in the settings language. Errors: an invalid or unknown step id or
+/// instruction ([`ErrorKind::Invalid`]); the provider's error
+/// ([`ErrorKind::Io`]).
+pub async fn rewrite(
+    provider: &dyn AiProvider,
+    guide: &Guide,
+    step_id: &str,
+    style: RewriteStyleArg,
+    ai: &settings::Ai,
+) -> Result<Rewritten> {
+    let id = parse_id(step_id)?;
+    let style = style.style()?;
+    let step = guide.steps().find(|step| step.id == id).ok_or_else(|| {
+        AppError::new(
+            ErrorKind::Invalid,
+            format!("step {id} is not in the saved guide"),
+        )
+    })?;
+    let language = if ai.language.trim().is_empty() {
+        guide.language.clone()
+    } else {
+        ai.language.clone()
+    };
+    let input = RewriteInput {
+        step_id: id,
+        kind: step.kind,
+        title: step.title.clone(),
+        description: step.description.clone(),
+        element: step.element.clone(),
+        style,
+        language,
+    };
+    let output = provider
+        .rewrite(&input)
+        .await
+        .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
+    Ok(Rewritten {
+        title: output.title,
+        description: output.description,
+        ai_state: AiState {
+            status: AiStatus::Ai,
+            model: Some(output.meta.model),
+            prompt_version: Some(output.meta.prompt_version),
+            error: None,
+            redaction_suggestions: step.ai_state.redaction_suggestions.clone(),
+        },
+    })
 }
 
 /// Starts writing an open guide with AI, on the guide as last saved (the
@@ -560,6 +732,34 @@ pub async fn ai_generate<R: Runtime>(
 #[tauri::command]
 pub fn ai_cancel(runs: State<'_, Arc<AiRuns>>, run_id: u64) {
     runs.cancel(run_id);
+}
+
+/// Rewrites one step of an open guide as last saved (the editor saves
+/// first) and returns the text; nothing is written. Runs alongside an
+/// `ai_generate` run of the same guide.
+#[tauri::command]
+pub async fn ai_rewrite_step(
+    cell: State<'_, Arc<SessionCell>>,
+    store: State<'_, Arc<SettingsStore>>,
+    guide_id: String,
+    step_id: String,
+    style: RewriteStyleArg,
+) -> Result<Rewritten> {
+    let id = parse_id(&guide_id)?;
+    let ai = store.get().ai;
+    let cell = Arc::clone(&cell);
+    let (key, guide) = blocking({
+        let ai = ai.clone();
+        move || {
+            let key = check_ready(&ai, keychain::get_api_key)?;
+            let (guide, _) = cell.get()?.saved_guide(id)?;
+            Ok((key, guide))
+        }
+    })
+    .await?;
+    let provider = ClaudeProvider::new(key, claude_config(&ai))
+        .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
+    rewrite(&provider, &guide, &step_id, style, &ai).await
 }
 
 /// The quit backstop: stops any run still going (nothing is lost; the
@@ -906,6 +1106,7 @@ mod tests {
         let options = GenerateOptions {
             step_ids: Some(vec![ids[1].to_string(), ids[2].to_string()]),
             guide_pass: Some(false),
+            force: false,
         };
         let (_, task) = begin(
             &runs,
@@ -941,7 +1142,7 @@ mod tests {
         for bad in ["nope", &Ulid::new().to_string()] {
             let options = GenerateOptions {
                 step_ids: Some(vec![bad.to_string()]),
-                guide_pass: None,
+                ..GenerateOptions::default()
             };
             let err = begin(
                 &runs,
@@ -1260,6 +1461,12 @@ mod tests {
             serde_json::from_value(json!({ "stepIds": ["a"], "guidePass": false })).unwrap();
         assert_eq!(options.step_ids, Some(vec!["a".to_string()]));
         assert_eq!(options.guide_pass, Some(false));
+        assert!(!options.force);
+        let options: GenerateOptions =
+            serde_json::from_value(json!({ "stepIds": [], "guidePass": true, "force": true }))
+                .unwrap();
+        assert_eq!(options.step_ids, Some(Vec::new()));
+        assert!(options.force);
         let options: GenerateOptions = serde_json::from_value(json!({})).unwrap();
         assert_eq!(options, GenerateOptions::default());
         assert_eq!(
@@ -1289,6 +1496,407 @@ mod tests {
             ..ai()
         });
         assert_eq!(config.step.model, ClaudeConfig::default().step.model);
+    }
+
+    fn step_events(events: &[AiEvent]) -> Vec<&StepPayload> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AiEvent::Step(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn guide_event(events: &[AiEvent]) -> &GuidePayload {
+        events
+            .iter()
+            .find_map(|e| match e {
+                AiEvent::Guide(g) => Some(g),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn finished_event(events: &[AiEvent]) -> &FinishedPayload {
+        let AiEvent::Finished(finished) = events.last().unwrap() else {
+            panic!("{events:?}");
+        };
+        finished
+    }
+
+    #[test]
+    fn force_regenerates_an_edited_step() {
+        let guide = guide();
+        let ids = step_ids(&guide);
+        let (events, _) = run_all(
+            MockProvider::new(),
+            guide,
+            GenerateOptions {
+                step_ids: Some(vec![ids[1].to_string()]),
+                guide_pass: Some(false),
+                force: true,
+            },
+        );
+        let AiEvent::Started(started) = &events[0] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(started.step_ids, [ids[1].to_string()]);
+        let steps = step_events(&events);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].outcome, Outcome::Applied);
+        let step = steps[0].step.as_ref().unwrap();
+        assert_eq!(step.title, "AI: Mine");
+        assert_eq!(step.ai_state.status, AiStatus::Ai);
+        assert_eq!(guide_event(&events).fields, None);
+        let finished = finished_event(&events);
+        assert_eq!(
+            (finished.applied, finished.skipped_edited, finished.failed),
+            (1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn without_force_an_edited_step_is_skipped() {
+        let guide = guide();
+        let ids = step_ids(&guide);
+        let provider = Arc::new(MockProvider::new());
+        let runs = Arc::new(AiRuns::default());
+        let events = Arc::new(Events::default());
+        let options = GenerateOptions {
+            step_ids: Some(vec![ids[1].to_string()]),
+            guide_pass: Some(false),
+            force: false,
+        };
+        let (_, task) = begin(
+            &runs,
+            Arc::clone(&provider) as Arc<dyn AiProvider>,
+            guide,
+            no_images(),
+            &options,
+            &ai(),
+            Arc::clone(&events) as Arc<dyn EventSink>,
+        )
+        .unwrap();
+        tauri::async_runtime::block_on(task);
+        let events = events.take();
+        assert_eq!(provider.step_calls(), 0);
+        let finished = finished_event(&events);
+        assert_eq!((finished.applied, finished.skipped_edited), (0, 1));
+    }
+
+    #[test]
+    fn a_forced_step_that_fails_stays_edited() {
+        let guide = guide();
+        let ids = step_ids(&guide);
+        let provider = MockProvider::new().on_step(|_| Err(AiError::Truncated));
+        let (events, _) = run_all(
+            provider,
+            guide,
+            GenerateOptions {
+                step_ids: Some(vec![ids[1].to_string()]),
+                guide_pass: Some(false),
+                force: true,
+            },
+        );
+        let steps = step_events(&events);
+        assert_eq!(steps[0].outcome, Outcome::Failed);
+        let step = steps[0].step.as_ref().unwrap();
+        assert_eq!(step.title, "Mine");
+        assert_eq!(step.ai_state.status, AiStatus::Edited);
+        assert!(step.ai_state.error.is_some());
+    }
+
+    #[test]
+    fn force_regenerates_edited_guide_fields_only() {
+        let mut guide = guide();
+        guide.ai_state.status = AiStatus::Edited;
+        let ids = step_ids(&guide);
+        let edited_step = ids[1];
+        let other = ids[0];
+        let provider = Arc::new(MockProvider::new().on_guide(move |input| {
+            // No step is open to consistency edits: there is no step pass.
+            assert!(input.steps.iter().all(|s| !s.editable));
+            Ok(GuideOutput {
+                title: "New".into(),
+                intro: "Intro".into(),
+                prerequisites: String::new(),
+                summary: String::new(),
+                tags: vec!["keys".into()],
+                step_edits: vec![
+                    StepEdit {
+                        step_id: other,
+                        title: Some("Changed".into()),
+                        description: None,
+                    },
+                    StepEdit {
+                        step_id: edited_step,
+                        title: Some("Changed".into()),
+                        description: None,
+                    },
+                ],
+                meta: mock_meta(prompts::GUIDE.version),
+            })
+        }));
+        let runs = Arc::new(AiRuns::default());
+        let events = Arc::new(Events::default());
+        let options = GenerateOptions {
+            step_ids: Some(Vec::new()),
+            guide_pass: Some(true),
+            force: true,
+        };
+        let (_, task) = begin(
+            &runs,
+            Arc::clone(&provider) as Arc<dyn AiProvider>,
+            guide,
+            no_images(),
+            &options,
+            &ai(),
+            Arc::clone(&events) as Arc<dyn EventSink>,
+        )
+        .unwrap();
+        tauri::async_runtime::block_on(task);
+        let events = events.take();
+        assert_eq!(provider.step_calls(), 0);
+        assert_eq!(provider.guide_calls(), 1);
+        let names: Vec<_> = events.iter().map(AiEvent::name).collect();
+        assert_eq!(names, [STARTED_EVENT, GUIDE_EVENT, FINISHED_EVENT]);
+        let AiEvent::Started(started) = &events[0] else {
+            panic!("{events:?}");
+        };
+        assert!(started.step_ids.is_empty());
+        let guide_event = guide_event(&events);
+        let fields = guide_event.fields.as_ref().unwrap();
+        assert_eq!(
+            (fields.title.as_str(), fields.intro.as_str()),
+            ("New", "Intro")
+        );
+        assert_eq!(guide_event.ai_state.status, AiStatus::Ai);
+        assert_eq!(
+            guide_event.ai_state.prompt_version.as_deref(),
+            Some(prompts::GUIDE.version)
+        );
+        let finished = finished_event(&events);
+        assert_eq!(
+            (finished.applied, finished.skipped_edited, finished.failed),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn empty_step_ids_run_only_the_guide_pass() {
+        let guide = guide();
+        let provider = Arc::new(MockProvider::new());
+        let runs = Arc::new(AiRuns::default());
+        let events = Arc::new(Events::default());
+        let options = GenerateOptions {
+            step_ids: Some(Vec::new()),
+            guide_pass: Some(true),
+            force: false,
+        };
+        let (_, task) = begin(
+            &runs,
+            Arc::clone(&provider) as Arc<dyn AiProvider>,
+            guide,
+            no_images(),
+            &options,
+            &ai(),
+            Arc::clone(&events) as Arc<dyn EventSink>,
+        )
+        .unwrap();
+        tauri::async_runtime::block_on(task);
+        let events = events.take();
+        assert_eq!(provider.step_calls(), 0);
+        assert_eq!(provider.guide_calls(), 1);
+        assert!(step_events(&events).is_empty());
+        assert!(guide_event(&events).fields.is_some());
+        let finished = finished_event(&events);
+        assert_eq!(
+            (finished.applied, finished.skipped_edited, finished.failed),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn a_forced_guide_pass_that_fails_stays_edited() {
+        let mut guide = guide();
+        guide.ai_state.status = AiStatus::Edited;
+        let provider = MockProvider::new().on_guide(|_| Err(AiError::Truncated));
+        let (events, _) = run_all(
+            provider,
+            guide,
+            GenerateOptions {
+                step_ids: Some(Vec::new()),
+                guide_pass: Some(true),
+                force: true,
+            },
+        );
+        let guide_event = guide_event(&events);
+        assert_eq!(guide_event.fields, None);
+        assert_eq!(guide_event.ai_state.status, AiStatus::Edited);
+        assert!(guide_event.error.is_some());
+    }
+
+    fn rewrite_now(
+        provider: &MockProvider,
+        guide: &Guide,
+        step_id: &str,
+        style: RewriteStyleArg,
+    ) -> Result<Rewritten> {
+        tauri::async_runtime::block_on(rewrite(provider, guide, step_id, style, &ai()))
+    }
+
+    #[test]
+    fn rewrites_an_edited_step() {
+        let mut guide = guide();
+        let ids = step_ids(&guide);
+        let suggestion = RedactionSuggestion {
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            reason: "email address".into(),
+        };
+        if let Item::Step(step) = &mut guide.items[1] {
+            step.description = "Mine too.".into();
+            step.ai_state.error = Some("old".into());
+            step.ai_state.redaction_suggestions = vec![suggestion.clone()];
+        }
+        let provider = MockProvider::new();
+        let rewritten = rewrite_now(
+            &provider,
+            &guide,
+            &ids[1].to_string(),
+            RewriteStyleArg::Shorter,
+        )
+        .unwrap();
+        assert_eq!(provider.rewrite_calls(), 1);
+        assert_eq!(
+            serde_json::to_value(&rewritten).unwrap(),
+            json!({
+                "title": "AI: Mine",
+                "description": "Mine too.",
+                "aiState": {
+                    "status": "ai",
+                    "model": "mock",
+                    "promptVersion": prompts::REWRITE.version,
+                    "redactionSuggestions": [{
+                        "rect": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 },
+                        "reason": "email address",
+                    }],
+                },
+            })
+        );
+        assert_eq!(rewritten.ai_state.error, None);
+    }
+
+    #[test]
+    fn rewrite_passes_the_style_and_language() {
+        let guide = guide();
+        let ids = step_ids(&guide);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = MockProvider::new().on_rewrite({
+            let seen = Arc::clone(&seen);
+            move |input| {
+                seen.lock()
+                    .unwrap()
+                    .push((input.style.clone(), input.language.clone()));
+                Ok(guidesya_core::ai::RewriteOutput {
+                    title: "T".into(),
+                    description: None,
+                    meta: mock_meta(prompts::REWRITE.version),
+                })
+            }
+        });
+        let style: RewriteStyleArg =
+            serde_json::from_value(json!({ "kind": "custom", "instruction": "  Be formal. " }))
+                .unwrap();
+        let rewritten = rewrite_now(&provider, &guide, &ids[0].to_string(), style).unwrap();
+        assert_eq!(rewritten.description, None);
+        for (value, style) in [
+            (json!({ "kind": "shorter" }), RewriteStyle::Shorter),
+            (json!({ "kind": "beginner" }), RewriteStyle::Beginner),
+            (json!({ "kind": "expert" }), RewriteStyle::Expert),
+        ] {
+            let arg: RewriteStyleArg = serde_json::from_value(value).unwrap();
+            assert_eq!(arg.style().unwrap(), style);
+        }
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            (RewriteStyle::Custom("Be formal.".into()), "en".to_string())
+        );
+    }
+
+    #[test]
+    fn custom_instructions_are_checked() {
+        let guide = guide();
+        let id = step_ids(&guide)[0].to_string();
+        let provider = MockProvider::new();
+        let custom = |s: &str| RewriteStyleArg::Custom {
+            instruction: s.into(),
+        };
+        for bad in ["", "   \n", &"x".repeat(MAX_INSTRUCTION_CHARS + 1)] {
+            let err = rewrite_now(&provider, &guide, &id, custom(bad)).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid, "{bad:?}");
+        }
+        assert_eq!(provider.rewrite_calls(), 0);
+        // Counted in characters, after trimming.
+        let longest = format!("  {}  ", "é".repeat(MAX_INSTRUCTION_CHARS));
+        assert!(rewrite_now(&provider, &guide, &id, custom(&longest)).is_ok());
+        assert!(rewrite_now(&provider, &guide, &id, custom("a")).is_ok());
+        assert!(serde_json::from_value::<RewriteStyleArg>(json!({ "kind": "custom" })).is_err());
+        assert!(serde_json::from_value::<RewriteStyleArg>(json!({ "kind": "louder" })).is_err());
+    }
+
+    #[test]
+    fn rewrite_errors() {
+        let guide = guide();
+        let id = step_ids(&guide)[0].to_string();
+        let provider = MockProvider::new();
+        for bad in ["nope".to_string(), Ulid::new().to_string()] {
+            let err = rewrite_now(&provider, &guide, &bad, RewriteStyleArg::Expert).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid);
+        }
+        assert_eq!(provider.rewrite_calls(), 0);
+        let failing = MockProvider::new().on_rewrite(|_| Err(AiError::Refusal { category: None }));
+        let err = rewrite_now(&failing, &guide, &id, RewriteStyleArg::Beginner).unwrap_err();
+        assert_eq!(
+            err,
+            AppError::new(ErrorKind::Io, "the model declined the request")
+        );
+    }
+
+    #[test]
+    fn the_saved_snapshot_needs_an_open_guide() {
+        let root = crate::editor::tests::library();
+        let session = crate::editor::Session::start(&root, None).unwrap();
+        let id = parse_id(&crate::editor::tests::fixture_id(&root)).unwrap();
+        // The command reads the guide through `saved_guide`, as `ai_generate`.
+        let err = session.saved_guide(id).err().unwrap();
+        assert_eq!(err.kind, ErrorKind::NotOpen);
+    }
+
+    #[test]
+    fn rewrite_runs_alongside_a_run_of_the_guide() {
+        let runs = Arc::new(AiRuns::default());
+        let guide = guide();
+        let id = step_ids(&guide)[0].to_string();
+        let (_, task) = begin(
+            &runs,
+            Arc::new(MockProvider::new()),
+            guide.clone(),
+            no_images(),
+            &GenerateOptions::default(),
+            &ai(),
+            Arc::new(Events::default()),
+        )
+        .unwrap();
+        assert_eq!(runs.active(), 1);
+        let provider = MockProvider::new();
+        assert!(rewrite_now(&provider, &guide, &id, RewriteStyleArg::Shorter).is_ok());
+        tauri::async_runtime::block_on(task);
     }
 
     #[test]

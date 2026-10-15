@@ -81,7 +81,11 @@ export interface EditorState {
    * sets (or insert or remove a step it writes) are dropped: their inverses
    * hold the text from before, and undoing or redoing them would put that
    * back over the new text. That field loses its undo depth; nothing else
-   * does. Returns false if it was refused (no guide, read-only, busy, or it
+   * does. This includes an explicit AI action's entry (Regenerate,
+   * Rewrite) when a later background run writes the same step or guide
+   * details again: by design, older text never comes back over newer AI
+   * text. An `aiState` that only gains or changes its `error` writes no
+   * text, so it drops nothing (undo may then clear the error). Returns false if it was refused (no guide, read-only, busy, or it
    * no longer applies).
    */
   applyUntracked(patches: Patch[]): boolean;
@@ -137,6 +141,21 @@ function overlaps(a: string, b: string): boolean {
 function touches(entry: HistoryEntry, written: string[]): boolean {
   const { forward, inverse } = entry.command;
   return [...forward, ...inverse].some((patch) => targets(patch).some((t) => written.some((w) => overlaps(t, w))));
+}
+
+/** Whether `patch` sets an `aiState` that differs from the current one only in `error`. */
+function onlyAnError(guide: Guide, patch: Patch): boolean {
+  if ((patch.op !== "setGuide" && patch.op !== "setItem") || patch.key !== "aiState") return false;
+  const current =
+    patch.op === "setGuide"
+      ? (guide.aiState ?? { status: "template" })
+      : (guide.items.find((item) => item.id === patch.id) as { aiState?: unknown } | undefined)?.aiState;
+  const withoutError = (value: unknown) => {
+    if (!value || typeof value !== "object") return value;
+    const { error: _error, ...rest } = value as Record<string, unknown>;
+    return rest;
+  };
+  return JSON.stringify(withoutError(current)) === JSON.stringify(withoutError(patch.value));
 }
 
 /** True if a command would change nothing (e.g. typing the same title). */
@@ -424,7 +443,8 @@ export function createEditorStore({
           console.error("untracked change failed:", error);
           return false;
         }
-        const written = patches.flatMap(targets);
+        // An AI error recorded on its own changes no text: undo keeps it.
+        const written = patches.filter((patch) => !onlyAnError(doc.guide, patch)).flatMap(targets);
         const keep = (stack: HistoryEntry[]) => stack.filter((entry) => !touches(entry, written));
         changed(guide, { undoStack: keep(get().undoStack), redoStack: keep(get().redoStack) });
         return true;

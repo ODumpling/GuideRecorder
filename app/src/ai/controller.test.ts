@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { autoRun, createAiStore, NO_KEY_MESSAGE, summary, type Listen } from "@/ai/controller";
+import { acceptBlurSuggestion, rejectBlurSuggestion } from "@/annotations/commands";
 import { setGuideField, setItemText } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 import type { AiApi, EditorApi } from "@/lib/ipc";
-import type { AiGuideEvent, AiStepEvent, Guide, Settings, Step } from "@/lib/types";
+import type { AiGuideEvent, AiRewriteResult, AiStepEvent, Guide, Settings, Step } from "@/lib/types";
 
 function fakeEvents() {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
@@ -22,7 +23,10 @@ function fakeEvents() {
   return { listen, emit, listeners };
 }
 
-async function setup({ generate }: { generate?: AiApi["generate"] } = {}) {
+async function setup({
+  generate,
+  rewriteStep,
+}: { generate?: AiApi["generate"]; rewriteStep?: AiApi["rewriteStep"] } = {}) {
   const saved: Guide[] = [];
   const editorApi: EditorApi = {
     listGuides: vi.fn(async () => []),
@@ -46,6 +50,14 @@ async function setup({ generate }: { generate?: AiApi["generate"] } = {}) {
   const api = {
     generate: vi.fn(generate ?? (async () => ({ runId: nextRun++ }))),
     cancel: vi.fn(async () => {}),
+    rewriteStep: vi.fn(
+      rewriteStep ??
+        (async () => ({
+          title: "Rewritten",
+          description: "Rewritten text" as string | null,
+          aiState: { status: "ai" as const, model: "claude-haiku-5-5", promptVersion: "rewrite.v1", error: null },
+        })),
+    ),
   };
   const ai = createAiStore({ api, editor, listen: events.listen });
   const e = () => editor.getState();
@@ -321,6 +333,233 @@ describe("AI run controller", () => {
     await ai.getState().start();
     expect(await ai.getState().start()).toBe(false);
     expect(api.generate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("explicit AI actions", () => {
+  it("Regenerate replaces an edited step as one undoable change; undo brings back `edited`", async () => {
+    const { e, ai, api, events } = await setup();
+    e().dispatch(setItemText(e().doc!.guide, "A", "title", "Mine"));
+    expect(await ai.getState().regenerateStep("A")).toBe(true);
+    expect(api.generate).toHaveBeenCalledWith("G1", { stepIds: ["A"], guidePass: false, force: true });
+    // Writing… shows on the step even though it is edited.
+    expect([...ai.getState().generating]).toEqual(["A"]);
+    expect(ai.getState().explicit).toEqual({ kind: "regenerate", guideId: "G1", stepId: "A" });
+
+    const suggestions = [{ rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email" }];
+    events.emit("ai://started", { runId: 7, guideId: "G1", stepIds: ["A"] });
+    events.emit("ai://step", stepEvent(7, "A", { redactionSuggestions: suggestions }));
+    expect(stepOf(e().doc!.guide, "A")).toMatchObject({
+      title: "AI title A",
+      description: "AI text A",
+      aiState: { status: "ai", redactionSuggestions: suggestions },
+    });
+    const top = e().undoStack.at(-1)!.command;
+    expect(top.label).toBe("Regenerate step");
+    expect(e().undoStack).toHaveLength(2);
+    events.emit("ai://guide", { ...guideEvent(7), fields: null, aiState: { status: "template" } });
+    events.emit("ai://finished", finished(7));
+    expect(ai.getState()).toMatchObject({ phase: "idle", explicit: null });
+    // Its result is the notice enough.
+    expect(e().notice).toBeNull();
+
+    e().undo();
+    expect(stepOf(e().doc!.guide, "A")).toMatchObject({ title: "Mine", aiState: { status: "edited" } });
+    e().redo();
+    expect(stepOf(e().doc!.guide, "A")).toMatchObject({ title: "AI title A", aiState: { status: "ai" } });
+  });
+
+  it("Regenerate guide details replaces edited fields as one undoable change", async () => {
+    const { e, ai, api, events } = await setup();
+    e().dispatch(setGuideField(e().doc!.guide, "summary", "My summary"));
+    expect(await ai.getState().regenerateGuide()).toBe(true);
+    expect(api.generate).toHaveBeenCalledWith("G1", { stepIds: [], guidePass: true, force: true });
+    expect(ai.getState().generating.size).toBe(0);
+    events.emit("ai://guide", guideEvent(7));
+    events.emit("ai://finished", finished(7));
+    expect(e().doc!.guide).toMatchObject({ title: "AI guide", summary: "AI summary", aiState: { status: "ai" } });
+    expect(e().undoStack.at(-1)!.command.label).toBe("Regenerate guide details");
+    e().undo();
+    expect(e().doc!.guide).toMatchObject({ title: "Guide", summary: "My summary", aiState: { status: "edited" } });
+  });
+
+  it("Rewrite flushes, then applies the result as one undoable change", async () => {
+    const { e, ai, api, saved } = await setup();
+    e().dispatch(setItemText(e().doc!.guide, "B", "description", "My words"));
+    let resolve: ((v: AiRewriteResult) => void) | null = null;
+    api.rewriteStep.mockImplementation(() => new Promise<AiRewriteResult>((r) => (resolve = r)));
+    const rewriting = ai.getState().rewriteStep("B", { kind: "shorter" });
+    await vi.waitFor(() => expect(resolve).not.toBeNull());
+    // The backend rewrites the step as saved.
+    expect(stepOf(saved.at(-1)!, "B").description).toBe("My words");
+    expect(api.rewriteStep).toHaveBeenCalledWith("G1", "B", { kind: "shorter" });
+    expect([...ai.getState().generating]).toEqual(["B"]);
+    // One AI action at a time.
+    expect(await ai.getState().start()).toBe(false);
+    expect(await ai.getState().regenerateStep("A")).toBe(false);
+
+    resolve!({ title: "Short", description: null, aiState: { status: "ai", promptVersion: "rewrite.v1", error: null } });
+    expect(await rewriting).toBe(true);
+    expect(ai.getState()).toMatchObject({ explicit: null, phase: "idle" });
+    expect(ai.getState().generating.size).toBe(0);
+    expect(stepOf(e().doc!.guide, "B")).toMatchObject({ title: "Short", description: "", aiState: { status: "ai" } });
+    expect(e().undoStack.at(-1)!.command.label).toBe("Rewrite step");
+    e().undo();
+    expect(stepOf(e().doc!.guide, "B")).toMatchObject({ title: "Step B", description: "My words", aiState: { status: "edited" } });
+  });
+
+  it("shows a rewrite's error as the notice and changes nothing", async () => {
+    const { e, ai } = await setup({
+      rewriteStep: async () => Promise.reject({ kind: "invalid", message: "AI is turned off in Settings." }),
+    });
+    expect(await ai.getState().rewriteStep("A", { kind: "custom", instruction: "Be brief" })).toBe(false);
+    expect(e().notice).toBe("AI is turned off in Settings.");
+    expect(e().undoStack).toHaveLength(0);
+    expect(ai.getState().explicit).toBeNull();
+  });
+
+  it("notices a failed regenerate and keeps the text and its status", async () => {
+    const { e, ai, events } = await setup();
+    e().dispatch(setItemText(e().doc!.guide, "A", "title", "Mine"));
+    await ai.getState().regenerateStep("A");
+    events.emit("ai://step", stepEvent(7, "A", { outcome: "failed", step: null, error: "rate limited" }));
+    events.emit("ai://finished", finished(7));
+    expect(stepOf(e().doc!.guide, "A")).toMatchObject({ title: "Mine", aiState: { status: "edited", error: "rate limited" } });
+    expect(e().notice).toBe("AI could not write this step: rate limited.");
+  });
+
+  it("refuses explicit actions while a background run is going", async () => {
+    const { ai, api, events } = await setup();
+    await ai.getState().start();
+    expect(await ai.getState().regenerateStep("A")).toBe(false);
+    expect(await ai.getState().regenerateGuide()).toBe(false);
+    expect(await ai.getState().rewriteStep("A", { kind: "expert" })).toBe(false);
+    expect(api.generate).toHaveBeenCalledTimes(1);
+    expect(api.rewriteStep).not.toHaveBeenCalled();
+    events.emit("ai://finished", finished(7));
+    expect(await ai.getState().regenerateStep("A")).toBe(true);
+  });
+
+  it("Accept and Reject of a blur suggestion are undo steps in the editor", async () => {
+    const { e, ai, events } = await setup();
+    const suggestions = [
+      { rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email" },
+      { rect: { x: 5, y: 6, width: 7, height: 8 }, reason: "name" },
+    ];
+    // Suggestions arrive with a background run, untracked.
+    await ai.getState().start();
+    events.emit("ai://step", stepEvent(7, "A", { redactionSuggestions: suggestions }));
+    events.emit("ai://finished", finished(7));
+    expect(e().undoStack).toHaveLength(0);
+
+    expect(e().dispatch(acceptBlurSuggestion(e().doc!.guide, "A", 0, "BL1"))).toBe(true);
+    expect(stepOf(e().doc!.guide, "A").annotations).toEqual([{ id: "BL1", type: "blur", geometry: suggestions[0].rect }]);
+    expect(e().dispatch(rejectBlurSuggestion(e().doc!.guide, "A", 0))).toBe(true);
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([]);
+
+    e().undo();
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([suggestions[1]]);
+    e().undo();
+    expect(stepOf(e().doc!.guide, "A").annotations).toEqual([]);
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual(suggestions);
+  });
+
+  it("a failed Regenerate records its error without dropping undo history", async () => {
+    const { e, ai, events } = await setup();
+    e().dispatch(setItemText(e().doc!.guide, "A", "title", "Mine"));
+    await ai.getState().regenerateStep("B");
+    events.emit("ai://step", stepEvent(7, "B"));
+    events.emit("ai://finished", finished(7));
+    expect(e().undoStack).toHaveLength(2);
+
+    await ai.getState().regenerateStep("A");
+    events.emit("ai://step", stepEvent(8, "A", { outcome: "failed", step: null, error: "rate limited" }));
+    events.emit("ai://finished", finished(8));
+    expect(stepOf(e().doc!.guide, "A").aiState).toMatchObject({ status: "edited", error: "rate limited" });
+    expect(e().undoStack).toHaveLength(2);
+    e().undo();
+    expect(stepOf(e().doc!.guide, "B").title).toBe("Step B");
+    e().undo();
+    expect(stepOf(e().doc!.guide, "A").title).toBe("Step A");
+  });
+
+  it("a failed guide Regenerate records its error without dropping undo history", async () => {
+    const { e, ai, events } = await setup();
+    e().dispatch(setGuideField(e().doc!.guide, "summary", "My summary"));
+    e().dispatch(setItemText(e().doc!.guide, "A", "title", "Mine"));
+    await ai.getState().regenerateGuide();
+    events.emit("ai://guide", { ...guideEvent(7), fields: null, aiState: { status: "edited" }, error: "overloaded" });
+    events.emit("ai://finished", finished(7));
+    expect(e().doc!.guide.aiState).toMatchObject({ status: "edited", error: "overloaded" });
+    expect(e().notice).toBe("AI could not write the guide details: overloaded.");
+    expect(e().undoStack).toHaveLength(2);
+    e().undo();
+    e().undo();
+    expect(e().doc!.guide.summary).toBe("");
+  });
+
+  it("drops a Rewrite whose guide was closed and reopened before the result came", async () => {
+    const { e, ai, api } = await setup();
+    let resolve: ((v: AiRewriteResult) => void) | null = null;
+    api.rewriteStep.mockImplementation(() => new Promise<AiRewriteResult>((r) => (resolve = r)));
+    const rewriting = ai.getState().rewriteStep("A", { kind: "shorter" });
+    await vi.waitFor(() => expect(resolve).not.toBeNull());
+    await e().closeGuide();
+    // Over at once: nothing is left waiting.
+    expect(ai.getState()).toMatchObject({ explicit: null });
+    expect(ai.getState().generating.size).toBe(0);
+    await e().openGuide("G1");
+
+    resolve!({ title: "Stale", description: "Stale", aiState: { status: "ai" } });
+    expect(await rewriting).toBe(false);
+    expect(stepOf(e().doc!.guide, "A").title).toBe("Step A");
+    expect(e().undoStack).toHaveLength(0);
+    expect(e().notice).toBeNull();
+  });
+
+  it("switching guides during a Rewrite frees AI for the new guide", async () => {
+    const { e, ai, api, events } = await setup();
+    let reject: ((error: unknown) => void) | null = null;
+    api.rewriteStep.mockImplementation(() => new Promise<AiRewriteResult>((_, r) => (reject = r)));
+    const rewriting = ai.getState().rewriteStep("A", { kind: "expert" });
+    await vi.waitFor(() => expect(reject).not.toBeNull());
+    await e().openGuide("G2");
+    expect(ai.getState().explicit).toBeNull();
+    expect(await ai.getState().start()).toBe(true);
+    expect(api.generate).toHaveBeenLastCalledWith("G2");
+
+    // The old request failing later says nothing and leaves the new run alone.
+    reject!({ kind: "io", message: "timed out" });
+    expect(await rewriting).toBe(false);
+    expect(e().notice).toBeNull();
+    expect(ai.getState().phase).toBe("running");
+    events.emit("ai://finished", { ...finished(7), guideId: "G2" });
+    expect(ai.getState().phase).toBe("idle");
+  });
+
+  it("a later background run drops an explicit action's undo entry (by design)", async () => {
+    const { e, ai, events } = await setup();
+    await ai.getState().regenerateStep("A");
+    events.emit("ai://step", stepEvent(7, "A"));
+    events.emit("ai://finished", finished(7));
+    expect(e().undoStack.map((entry) => entry.command.label)).toEqual(["Regenerate step"]);
+
+    // The step is `ai` now, so the background run writes it again...
+    await ai.getState().start();
+    events.emit("ai://step", stepEvent(8, "A", { step: { ...stepEvent(8, "A").step!, title: "Newer" } }));
+    events.emit("ai://finished", finished(8));
+    expect(stepOf(e().doc!.guide, "A").title).toBe("Newer");
+    // ...and undo can't bring the older text back over it.
+    expect(e().undoStack).toHaveLength(0);
+  });
+
+  it("keeps background results untracked", async () => {
+    const { e, ai, events } = await setup();
+    await ai.getState().start();
+    events.emit("ai://step", stepEvent(7, "A"));
+    events.emit("ai://guide", guideEvent(7));
+    expect(stepOf(e().doc!.guide, "A").title).toBe("AI title A");
+    expect(e().undoStack).toHaveLength(0);
   });
 });
 

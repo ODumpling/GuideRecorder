@@ -6,6 +6,7 @@ import { join, relative, resolve } from "node:path";
 import type {
   AiFinishedEvent,
   AiGuideEvent,
+  AiRewriteResult,
   AiStepEvent,
   CaptureArea,
   CaptureTargetArg,
@@ -19,12 +20,17 @@ import type {
   RecordingSaved,
   RecordingSnapshot,
   RecordingStatus,
+  RedactionSuggestion,
+  RewriteStyleArg,
   Settings,
   StampedStatus,
   Step,
   StepImage,
 } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
+
+/** `ai_generate`'s options. */
+type AiGenerateArgs = { stepIds?: string[]; guidePass?: boolean; force?: boolean };
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
 const SCHEMA_VERSION = 1;
@@ -198,8 +204,11 @@ export class Backend {
   private aiRun: { runId: number; guideId: string; pending: EmittedEvent[] } | null = null;
   private aiRuns = 0;
   /** Every `ai_generate` that started a run, in order, with its options. */
-  readonly aiGenerations: { guideId: string; runId: number; options?: { stepIds?: string[]; guidePass?: boolean } }[] =
-    [];
+  readonly aiGenerations: { guideId: string; runId: number; options?: AiGenerateArgs }[] = [];
+  /** Blur suggestions the mock AI sends with a step it writes, by step id. */
+  aiSuggestions: Record<string, RedactionSuggestion[]> = {};
+  /** Every `ai_rewrite_step`, in order. */
+  readonly aiRewrites: { guideId: string; stepId: string; style: RewriteStyleArg }[] = [];
   /** Guides opened and not closed since, as the Rust session tracks them. */
   private openGuides = new Set<string>();
   /** Run ids `ai_cancel` was called with. */
@@ -282,9 +291,10 @@ export class Backend {
   /**
    * Starts an AI run on the guide as last saved, like Rust's `ai_generate`:
    * the same checks in the same order, and step events only for the steps
-   * it writes (`stepIds`, default all, less the edited ones).
+   * it writes (`stepIds`, default all, `[]` none, less the edited ones
+   * unless `force`).
    */
-  private aiGenerate(guideId: string, options?: { stepIds?: string[]; guidePass?: boolean }): { runId: number } {
+  private aiGenerate(guideId: string, options?: AiGenerateArgs): { runId: number } {
     if (!this.settings.ai.enabled) fail("invalid", "AI is turned off in Settings.");
     if (!this.apiKeyStored) fail("invalid", "Add an API key in Settings to write with AI.");
     if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
@@ -299,7 +309,8 @@ export class Backend {
     const runId = ++this.aiRuns;
     this.aiGenerations.push(options ? { guideId, runId, options: structuredClone(options) } : { guideId, runId });
     const wanted = (step: Step) => !options?.stepIds || options.stepIds.includes(step.id);
-    const targets = steps.filter((step) => wanted(step) && step.aiState.status !== "edited");
+    const force = options?.force === true;
+    const targets = steps.filter((step) => wanted(step) && (force || step.aiState.status !== "edited"));
     const base = { runId, guideId };
     const stepEvents = targets.map(
       (step): AiStepEvent => ({
@@ -309,14 +320,19 @@ export class Backend {
         step: {
           ...structuredClone(step),
           ...Backend.aiStepText(steps.indexOf(step) + 1),
-          aiState: { status: "ai", model: this.settings.ai.stepModel, promptVersion: "step.v1" },
+          aiState: {
+            status: "ai",
+            model: this.settings.ai.stepModel,
+            promptVersion: "step.v1",
+            ...(this.aiSuggestions[step.id] && { redactionSuggestions: structuredClone(this.aiSuggestions[step.id]) }),
+          },
         },
-        redactionSuggestions: [],
+        redactionSuggestions: structuredClone(this.aiSuggestions[step.id] ?? []),
         error: null,
       }),
     );
     // Edited, or not asked for: no fields.
-    const guideSkipped = guide.aiState?.status === "edited" || options?.guidePass === false;
+    const guideSkipped = (guide.aiState?.status === "edited" && !force) || options?.guidePass === false;
     const guidePass: AiGuideEvent = {
       ...base,
       fields: guideSkipped
@@ -333,7 +349,7 @@ export class Backend {
       applied: targets.length,
       failed: 0,
       // Steps left out by `stepIds` are not counted, as in Rust.
-      skippedEdited: steps.filter((step) => wanted(step) && step.aiState.status === "edited").length,
+      skippedEdited: force ? 0 : steps.filter((step) => wanted(step) && step.aiState.status === "edited").length,
       usage: { inputTokens: 1000, outputTokens: 200 },
       error: null,
     };
@@ -346,6 +362,41 @@ export class Backend {
     if (this.aiHold) this.aiRun = { runId, guideId, pending: rest };
     else this.after.push(...rest);
     return { runId };
+  }
+
+  /** The text the mock AI rewrites a step to. */
+  static aiRewriteText(style: RewriteStyleArg, n: number) {
+    const how = style.kind === "custom" ? `custom (${style.instruction})` : style.kind;
+    return { title: `Rewritten ${how} ${n}`, description: `Rewritten ${how} for step ${n}.` };
+  }
+
+  /**
+   * Rewrites a step of the guide as last saved, like Rust's
+   * `ai_rewrite_step`: edited or not, no events, suggestions kept.
+   */
+  private aiRewriteStep(guideId: string, stepId: string, style: RewriteStyleArg): AiRewriteResult {
+    if (!this.settings.ai.enabled) fail("invalid", "AI is turned off in Settings.");
+    if (!this.apiKeyStored) fail("invalid", "Add an API key in Settings to write with AI.");
+    if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
+    const bundle = this.bundle(guideId);
+    if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
+    const steps = bundle.guide.items.filter((item): item is Step => item.type === "step");
+    const step = steps.find((s) => s.id === stepId) ?? fail("invalid", `step ${stepId} is not in the saved guide`);
+    if (style.kind === "custom") {
+      const length = style.instruction.trim().length;
+      if (length < 1 || length > 500) fail("invalid", "The instruction must be 1 to 500 characters.");
+    }
+    this.aiRewrites.push({ guideId, stepId, style: structuredClone(style) });
+    return {
+      ...Backend.aiRewriteText(style, steps.indexOf(step) + 1),
+      aiState: {
+        status: "ai",
+        model: this.settings.ai.stepModel,
+        promptVersion: "rewrite.v1",
+        error: null,
+        ...(step.aiState.redactionSuggestions && { redactionSuggestions: structuredClone(step.aiState.redactionSuggestions) }),
+      },
+    };
   }
 
   /** Cancels the held AI run: what was left comes back cancelled. */
@@ -687,8 +738,10 @@ export class Backend {
       case "ai_generate":
         return this.aiGenerate(
           String(args.guideId),
-          (args.options ?? undefined) as { stepIds?: string[]; guidePass?: boolean } | undefined,
+          (args.options ?? undefined) as AiGenerateArgs | undefined,
         );
+      case "ai_rewrite_step":
+        return this.aiRewriteStep(String(args.guideId), String(args.stepId), args.style as RewriteStyleArg);
       case "ai_cancel":
         this.aiCancel(Number(args.runId));
         return null;

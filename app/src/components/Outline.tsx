@@ -9,9 +9,12 @@ import {
   Lightbulb,
   MousePointerClick,
   Plus,
+  Sparkles,
   TriangleAlert,
 } from "lucide-react";
-import { WritingIndicator } from "@/ai/WriteWithAi";
+import { aiStore, useAi } from "@/ai/ai";
+import { BUSY_HINT } from "@/ai/controller";
+import { StepStatusBadge, useAiBlocked } from "@/ai/WriteWithAi";
 import { Button } from "@/components/ui/button";
 import { deleteSelected } from "@/editor/actions";
 import { Input } from "@/components/ui/input";
@@ -58,6 +61,28 @@ function ItemIcon({ item }: { item: Item }) {
   }
   if (item.kind === "manual") return <ImageIcon className="size-3.5 text-muted-foreground" />;
   return <MousePointerClick className="size-3.5 text-muted-foreground" />;
+}
+
+/**
+ * Regenerates the guide details (title, intro, prerequisites, summary,
+ * tags), edited or not, as one undoable change.
+ */
+function RegenerateGuide({ readOnly }: { readOnly: boolean }) {
+  const { busy, background } = useAiBlocked();
+  const writing = useAi((s) => s.explicit?.kind === "guide");
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={cn(writing && "animate-pulse")}
+      aria-label={writing ? "Writing the guide details" : "Regenerate guide details"}
+      title={background ? BUSY_HINT : "Regenerate the title, introduction, prerequisites, summary and tags with AI"}
+      disabled={readOnly || busy}
+      onClick={() => void aiStore.getState().regenerateGuide()}
+    >
+      <Sparkles />
+    </Button>
+  );
 }
 
 /** The open guide's title and its items, with selection and reordering. */
@@ -112,13 +137,16 @@ export function Outline() {
             <InsertMenu disabled={readOnly} />
           </Suspense>
         </div>
-        <Input
-          aria-label="Guide title"
-          className="font-semibold"
-          value={guide.title}
-          disabled={readOnly}
-          onChange={(e) => dispatch(renameGuide(editorStore.getState().doc!.guide, e.target.value))}
-        />
+        <div className="flex items-center gap-1">
+          <Input
+            aria-label="Guide title"
+            className="font-semibold"
+            value={guide.title}
+            disabled={readOnly}
+            onChange={(e) => dispatch(renameGuide(editorStore.getState().doc!.guide, e.target.value))}
+          />
+          <RegenerateGuide readOnly={readOnly} />
+        </div>
       </div>
       <ol className="min-h-0 flex-1 overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
         {guide.items.map((item, index) => (
@@ -171,7 +199,7 @@ export function Outline() {
                 </span>
               )}
               <span className="truncate">{itemLabel(item)}</span>
-              {item.type === "step" && <WritingIndicator stepId={item.id} />}
+              {item.type === "step" && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
             </button>
             {!readOnly && (
               <span className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">

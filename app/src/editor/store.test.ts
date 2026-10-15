@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorApi } from "@/lib/ipc";
-import type { Guide, OpenedGuide } from "@/lib/types";
+import type { Guide, OpenedGuide, Step } from "@/lib/types";
 import {
   deleteItem,
   insertItemAfter,
@@ -655,6 +655,20 @@ describe("untracked changes", () => {
 });
 
 describe("history after untracked changes", () => {
+  it("keeps entries when only an AI error is recorded", async () => {
+    const { s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Mine"));
+    clock += 5000;
+    s().dispatch(renameGuide(s().doc!.guide, "My guide"));
+    const stepState = (s().doc!.guide.items[1] as Step).aiState;
+    s().applyUntracked([{ op: "setItem", id: "A", key: "aiState", value: { ...stepState, error: "rate limited" } }]);
+    s().applyUntracked([{ op: "setGuide", key: "aiState", value: { ...s().doc!.guide.aiState, error: "overloaded" } }]);
+    expect(s().undoStack).toHaveLength(2);
+    // A changed status is a write: it drops them.
+    s().applyUntracked([{ op: "setItem", id: "A", key: "aiState", value: { status: "ai" } }]);
+    expect(s().undoStack).toHaveLength(1);
+  });
+
   it("drops entries whose stale guide field would come back over AI text", async () => {
     const { s } = await opened();
     s().dispatch(renameGuide(s().doc!.guide, "Mine"));

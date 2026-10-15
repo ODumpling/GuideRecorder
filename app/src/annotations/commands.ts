@@ -98,3 +98,44 @@ export function removeAnnotation(guide: Guide, stepId: string, id: string): Comm
   const annotations = findStep(guide, stepId).annotations.filter((a) => a.id !== id);
   return setAnnotations(guide, stepId, annotations, `Delete ${name(current)}`);
 }
+
+// AI blur suggestions (#366). They live in the step's `aiState` only, so
+// the export never sees them; accepting one makes it a real blur.
+
+function suggestionsOf(guide: Guide, stepId: string, index: number) {
+  const step = findStep(guide, stepId);
+  const suggestions = step.aiState.redactionSuggestions ?? [];
+  if (!suggestions[index]) throw new PatchError(`step ${stepId} has no blur suggestion ${index}`);
+  return { step, suggestions };
+}
+
+/**
+ * Accepts the step's blur suggestion `index`: a blur annotation `id` over
+ * its rect (full-screenshot pixels, like annotations), and the suggestion
+ * goes. One undo step.
+ */
+export function acceptBlurSuggestion(guide: Guide, stepId: string, index: number, id: string): Command {
+  const { step, suggestions } = suggestionsOf(guide, stepId, index);
+  const blur: Annotation = { id, type: "blur", geometry: { ...suggestions[index].rect } };
+  const added = addAnnotation(guide, stepId, blur);
+  return {
+    label: "Accept blur suggestion",
+    forward: [
+      ...added.forward,
+      { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: suggestions.filter((_, i) => i !== index) } },
+    ],
+    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }, ...added.inverse],
+  };
+}
+
+/** Rejects the step's blur suggestion `index`: it goes, nothing is blurred. */
+export function rejectBlurSuggestion(guide: Guide, stepId: string, index: number): Command {
+  const { step, suggestions } = suggestionsOf(guide, stepId, index);
+  return {
+    label: "Reject blur suggestion",
+    forward: [
+      { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: suggestions.filter((_, i) => i !== index) } },
+    ],
+    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }],
+  };
+}

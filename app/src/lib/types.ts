@@ -366,6 +366,20 @@ export interface AiGuideFields {
   tags: string[];
 }
 
+/** How `ai_rewrite_step` rewrites a step; a custom `instruction` is 1–500 characters after trimming. */
+export type RewriteStyleArg =
+  | { kind: "shorter" }
+  | { kind: "beginner" }
+  | { kind: "expert" }
+  | { kind: "custom"; instruction: string };
+
+/** `ai_rewrite_step`'s result: the step's new text and `aiState` (status `ai`). */
+export interface AiRewriteResult {
+  title: string;
+  description: string | null;
+  aiState: AiState;
+}
+
 /** `ai://started`: the run began; `stepIds` are the steps it will write. */
 export interface AiStartedEvent {
   runId: number;

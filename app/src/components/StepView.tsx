@@ -1,5 +1,7 @@
-import { lazy, Suspense, useRef, type Ref } from "react";
-import { ImageOff, Merge, Scissors, Trash2 } from "lucide-react";
+import { lazy, Suspense, useRef, useState, type Ref } from "react";
+import { ChevronDown, ImageOff, Merge, Scissors, Sparkles, Trash2 } from "lucide-react";
+import { useAi } from "@/ai/ai";
+import { CustomRewrite } from "@/ai/CustomRewrite";
 import type { MarkdownEditorHandle } from "@/components/MarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
@@ -14,6 +16,8 @@ import { markdownToPlainText } from "@/text/markdown";
 const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
 // The annotation layer, likewise; the plain image shows until it loads.
 const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
+// The AI menu (Radix), likewise.
+const StepAiMenu = lazy(() => import("@/components/StepAiMenu"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
@@ -98,14 +102,25 @@ function TextEditor({
 const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note" };
 
 /** Delete, merge and split for the selected item. */
-function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
+function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void; onCustom(): void }) {
   // Re-render when the guide changes, so merge availability stays current.
   const canMerge = useEditor(() => canMergeSelected(editorStore));
   const name = item.type === "note" ? item.kind : ITEM_NAMES[item.type];
+  const writing = useAi((s) => s.generating.has(item.id));
   return (
     <div className="flex items-center gap-1" role="toolbar" aria-label={`${name} actions`}>
+      {writing && <span className="animate-pulse text-xs text-muted-foreground">Writing…</span>}
       {item.type === "step" && (
         <>
+          <Suspense
+            fallback={
+              <Button variant="ghost" size="sm" disabled>
+                <Sparkles /> AI <ChevronDown />
+              </Button>
+            }
+          >
+            <StepAiMenu stepId={item.id} onCustom={onCustom} />
+          </Suspense>
           <Button
             variant="ghost"
             size="sm"
@@ -139,6 +154,8 @@ export function StepView() {
   const doc = useEditor((s) => s.doc);
   const item = useSelectedItem();
   const description = useRef<MarkdownEditorHandle>(null);
+  // The step whose custom rewrite form is open.
+  const [customFor, setCustomFor] = useState<string | null>(null);
   if (!doc) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -162,9 +179,10 @@ export function StepView() {
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
       {!doc.readOnly && (
         <div className="-my-2 flex justify-end">
-          <ItemActions item={item} onSplit={split} />
+          <ItemActions item={item} onSplit={split} onCustom={() => setCustomFor(item.id)} />
         </div>
       )}
+      {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
       {item.type === "step" && (
         <>
           <Suspense fallback={<StepImage guideId={doc.guide.id} step={item} />}>

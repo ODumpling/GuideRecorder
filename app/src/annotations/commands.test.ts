@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  acceptBlurSuggestion,
   addAnnotation,
+  rejectBlurSuggestion,
   removeAnnotation,
   setAnnotationStyle,
   setCalloutText,
@@ -77,5 +79,41 @@ describe("annotation commands", () => {
     const command = removeAnnotation(g, "A", "B1");
     expect(command.label).toBe("Delete box");
     expect(annotationsOf(roundTrip(g, command))).toEqual([callout]);
+  });
+});
+
+describe("blur suggestions", () => {
+  const suggestions = [
+    { rect: { x: 10, y: 20, width: 30, height: 40 }, reason: "email" },
+    { rect: { x: 50, y: 60, width: 70, height: 80 }, reason: "token" },
+  ];
+  function withSuggestions(): Guide {
+    const g = withAnnotations(box);
+    const step = g.items[1] as Step;
+    step.aiState = { status: "edited", redactionSuggestions: suggestions };
+    return g;
+  }
+  const stepOf = (g: Guide) => g.items[1] as Step;
+
+  it("Accept adds a blur over the suggestion and removes it, undoably", () => {
+    const g = withSuggestions();
+    const command = acceptBlurSuggestion(g, "A", 1, "BL1");
+    const after = roundTrip(g, command);
+    expect(stepOf(after).annotations).toEqual([box, { id: "BL1", type: "blur", geometry: suggestions[1].rect }]);
+    // Only the suggestion goes; the text status stays.
+    expect(stepOf(after).aiState).toEqual({ status: "edited", redactionSuggestions: [suggestions[0]] });
+    expect(command.label).toBe("Accept blur suggestion");
+  });
+
+  it("Reject removes the suggestion only, undoably", () => {
+    const g = withSuggestions();
+    const after = roundTrip(g, rejectBlurSuggestion(g, "A", 0));
+    expect(stepOf(after).annotations).toEqual([box]);
+    expect(stepOf(after).aiState.redactionSuggestions).toEqual([suggestions[1]]);
+  });
+
+  it("refuses a suggestion that is not there", () => {
+    expect(() => rejectBlurSuggestion(withSuggestions(), "A", 2)).toThrow(PatchError);
+    expect(() => acceptBlurSuggestion(guide(), "A", 0, "X")).toThrow(PatchError);
   });
 });
