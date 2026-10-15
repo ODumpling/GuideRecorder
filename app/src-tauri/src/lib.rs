@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::menu::Menu;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
 
+mod blocking;
 mod commands;
 mod editor;
 mod export;

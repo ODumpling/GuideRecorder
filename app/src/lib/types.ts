@@ -250,14 +250,35 @@ export interface McpSetup {
 }
 
 /**
- * The recorder's state (see app/src-tauri/src/recording.rs). `startedAt` is
+ * The recorder's state (see app/src-tauri/src/recording.rs). Times are
  * RFC 3339 UTC. `captureAreaFallback`: the settings asked for a window or
  * region, which can't be captured yet, so every display is recorded.
+ * `pausedMs`: time spent in finished pauses; `pausedAt`: when the current
+ * pause began (so recorded time is `now − startedAt − pausedMs`, less
+ * `now − pausedAt` while paused). `excludedApp`: bundle id of the excluded
+ * app in front, while one is; nothing is captured meanwhile.
  */
 export type RecordingStatus =
   | { state: "idle" }
-  | { state: "recording" | "paused"; startedAt: string; title: string | null; captureAreaFallback: boolean }
+  | ({ state: "recording" } & RecordingRun)
+  | ({ state: "paused"; pausedAt: string } & RecordingRun)
   | { state: "saving"; startedAt: string; title: string | null };
+
+/**
+ * A status as the recorder stored it: every status event and command result
+ * carries the `seq` it was stored with, which grows with each change, so one
+ * that arrives after a newer one can be dropped.
+ */
+export type StampedStatus = RecordingStatus & { seq: number };
+
+/** The fields `recording` and `paused` share. */
+export interface RecordingRun {
+  startedAt: string;
+  title: string | null;
+  captureAreaFallback: boolean;
+  pausedMs: number;
+  excludedApp: string | null;
+}
 
 /** A recording saved as a new guide. `skipped`: steps left out for lack of a screenshot. */
 export interface RecordingSaved {

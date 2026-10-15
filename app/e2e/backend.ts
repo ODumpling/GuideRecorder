@@ -13,8 +13,10 @@ import type {
   RecordingSnapshot,
   RecordingStatus,
   Settings,
+  StampedStatus,
   StepImage,
 } from "../src/lib/types";
+import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
 const SCHEMA_VERSION = 1;
@@ -110,7 +112,7 @@ export class Backend {
       captureArea: "display",
       afterFrames: true,
       afterFrameDelayMs: 400,
-      excludedApps: [],
+      excludedApps: [...DEFAULT_EXCLUDED_IDS],
       typingIdleMs: 1500,
     },
     ai: {
@@ -138,6 +140,8 @@ export class Backend {
 
   /** The recorder's state, as `recording_status` reports it. */
   recording: RecordingStatus = { state: "idle" };
+  /** The `seq` `recording` was stored with. */
+  recordingSeq = 0;
   /** The capture area falls back to all displays (settings say window or region). */
   captureAreaFallback = false;
   /** Steps the next saved recording leaves out for lack of a screenshot. */
@@ -208,10 +212,35 @@ export class Backend {
     return this.events.splice(0);
   }
 
+  /** Stores `status` under the next `seq`, as the Rust `Recorder` does, and queues its event. */
   private setRecording(status: RecordingStatus) {
     this.recording = status;
+    this.recordingSeq += 1;
     if (status.state === "idle") this.snapshots.clear();
-    this.events.push({ event: "recording://status", payload: structuredClone(status) });
+    this.events.push({ event: "recording://status", payload: this.stamped() });
+  }
+
+  /** The recorder's status with its `seq`, as commands return and events carry it. */
+  stamped(): StampedStatus {
+    return { ...structuredClone(this.recording), seq: this.recordingSeq };
+  }
+
+  /**
+   * An excluded app comes to the front (`null`: a non-excluded one does),
+   * as the Rust side's exclusion sink reports it. Returns the new status;
+   * the test emits it (the sink sends it at once, not with a reply).
+   */
+  frontmost(excludedApp: string | null): StampedStatus {
+    this.recording = { ...this.active(), excludedApp };
+    this.recordingSeq += 1;
+    return this.stamped();
+  }
+
+  /** Replaces the running recording's status as is (e.g. to age it), without an event. */
+  setActive(status: Extract<RecordingStatus, { state: "recording" | "paused" }>) {
+    this.active();
+    this.recording = structuredClone(status);
+    this.recordingSeq += 1;
   }
 
   /**
@@ -412,16 +441,24 @@ export class Backend {
           startedAt: new Date().toISOString(),
           title,
           captureAreaFallback: this.captureAreaFallback,
+          pausedMs: 0,
+          excludedApp: null,
         });
-        return this.recording;
+        return this.stamped();
       }
       case "pause_recording":
       case "resume_recording": {
-        // Like Rust's `set_paused`: no event when nothing changes.
-        const state = cmd === "pause_recording" ? "paused" : "recording";
+        // Like Rust's `set_paused`: no event when nothing changes; a resume
+        // adds the pause to `pausedMs`.
         const status = this.active();
-        if (status.state !== state) this.setRecording({ ...status, state });
-        return this.recording;
+        if (cmd === "pause_recording" && status.state === "recording") {
+          this.setRecording({ ...status, state: "paused", pausedAt: new Date().toISOString() });
+        } else if (cmd === "resume_recording" && status.state === "paused") {
+          const { pausedAt, ...run } = status;
+          const pausedMs = run.pausedMs + Math.max(0, Date.now() - Date.parse(pausedAt));
+          this.setRecording({ ...run, state: "recording", pausedMs });
+        }
+        return this.stamped();
       }
       case "stop_recording": {
         const { startedAt, title } = this.active();
@@ -436,7 +473,7 @@ export class Backend {
         this.setRecording({ state: "idle" });
         return null;
       case "recording_status":
-        return this.recording;
+        return this.stamped();
       case "recording_snapshot": {
         const id = String(args.id);
         if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");
@@ -444,7 +481,7 @@ export class Backend {
         if (!this.snapshots.has(id)) fail("notFound", `no snapshot ${id}`);
         const source = [...this.bundles.values()][0];
         const image = [...source.files.entries()].find(([path]) => path.startsWith("steps/") && path.endsWith(".webp"));
-        if (!image) fail("notFound", "the fixtures have no step image");
+        if (!image) return fail("notFound", "the fixtures have no step image");
         return [...image[1]];
       }
       case "quit_ack":

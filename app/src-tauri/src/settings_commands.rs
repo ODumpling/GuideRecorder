@@ -13,19 +13,10 @@ use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::DialogExt;
 
+use crate::blocking::blocking;
 use crate::editor::{self, AppError, ErrorKind, Result, Session, SessionCell};
 use crate::export::ChosenPaths;
 use crate::settings::{self, Settings, SettingsStore, SettingsView};
-
-async fn blocking<T, F>(f: F) -> Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))?
-}
 
 /// The library folder the app opened (or tried to open) last.
 #[derive(Default)]

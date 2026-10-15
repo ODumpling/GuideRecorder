@@ -130,3 +130,85 @@ test("quitting while recording saves the recording first", async ({ page, backen
   // Not opened: the app is quitting.
   expect(backend.calls.some((c) => c.cmd === "open_guide")).toBe(false);
 });
+
+test("shows when an excluded app is in front", async ({ page, backend }) => {
+  grantAll(backend.permissions);
+  await page.getByRole("button", { name: "Record" }).click();
+  const controls = page.getByRole("group", { name: "Recording" });
+  const label = controls.getByRole("status");
+  await expect(label).toHaveText("Recording");
+
+  await emitEvent(page, "recording://status", backend.frontmost("com.1password.1password"));
+  await expect(label).toHaveText("Not capturing: 1Password is in front");
+  // Still a running recording: it can be paused or stopped as usual.
+  await expect(controls.getByRole("button", { name: "Pause recording" })).toBeEnabled();
+  // An app without a known name shows its bundle id.
+  await emitEvent(page, "recording://status", backend.frontmost("com.example.vault"));
+  await expect(label).toHaveText("Not capturing: com.example.vault is in front");
+
+  // A pause by the user reads as a pause, whatever is in front.
+  await controls.getByRole("button", { name: "Pause recording" }).click();
+  await expect(label).toHaveText("Paused");
+  await controls.getByRole("button", { name: "Resume recording" }).click();
+  await expect(label).toHaveText("Not capturing: com.example.vault is in front");
+
+  await emitEvent(page, "recording://status", backend.frontmost(null));
+  await expect(label).toHaveText("Recording");
+
+  // A sink event that arrives after a newer status (here a pause) is dropped.
+  const stale = backend.frontmost("com.1password.1password");
+  await controls.getByRole("button", { name: "Pause recording" }).click();
+  await expect(label).toHaveText("Paused");
+  await emitEvent(page, "recording://status", stale);
+  await expect(controls.getByRole("button", { name: "Resume recording" })).toBeVisible();
+  await expect(label).toHaveText("Paused");
+});
+
+test("the recording clock survives a reload, paused time included", async ({ page, backend }) => {
+  grantAll(backend.permissions);
+  await page.getByRole("button", { name: "Record" }).click();
+  await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
+
+  // Started 125 s ago, paused 5 s ago after 20 s of earlier pauses: 1:40 recorded.
+  const now = Date.now();
+  const status = backend.recording;
+  if (status.state !== "recording") throw new Error("not recording");
+  backend.setActive({
+    ...status,
+    state: "paused",
+    startedAt: new Date(now - 125_000).toISOString(),
+    pausedMs: 20_000,
+    pausedAt: new Date(now - 5_000).toISOString(),
+  });
+
+  await page.reload();
+  const controls = page.getByRole("group", { name: "Recording" });
+  await expect(controls.getByRole("status")).toHaveText("Paused");
+  await expect(controls.getByLabel("Recording time")).toHaveText("1:40");
+
+  // Resuming counts this pause too, and the clock runs on from 1:40.
+  await controls.getByRole("button", { name: "Resume recording" }).click();
+  await expect(controls.getByRole("status")).toHaveText("Recording");
+  const resumed = backend.recording;
+  expect(resumed.state === "recording" && resumed.pausedMs).toBeGreaterThanOrEqual(25_000);
+  await expect(controls.getByLabel("Recording time")).toHaveText(/^1:4\d$/);
+  await page.reload();
+  await expect(page.getByRole("group", { name: "Recording" }).getByLabel("Recording time")).toHaveText(/^1:4\d$/);
+});
+
+test("excluded apps default to the suggested list and can be restored", async ({ page, backend }) => {
+  await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Recording" }).click();
+  await expect(dialog.getByText("Keychain Access", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Restore defaults" })).toBeHidden();
+
+  await dialog.getByRole("button", { name: "Remove com.apple.keychainaccess" }).click();
+  await expect(dialog.getByText("Keychain Access", { exact: true })).toBeHidden();
+  expect(backend.settings.recording.excludedApps).not.toContain("com.apple.keychainaccess");
+  await dialog.getByRole("button", { name: "Restore defaults" }).click();
+  await expect(dialog.getByText("Keychain Access", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Restore defaults" })).toBeHidden();
+  await expect.poll(() => backend.settings.recording.excludedApps).toContain("com.apple.keychainaccess");
+});

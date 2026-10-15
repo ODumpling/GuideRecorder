@@ -4,6 +4,7 @@ import { Circle, Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleA
 import { Button } from "@/components/ui/button";
 import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
+import { appName } from "@/recording/apps";
 import { recordingStore, useRecording } from "@/recording/recording";
 import { elapsedMs, formatElapsed } from "@/recording/store";
 import { makeThumbnail, THUMBNAIL_SIDE } from "@/recording/thumbnails";
@@ -19,7 +20,7 @@ function Elapsed() {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, [state]);
-  const ms = useRecording((s) => elapsedMs(s, now));
+  const ms = useRecording((s) => elapsedMs(s.status, now));
   return (
     <span aria-label="Recording time" className="font-mono text-xs tabular-nums">
       {formatElapsed(ms)}
@@ -81,14 +82,25 @@ export function RecordingControls() {
   }
 
   const paused = status.state === "paused";
+  // Nothing is captured while an excluded app is in front; the clock runs on.
+  const excludedApp = paused ? null : status.excludedApp;
+  const excluded = excludedApp !== null;
   const busy = pending !== null;
   return (
     <div role="group" aria-label="Recording" className="ml-1 flex items-center gap-1 rounded-md border border-border px-1.5">
       <span
-        className={`size-2 rounded-full bg-[var(--status-danger)] ${paused ? "opacity-40" : "animate-pulse"}`}
+        className={`size-2 rounded-full ${excluded ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
+          paused || excluded ? "opacity-40" : "animate-pulse"
+        }`}
         aria-hidden
       />
-      <span className="text-xs font-medium">{paused ? "Paused" : "Recording"}</span>
+      <span
+        role="status"
+        className="max-w-48 truncate text-xs font-medium"
+        title={excluded ? "Nothing is captured while an excluded app is in front (Settings → Recording)." : undefined}
+      >
+        {paused ? "Paused" : excluded ? `Not capturing: ${appName(excludedApp)} is in front` : "Recording"}
+      </span>
       <Elapsed />
       {paused ? (
         <Button variant="ghost" size="icon" aria-label="Resume recording" title="Resume" disabled={busy} onClick={() => void resume()}>

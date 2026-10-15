@@ -13,9 +13,9 @@ import type {
   PermissionStatus,
   RecordingReadiness,
   RecordingSaved,
-  RecordingStatus,
   Settings,
   SettingsView,
+  StampedStatus,
   Step,
   StepImage,
 } from "@/lib/types";
@@ -172,14 +172,14 @@ export const tauriSettingsApi: SettingsApi = {
 /** Recording commands (see app/src-tauri/src/recording.rs). */
 export interface RecordingApi {
   /** Checks the permissions live, then starts. `title` null: named after the date. */
-  start(title: string | null): Promise<RecordingStatus>;
-  pause(): Promise<RecordingStatus>;
-  resume(): Promise<RecordingStatus>;
+  start(title: string | null): Promise<StampedStatus>;
+  pause(): Promise<StampedStatus>;
+  resume(): Promise<StampedStatus>;
   /** Saves the recording as a new guide in the open library. */
   stop(): Promise<RecordingSaved>;
   /** Discards the recording. */
   cancel(): Promise<void>;
-  status(): Promise<RecordingStatus>;
+  status(): Promise<StampedStatus>;
   /** WebP bytes of a screenshot the running recording announced, by its id. */
   snapshotImage(id: string): Promise<ArrayBuffer>;
 }
@@ -194,7 +194,7 @@ export const tauriRecordingApi: RecordingApi = {
   snapshotImage: async (id) => toArrayBuffer(await invoke("recording_snapshot", { id })),
 };
 
-/** Emitted with a `RecordingStatus` on every change of the recorder's state. */
+/** Emitted with a `StampedStatus` on every change of the recorder's state. */
 export const RECORDING_STATUS_EVENT = "recording://status";
 /** Emitted with a `RecordingSaved` after a recording was saved. */
 export const RECORDING_SAVED_EVENT = "recording://saved";

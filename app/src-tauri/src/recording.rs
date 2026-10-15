@@ -9,9 +9,18 @@
 //! the bundle.
 //!
 //! Status changes are pushed to the webview as [`STATUS_EVENT`] with a
-//! [`RecordingStatus`] payload; a saved recording is announced as
+//! [`StampedStatus`] payload (the status plus a `seq` that grows with each
+//! change; commands return the same); a saved recording is announced as
 //! [`SAVED_EVENT`] with a [`RecordingSaved`] payload (the same value the
 //! `stop_recording` command returns).
+//!
+//! While an excluded app (settings: `recording.excludedApps`) is
+//! frontmost the session captures nothing; the status says which one in
+//! `excludedApp`, and a new [`STATUS_EVENT`] is sent each time that
+//! changes (see the capture crate's `# Excluded apps`).
+//!
+//! The status carries the paused time (`pausedMs`, and `pausedAt` while
+//! paused), so the UI's elapsed clock survives a webview reload.
 //!
 //! While recording, each screenshot the session encodes is announced as
 //! [`SNAPSHOT_EVENT`] with a [`RecordingSnapshot`] payload, so the UI can
@@ -34,10 +43,11 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
-use chrono::{Local, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 use guidesya_capture::macos::frames::CaptureTarget;
 use guidesya_capture::macos::session::{
-    Hotkey, LiveSnapshot, RecordingSession, SessionConfig, SessionError, SnapshotSink,
+    ExclusionSink, Hotkey, LiveSnapshot, RecordingSession, SessionConfig, SessionError,
+    SnapshotSink,
 };
 use guidesya_core::events::Modifiers;
 use guidesya_core::model::Point;
@@ -45,6 +55,7 @@ use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
+use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
 use crate::settings::{CaptureArea, Settings, SettingsStore};
 use crate::settings_commands;
@@ -60,9 +71,12 @@ pub const SNAPSHOT_EVENT: &str = "recording://snapshot";
 
 /// What the recorder is doing. Serialized as `{"state": "idle"}`,
 /// `{"state": "recording", "startedAt": …, "title": …,
-/// "captureAreaFallback": …}`, `{"state": "paused", …}` with the same
-/// fields as `recording`, or `{"state": "saving", "startedAt": …,
-/// "title": …}`.
+/// "captureAreaFallback": …, "pausedMs": …, "excludedApp": …}`,
+/// `{"state": "paused", …}` with the fields of `recording` plus
+/// `"pausedAt"`, or `{"state": "saving", "startedAt": …, "title": …}`.
+///
+/// Time spent recording so far is `now − startedAt − pausedMs`, less
+/// `now − pausedAt` while paused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(
     tag = "state",
@@ -80,18 +94,41 @@ pub enum RecordingStatus {
         /// The stored capture area is Window or Region, which have no
         /// picker yet (#357), so every display is being captured.
         capture_area_fallback: bool,
+        /// Milliseconds spent in finished pauses.
+        paused_ms: u64,
+        /// Bundle id of the excluded app in front, while one is: nothing
+        /// is captured meanwhile.
+        excluded_app: Option<String>,
     },
     /// Between `pause_recording` and `resume_recording`; the fields are
-    /// those of the `Recording` it paused.
+    /// those of the `Recording` it paused, plus when the pause began.
     Paused {
         started_at: String,
         title: Option<String>,
         capture_area_fallback: bool,
+        /// Milliseconds spent in earlier, finished pauses (not this one).
+        paused_ms: u64,
+        /// RFC 3339, UTC: when this pause began.
+        paused_at: String,
+        /// As for `Recording`; tracked while paused too.
+        excluded_app: Option<String>,
     },
     Saving {
         started_at: String,
         title: Option<String>,
     },
+}
+
+/// A [`RecordingStatus`] as the [`Recorder`] stored it, serialized as the
+/// status with a `seq` field added. `seq` grows with every change, so the
+/// webview can drop a status that arrives after a newer one (events and
+/// command results are sent after the lock is released, so they can
+/// overtake each other).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StampedStatus {
+    pub seq: u64,
+    #[serde(flatten)]
+    pub status: RecordingStatus,
 }
 
 /// A recording saved into the library (returned by `stop_recording` and
@@ -150,16 +187,35 @@ fn is_snapshot_id(id: &str) -> bool {
 #[derive(Default)]
 pub struct Recorder {
     session: Mutex<Option<RecordingSession>>,
-    status: Mutex<RecordingStatus>,
+    status: Mutex<StampedStatus>,
 }
 
 impl Recorder {
-    pub fn status(&self) -> RecordingStatus {
+    /// The current status with the `seq` it was stored with.
+    pub fn status(&self) -> StampedStatus {
         lock(&self.status).clone()
     }
 
-    fn set_status(&self, status: RecordingStatus) {
-        *lock(&self.status) = status;
+    /// Stores `status` under the next `seq` and returns it stamped.
+    fn set_status(&self, status: RecordingStatus) -> StampedStatus {
+        let mut stored = lock(&self.status);
+        stored.seq += 1;
+        stored.status = status;
+        stored.clone()
+    }
+
+    /// Replaces the status with `f(current)` in one step (so a concurrent
+    /// update is never lost) and returns it, with whether it changed; only
+    /// a change takes the next `seq`.
+    fn update(&self, f: impl FnOnce(&RecordingStatus) -> RecordingStatus) -> (StampedStatus, bool) {
+        let mut stored = lock(&self.status);
+        let next = f(&stored.status);
+        let changed = next != stored.status;
+        if changed {
+            stored.seq += 1;
+            stored.status = next;
+        }
+        (stored.clone(), changed)
     }
 
     /// The session slot, held across a whole start, pause, resume, stop or
@@ -213,9 +269,20 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn emit_status<R: Runtime>(app: &AppHandle<R>, recorder: &Recorder, status: RecordingStatus) {
-    recorder.set_status(status.clone());
-    if let Err(e) = app.emit(STATUS_EVENT, &status) {
+/// Stores `status` and sends it; returns it stamped.
+fn emit_status<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Recorder,
+    status: RecordingStatus,
+) -> StampedStatus {
+    let stamped = recorder.set_status(status);
+    emit(app, &stamped);
+    stamped
+}
+
+/// Sends `status` as [`STATUS_EVENT`] (the caller has stored it).
+fn emit<R: Runtime>(app: &AppHandle<R>, status: &StampedStatus) {
+    if let Err(e) = app.emit(STATUS_EVENT, status) {
         eprintln!("guidesya: cannot emit {STATUS_EVENT}: {e}");
     }
 }
@@ -231,36 +298,61 @@ fn not_recording() -> AppError {
     AppError::new(ErrorKind::Invalid, "no recording is running")
 }
 
-/// `status` with its `recording`/`paused` state set by `paused`, keeping
-/// its fields; `idle` and `saving` are returned unchanged.
-fn with_paused(status: RecordingStatus, paused: bool) -> RecordingStatus {
+/// `status` with its `recording`/`paused` state set by `paused` at
+/// `now`, keeping its fields: pausing records `pausedAt`, resuming adds
+/// the pause to `pausedMs`. Already in that state, `idle` and `saving`
+/// are returned unchanged.
+fn with_paused(status: RecordingStatus, paused: bool, now: DateTime<Utc>) -> RecordingStatus {
     match status {
         RecordingStatus::Recording {
             started_at,
             title,
             capture_area_fallback,
-        }
-        | RecordingStatus::Paused {
+            paused_ms,
+            excluded_app,
+        } if paused => RecordingStatus::Paused {
             started_at,
             title,
             capture_area_fallback,
-        } => {
-            if paused {
-                RecordingStatus::Paused {
-                    started_at,
-                    title,
-                    capture_area_fallback,
-                }
-            } else {
-                RecordingStatus::Recording {
-                    started_at,
-                    title,
-                    capture_area_fallback,
-                }
-            }
-        }
+            paused_ms,
+            paused_at: rfc3339(now),
+            excluded_app,
+        },
+        RecordingStatus::Paused {
+            started_at,
+            title,
+            capture_area_fallback,
+            paused_ms,
+            paused_at,
+            excluded_app,
+        } if !paused => RecordingStatus::Recording {
+            started_at,
+            title,
+            capture_area_fallback,
+            paused_ms: paused_ms.saturating_add(ms_since(&paused_at, now)),
+            excluded_app,
+        },
         other => other,
     }
+}
+
+/// `status` with its `excludedApp` set to `app`; `idle` and `saving` are
+/// returned unchanged.
+fn with_excluded(mut status: RecordingStatus, app: Option<&str>) -> RecordingStatus {
+    if let RecordingStatus::Recording { excluded_app, .. }
+    | RecordingStatus::Paused { excluded_app, .. } = &mut status
+    {
+        *excluded_app = app.map(str::to_owned);
+    }
+    status
+}
+
+/// Whole milliseconds from the RFC 3339 time `at` to `now`; 0 when `at`
+/// is later or unreadable.
+fn ms_since(at: &str, now: DateTime<Utc>) -> u64 {
+    DateTime::parse_from_rfc3339(at)
+        .map(|at| (now - at.with_timezone(&Utc)).num_milliseconds())
+        .map_or(0, |ms| u64::try_from(ms).unwrap_or(0))
 }
 
 /// The running session in `slot`; `invalid` when there is none (idle, or
@@ -270,7 +362,11 @@ fn running(slot: &mut Option<RecordingSession>) -> Result<&mut RecordingSession>
 }
 
 fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    rfc3339(Utc::now())
+}
+
+fn rfc3339(time: DateTime<Utc>) -> String {
+    time.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// `Recording 2026-10-15 14:03`, the title of an untitled recording.
@@ -417,16 +513,6 @@ fn session_config(settings: &Settings) -> (SessionConfig, bool) {
     (cfg, fallback)
 }
 
-async fn blocking<T, F>(f: F) -> Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))?
-}
-
 /// Starts recording the display. Refuses with `invalid` when a recording
 /// is already running, with the library's startup error when there is no
 /// open library (so a recording can never be lost to a missing library at
@@ -442,14 +528,14 @@ pub async fn start_recording<R: Runtime>(
     store: State<'_, Arc<SettingsStore>>,
     cell: State<'_, Arc<SessionCell>>,
     title: Option<String>,
-) -> Result<RecordingStatus> {
+) -> Result<StampedStatus> {
     let recorder = Arc::clone(&recorder);
     let store = Arc::clone(&store);
     let cell = Arc::clone(&cell);
     let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     blocking(move || {
         let mut slot = recorder.slot();
-        if slot.is_some() || recorder.status() != RecordingStatus::Idle {
+        if slot.is_some() || recorder.status().status != RecordingStatus::Idle {
             return Err(AppError::new(
                 ErrorKind::Invalid,
                 "a recording is already running",
@@ -465,17 +551,61 @@ pub async fn start_recording<R: Runtime>(
                 eprintln!("guidesya: cannot emit {SNAPSHOT_EVENT}: {e}");
             }
         }));
+        cfg.on_excluded = Some(exclusion_sink(&app, &recorder));
         let session = RecordingSession::start(cfg).map_err(session_error)?;
+        let status = emit_status(
+            &app,
+            &recorder,
+            RecordingStatus::Recording {
+                started_at: now_rfc3339(),
+                title,
+                capture_area_fallback,
+                paused_ms: 0,
+                excluded_app: None,
+            },
+        );
+        // The sink's initial read came while the status was still idle, so
+        // it was ignored; from here on the sink applies its changes. Read
+        // the session's state now, inside the status lock, so a change the
+        // sink reports meanwhile is never overwritten by an older one.
+        let status = sync_excluded(&app, &recorder, &session).unwrap_or(status);
         *slot = Some(session);
-        let status = RecordingStatus::Recording {
-            started_at: now_rfc3339(),
-            title,
-            capture_area_fallback,
-        };
-        emit_status(&app, &recorder, status.clone());
         Ok(status)
     })
     .await
+}
+
+/// Sets the status's `excludedApp` to the session's, read inside the
+/// status lock; sends and returns the new status if that changed it.
+fn sync_excluded<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Recorder,
+    session: &RecordingSession,
+) -> Option<StampedStatus> {
+    let (status, changed) =
+        recorder.update(|s| with_excluded(s.clone(), session.excluded_app().as_deref()));
+    changed.then(|| {
+        emit(app, &status);
+        status
+    })
+}
+
+/// Puts each change of excluded app in front into the status and sends
+/// it. Runs on the main thread (or a command's thread for the initial
+/// read), so it only takes the status lock, never the session slot.
+/// Holds the recorder weakly: the session it belongs to lives inside it.
+fn exclusion_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> ExclusionSink {
+    let app = app.clone();
+    let recorder = Arc::downgrade(recorder);
+    ExclusionSink::new(move |excluded: Option<&str>| {
+        let Some(recorder) = recorder.upgrade() else {
+            return;
+        };
+        let (status, changed) = recorder.update(|s| with_excluded(s.clone(), excluded));
+        if changed {
+            emit(&app, &status);
+        }
+    })
 }
 
 /// Pauses the recording: input and screen capture stop until
@@ -488,7 +618,7 @@ pub async fn start_recording<R: Runtime>(
 pub async fn pause_recording<R: Runtime>(
     app: AppHandle<R>,
     recorder: State<'_, Arc<Recorder>>,
-) -> Result<RecordingStatus> {
+) -> Result<StampedStatus> {
     let recorder = Arc::clone(&recorder);
     blocking(move || set_paused(&app, &recorder, true)).await
 }
@@ -502,7 +632,7 @@ pub async fn pause_recording<R: Runtime>(
 pub async fn resume_recording<R: Runtime>(
     app: AppHandle<R>,
     recorder: State<'_, Arc<Recorder>>,
-) -> Result<RecordingStatus> {
+) -> Result<StampedStatus> {
     let recorder = Arc::clone(&recorder);
     blocking(move || set_paused(&app, &recorder, false)).await
 }
@@ -514,7 +644,7 @@ fn set_paused<R: Runtime>(
     app: &AppHandle<R>,
     recorder: &Recorder,
     paused: bool,
-) -> Result<RecordingStatus> {
+) -> Result<StampedStatus> {
     let mut slot = recorder.slot();
     let session = running(&mut slot)?;
     if session.is_paused() == paused {
@@ -525,10 +655,16 @@ fn set_paused<R: Runtime>(
     } else {
         session.resume()
     };
-    let current = recorder.status();
-    let status = with_paused(current.clone(), session.is_paused());
-    if status != current {
-        emit_status(app, recorder, status.clone());
+    let now_paused = session.is_paused();
+    // The excluded app is read inside the status lock, as in `sync_excluded`.
+    let (status, changed) = recorder.update(|s| {
+        with_excluded(
+            with_paused(s.clone(), now_paused, Utc::now()),
+            session.excluded_app().as_deref(),
+        )
+    });
+    if changed {
+        emit(app, &status);
     }
     result.map_err(session_error)?;
     Ok(status)
@@ -550,7 +686,7 @@ pub async fn stop_recording<R: Runtime>(
     blocking(move || {
         let mut slot = recorder.slot();
         let session = slot.take().ok_or_else(not_recording)?;
-        let (started_at, title) = match recorder.status() {
+        let (started_at, title) = match recorder.status().status {
             RecordingStatus::Recording {
                 started_at, title, ..
             }
@@ -652,10 +788,10 @@ pub async fn recording_snapshot(
     .await
 }
 
-/// The current [`RecordingStatus`]; never waits on a start or stop in
-/// progress.
+/// The current [`RecordingStatus`], stamped; never waits on a start or
+/// stop in progress.
 #[tauri::command]
-pub fn recording_status(recorder: State<'_, Arc<Recorder>>) -> RecordingStatus {
+pub fn recording_status(recorder: State<'_, Arc<Recorder>>) -> StampedStatus {
     recorder.status()
 }
 
@@ -818,6 +954,8 @@ mod tests {
                 started_at: "2026-10-15T01:02:03.000Z".into(),
                 title: None,
                 capture_area_fallback: true,
+                paused_ms: 0,
+                excluded_app: Some("com.1password.1password".into()),
             })
             .unwrap(),
             json!({
@@ -825,6 +963,8 @@ mod tests {
                 "startedAt": "2026-10-15T01:02:03.000Z",
                 "title": null,
                 "captureAreaFallback": true,
+                "pausedMs": 0,
+                "excludedApp": "com.1password.1password",
             })
         );
         assert_eq!(
@@ -832,6 +972,9 @@ mod tests {
                 started_at: "2026-10-15T01:02:03.000Z".into(),
                 title: Some("Rotate a key".into()),
                 capture_area_fallback: false,
+                paused_ms: 1500,
+                paused_at: "2026-10-15T01:05:00.000Z".into(),
+                excluded_app: None,
             })
             .unwrap(),
             json!({
@@ -839,6 +982,9 @@ mod tests {
                 "startedAt": "2026-10-15T01:02:03.000Z",
                 "title": "Rotate a key",
                 "captureAreaFallback": false,
+                "pausedMs": 1500,
+                "pausedAt": "2026-10-15T01:05:00.000Z",
+                "excludedApp": null,
             })
         );
         assert_eq!(
@@ -905,7 +1051,7 @@ mod tests {
     #[test]
     fn recorder_starts_idle_and_refuses_to_stop() {
         let recorder = Recorder::default();
-        assert_eq!(recorder.status(), RecordingStatus::Idle);
+        assert_eq!(recorder.status().status, RecordingStatus::Idle);
         let mut slot = recorder.slot();
         match slot.take().ok_or_else(not_recording) {
             Ok(_) => panic!("a session out of nowhere"),
@@ -926,38 +1072,227 @@ mod tests {
         }
     }
 
+    fn at(rfc3339: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
     #[test]
     fn pausing_and_resuming_keep_the_status_fields() {
         let recording = RecordingStatus::Recording {
             started_at: "2026-10-15T01:02:03.000Z".into(),
             title: Some("Rotate a key".into()),
             capture_area_fallback: true,
+            paused_ms: 0,
+            excluded_app: Some("com.apple.keychainaccess".into()),
         };
         let paused = RecordingStatus::Paused {
             started_at: "2026-10-15T01:02:03.000Z".into(),
             title: Some("Rotate a key".into()),
             capture_area_fallback: true,
+            paused_ms: 0,
+            paused_at: "2026-10-15T01:03:00.000Z".into(),
+            excluded_app: Some("com.apple.keychainaccess".into()),
         };
-        assert_eq!(with_paused(recording.clone(), true), paused);
-        assert_eq!(with_paused(paused.clone(), false), recording);
-        assert_eq!(with_paused(paused.clone(), true), paused);
-        assert_eq!(with_paused(recording.clone(), false), recording);
+        let t = at("2026-10-15T01:03:00.000Z");
+        assert_eq!(with_paused(recording.clone(), true, t), paused);
+        // Already in that state: unchanged, `pausedAt` included.
+        let later = at("2026-10-15T01:09:00.000Z");
+        assert_eq!(with_paused(paused.clone(), true, later), paused);
+        assert_eq!(with_paused(recording.clone(), false, later), recording);
         assert_eq!(
-            with_paused(RecordingStatus::Idle, true),
+            with_paused(RecordingStatus::Idle, true, t),
             RecordingStatus::Idle
         );
         let saving = RecordingStatus::Saving {
             started_at: "2026-10-15T01:02:03.000Z".into(),
             title: None,
         };
-        assert_eq!(with_paused(saving.clone(), true), saving);
+        assert_eq!(with_paused(saving.clone(), true, t), saving);
+    }
+
+    #[test]
+    fn paused_time_adds_up_across_pauses() {
+        let mut status = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        };
+        status = with_paused(status, true, at("2026-10-15T01:01:00.000Z"));
+        status = with_paused(status, false, at("2026-10-15T01:01:02.500Z"));
+        assert!(
+            matches!(
+                status,
+                RecordingStatus::Recording {
+                    paused_ms: 2500,
+                    ..
+                }
+            ),
+            "{status:?}"
+        );
+        status = with_paused(status, true, at("2026-10-15T01:05:00.000Z"));
+        match &status {
+            RecordingStatus::Paused {
+                paused_ms,
+                paused_at,
+                ..
+            } => {
+                // The pause in progress is not in `pausedMs` yet.
+                assert_eq!(*paused_ms, 2500);
+                assert_eq!(paused_at, "2026-10-15T01:05:00.000Z");
+            }
+            other => panic!("{other:?}"),
+        }
+        status = with_paused(status, false, at("2026-10-15T01:05:01.000Z"));
+        assert!(
+            matches!(
+                status,
+                RecordingStatus::Recording {
+                    paused_ms: 3500,
+                    ..
+                }
+            ),
+            "{status:?}"
+        );
+    }
+
+    #[test]
+    fn ms_since_never_goes_negative() {
+        let now = at("2026-10-15T01:00:01.250Z");
+        assert_eq!(ms_since("2026-10-15T01:00:00.000Z", now), 1250);
+        assert_eq!(ms_since("2026-10-15T03:00:00.000+02:00", now), 1250);
+        assert_eq!(ms_since("2026-10-15T01:00:02.000Z", now), 0);
+        assert_eq!(ms_since("not a time", now), 0);
+    }
+
+    #[test]
+    fn excluded_app_is_set_on_recording_and_paused_only() {
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        };
+        let excluded = with_excluded(recording.clone(), Some("com.1password.1password"));
+        assert!(matches!(
+            &excluded,
+            RecordingStatus::Recording { excluded_app: Some(id), .. } if id == "com.1password.1password"
+        ));
+        assert_eq!(with_excluded(excluded.clone(), None), recording);
+        let paused = with_paused(excluded, true, at("2026-10-15T01:01:00.000Z"));
+        assert!(matches!(
+            with_excluded(paused, Some("com.apple.MobileSMS")),
+            RecordingStatus::Paused { excluded_app: Some(id), .. } if id == "com.apple.MobileSMS"
+        ));
+        assert_eq!(
+            with_excluded(RecordingStatus::Idle, Some("com.apple.MobileSMS")),
+            RecordingStatus::Idle
+        );
+    }
+
+    #[test]
+    fn update_reports_whether_the_status_changed() {
+        let recorder = Recorder::default();
+        let (status, changed) =
+            recorder.update(|s| with_excluded(s.clone(), Some("com.apple.MobileSMS")));
+        assert_eq!(
+            (status.status, status.seq, changed),
+            (RecordingStatus::Idle, 0, false)
+        );
+        recorder.set_status(RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        });
+        let (_, changed) =
+            recorder.update(|s| with_excluded(s.clone(), Some("com.apple.MobileSMS")));
+        assert!(changed);
+        let (status, changed) =
+            recorder.update(|s| with_excluded(s.clone(), Some("com.apple.MobileSMS")));
+        assert!(!changed);
+        assert_eq!(recorder.status(), status);
+    }
+
+    #[test]
+    fn seq_strictly_increases_with_each_change() {
+        let recorder = Recorder::default();
+        assert_eq!(recorder.status().seq, 0);
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        };
+        let mut seqs = vec![recorder.set_status(recording.clone()).seq];
+        // Storing the same value again is still a new status.
+        seqs.push(recorder.set_status(recording).seq);
+        let (s, changed) =
+            recorder.update(|s| with_excluded(s.clone(), Some("com.1password.1password")));
+        assert!(changed);
+        seqs.push(s.seq);
+        let (s, changed) = recorder.update(|s| with_paused(s.clone(), true, Utc::now()));
+        assert!(changed);
+        seqs.push(s.seq);
+        // No change: no new seq.
+        let (s, changed) = recorder.update(|s| s.clone());
+        assert!(!changed);
+        assert_eq!(s.seq, *seqs.last().unwrap());
+        seqs.push(recorder.set_status(RecordingStatus::Idle).seq);
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+        assert_eq!(recorder.status().seq, *seqs.last().unwrap());
+        // `discard` stores idle under a new seq too.
+        recorder.set_status(RecordingStatus::Idle);
+        assert!(recorder.status().seq > *seqs.last().unwrap());
+    }
+
+    #[test]
+    fn stamped_status_puts_seq_beside_the_state() {
+        assert_eq!(
+            serde_json::to_value(StampedStatus {
+                seq: 7,
+                status: RecordingStatus::Idle,
+            })
+            .unwrap(),
+            json!({"seq": 7, "state": "idle"})
+        );
+        assert_eq!(
+            serde_json::to_value(StampedStatus {
+                seq: 8,
+                status: RecordingStatus::Paused {
+                    started_at: "2026-10-15T01:02:03.000Z".into(),
+                    title: None,
+                    capture_area_fallback: false,
+                    paused_ms: 0,
+                    paused_at: "2026-10-15T01:05:00.000Z".into(),
+                    excluded_app: Some("com.apple.MobileSMS".into()),
+                },
+            })
+            .unwrap(),
+            json!({
+                "seq": 8,
+                "state": "paused",
+                "startedAt": "2026-10-15T01:02:03.000Z",
+                "title": null,
+                "captureAreaFallback": false,
+                "pausedMs": 0,
+                "pausedAt": "2026-10-15T01:05:00.000Z",
+                "excludedApp": "com.apple.MobileSMS",
+            })
+        );
     }
 
     #[test]
     fn discard_never_waits_and_is_a_no_op_when_idle() {
         let recorder = Recorder::default();
         assert!(!recorder.discard());
-        assert_eq!(recorder.status(), RecordingStatus::Idle);
+        assert_eq!(recorder.status().status, RecordingStatus::Idle);
         // A command holding the slot (e.g. a start waiting on the main
         // thread) must not block the quit.
         let slot = recorder.slot();
@@ -966,7 +1301,10 @@ mod tests {
             title: None,
         });
         assert!(!recorder.discard());
-        assert!(matches!(recorder.status(), RecordingStatus::Saving { .. }));
+        assert!(matches!(
+            recorder.status().status,
+            RecordingStatus::Saving { .. }
+        ));
         drop(slot);
     }
 

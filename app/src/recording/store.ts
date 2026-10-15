@@ -6,7 +6,7 @@ import {
   RECORDING_STATUS_EVENT,
   type RecordingApi,
 } from "@/lib/ipc";
-import type { AppError, RecordingSaved, RecordingSnapshot, RecordingStatus } from "@/lib/types";
+import type { AppError, RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
 
 export type RecordingAction = "start" | "pause" | "resume" | "stop" | "cancel";
 
@@ -22,12 +22,6 @@ export interface RecordingState {
   pending: RecordingAction | null;
   error: RecordingError | null;
   /**
-   * Time spent paused in this recording, as seen here (the backend doesn't
-   * report it), and when the current pause began. For the elapsed clock.
-   */
-  pausedMs: number;
-  pausedAt: number | null;
-  /**
    * Screenshots the running recording has taken, oldest first. Provisional
    * (the steps are decided at stop); cleared when the recording ends.
    */
@@ -35,8 +29,12 @@ export interface RecordingState {
 
   /** Reads the recorder's state (once at startup: the app may have reloaded mid-recording). */
   load(): Promise<void>;
-  /** Applies a `recording://status` event or a command's result. */
-  setStatus(status: RecordingStatus): void;
+  /**
+   * Applies a `recording://status` event or a command's result; one older
+   * (lower `seq`) than the last applied is ignored, one without a `seq`
+   * always applies.
+   */
+  setStatus(status: RecordingStatus | StampedStatus): void;
   /** Handles a `recording://snapshot` event (ignored when idle, and once per id). */
   addSnapshot(snapshot: RecordingSnapshot): void;
   /** Handles a `recording://saved` event or `stop`'s result, once per guide. */
@@ -57,24 +55,28 @@ export interface RecordingOptions {
   api: RecordingApi;
   /** A recording became a guide: open it, refresh the library. */
   onSaved?(saved: RecordingSaved): void;
-  now?: () => number;
 }
 
 export type RecordingStore = StoreApi<RecordingState>;
 
 /** True while a recording is running or paused (stopping would save it). */
-export function isActive(status: RecordingStatus): boolean {
+export function isActive(
+  status: RecordingStatus,
+): status is Extract<RecordingStatus, { state: "recording" | "paused" }> {
   return status.state === "recording" || status.state === "paused";
 }
 
-/** Milliseconds recorded so far, not counting pauses. */
-export function elapsedMs(state: RecordingState, now: number): number {
-  const { status } = state;
-  if (status.state === "idle") return 0;
+/**
+ * Milliseconds recorded so far, not counting pauses, from the status alone
+ * (so it survives a reload); 0 unless recording or paused.
+ */
+export function elapsedMs(status: RecordingStatus, now: number): number {
+  if (!isActive(status)) return 0;
   const started = Date.parse(status.startedAt);
   if (Number.isNaN(started)) return 0;
-  const end = state.pausedAt ?? now;
-  return Math.max(0, end - started - state.pausedMs);
+  const pausedAt = status.state === "paused" ? Date.parse(status.pausedAt) : NaN;
+  const end = Number.isNaN(pausedAt) ? now : Math.min(now, pausedAt);
+  return Math.max(0, end - started - status.pausedMs);
 }
 
 /** `m:ss`, or `h:mm:ss` from an hour. */
@@ -98,7 +100,7 @@ export type Listen = (event: string, handler: (payload: unknown) => void) => Pro
 /** Keeps the store in step with the recorder's events. Returns an unsubscribe. */
 export function subscribe(store: RecordingStore, listen: Listen): () => void {
   const stops = [
-    listen(RECORDING_STATUS_EVENT, (status) => store.getState().setStatus(status as RecordingStatus)),
+    listen(RECORDING_STATUS_EVENT, (status) => store.getState().setStatus(status as StampedStatus)),
     listen(RECORDING_SAVED_EVENT, (saved) => store.getState().saved(saved as RecordingSaved)),
     listen(RECORDING_SNAPSHOT_EVENT, (snapshot) => store.getState().addSnapshot(snapshot as RecordingSnapshot)),
   ];
@@ -107,11 +109,13 @@ export function subscribe(store: RecordingStore, listen: Listen): () => void {
   };
 }
 
-export function createRecordingStore({ api, onSaved, now = Date.now }: RecordingOptions): RecordingStore {
+export function createRecordingStore({ api, onSaved }: RecordingOptions): RecordingStore {
   // Guides already handled: `stop`'s result and the saved event both arrive.
   const handled = new Set<string>();
   // A stop before quitting: its guide is not opened.
   let quietStop = false;
+  // The newest `seq` applied: events and command results can arrive out of order.
+  let lastSeq = -1;
 
   return createStore<RecordingState>()((set, get) => {
     /** Runs a command; on failure records the error and re-reads the state. */
@@ -129,38 +133,40 @@ export function createRecordingStore({ api, onSaved, now = Date.now }: Recording
       }
     }
 
-    function applyStatus(status: RecordingStatus) {
+    /**
+     * Applies `status` unless it is older than the last one applied. A status
+     * without a `seq` (the idle a stop or cancel ends in) always applies;
+     * `reset` (a fresh read) applies and becomes the baseline.
+     */
+    function applyStatus(status: RecordingStatus | StampedStatus, reset = false) {
+      if ("seq" in status) {
+        if (!reset && status.seq < lastSeq) return;
+        lastSeq = status.seq;
+        const { seq: _, ...rest } = status;
+        status = rest as RecordingStatus;
+      }
       const prev = get().status;
       const sameRun = prev.state !== "idle" && status.state !== "idle" && prev.startedAt === status.startedAt;
-      let { pausedMs, pausedAt } = sameRun ? get() : { pausedMs: 0, pausedAt: null };
-      const t = now();
-      if (status.state === "paused" && pausedAt === null) pausedAt = t;
-      if (status.state === "recording" && pausedAt !== null) {
-        pausedMs += t - pausedAt;
-        pausedAt = null;
-      }
       // The strip stays up while saving; it is gone once the guide opens.
       const snapshots = status.state === "idle" ? [] : sameRun ? get().snapshots : [];
-      set({ status, pausedMs, pausedAt, snapshots });
+      set({ status, snapshots });
     }
 
     return {
       status: { state: "idle" },
       pending: null,
       error: null,
-      pausedMs: 0,
-      pausedAt: null,
       snapshots: [],
 
       async load() {
         try {
-          applyStatus(await api.status());
+          applyStatus(await api.status(), true);
         } catch (error) {
           console.error("reading the recording status failed:", error);
         }
       },
 
-      setStatus: applyStatus,
+      setStatus: (status) => applyStatus(status),
 
       addSnapshot(snapshot) {
         const { status, snapshots } = get();

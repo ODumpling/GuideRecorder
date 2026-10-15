@@ -11,6 +11,7 @@ use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
+use crate::blocking::blocking;
 use crate::editor::{
     AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
     MAX_PNG_BYTES,
@@ -162,17 +163,6 @@ pub async fn read_image_file(
         .await
         .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))??;
     Ok(Response::new(bytes))
-}
-
-/// Runs `f` on the blocking pool (native dialogs block until closed).
-async fn blocking<T, F>(f: F) -> Result<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
-{
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::new(ErrorKind::Io, format!("task failed: {e}")))?
 }
 
 /// Starts a dialog in `directory` when it is an existing folder (only where

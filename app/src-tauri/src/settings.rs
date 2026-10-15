@@ -3,8 +3,10 @@
 //! schema version.
 //!
 //! The API key is not here: it lives in the Keychain (core's
-//! `ai::keychain`). Recording settings are only stored for now; the capture
-//! session reads them once recording is wired (#341).
+//! `ai::keychain`). Each recording reads the recording settings when it
+//! starts (`recording::session_config`); the record and pause shortcuts,
+//! window and region capture, and after-frames are stored but not used
+//! yet.
 //!
 //! Paths in settings (the library, the default export folder and the logo)
 //! are trusted later without another dialog, so the webview may only set
@@ -116,7 +118,9 @@ pub struct Recording {
     pub after_frames: bool,
     /// How long after the action that frame is taken.
     pub after_frame_delay_ms: u32,
-    /// Bundle ids of apps whose windows are never recorded.
+    /// Bundle ids of apps during which nothing is recorded while one is
+    /// frontmost. A settings file without the field gets
+    /// [`default_excluded_apps`]; a saved empty list stays empty.
     pub excluded_apps: Vec<String>,
     /// Typing pauses longer than this end a typing step.
     pub typing_idle_ms: u32,
@@ -129,9 +133,23 @@ impl Default for Recording {
             capture_area: CaptureArea::default(),
             after_frames: true,
             after_frame_delay_ms: 400,
-            excluded_apps: Vec::new(),
+            excluded_apps: default_excluded_apps(),
             typing_idle_ms: 1500,
         }
+    }
+}
+
+/// The suggested exclusion list: password managers, Keychain Access,
+/// Passwords and Messages (the capture crate's
+/// `DEFAULT_EXCLUDED_BUNDLE_IDS`). Empty where there is no capture backend.
+pub fn default_excluded_apps() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        guidesya_capture::macos::session::default_excluded_bundle_ids()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
     }
 }
 
@@ -644,6 +662,37 @@ mod tests {
             serde_json::from_str(r#"{"version":1,"ai":{"enabled":false}}"#).unwrap();
         assert!(!partial.ai.enabled);
         assert_eq!(partial.ai.guide_model, DEFAULT_GUIDE_MODEL);
+    }
+
+    #[test]
+    fn excluded_apps_default_only_when_missing() {
+        let defaults = default_excluded_apps();
+        #[cfg(target_os = "macos")]
+        {
+            assert!(defaults.contains(&"com.1password.1password".to_owned()));
+            assert!(defaults.contains(&"com.bitwarden.desktop".to_owned()));
+            assert!(defaults.contains(&"com.apple.keychainaccess".to_owned()));
+            assert!(defaults.contains(&"com.apple.MobileSMS".to_owned()));
+        }
+        assert!(defaults.len() <= MAX_EXCLUDED_APPS);
+        assert!(defaults.iter().all(|id| is_bundle_id(id)), "{defaults:?}");
+        assert_eq!(Settings::default().recording.excluded_apps, defaults);
+
+        // No recording section, or one without the field: the defaults.
+        let missing: Settings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert_eq!(missing.recording.excluded_apps, defaults);
+        let missing: Settings =
+            serde_json::from_str(r#"{"version":1,"recording":{"typingIdleMs":900}}"#).unwrap();
+        assert_eq!(missing.recording.excluded_apps, defaults);
+        // A saved empty list stays empty.
+        let empty: Settings =
+            serde_json::from_str(r#"{"version":1,"recording":{"excludedApps":[]}}"#).unwrap();
+        assert!(empty.recording.excluded_apps.is_empty());
+        let mine: Settings = serde_json::from_str(
+            r#"{"version":1,"recording":{"excludedApps":["com.apple.Safari"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.recording.excluded_apps, ["com.apple.Safari"]);
     }
 
     #[test]

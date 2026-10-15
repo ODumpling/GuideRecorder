@@ -1,28 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { RECORDING_SAVED_EVENT, RECORDING_SNAPSHOT_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
-import type { RecordingSaved, RecordingSnapshot, RecordingStatus } from "@/lib/types";
+import type { RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
 import { createRecordingStore, elapsedMs, formatElapsed, isActive, subscribe, type Listen } from "@/recording/store";
 
 const STARTED = "2026-10-15T10:00:00.000Z";
 const T0 = Date.parse(STARTED);
-const recording: RecordingStatus = { state: "recording", startedAt: STARTED, title: null, captureAreaFallback: false };
-const paused: RecordingStatus = { ...recording, state: "paused" };
+const run = { startedAt: STARTED, title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null };
+const recording: RecordingStatus = { state: "recording", ...run };
+const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
 const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0 };
 const SNAP1: RecordingSnapshot = { id: "0-5000000", ts: 7_000_000, width: 16, height: 10, point: { x: 8, y: 5 } };
 const SNAP2: RecordingSnapshot = { id: "0-9000000", ts: 12_000_000, width: 16, height: 10, point: null };
 
+/** `status` as the recorder would send it, with `seq`. */
+const stamp = (status: RecordingStatus, seq: number): StampedStatus => ({ ...status, seq });
+
+/** A recorder that stamps each change with the next `seq`, like the Rust side. */
 function fakeApi(overrides: Partial<RecordingApi> = {}) {
-  let status: RecordingStatus = { state: "idle" };
+  let seq = 0;
+  let status: StampedStatus = stamp({ state: "idle" }, seq);
+  const store = (next: RecordingStatus) => (status = stamp(next, ++seq));
   const api: RecordingApi = {
-    start: vi.fn(async () => (status = recording)),
-    pause: vi.fn(async () => (status = paused)),
-    resume: vi.fn(async () => (status = recording)),
+    start: vi.fn(async () => store(recording)),
+    pause: vi.fn(async () => store(paused)),
+    resume: vi.fn(async () => store(recording)),
     stop: vi.fn(async () => {
-      status = { state: "idle" };
+      store({ state: "idle" });
       return SAVED;
     }),
     cancel: vi.fn(async () => {
-      status = { state: "idle" };
+      store({ state: "idle" });
     }),
     status: vi.fn(async () => status),
     snapshotImage: vi.fn(async () => new ArrayBuffer(0)),
@@ -32,12 +39,14 @@ function fakeApi(overrides: Partial<RecordingApi> = {}) {
 }
 
 function setup(overrides: Partial<RecordingApi> = {}) {
-  let time = T0;
   const api = fakeApi(overrides);
   const onSaved = vi.fn();
-  const store = createRecordingStore({ api, onSaved, now: () => time });
-  return { api, onSaved, store, advance: (ms: number) => (time += ms), now: () => time };
+  const store = createRecordingStore({ api, onSaved });
+  return { api, onSaved, store };
 }
+
+/** RFC 3339 for `ms` after the recording started. */
+const after = (ms: number) => new Date(T0 + ms).toISOString();
 
 describe("recording store", () => {
   it("starts, pauses, resumes and stops", async () => {
@@ -61,20 +70,20 @@ describe("recording store", () => {
   });
 
   it("marks the command in flight and refuses a second one", async () => {
-    let finish!: (s: RecordingStatus) => void;
-    const { api, store } = setup({ start: vi.fn(() => new Promise<RecordingStatus>((r) => (finish = r))) });
+    let finish!: (s: StampedStatus) => void;
+    const { api, store } = setup({ start: vi.fn(() => new Promise<StampedStatus>((r) => (finish = r))) });
     const starting = store.getState().start();
     expect(store.getState().pending).toBe("start");
     expect(await store.getState().start()).toBe(false);
     expect(api.start).toHaveBeenCalledTimes(1);
-    finish(recording);
+    finish(stamp(recording, 1));
     expect(await starting).toBe(true);
     expect(store.getState().pending).toBeNull();
   });
 
   it("refuses a stop while another command runs, leaving the state alone", async () => {
-    let finish!: (s: RecordingStatus) => void;
-    const { api, onSaved, store } = setup({ pause: vi.fn(() => new Promise<RecordingStatus>((r) => (finish = r))) });
+    let finish!: (s: StampedStatus) => void;
+    const { api, onSaved, store } = setup({ pause: vi.fn(() => new Promise<StampedStatus>((r) => (finish = r))) });
     store.getState().setStatus(recording);
     const pausing = store.getState().pause();
     expect(store.getState().pending).toBe("pause");
@@ -84,7 +93,7 @@ describe("recording store", () => {
     expect(store.getState().status).toEqual(recording);
     expect(store.getState().error).toBeNull();
 
-    finish(paused);
+    finish(stamp(paused, 1));
     await pausing;
     expect(store.getState().status).toEqual(paused);
     // The refused quiet stop did not leave later saves quiet.
@@ -114,7 +123,7 @@ describe("recording store", () => {
       start: vi.fn(async () => {
         throw { kind: "invalid", message: "a recording is already running" };
       }),
-      status: vi.fn(async () => recording),
+      status: vi.fn(async () => stamp(recording, 1)),
     });
     await store.getState().start();
     expect(store.getState().error).toEqual({ message: "a recording is already running", permissions: false });
@@ -171,7 +180,7 @@ describe("recording store", () => {
   });
 
   it("loads the status at startup", async () => {
-    const { store } = setup({ status: vi.fn(async () => paused) });
+    const { store } = setup({ status: vi.fn(async () => stamp(paused, 1)) });
     await store.getState().load();
     expect(store.getState().status).toEqual(paused);
   });
@@ -234,31 +243,68 @@ describe("recording store", () => {
     expect(store.getState().snapshots).toEqual([]);
   });
 
-  it("does not count pauses in the elapsed time", () => {
-    const { advance, now, store } = setup();
-    const elapsed = () => elapsedMs(store.getState(), now());
-    expect(elapsed()).toBe(0);
+  it("takes the elapsed time from the status, not counting pauses", () => {
+    const at = (ms: number) => T0 + ms;
+    expect(elapsedMs({ state: "idle" }, at(5_000))).toBe(0);
+    expect(elapsedMs({ state: "saving", startedAt: STARTED, title: null }, at(5_000))).toBe(0);
 
+    expect(elapsedMs(recording, at(10_000))).toBe(10_000);
+    // Paused at 10 s after an earlier 2 s pause: frozen at 8 s.
+    const pausedAt10 = { ...paused, pausedMs: 2_000, pausedAt: after(10_000) };
+    expect(elapsedMs(pausedAt10, at(10_000))).toBe(8_000);
+    expect(elapsedMs(pausedAt10, at(60_000))).toBe(8_000);
+    // Resumed at 15 s: the 5 s pause is in `pausedMs` now.
+    const resumed = { ...recording, pausedMs: 7_000 };
+    expect(elapsedMs(resumed, at(20_000))).toBe(13_000);
+    // Never negative, and a bad time is 0.
+    expect(elapsedMs(recording, at(-1_000))).toBe(0);
+    expect(elapsedMs({ ...recording, startedAt: "soon" }, at(1_000))).toBe(0);
+  });
+
+  it("keeps the elapsed time across a reload (a fresh store reads the status)", async () => {
+    const status: RecordingStatus = { ...paused, pausedMs: 3_000, pausedAt: after(30_000) };
+    const { store } = setup({ status: vi.fn(async () => stamp(status, 4)) });
+    await store.getState().load();
+    expect(elapsedMs(store.getState().status, T0 + 90_000)).toBe(27_000);
+  });
+
+  it("follows the excluded app in front", () => {
+    const { store } = setup();
     store.getState().setStatus(recording);
-    advance(10_000);
-    expect(elapsed()).toBe(10_000);
-
-    store.getState().setStatus(paused);
-    advance(5_000);
-    expect(elapsed()).toBe(10_000);
-    // A repeated paused event keeps the pause's start.
-    store.getState().setStatus(paused);
-    advance(1_000);
-
+    store.getState().setStatus({ ...recording, excludedApp: "com.1password.1password" });
+    const status = store.getState().status;
+    expect(status.state === "recording" && status.excludedApp).toBe("com.1password.1password");
     store.getState().setStatus(recording);
-    advance(2_000);
-    expect(elapsed()).toBe(12_000);
+    expect(store.getState().status).toEqual(recording);
+  });
 
-    // A new recording starts the clock over.
-    store.getState().setStatus({ state: "idle" });
-    store.getState().setStatus({ ...recording, startedAt: new Date(now()).toISOString() });
-    advance(3_000);
-    expect(elapsed()).toBe(3_000);
+  it("ignores a status older than the last one applied", async () => {
+    const { store } = setup();
+    // A stale event (the exclusion sink's, sent late) after the newer pause.
+    store.getState().setStatus(stamp(recording, 3));
+    store.getState().setStatus(stamp(paused, 5));
+    store.getState().setStatus(stamp({ ...recording, excludedApp: "com.1password.1password" }, 4));
+    expect(store.getState().status).toEqual(paused);
+    // The same seq again (the event and the command result) still applies.
+    store.getState().setStatus(stamp(paused, 5));
+    expect(store.getState().status).toEqual(paused);
+    // A late recording event after idle is ignored too.
+    store.getState().setStatus(stamp({ state: "idle" }, 7));
+    store.getState().setStatus(stamp(recording, 6));
+    expect(store.getState().status).toEqual({ state: "idle" });
+    // A command's result goes through the same check.
+    await store.getState().start();
+    expect(store.getState().status).toEqual({ state: "idle" });
+  });
+
+  it("takes a fresh read as the new baseline", async () => {
+    const { store } = setup({ status: vi.fn(async () => stamp(recording, 2)) });
+    store.getState().setStatus(stamp({ state: "idle" }, 9));
+    // As after the app restarted: the recorder counts from 0 again.
+    await store.getState().load();
+    expect(store.getState().status).toEqual(recording);
+    store.getState().setStatus(stamp(paused, 3));
+    expect(store.getState().status).toEqual(paused);
   });
 
   it("formats elapsed time", () => {

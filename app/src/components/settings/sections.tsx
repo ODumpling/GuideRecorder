@@ -21,6 +21,7 @@ import {
   TYPING_IDLE_MS,
 } from "@/settings/validate";
 import { isAccent } from "@/export/export";
+import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
 
 type Change = (update: (s: Settings) => Settings) => void;
 
@@ -158,6 +159,9 @@ export function RecordingSection() {
     setRecording({ excludedApps: [...r.excludedApps, id] });
     setApp("");
   };
+  // Adds back the suggested apps that were removed; keeps the user's own.
+  const missingDefaults = DEFAULT_EXCLUDED_IDS.filter((id) => !r.excludedApps.includes(id));
+  const full = r.excludedApps.length >= MAX_EXCLUDED_APPS;
 
   return (
     <Section title="Recording" intro="The next recording uses these. The record and pause shortcuts, window and region capture, and after frames are not supported yet.">
@@ -220,13 +224,16 @@ export function RecordingSection() {
       <div className="flex flex-col gap-2 py-3">
         <span className="text-sm font-medium">Excluded apps</span>
         <span className="text-xs text-muted-foreground">
-          Windows of these apps are never recorded. Use bundle ids, such as com.1password.1password.
+          Nothing is recorded while one of these apps is in front. Use bundle ids, such as com.1password.1password.
         </span>
         {r.excludedApps.length > 0 && (
           <ul className="flex flex-col gap-1">
             {r.excludedApps.map((id) => (
               <li key={id} className="flex items-center justify-between rounded-md bg-muted px-2 py-1 text-sm">
-                <span className="truncate font-mono text-xs">{id}</span>
+                <span className="flex min-w-0 items-baseline gap-2">
+                  {appName(id) !== id && <span className="text-sm">{appName(id)}</span>}
+                  <span className="truncate font-mono text-xs text-muted-foreground">{id}</span>
+                </span>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -254,6 +261,25 @@ export function RecordingSection() {
             Add
           </Button>
         </div>
+        {missingDefaults.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={readOnly || full}
+              onClick={() =>
+                setRecording({ excludedApps: [...r.excludedApps, ...missingDefaults].slice(0, MAX_EXCLUDED_APPS) })
+              }
+            >
+              Restore defaults
+            </Button>
+            {full && (
+              <span className="text-xs text-muted-foreground">
+                The list is full ({MAX_EXCLUDED_APPS} apps); remove one first.
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </Section>
   );
