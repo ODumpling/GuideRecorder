@@ -43,15 +43,18 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
       <span
         data-tauri-drag-region
         aria-hidden
-        className={`size-2 shrink-0 rounded-full ${view.excluded ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
-          view.paused || view.excluded ? "opacity-40" : "animate-pulse"
+        className={`size-2 shrink-0 rounded-full ${view.excluded || view.lost ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
+          view.paused || view.excluded || view.lost ? "opacity-40" : "animate-pulse"
         }`}
       />
       <span
         data-tauri-drag-region
         role="status"
         className="min-w-0 flex-1 truncate text-xs font-medium"
-        title={view.excluded ? "Nothing is captured while an excluded app is in front (Settings → Recording)." : view.label}
+        title={
+          view.lost ??
+          (view.excluded ? "Nothing is captured while an excluded app is in front (Settings → Recording)." : view.label)
+        }
       >
         {view.label}
       </span>
@@ -79,7 +82,15 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
         variant="ghost"
         size="icon"
         aria-label="Add manual step"
-        title={manualError ? `Couldn't add a step: ${manualError}` : phase === "added" ? "Step added" : "Add a step from the screen now"}
+        title={
+          manualError
+            ? `Couldn't add a step: ${manualError}`
+            : phase === "added"
+              ? "Step added"
+              : view.lost
+                ? "Capture stopped: no step can be added"
+                : "Add a step from the screen now"
+        }
         disabled={!view.canAddStep}
         onClick={() => void manual.getState().add()}
       >

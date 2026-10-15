@@ -403,15 +403,32 @@ struct ReaderState {
     /// The current run was stopped by the system (display gone, screen
     /// locked, permission revoked, "Stop sharing").
     stopped_by_system: bool,
+    /// When the current run was stopped by the system (event clock). No
+    /// frame from this run is used for a later time: the screen may have
+    /// changed (the window closed) without a frame to show it.
+    stopped_at: Option<Timestamp>,
     last_error: Option<String>,
 }
 
-#[derive(Debug)]
+/// Called with the error and the stop time when the system stops the
+/// stream.
+type StopHook = Arc<dyn Fn(&str, Timestamp) + Send + Sync>;
+
 struct Shared {
     state: Mutex<ReaderState>,
     arrived: Condvar,
     /// Spare pixel buffers; `None` when reuse is off.
     pool: Option<Mutex<Vec<Vec<u8>>>>,
+    /// See [`FrameReader::on_system_stop`].
+    on_stop: Mutex<Option<StopHook>>,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Shared {
@@ -449,10 +466,12 @@ impl FrameReader {
                     active: true,
                     generation: 0,
                     stopped_by_system: false,
+                    stopped_at: None,
                     last_error: None,
                 }),
                 arrived: Condvar::new(),
                 pool: reuse_buffers.then(|| Mutex::new(Vec::new())),
+                on_stop: Mutex::new(None),
             }),
         }
     }
@@ -516,6 +535,7 @@ impl FrameReader {
             state.generation += 1;
             state.active = true;
             state.stopped_by_system = false;
+            state.stopped_at = None;
             (state.generation, state.ring.clear())
         };
         self.recycle(old);
@@ -536,18 +556,60 @@ impl FrameReader {
         }
     }
 
-    /// The system stopped run `generation`.
+    /// The system stopped run `generation`, now.
     fn system_stopped(&self, generation: u64, error: String) {
+        self.system_stopped_at(generation, error, super::event_tap::now());
+    }
+
+    /// The system stopped run `generation` at `at` (event clock). Calls
+    /// the [`FrameReader::on_system_stop`] hook, outside the lock.
+    pub(crate) fn system_stopped_at(&self, generation: u64, error: String, at: Timestamp) {
         {
             let mut state = self.shared.lock();
-            if state.generation != generation {
+            if state.generation != generation || state.stopped_by_system {
                 return;
             }
             state.stopped_by_system = true;
+            state.stopped_at = Some(at);
             state.active = false;
-            state.last_error = Some(error);
+            state.last_error = Some(error.clone());
         }
         self.shared.arrived.notify_all();
+        let hook = self
+            .shared
+            .on_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(hook) = hook {
+            hook(&error, at);
+        }
+    }
+
+    /// The current run's generation, for [`FrameReader::system_stopped_at`]
+    /// in tests.
+    #[cfg(test)]
+    pub(crate) fn generation(&self) -> u64 {
+        self.shared.lock().generation
+    }
+
+    /// Calls `f` with the error and the stop time, once per run, when the
+    /// system stops the
+    /// stream (window closed, display unplugged, permission revoked). It
+    /// runs on ScreenCaptureKit's queue: keep it quick. Replaces any
+    /// earlier hook.
+    pub fn on_system_stop(&self, f: impl Fn(&str, Timestamp) + Send + Sync + 'static) {
+        *self
+            .shared
+            .on_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(f));
+    }
+
+    /// When the system stopped the current run (event clock); `None` while
+    /// it runs, is paused or was stopped by us.
+    pub fn stopped_at(&self) -> Option<Timestamp> {
+        self.shared.lock().stopped_at
     }
 
     fn stopped_by_system(&self) -> bool {
@@ -559,8 +621,15 @@ impl FrameReader {
     }
 
     /// Newest frame taken strictly before `ts` (the pre-click frame).
+    /// `None` for a `ts` at or after the time the system stopped the
+    /// stream ([`FrameReader::stopped_at`]): the last frame may show a
+    /// window that has closed since.
     pub fn frame_before(&self, ts: Timestamp) -> Option<Frame> {
-        self.shared.lock().ring.before(ts).cloned()
+        let state = self.shared.lock();
+        if state.stopped_at.is_some_and(|at| ts >= at) {
+            return None;
+        }
+        state.ring.before(ts).cloned()
     }
 
     /// First frame taken at least `min_delay_ms` after `ts` (the "after"
@@ -587,6 +656,9 @@ impl FrameReader {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if !state.active || left.is_zero() {
+                if state.stopped_at.is_some_and(|at| ts >= at) {
+                    return None;
+                }
                 return state.ring.latest().filter(|f| f.ts >= ts).cloned();
             }
             state = self
@@ -1525,6 +1597,30 @@ fn wait_for_completion(f: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>)) 
     }
 }
 
+/// Whether a stop error (as [`FrameReader::last_error`] gives it, ending in
+/// `(code N)`) says the captured window or display is gone, rather than
+/// e.g. a screen lock or a revoked permission.
+pub fn is_source_gone_error(error: &str) -> bool {
+    let code = error
+        .rsplit_once("(code ")
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .and_then(|n| n.trim().parse::<isize>().ok());
+    code.is_some_and(|c| {
+        [
+            SCStreamErrorCode::NoCaptureSource,
+            SCStreamErrorCode::NoWindowList,
+            SCStreamErrorCode::NoDisplayList,
+        ]
+        .iter()
+        .any(|gone| gone.0 == c)
+    })
+}
+
+/// Whether window `window_id` is still listed by the window server.
+pub fn window_exists(window_id: u32) -> bool {
+    current_window_rect(window_id).is_some()
+}
+
 fn describe(error: &NSError) -> String {
     format!("{} (code {})", error.localizedDescription(), error.code())
 }
@@ -2104,6 +2200,72 @@ mod tests {
         assert!(!reader.stopped_by_system());
         reader.clear_error();
         assert!(reader.last_error().is_none());
+    }
+
+    #[test]
+    fn no_frame_after_a_system_stop() {
+        let reader = FrameReader::detached(4);
+        let run = reader.begin_run();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook_seen = Arc::clone(&seen);
+        reader.on_system_stop(move |e, at| hook_seen.lock().unwrap().push((e.to_owned(), at)));
+        reader.push_from(run, fake(10));
+        reader.push_from(run, fake(20));
+        reader.system_stopped_at(run, "window gone".into(), Timestamp(30));
+        // A second notification for the same run is ignored.
+        reader.system_stopped_at(run, "again".into(), Timestamp(40));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [("window gone".to_owned(), Timestamp(30))]
+        );
+        assert_eq!(reader.stopped_at(), Some(Timestamp(30)));
+        // Before the stop: the frames still serve.
+        assert_eq!(ts_of(reader.frame_before(Timestamp(25))), Some(20));
+        assert_eq!(ts_of(reader.frame_before(Timestamp(15))), Some(10));
+        // At or after it: nothing, however old the last frame is.
+        assert!(reader.frame_before(Timestamp(30)).is_none());
+        assert!(reader.frame_before(Timestamp(1_000)).is_none());
+        assert!(reader
+            .frame_after(Timestamp(30), 0, Duration::from_secs(5))
+            .is_none());
+        assert_eq!(
+            ts_of(reader.frame_after(Timestamp(15), 0, Duration::from_secs(5))),
+            Some(20)
+        );
+        // A new run lifts the cutoff.
+        let next = reader.begin_run();
+        assert!(reader.stopped_at().is_none());
+        reader.push_from(next, fake(50));
+        assert_eq!(ts_of(reader.frame_before(Timestamp(60))), Some(50));
+    }
+
+    #[test]
+    fn source_gone_errors_by_code() {
+        assert!(is_source_gone_error(
+            "The stream has no capture source. (code -3815)"
+        ));
+        assert!(is_source_gone_error("x (code -3813)"));
+        assert!(is_source_gone_error("x (code -3814)"));
+        // A system stop (screen lock, sleep), a user stop, a revoked
+        // permission or an unknown text: not known to be gone.
+        assert!(!is_source_gone_error(
+            "Stream was stopped by the system (code -3821)"
+        ));
+        assert!(!is_source_gone_error("x (code -3817)"));
+        assert!(!is_source_gone_error("x (code -3801)"));
+        assert!(!is_source_gone_error("window gone"));
+        assert!(!is_source_gone_error("x (code abc)"));
+    }
+
+    #[test]
+    fn stale_run_stop_has_no_cutoff() {
+        let reader = FrameReader::detached(4);
+        let old = reader.begin_run();
+        let run = reader.begin_run();
+        reader.push_from(run, fake(10));
+        reader.system_stopped_at(old, "old".into(), Timestamp(5));
+        assert!(reader.stopped_at().is_none());
+        assert_eq!(ts_of(reader.frame_before(Timestamp(100))), Some(10));
     }
 
     #[test]

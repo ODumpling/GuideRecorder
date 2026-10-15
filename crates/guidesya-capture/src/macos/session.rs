@@ -151,6 +151,43 @@
 //! expose the state, e.g. for a "paused: excluded app" toolbar.
 //! Secure-field masking (below) does not depend on the exclusion list.
 //!
+//! # Lost capture
+//!
+//! ScreenCaptureKit stops a stream by itself when its window closes or its
+//! display is unplugged. From the stop time on
+//! ([`FrameReader::stopped_at`]) that stream's reader gives no frame, so no
+//! later event gets a snapshot of the dead window's last frame: the event
+//! counts in `missing_frames` and its step borrows a neighbour's snapshot
+//! or is skipped. The stop is noticed when ScreenCaptureKit reports it, a
+//! moment after the window closed. With several display streams only the
+//! lost one stops serving.
+//!
+//! Each such stop is kept as a [`LossCutoff`] (the stream and its stop
+//! time) in [`Recording::loss_cutoffs`]: at save, a step at or after a
+//! cutoff never borrows a snapshot that stream took before it (see
+//! [`match_snapshot_where`]); with no other snapshot near it, the step is
+//! skipped. This also covers manual-step hotkey presses after the loss.
+//!
+//! Once *every* stream has stopped, nothing more can be captured:
+//! [`RecordingSession::capture_lost`] gives a short reason ("the window was
+//! closed") and [`SessionConfig::on_capture_lost`] reports it once. The
+//! reason names the window or display only when it is known to be gone
+//! (ScreenCaptureKit's error says so, see [`frames::is_source_gone_error`],
+//! or the window or display is no longer listed); otherwise it is the
+//! neutral [`LOST_UNKNOWN`] (e.g. a screen lock or a revoked permission).
+//! [`RecordingSession::manual_step`] then adds nothing. The session keeps
+//! running (it does not stop itself) so the host can tell the user and let
+//! them stop and save what was recorded.
+//!
+//! [`RecordingSession::resume`] after a loss tries to start the streams
+//! again. If that works (e.g. one of several displays is still there, or
+//! the display came back), the loss is cleared (reported as `None`) and
+//! recording goes on. If the window or display is still gone, it returns
+//! [`SessionError::CaptureLost`] and the session stays paused;
+//! [`RecordingSession::stop`] still saves what was recorded. A window or
+//! display that went away *while paused* is reported the same way, at
+//! resume.
+//!
 //! # Snapshots
 //!
 //! A snapshot is taken for each `MouseDown`, `ManualStep`, shortcut, Return
@@ -307,6 +344,10 @@ pub enum SessionError {
     Spawn(io::Error),
     #[error("a session thread panicked")]
     ThreadPanicked,
+    /// The captured window or display is gone (see `# Lost capture`); the
+    /// reason is [`RecordingSession::capture_lost`].
+    #[error("capture stopped: {0}")]
+    CaptureLost(String),
 }
 
 fn io_err(path: &Path) -> impl FnOnce(io::Error) -> SessionError + '_ {
@@ -386,6 +427,36 @@ pub struct SessionConfig {
     /// paused. Keep it quick. `None` reports nothing; the state can also
     /// be polled with [`RecordingSession::excluded_app`].
     pub on_excluded: Option<ExclusionSink>,
+    /// Called with a short reason when every frame stream has stopped by
+    /// itself (the window closed, the display was unplugged), and with
+    /// `None` when a resume starts capturing again; see `# Lost capture`.
+    /// Called on ScreenCaptureKit's queue or on the thread calling
+    /// [`RecordingSession::resume`]. Keep it quick. `None` reports
+    /// nothing; the state can also be polled with
+    /// [`RecordingSession::capture_lost`].
+    pub on_capture_lost: Option<CaptureLostSink>,
+}
+
+/// The callback behind [`SessionConfig::on_capture_lost`].
+#[derive(Clone)]
+pub struct CaptureLostSink(Arc<CaptureLostFn>);
+
+type CaptureLostFn = dyn Fn(Option<&str>) + Send + Sync;
+
+impl CaptureLostSink {
+    pub fn new(f: impl Fn(Option<&str>) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn report(&self, reason: Option<&str>) {
+        (self.0)(reason);
+    }
+}
+
+impl fmt::Debug for CaptureLostSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CaptureLostSink")
+    }
 }
 
 /// The callback behind [`SessionConfig::on_excluded`]: `Some(bundle id)`
@@ -468,6 +539,7 @@ impl Default for SessionConfig {
             work_dir: None,
             on_snapshot: None,
             on_excluded: None,
+            on_capture_lost: None,
         }
     }
 }
@@ -551,6 +623,12 @@ pub struct RecordingSession {
     /// Refreshes the streams' content filters; ends once `observer` is
     /// dropped.
     filter_refresh: Option<JoinHandle<()>>,
+    /// Which streams the system stopped (see `# Lost capture`), shared
+    /// with their stop hooks.
+    loss: Arc<CaptureLoss>,
+    /// Whether a stopped stream's window or display is gone, from its
+    /// target and stop error; [`source_gone`], scripted in tests.
+    source_gone: fn(CaptureTarget, &str) -> bool,
 }
 
 impl RecordingSession {
@@ -617,6 +695,8 @@ impl RecordingSession {
             front: Arc::new(Frontmost::new(cfg)),
             observer: None,
             filter_refresh: None,
+            loss: Arc::new(CaptureLoss::new(cfg.on_capture_lost.clone())),
+            source_gone,
         }
     }
 
@@ -635,12 +715,33 @@ impl RecordingSession {
             })?);
         }
         *lock(&self.sources) = streams.iter().map(FrameSource::of).collect();
+        self.watch_streams(streams.iter().map(|s| (s.reader(), s.config().target)));
         self.displays = streams
             .iter()
             .filter_map(|s| display_for(s.config().target))
             .collect();
         self.frames = streams;
         Ok(())
+    }
+
+    /// Starts tracking `streams` (each with its target) for a loss (see
+    /// `# Lost capture`): each one's stop hook marks it lost, with its stop
+    /// time and reason. Clears an earlier loss.
+    fn watch_streams(&self, streams: impl ExactSizeIterator<Item = (FrameReader, CaptureTarget)>) {
+        let epoch = self.loss.begin(streams.len());
+        let gone = self.source_gone;
+        for (index, (reader, target)) in streams.enumerate() {
+            let loss = Arc::clone(&self.loss);
+            reader.on_system_stop(move |error, at| {
+                loss.stream_lost(epoch, index, lost_reason(target, gone(target, error)), at)
+            });
+            // In case it stopped before the hook was set.
+            if let Some(at) = reader.stopped_at() {
+                let error = reader.last_error().unwrap_or_default();
+                self.loss
+                    .stream_lost(epoch, index, lost_reason(target, gone(target, &error)), at);
+            }
+        }
     }
 
     /// Stops every frame stream (releasing their rings) and removes them
@@ -781,13 +882,22 @@ impl RecordingSession {
         self.excluded_app().is_some()
     }
 
+    /// Why nothing can be captured any more, e.g. "the window was closed",
+    /// once every frame stream has stopped by itself; `None` while
+    /// capturing (see `# Lost capture`). [`SessionConfig::on_capture_lost`]
+    /// reports the same changes as they happen.
+    pub fn capture_lost(&self) -> Option<String> {
+        self.loss.current()
+    }
+
     /// Adds a manual step now, as the manual-step hotkey does (e.g. from a
     /// toolbar button): a [`CaptureEvent::ManualStep`] stamped now goes
     /// through the router like the hotkey's, so it takes a snapshot and is
     /// dropped while an excluded app is in front or focused. Returns false,
-    /// adding nothing, while paused or once input has stopped.
+    /// adding nothing, while paused, once capture is lost
+    /// ([`RecordingSession::capture_lost`]) or once input has stopped.
     pub fn manual_step(&self) -> bool {
-        if self.is_paused() {
+        if self.is_paused() || self.capture_lost().is_some() {
             return false;
         }
         let Some(tx) = &self.tap_tx else {
@@ -831,14 +941,19 @@ impl RecordingSession {
     /// removed during the pause is picked up), notes the time and starts a
     /// new tap. The first event after that time resets what would link it
     /// to the events from before the pause (see the module docs). Resuming
-    /// while not paused is a no-op. On error the session stays paused.
+    /// while not paused is a no-op. On error the session stays paused, and
+    /// [`RecordingSession::stop`] still saves the recording.
+    ///
+    /// If the captured window or display is gone (it went away while
+    /// recording or while paused), returns [`SessionError::CaptureLost`]
+    /// and reports the loss (see `# Lost capture`).
     pub fn resume(&mut self) -> Result<(), SessionError> {
         let Some(paused_at) = self.paused_at else {
             return Ok(());
         };
         if let Err(e) = self.start_frames() {
             let _ = self.stop_frames();
-            return Err(e);
+            return Err(self.resume_error(e));
         }
         // In case an activation was missed (no main run loop while paused).
         self.read_frontmost();
@@ -862,6 +977,28 @@ impl RecordingSession {
             resumed_at: Some(at),
         });
         Ok(())
+    }
+
+    /// The error for a resume whose streams did not start: a gone window or
+    /// display is a lost capture (noted and reported), as is any failure
+    /// once capture was already lost.
+    fn resume_error(&self, e: SessionError) -> SessionError {
+        let gone = match (&e, &self.frames_cfg) {
+            (
+                SessionError::Frames(
+                    FrameError::WindowNotFound(_) | FrameError::DisplayNotFound(_),
+                ),
+                Some(cfg),
+            ) => Some(lost_reason(cfg.target, true)),
+            _ => None,
+        };
+        if let Some(reason) = gone {
+            self.loss.lost(reason);
+        }
+        match self.loss.current() {
+            Some(reason) => SessionError::CaptureLost(reason),
+            None => e,
+        }
     }
 
     /// Stops recording and runs step detection. Works while paused: that
@@ -1017,6 +1154,7 @@ impl RecordingSession {
             crop_size: self.crop_size,
             fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
             pauses: std::mem::take(&mut self.pauses),
+            loss_cutoffs: self.loss.cutoffs(),
             session_dir,
         })
     }
@@ -1084,6 +1222,131 @@ fn display_for(target: CaptureTarget) -> Option<frames::DisplayInfo> {
             display_id.map_or_else(frames::DisplayInfo::main, frames::DisplayInfo::for_id)
         }
         CaptureTarget::Window { .. } => None,
+    }
+}
+
+/// The reason for a lost capture when the window or display is not known
+/// to be gone (a screen lock, a revoked permission, an SCK failure).
+pub const LOST_UNKNOWN: &str = "screen capture was interrupted";
+
+/// The short reason a stream of `target` stopped by itself (see
+/// [`RecordingSession::capture_lost`]): the window or display only when it
+/// is known to be `gone`, else [`LOST_UNKNOWN`].
+pub fn lost_reason(target: CaptureTarget, gone: bool) -> &'static str {
+    match target {
+        _ if !gone => LOST_UNKNOWN,
+        CaptureTarget::Window { .. } => "the window was closed",
+        CaptureTarget::Display { .. } | CaptureTarget::Region { .. } => {
+            "the display was disconnected"
+        }
+    }
+}
+
+/// Whether the window or display a stopped stream of `target` captured is
+/// gone: its stop `error` says so ([`frames::is_source_gone_error`]), or
+/// the window, or the display, is no longer listed.
+fn source_gone(target: CaptureTarget, error: &str) -> bool {
+    frames::is_source_gone_error(error)
+        || match target {
+            CaptureTarget::Window { window_id } => !frames::window_exists(window_id),
+            CaptureTarget::Display {
+                display_id: Some(id),
+            }
+            | CaptureTarget::Region {
+                display_id: Some(id),
+                ..
+            } => frames::DisplayInfo::for_id(id).is_none(),
+            // The main display: always one.
+            _ => false,
+        }
+}
+
+/// Which of the current frame streams the system stopped, and the loss
+/// reported once all of them have (see `# Lost capture`).
+struct CaptureLoss {
+    sink: Option<CaptureLostSink>,
+    state: Mutex<LossState>,
+}
+
+#[derive(Default)]
+struct LossState {
+    /// Bumped by each [`CaptureLoss::begin`], so a late stop from an older
+    /// set of streams is ignored.
+    epoch: u64,
+    lost: Vec<bool>,
+    reason: Option<String>,
+    /// Every stream stopped so far, across epochs.
+    cutoffs: Vec<LossCutoff>,
+}
+
+impl CaptureLoss {
+    fn new(sink: Option<CaptureLostSink>) -> Self {
+        Self {
+            sink,
+            state: Mutex::default(),
+        }
+    }
+
+    /// A new set of `streams` streams is capturing: clears an earlier loss
+    /// (reporting `None`) when there is at least one. Returns their epoch.
+    fn begin(&self, streams: usize) -> u64 {
+        let (epoch, cleared) = {
+            let mut state = lock(&self.state);
+            state.epoch += 1;
+            state.lost = vec![false; streams];
+            let cleared = streams > 0 && state.reason.take().is_some();
+            (state.epoch, cleared)
+        };
+        if cleared {
+            self.report(None);
+        }
+        epoch
+    }
+
+    /// Stream `index` of `epoch` was stopped by the system at `at`. Once
+    /// every stream of the current epoch has, the loss is noted and
+    /// reported.
+    fn stream_lost(&self, epoch: u64, index: usize, reason: &str, at: Timestamp) {
+        let all_lost = {
+            let mut state = lock(&self.state);
+            if state.epoch != epoch || state.lost.get(index) != Some(&false) {
+                return;
+            }
+            state.lost[index] = true;
+            state.cutoffs.push(LossCutoff { source: index, at });
+            state.lost.iter().all(|l| *l)
+        };
+        if all_lost {
+            self.lost(reason);
+        }
+    }
+
+    /// Notes a loss with `reason` and reports it, unless one is noted
+    /// already.
+    fn lost(&self, reason: &str) {
+        {
+            let mut state = lock(&self.state);
+            if state.reason.is_some() {
+                return;
+            }
+            state.reason = Some(reason.to_owned());
+        }
+        self.report(Some(reason));
+    }
+
+    fn current(&self) -> Option<String> {
+        lock(&self.state).reason.clone()
+    }
+
+    fn cutoffs(&self) -> Vec<LossCutoff> {
+        lock(&self.state).cutoffs.clone()
+    }
+
+    /// Reports to the sink, outside the lock.
+    fn report(&self, reason: Option<&str>) {
+        if let Some(sink) = &self.sink {
+            sink.report(reason);
+        }
     }
 }
 
@@ -1214,6 +1477,8 @@ pub struct Recording {
     pub fallback_ms: u64,
     /// The pauses, in order; one still open at stop has no `resumed_at`.
     pub pauses: Vec<PauseSpan>,
+    /// The streams the system stopped, and when (see `# Lost capture`).
+    pub loss_cutoffs: Vec<LossCutoff>,
     session_dir: PathBuf,
 }
 
@@ -1270,7 +1535,14 @@ impl Recording {
         // The last decoded frame (RGBA), for crops.
         let mut decoded: Option<(FrameKey, u32, Vec<u8>)> = None;
         for draft in &self.drafts {
-            let Some((_, snap)) = match_snapshot(&self.snapshots, draft.at, max_gap_ns) else {
+            // Never a frame of a stream from before it was lost, for a step
+            // after: it may show a window that has closed since.
+            let usable = |ts: Timestamp, snap: &SnapshotRef| {
+                usable_after_loss(&self.loss_cutoffs, draft.at, ts, snap.source)
+            };
+            let Some((_, snap)) =
+                match_snapshot_where(&self.snapshots, draft.at, max_gap_ns, usable)
+            else {
                 skipped += 1;
                 continue;
             };
@@ -3186,18 +3458,52 @@ pub fn match_snapshot<T>(
     at: Timestamp,
     max_gap_ns: u64,
 ) -> Option<(Timestamp, &T)> {
+    match_snapshot_where(snapshots, at, max_gap_ns, |_, _| true)
+}
+
+/// As [`match_snapshot`], among the snapshots `usable(event ts, snapshot)`
+/// accepts: the newest usable one at or before `at`, else the oldest
+/// usable one after, within `max_gap_ns`.
+pub fn match_snapshot_where<T>(
+    snapshots: &BTreeMap<Timestamp, T>,
+    at: Timestamp,
+    max_gap_ns: u64,
+    usable: impl Fn(Timestamp, &T) -> bool,
+) -> Option<(Timestamp, &T)> {
     let before = snapshots
         .range(..=at)
-        .next_back()
-        .filter(|(ts, _)| at.0 - ts.0 <= max_gap_ns);
+        .rev()
+        .take_while(|(ts, _)| at.0 - ts.0 <= max_gap_ns)
+        .find(|(ts, v)| usable(**ts, v));
     before
         .or_else(|| {
             snapshots
                 .range(at..)
-                .next()
-                .filter(|(ts, _)| ts.0 - at.0 <= max_gap_ns)
+                .take_while(|(ts, _)| ts.0 - at.0 <= max_gap_ns)
+                .find(|(ts, v)| usable(**ts, v))
         })
         .map(|(ts, v)| (*ts, v))
+}
+
+/// A frame stream the system stopped (see `# Lost capture`): its source
+/// index ([`FrameKey::source`]) and its stop time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LossCutoff {
+    pub source: usize,
+    pub at: Timestamp,
+}
+
+/// Whether a step at `at` may use the snapshot an event at `snap_ts` took
+/// from `source`: not if that source was lost between the two.
+pub fn usable_after_loss(
+    cutoffs: &[LossCutoff],
+    at: Timestamp,
+    snap_ts: Timestamp,
+    source: usize,
+) -> bool {
+    !cutoffs
+        .iter()
+        .any(|c| c.source == source && snap_ts < c.at && at >= c.at)
 }
 
 /// A draft step's point and end point in frame pixels; `None` if off the
@@ -4099,6 +4405,7 @@ mod tests {
             crop_size: (40, 20),
             fallback_ms: 3000,
             pauses: Vec::new(),
+            loss_cutoffs: Vec::new(),
             session_dir,
         }
     }
@@ -5708,5 +6015,325 @@ mod tests {
         let recording = session.stop().expect("stop");
         assert!(recording.metrics.wall >= Duration::from_millis(500));
         assert!(recording.session_dir().starts_with(&scratch.0));
+    }
+
+    /// A config recording capture-lost changes.
+    fn loss_cfg() -> (SessionConfig, Seen<Option<String>>) {
+        let changes: Seen<Option<String>> = Arc::default();
+        let c = Arc::clone(&changes);
+        let cfg = SessionConfig {
+            on_capture_lost: Some(CaptureLostSink::new(move |r| {
+                lock(&c).push(r.map(str::to_owned))
+            })),
+            ..SessionConfig::default()
+        };
+        (cfg, changes)
+    }
+
+    const WINDOW: CaptureTarget = CaptureTarget::Window { window_id: 7 };
+    const DISPLAY: CaptureTarget = CaptureTarget::Display {
+        display_id: Some(2),
+    };
+
+    /// A session whose stopped streams count as gone (`gone`) or not,
+    /// whatever is on screen.
+    fn scripted_gone(session: &mut RecordingSession, gone: bool) {
+        session.source_gone = if gone { |_, _| true } else { |_, _| false };
+    }
+
+    #[test]
+    fn lost_window_stream_stops_snapshots_and_is_reported_once() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, changes) = loss_cfg();
+        let (mut session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        scripted_gone(&mut session, true);
+        session.watch_streams([(reader.clone(), WINDOW)].into_iter());
+        assert!(session.capture_lost().is_none());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let before = Timestamp(t0.0 + MS);
+        tx.send(shortcut_at(before)).unwrap();
+
+        // The window closes: the system stops the stream.
+        let stop = Timestamp(t0.0 + 10 * MS);
+        reader.system_stopped_at(reader.generation(), "x (code -3815)".into(), stop);
+        assert_eq!(
+            session.capture_lost().as_deref(),
+            Some("the window was closed")
+        );
+        assert_eq!(*lock(&changes), [Some("the window was closed".to_owned())]);
+        // The dead window's last frame is never reused for a later event.
+        tx.send(shortcut_at(Timestamp(stop.0 + MS))).unwrap();
+        tx.send(shortcut_at(Timestamp(stop.0 + 1_000 * MS)))
+            .unwrap();
+        assert!(
+            !session.manual_step(),
+            "no manual step once capture is lost"
+        );
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.snapshots, 1);
+        assert_eq!(rec.metrics.missing_frames, 2);
+        assert!(rec.snapshots.contains_key(&before));
+        assert_eq!(
+            rec.loss_cutoffs,
+            [LossCutoff {
+                source: 0,
+                at: stop
+            }]
+        );
+        assert_eq!(lock(&changes).len(), 1, "reported once");
+    }
+
+    #[test]
+    fn steps_after_a_loss_never_borrow_an_older_snapshot() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, _) = loss_cfg();
+        let (mut session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        scripted_gone(&mut session, true);
+        session.watch_streams([(reader.clone(), WINDOW)].into_iter());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 16, 10, geometry(8.0, 5.0, 16, 10)));
+        // A click before the loss takes its snapshot.
+        let [down, up] = click(0, 4.0, 2.5);
+        let at = |ev: TimedEvent, ms: u64| TimedEvent {
+            ts: Timestamp(t0.0 + ms * MS + ev.ts.0),
+            event: ev.event,
+        };
+        tx.send(targeted(at(down.clone(), 1))).unwrap();
+        tx.send(targeted(at(up.clone(), 1))).unwrap();
+        let stop = Timestamp(t0.0 + 100 * MS);
+        reader.system_stopped_at(reader.generation(), "x (code -3815)".into(), stop);
+        // A click after it, well within the borrowing gap (3 s), and a
+        // manual-step hotkey press: neither may use the old frame.
+        tx.send(targeted(at(down, 200))).unwrap();
+        tx.send(targeted(at(up, 200))).unwrap();
+        tx.send(event_at(
+            Timestamp(t0.0 + 400 * MS),
+            CaptureEvent::KeyDown {
+                key: key(KEY_S, Some("ß")),
+                modifiers: Hotkey::MANUAL_STEP.modifiers,
+                is_repeat: false,
+                secure: false,
+            },
+        ))
+        .unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.drafts.len(), 3, "{:?}", rec.drafts);
+        assert!(rec.fallback_ms * MS > 300 * MS);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Lost").unwrap();
+        assert_eq!(saved.skipped, 2);
+        let steps: Vec<_> = saved.guide.steps().collect();
+        assert_eq!(steps.len(), 1);
+        // The click before the loss, with its snapshot (and a crop at its
+        // point).
+        assert!(steps[0].point.is_some());
+        assert!(steps[0].image.crop.is_some());
+    }
+
+    #[test]
+    fn snapshot_matching_respects_loss_cutoffs() {
+        let snaps: BTreeMap<Timestamp, usize> = [(Timestamp(10), 0), (Timestamp(20), 1)]
+            .into_iter()
+            .collect();
+        // Source 0 lost at 30; source 1 still fine.
+        let cutoffs = [LossCutoff {
+            source: 0,
+            at: Timestamp(30),
+        }];
+        let ok = |at: Timestamp| {
+            move |ts: Timestamp, src: &usize| usable_after_loss(&cutoffs, at, ts, *src)
+        };
+        // Before the loss: the newest one.
+        assert_eq!(
+            match_snapshot_where(&snaps, Timestamp(25), 100, ok(Timestamp(25))),
+            Some((Timestamp(20), &1))
+        );
+        // After it: source 1's still serves; source 0's never does.
+        assert_eq!(
+            match_snapshot_where(&snaps, Timestamp(40), 100, ok(Timestamp(40))),
+            Some((Timestamp(20), &1))
+        );
+        let only0: BTreeMap<Timestamp, usize> = [(Timestamp(10), 0)].into_iter().collect();
+        assert_eq!(
+            match_snapshot_where(&only0, Timestamp(40), 100, ok(Timestamp(40))),
+            None
+        );
+        // A later snapshot from source 0 (a new stream after a resume) is fine.
+        let resumed: BTreeMap<Timestamp, usize> = [(Timestamp(10), 0), (Timestamp(50), 0)]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            match_snapshot_where(&resumed, Timestamp(45), 100, ok(Timestamp(45))),
+            Some((Timestamp(50), &0))
+        );
+        assert_eq!(
+            match_snapshot(&only0, Timestamp(40), 100),
+            Some((Timestamp(10), &0))
+        );
+    }
+
+    #[test]
+    fn one_lost_display_of_two_is_not_a_lost_capture() {
+        let (cfg, changes) = loss_cfg();
+        let mut session = RecordingSession::new(&cfg);
+        scripted_gone(&mut session, true);
+        let (a, b) = (FrameReader::detached(2), FrameReader::detached(2));
+        session.watch_streams([(a.clone(), DISPLAY), (b.clone(), DISPLAY)].into_iter());
+        a.push(frame(5, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        b.push(frame(5, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        a.system_stopped_at(a.generation(), "display gone".into(), Timestamp(10));
+        assert!(session.capture_lost().is_none());
+        assert!(lock(&changes).is_empty());
+        // Only the lost stream stops serving.
+        assert!(a.frame_before(Timestamp(20)).is_none());
+        assert!(b.frame_before(Timestamp(20)).is_some());
+        // Then the other one goes too.
+        b.system_stopped_at(b.generation(), "display gone".into(), Timestamp(30));
+        assert_eq!(
+            session.capture_lost().as_deref(),
+            Some("the display was disconnected")
+        );
+        assert_eq!(
+            *lock(&changes),
+            [Some("the display was disconnected".to_owned())]
+        );
+        assert_eq!(
+            session.loss.cutoffs(),
+            [
+                LossCutoff {
+                    source: 0,
+                    at: Timestamp(10)
+                },
+                LossCutoff {
+                    source: 1,
+                    at: Timestamp(30)
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stop_not_known_to_be_a_gone_source_is_neutral() {
+        let (cfg, changes) = loss_cfg();
+        let mut session = RecordingSession::new(&cfg);
+        scripted_gone(&mut session, false);
+        let reader = FrameReader::detached(2);
+        session.watch_streams([(reader.clone(), WINDOW)].into_iter());
+        reader.system_stopped_at(
+            reader.generation(),
+            "Stream was stopped by the system (code -3821)".into(),
+            Timestamp(10),
+        );
+        assert_eq!(session.capture_lost().as_deref(), Some(LOST_UNKNOWN));
+        assert_eq!(*lock(&changes), [Some(LOST_UNKNOWN.to_owned())]);
+    }
+
+    #[test]
+    fn restarted_streams_clear_the_loss_and_ignore_old_stops() {
+        let (cfg, changes) = loss_cfg();
+        let mut session = RecordingSession::new(&cfg);
+        scripted_gone(&mut session, true);
+        let region = CaptureTarget::Region {
+            display_id: Some(1),
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+        };
+        let old = FrameReader::detached(2);
+        session.watch_streams([(old.clone(), region)].into_iter());
+        old.system_stopped_at(old.generation(), "gone".into(), Timestamp(10));
+        assert!(session.capture_lost().is_some());
+        // A resume that starts a stream again clears it.
+        let new = FrameReader::detached(2);
+        session.watch_streams([(new.clone(), region)].into_iter());
+        assert!(session.capture_lost().is_none());
+        assert_eq!(
+            *lock(&changes),
+            [Some("the display was disconnected".to_owned()), None]
+        );
+        // A stream that stopped before it was watched still counts.
+        let dead = FrameReader::detached(2);
+        dead.system_stopped_at(dead.generation(), "gone".into(), Timestamp(20));
+        session.watch_streams([(dead, region)].into_iter());
+        assert!(session.capture_lost().is_some());
+        // An older epoch's hook firing late changes nothing.
+        session.loss.begin(1);
+        session
+            .loss
+            .stream_lost(1, 0, "the display was disconnected", Timestamp(30));
+        assert!(session.capture_lost().is_none());
+        // Every stop is kept as a cutoff, across resumes.
+        assert_eq!(session.loss.cutoffs().len(), 2);
+    }
+
+    #[test]
+    fn resume_with_the_window_gone_is_a_lost_capture() {
+        let (cfg, changes) = loss_cfg();
+        let mut session = RecordingSession::new(&cfg);
+        session.frames_cfg = Some(FrameStreamConfig {
+            target: CaptureTarget::Window { window_id: 9 },
+            ..FrameStreamConfig::default()
+        });
+        // Gone while paused: the resume's own error says so.
+        match session.resume_error(FrameError::WindowNotFound(9).into()) {
+            SessionError::CaptureLost(r) => assert_eq!(r, "the window was closed"),
+            e => panic!("unexpected {e}"),
+        }
+        assert_eq!(
+            session.capture_lost().as_deref(),
+            Some("the window was closed")
+        );
+        assert_eq!(*lock(&changes), [Some("the window was closed".to_owned())]);
+        // Once lost, any resume failure is reported as the loss.
+        assert!(matches!(
+            session.resume_error(FrameError::Timeout.into()),
+            SessionError::CaptureLost(_)
+        ));
+        assert_eq!(lock(&changes).len(), 1);
+        assert_eq!(
+            SessionError::CaptureLost("the window was closed".into()).to_string(),
+            "capture stopped: the window was closed"
+        );
+    }
+
+    #[test]
+    fn other_resume_errors_are_unchanged() {
+        let mut session = RecordingSession::new(&SessionConfig::default());
+        session.frames_cfg = Some(FrameStreamConfig::default());
+        assert!(matches!(
+            session.resume_error(FrameError::Timeout.into()),
+            SessionError::Frames(FrameError::Timeout)
+        ));
+        assert!(session.capture_lost().is_none());
+    }
+
+    #[test]
+    fn lost_reasons_by_target_and_cause() {
+        assert_eq!(lost_reason(WINDOW, true), "the window was closed");
+        assert_eq!(
+            lost_reason(CaptureTarget::Display { display_id: None }, true),
+            "the display was disconnected"
+        );
+        assert_eq!(lost_reason(WINDOW, false), LOST_UNKNOWN);
+        assert_eq!(lost_reason(DISPLAY, false), LOST_UNKNOWN);
+        // The error code alone is enough, whatever is listed.
+        assert!(source_gone(
+            CaptureTarget::Display { display_id: None },
+            "x (code -3815)"
+        ));
+        // The main display is always there; a screen lock is not a loss
+        // of it.
+        assert!(!source_gone(
+            CaptureTarget::Display { display_id: None },
+            "x (code -3821)"
+        ));
     }
 }

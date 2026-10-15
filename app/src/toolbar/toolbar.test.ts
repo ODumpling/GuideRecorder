@@ -4,7 +4,7 @@ import type { RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/ty
 import { createRecordingStore } from "@/recording/store";
 import { createManualStepStore, MANUAL_STEP_NOTICE_MS, toolbarView } from "@/toolbar/toolbar";
 
-const run = { startedAt: "2026-10-15T10:00:00.000Z", title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null };
+const run = { startedAt: "2026-10-15T10:00:00.000Z", title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null, captureLost: null };
 const recording: RecordingStatus = { state: "recording", ...run };
 const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
 const snap = (id: string): RecordingSnapshot => ({ id, ts: 0, width: 16, height: 10, point: null });
@@ -83,6 +83,21 @@ describe("toolbar buttons", () => {
     expect(view({ ...paused, excludedApp: "com.1password.1password" }).label).toBe("Paused");
   });
 
+  it("capture lost: says so, no manual step, pause/resume and stop still work", () => {
+    const v = view({ ...recording, captureLost: "the window was closed" });
+    expect(v.label).toBe("Capture stopped: the window was closed");
+    expect(v.lost).toBe("Capture stopped: the window was closed. Stop to save what was recorded.");
+    expect(enabled(v)).toEqual({ pause: true, resume: false, step: false, stop: true });
+    // It wins over Paused and over an excluded app in front.
+    const p = view({ ...paused, captureLost: "the window was closed" });
+    expect(p.label).toBe("Capture stopped: the window was closed");
+    expect(enabled(p)).toEqual({ pause: false, resume: true, step: false, stop: true });
+    expect(view({ ...recording, excludedApp: "com.1password.1password", captureLost: "the display was disconnected" }).label).toBe(
+      "Capture stopped: the display was disconnected",
+    );
+    expect(view(recording).lost).toBeNull();
+  });
+
   it("nothing while a command runs, a step is being added, saving or idle", () => {
     const none = { pause: false, resume: false, step: false, stop: false };
     expect(enabled(view(recording, "pause"))).toEqual(none);
@@ -129,6 +144,14 @@ describe("manual step", () => {
     expect(api.status).toHaveBeenCalledTimes(2);
     timers.shift()!();
     expect(manual.getState().phase).toBe("ready");
+  });
+
+  it("is not called once capture is lost", async () => {
+    const add = vi.fn(async () => {});
+    const { store, manual } = manualSetup(add, { ...recording, captureLost: "the window was closed" });
+    await store.getState().load();
+    expect(await manual.getState().add()).toBe(false);
+    expect(add).not.toHaveBeenCalled();
   });
 
   it("is not called while paused", async () => {

@@ -290,6 +290,9 @@ export interface McpSetup {
  * pause began (so recorded time is `now − startedAt − pausedMs`, less
  * `now − pausedAt` while paused). `excludedApp`: bundle id of the excluded
  * app in front, while one is; nothing is captured meanwhile.
+ * `captureLost`: why capture stopped by itself (e.g. "the window was
+ * closed"); nothing more is captured, manual steps are refused and the user
+ * should stop to save what was recorded. The recording is not stopped.
  */
 export type RecordingStatus =
   | { state: "idle" }
@@ -311,6 +314,7 @@ export interface RecordingRun {
   captureAreaFallback: boolean;
   pausedMs: number;
   excludedApp: string | null;
+  captureLost: string | null;
 }
 
 /** A recording saved as a new guide. `skipped`: steps left out for lack of a screenshot. */

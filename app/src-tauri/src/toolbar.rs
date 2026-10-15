@@ -123,6 +123,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         assert_eq!(wanted(&recording), Some(true));
         let paused = RecordingStatus::Paused {
@@ -132,6 +133,7 @@ mod tests {
             paused_ms: 0,
             paused_at: "2026-10-15T01:01:00.000Z".into(),
             excluded_app: None,
+            capture_lost: None,
         };
         assert_eq!(wanted(&paused), Some(true));
         let saving = RecordingStatus::Saving {

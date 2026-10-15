@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage } from "@/lib/ipc";
 import { appName } from "@/recording/apps";
-import type { RecordingState, RecordingStore } from "@/recording/store";
+import { captureLostLabel, captureLostMessage, type RecordingState, type RecordingStore } from "@/recording/store";
 
 /** What the toolbar shows and which of its buttons work, from the recording store's state. */
 export interface ToolbarView {
@@ -9,6 +9,8 @@ export interface ToolbarView {
   label: string;
   /** An excluded app is in front: nothing is captured. */
   excluded: boolean;
+  /** Capture stopped by itself (the window closed, the display went away): the full notice, else null. */
+  lost: string | null;
   paused: boolean;
   canPause: boolean;
   canResume: boolean;
@@ -26,20 +28,24 @@ export function toolbarView(state: Pick<RecordingState, "status" | "pending" | "
   const steps = state.snapshots.length;
   if (status.state !== "recording" && status.state !== "paused") {
     const label = status.state === "saving" ? "Saving…" : "Not recording";
-    return { label, excluded: false, paused: false, canPause: false, canResume: false, canAddStep: false, canStop: false, steps };
+    return { label, excluded: false, lost: null, paused: false, canPause: false, canResume: false, canAddStep: false, canStop: false, steps };
   }
   const paused = status.state === "paused";
   const excludedApp = paused ? null : status.excludedApp;
   const excluded = excludedApp !== null;
+  const lostLabel = captureLostLabel(status);
+  const lost = captureLostMessage(status);
   const free = pending === null;
   return {
-    label: paused ? "Paused" : excluded ? `Not capturing: ${appName(excludedApp)} is in front` : "Recording",
+    label: lostLabel ?? (paused ? "Paused" : excluded ? `Not capturing: ${appName(excludedApp)} is in front` : "Recording"),
     excluded,
+    lost,
     paused,
     canPause: free && !paused,
     canResume: free && paused,
-    // Paused counts as not running for `add_manual_step`; an excluded app's screen is never captured.
-    canAddStep: free && !paused && !excluded && !adding,
+    // Paused counts as not running for `add_manual_step`; an excluded app's screen is never captured,
+    // nor anything once capture is lost.
+    canAddStep: free && !paused && !excluded && lost === null && !adding,
     canStop: free,
     steps,
   };

@@ -7,7 +7,7 @@ import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";
 import { WindowPicker } from "@/picker/WindowPicker";
 import { recordingStore, startFlow, useRecording } from "@/recording/recording";
-import { elapsedMs, formatElapsed } from "@/recording/store";
+import { captureLostLabel, captureLostMessage, elapsedMs, formatElapsed } from "@/recording/store";
 import { makeThumbnail, THUMBNAIL_SIDE } from "@/recording/thumbnails";
 
 /** Recorded time, ticking while recording and frozen while paused. */
@@ -104,21 +104,28 @@ function Controls() {
   // Nothing is captured while an excluded app is in front; the clock runs on.
   const excludedApp = paused ? null : status.excludedApp;
   const excluded = excludedApp !== null;
+  const lost = captureLostLabel(status);
   const busy = pending !== null;
   return (
     <div role="group" aria-label="Recording" className="ml-1 flex items-center gap-1 rounded-md border border-border px-1.5">
       <span
-        className={`size-2 rounded-full ${excluded ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
-          paused || excluded ? "opacity-40" : "animate-pulse"
+        className={`size-2 rounded-full ${excluded || lost ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
+          paused || excluded || lost ? "opacity-40" : "animate-pulse"
         }`}
         aria-hidden
       />
       <span
         role="status"
         className="max-w-48 truncate text-xs font-medium"
-        title={excluded ? "Nothing is captured while an excluded app is in front (Settings → Recording)." : undefined}
+        title={
+          lost
+            ? captureLostMessage(status) ?? undefined
+            : excluded
+              ? "Nothing is captured while an excluded app is in front (Settings → Recording)."
+              : undefined
+        }
       >
-        {paused ? "Paused" : excluded ? `Not capturing: ${appName(excludedApp)} is in front` : "Recording"}
+        {lost ?? (paused ? "Paused" : excluded ? `Not capturing: ${appName(excludedApp)} is in front` : "Recording")}
       </span>
       <Elapsed />
       {paused ? (
@@ -144,13 +151,22 @@ export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
   const fallback = useRecording(
     (s) => (s.status.state === "recording" || s.status.state === "paused") && s.status.captureAreaFallback,
   );
+  const lost = useRecording((s) => captureLostMessage(s.status));
+  // A refused resume says the same as the "Capture stopped" notice: one banner is enough.
+  const shownError = error && error.message !== lost ? error : null;
   return (
     <>
-      {error && (
+      {lost && (
+        <div role="alert" aria-label="Capture stopped" className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
+          <TriangleAlert className="size-4 shrink-0 text-[var(--status-danger)]" />
+          <span className="flex-1">{lost}</span>
+        </div>
+      )}
+      {shownError && (
         <div role="alert" className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
           <TriangleAlert className="size-4 shrink-0 text-[var(--status-danger)]" />
-          <span className="flex-1">Recording: {error.message}</span>
-          {error.permissions && (
+          <span className="flex-1">Recording: {shownError.message}</span>
+          {shownError.permissions && (
             <Button
               variant="outline"
               size="sm"

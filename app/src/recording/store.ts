@@ -93,6 +93,17 @@ export function elapsedMs(status: RecordingStatus, now: number): number {
   return Math.max(0, end - started - status.pausedMs);
 }
 
+/** Why capture stopped by itself, as a short label ("Capture stopped: the window was closed"), or null. */
+export function captureLostLabel(status: RecordingStatus): string | null {
+  return isActive(status) && status.captureLost !== null ? `Capture stopped: ${status.captureLost}` : null;
+}
+
+/** The full notice for a lost capture, telling the user what to do, or null. */
+export function captureLostMessage(status: RecordingStatus): string | null {
+  const label = captureLostLabel(status);
+  return label === null ? null : `${label}. Stop to save what was recorded.`;
+}
+
 /** `m:ss`, or `h:mm:ss` from an hour. */
 export function formatElapsed(ms: number): string {
   const total = Math.floor(ms / 1000);

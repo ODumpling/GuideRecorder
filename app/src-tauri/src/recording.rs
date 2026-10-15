@@ -19,6 +19,13 @@
 //! `excludedApp`, and a new [`STATUS_EVENT`] is sent each time that
 //! changes (see the capture crate's `# Excluded apps`).
 //!
+//! If the captured window closes or its display is unplugged, the status
+//! says why in `captureLost` (sent as a new [`STATUS_EVENT`]): nothing more
+//! is captured, manual steps are refused, and resuming fails while the
+//! window or display is gone. The recording is not stopped; the user
+//! stops it to save what was recorded (see the capture crate's
+//! `# Lost capture`).
+//!
 //! The status carries the paused time (`pausedMs`, and `pausedAt` while
 //! paused), so the UI's elapsed clock survives a webview reload.
 //!
@@ -57,8 +64,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use guidesya_capture::macos::frames::CaptureTarget;
 use guidesya_capture::macos::session::{
-    ExclusionSink, Hotkey, LiveSnapshot, RecordingSession, SessionConfig, SessionError,
-    SnapshotSink,
+    CaptureLostSink, ExclusionSink, Hotkey, LiveSnapshot, RecordingSession, SessionConfig,
+    SessionError, SnapshotSink,
 };
 use guidesya_core::events::Modifiers;
 use guidesya_core::model::Point;
@@ -88,7 +95,8 @@ pub const PICK_AREA_EVENT: &str = "recording://pick-area";
 
 /// What the recorder is doing. Serialized as `{"state": "idle"}`,
 /// `{"state": "recording", "startedAt": …, "title": …,
-/// "captureAreaFallback": …, "pausedMs": …, "excludedApp": …}`,
+/// "captureAreaFallback": …, "pausedMs": …, "excludedApp": …,
+/// "captureLost": …}`,
 /// `{"state": "paused", …}` with the fields of `recording` plus
 /// `"pausedAt"`, or `{"state": "saving", "startedAt": …, "title": …}`.
 ///
@@ -116,6 +124,10 @@ pub enum RecordingStatus {
         /// Bundle id of the excluded app in front, while one is: nothing
         /// is captured meanwhile.
         excluded_app: Option<String>,
+        /// Why capture stopped by itself, e.g. "the window was closed":
+        /// nothing more can be captured, and the user should stop to save
+        /// what was recorded. `None` while capturing.
+        capture_lost: Option<String>,
     },
     /// Between `pause_recording` and `resume_recording`; the fields are
     /// those of the `Recording` it paused, plus when the pause began.
@@ -129,6 +141,9 @@ pub enum RecordingStatus {
         paused_at: String,
         /// As for `Recording`; tracked while paused too.
         excluded_app: Option<String>,
+        /// As for `Recording`; also set when a resume finds the window or
+        /// display gone.
+        capture_lost: Option<String>,
     },
     Saving {
         started_at: String,
@@ -314,6 +329,7 @@ fn emit<R: Runtime>(app: &AppHandle<R>, status: &StampedStatus) {
 fn session_error(e: SessionError) -> AppError {
     match e {
         SessionError::Library(e) => e.into(),
+        SessionError::CaptureLost(reason) => capture_lost_error(&reason),
         e => AppError::new(ErrorKind::Io, e.to_string()),
     }
 }
@@ -344,6 +360,7 @@ fn with_paused(status: RecordingStatus, paused: bool, now: DateTime<Utc>) -> Rec
             capture_area_fallback,
             paused_ms,
             excluded_app,
+            capture_lost,
         } if paused => RecordingStatus::Paused {
             started_at,
             title,
@@ -351,6 +368,7 @@ fn with_paused(status: RecordingStatus, paused: bool, now: DateTime<Utc>) -> Rec
             paused_ms,
             paused_at: rfc3339(now),
             excluded_app,
+            capture_lost,
         },
         RecordingStatus::Paused {
             started_at,
@@ -359,15 +377,36 @@ fn with_paused(status: RecordingStatus, paused: bool, now: DateTime<Utc>) -> Rec
             paused_ms,
             paused_at,
             excluded_app,
+            capture_lost,
         } if !paused => RecordingStatus::Recording {
             started_at,
             title,
             capture_area_fallback,
             paused_ms: paused_ms.saturating_add(ms_since(&paused_at, now)),
             excluded_app,
+            capture_lost,
         },
         other => other,
     }
+}
+
+/// `status` with its `captureLost` set to `reason`; `idle` and `saving`
+/// are returned unchanged.
+fn with_capture_lost(mut status: RecordingStatus, reason: Option<&str>) -> RecordingStatus {
+    if let RecordingStatus::Recording { capture_lost, .. }
+    | RecordingStatus::Paused { capture_lost, .. } = &mut status
+    {
+        *capture_lost = reason.map(str::to_owned);
+    }
+    status
+}
+
+/// `status` with the session's excluded app and lost capture.
+fn with_session(status: RecordingStatus, session: &RecordingSession) -> RecordingStatus {
+    with_capture_lost(
+        with_excluded(status, session.excluded_app().as_deref()),
+        session.capture_lost().as_deref(),
+    )
 }
 
 /// `status` with its `excludedApp` set to `app`; `idle` and `saving` are
@@ -605,6 +644,7 @@ fn start<R: Runtime>(
         }
     }));
     cfg.on_excluded = Some(exclusion_sink(app, recorder));
+    cfg.on_capture_lost = Some(capture_lost_sink(app, recorder));
     let session = RecordingSession::start(cfg).map_err(session_error)?;
     let status = emit_status(
         app,
@@ -615,26 +655,27 @@ fn start<R: Runtime>(
             capture_area_fallback,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         },
     );
     // The sink's initial read came while the status was still idle, so
     // it was ignored; from here on the sink applies its changes. Read
     // the session's state now, inside the status lock, so a change the
     // sink reports meanwhile is never overwritten by an older one.
-    let status = sync_excluded(app, recorder, &session).unwrap_or(status);
+    let status = sync_session(app, recorder, &session).unwrap_or(status);
     *slot = Some(session);
     Ok(status)
 }
 
-/// Sets the status's `excludedApp` to the session's, read inside the
-/// status lock; sends and returns the new status if that changed it.
-fn sync_excluded<R: Runtime>(
+/// Sets the status's `excludedApp` and `captureLost` to the session's,
+/// read inside the status lock; sends and returns the new status if that
+/// changed it.
+fn sync_session<R: Runtime>(
     app: &AppHandle<R>,
     recorder: &Recorder,
     session: &RecordingSession,
 ) -> Option<StampedStatus> {
-    let (status, changed) =
-        recorder.update(|s| with_excluded(s.clone(), session.excluded_app().as_deref()));
+    let (status, changed) = recorder.update(|s| with_session(s.clone(), session));
     changed.then(|| {
         emit(app, &status);
         status
@@ -659,6 +700,29 @@ fn exclusion_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> E
     })
 }
 
+/// Puts each change of lost capture into the status and sends it, as
+/// [`exclusion_sink`] does. Runs on ScreenCaptureKit's queue (or a resume's
+/// thread), so it only takes the status lock, never the session slot.
+fn capture_lost_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> CaptureLostSink {
+    let app = app.clone();
+    let recorder = Arc::downgrade(recorder);
+    CaptureLostSink::new(move |reason: Option<&str>| {
+        let Some(recorder) = recorder.upgrade() else {
+            return;
+        };
+        if let Some(status) = note_capture_lost(&recorder, reason) {
+            emit(&app, &status);
+        }
+    })
+}
+
+/// Sets the status's `captureLost` to `reason`; returns the new status if
+/// that changed it (the sink then sends it).
+fn note_capture_lost(recorder: &Recorder, reason: Option<&str>) -> Option<StampedStatus> {
+    let (status, changed) = recorder.update(|s| with_capture_lost(s.clone(), reason));
+    changed.then_some(status)
+}
+
 /// Pauses the recording: input and screen capture stop until
 /// `resume_recording`, and nothing in between ends up in the guide.
 /// `invalid` when nothing is recording; already paused returns the current
@@ -677,8 +741,11 @@ pub async fn pause_recording<R: Runtime>(
 /// Resumes a paused recording (restarting screen capture takes a moment,
 /// as at start). `invalid` when nothing is recording; not paused returns
 /// the current status unchanged. On error the session stays paused, the
-/// status stays `paused` and the error is returned. Returns the new
-/// status, also sent as [`STATUS_EVENT`].
+/// status stays `paused` and the error is returned; with the window or
+/// display gone the error is "Capture stopped: <reason>. Stop to save
+/// what was recorded." and the status's
+/// `captureLost` says the same (stop still saves the recording). Returns
+/// the new status, also sent as [`STATUS_EVENT`].
 #[tauri::command]
 pub async fn resume_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -707,13 +774,10 @@ fn set_paused<R: Runtime>(
         session.resume()
     };
     let now_paused = session.is_paused();
-    // The excluded app is read inside the status lock, as in `sync_excluded`.
-    let (status, changed) = recorder.update(|s| {
-        with_excluded(
-            with_paused(s.clone(), now_paused, Utc::now()),
-            session.excluded_app().as_deref(),
-        )
-    });
+    // The session's state is read inside the status lock, as in
+    // `sync_session`.
+    let (status, changed) =
+        recorder.update(|s| with_session(with_paused(s.clone(), now_paused, Utc::now()), session));
     if changed {
         emit(app, &status);
     }
@@ -866,7 +930,9 @@ pub fn recording_status(recorder: State<'_, Arc<Recorder>>) -> StampedStatus {
 /// Adds a manual step from the screen as it is now, as the manual-step
 /// hotkey does (see `RecordingSession::manual_step`; dropped while an
 /// excluded app is in front). `invalid` ("no recording is running") unless
-/// a recording is running: idle, paused and saving all refuse.
+/// a recording is running: idle, paused and saving all refuse. `invalid`
+/// ("Capture stopped: <reason>. Stop to save what was recorded.") once
+/// capture is lost.
 #[tauri::command]
 pub async fn add_manual_step(recorder: State<'_, Arc<Recorder>>) -> Result<()> {
     let recorder = Arc::clone(&recorder);
@@ -878,9 +944,24 @@ pub async fn add_manual_step(recorder: State<'_, Arc<Recorder>>) -> Result<()> {
 fn manual_step(recorder: &Recorder) -> Result<()> {
     let slot = recorder.slot();
     match slot.as_ref() {
-        Some(session) if !session.is_paused() && session.manual_step() => Ok(()),
-        _ => Err(not_recording()),
+        Some(session) if session.is_paused() => Err(not_recording()),
+        Some(session) => match session.capture_lost() {
+            Some(reason) => Err(capture_lost_error(&reason)),
+            None if session.manual_step() => Ok(()),
+            None => Err(not_recording()),
+        },
+        None => Err(not_recording()),
     }
+}
+
+/// The refusal of a resume or manual step once capture is lost, worded as
+/// the webview's "Capture stopped" notice (`captureLostMessage`), which
+/// then shows no second banner for it; the tray and hotkeys show it as is.
+fn capture_lost_error(reason: &str) -> AppError {
+    AppError::new(
+        ErrorKind::Invalid,
+        format!("Capture stopped: {reason}. Stop to save what was recorded."),
+    )
 }
 
 /// A recording action from outside the webview: the tray menu or a global
@@ -1206,6 +1287,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         assert_eq!(
             Control::ToggleRecording.resolve(&recording),
@@ -1231,6 +1313,7 @@ mod tests {
                 capture_area_fallback: true,
                 paused_ms: 0,
                 excluded_app: Some("com.1password.1password".into()),
+                capture_lost: None,
             })
             .unwrap(),
             json!({
@@ -1240,6 +1323,7 @@ mod tests {
                 "captureAreaFallback": true,
                 "pausedMs": 0,
                 "excludedApp": "com.1password.1password",
+                "captureLost": null,
             })
         );
         assert_eq!(
@@ -1250,6 +1334,7 @@ mod tests {
                 paused_ms: 1500,
                 paused_at: "2026-10-15T01:05:00.000Z".into(),
                 excluded_app: None,
+                capture_lost: None,
             })
             .unwrap(),
             json!({
@@ -1260,6 +1345,7 @@ mod tests {
                 "pausedMs": 1500,
                 "pausedAt": "2026-10-15T01:05:00.000Z",
                 "excludedApp": null,
+                "captureLost": null,
             })
         );
         assert_eq!(
@@ -1361,6 +1447,7 @@ mod tests {
             capture_area_fallback: true,
             paused_ms: 0,
             excluded_app: Some("com.apple.keychainaccess".into()),
+            capture_lost: None,
         };
         let paused = RecordingStatus::Paused {
             started_at: "2026-10-15T01:02:03.000Z".into(),
@@ -1369,6 +1456,7 @@ mod tests {
             paused_ms: 0,
             paused_at: "2026-10-15T01:03:00.000Z".into(),
             excluded_app: Some("com.apple.keychainaccess".into()),
+            capture_lost: None,
         };
         let t = at("2026-10-15T01:03:00.000Z");
         assert_eq!(with_paused(recording.clone(), true, t), paused);
@@ -1395,6 +1483,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         status = with_paused(status, true, at("2026-10-15T01:01:00.000Z"));
         status = with_paused(status, false, at("2026-10-15T01:01:02.500Z"));
@@ -1451,6 +1540,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         let excluded = with_excluded(recording.clone(), Some("com.1password.1password"));
         assert!(matches!(
@@ -1484,6 +1574,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         });
         let (_, changed) =
             recorder.update(|s| with_excluded(s.clone(), Some("com.apple.MobileSMS")));
@@ -1504,6 +1595,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         let mut seqs = vec![recorder.set_status(recording.clone()).seq];
         // Storing the same value again is still a new status.
@@ -1547,6 +1639,7 @@ mod tests {
                     paused_ms: 0,
                     paused_at: "2026-10-15T01:05:00.000Z".into(),
                     excluded_app: Some("com.apple.MobileSMS".into()),
+                    capture_lost: None,
                 },
             })
             .unwrap(),
@@ -1559,6 +1652,7 @@ mod tests {
                 "pausedMs": 0,
                 "pausedAt": "2026-10-15T01:05:00.000Z",
                 "excludedApp": "com.apple.MobileSMS",
+                "captureLost": null,
             })
         );
     }
@@ -1629,6 +1723,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         let paused = with_paused(recording.clone(), true, Utc::now());
         let saving = RecordingStatus::Saving {
@@ -1660,6 +1755,87 @@ mod tests {
             ]
         );
         assert_eq!(table(&saving), [None; 6]);
+    }
+
+    #[test]
+    fn capture_lost_is_set_on_recording_and_paused_only() {
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+            capture_lost: None,
+        };
+        let lost = with_capture_lost(recording.clone(), Some("the window was closed"));
+        assert!(matches!(
+            &lost,
+            RecordingStatus::Recording { capture_lost: Some(r), .. } if r == "the window was closed"
+        ));
+        assert_eq!(with_capture_lost(lost.clone(), None), recording);
+        // Kept across a pause and a resume, beside the excluded app.
+        let paused = with_paused(
+            with_excluded(lost, Some("com.apple.MobileSMS")),
+            true,
+            at("2026-10-15T01:01:00.000Z"),
+        );
+        assert!(matches!(
+            &paused,
+            RecordingStatus::Paused { capture_lost: Some(r), excluded_app: Some(_), .. }
+                if r == "the window was closed"
+        ));
+        assert!(matches!(
+            with_paused(paused, false, at("2026-10-15T01:02:00.000Z")),
+            RecordingStatus::Recording {
+                capture_lost: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            with_capture_lost(RecordingStatus::Idle, Some("the window was closed")),
+            RecordingStatus::Idle
+        );
+    }
+
+    #[test]
+    fn capture_lost_sink_stamps_and_reports_changes_only() {
+        let recorder = Recorder::default();
+        // Idle: nothing to note (a late report after stop).
+        assert!(note_capture_lost(&recorder, Some("the window was closed")).is_none());
+        let start = recorder.set_status(RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+            capture_lost: None,
+        });
+        let lost = note_capture_lost(&recorder, Some("the display was disconnected")).unwrap();
+        assert!(lost.seq > start.seq);
+        assert!(matches!(
+            &lost.status,
+            RecordingStatus::Recording { capture_lost: Some(r), .. } if r == "the display was disconnected"
+        ));
+        assert_eq!(
+            serde_json::to_value(&lost).unwrap()["captureLost"],
+            json!("the display was disconnected")
+        );
+        // The same again: no change, no new seq.
+        assert!(note_capture_lost(&recorder, Some("the display was disconnected")).is_none());
+        assert_eq!(recorder.status().seq, lost.seq);
+        let cleared = note_capture_lost(&recorder, None).unwrap();
+        assert!(cleared.seq > lost.seq);
+    }
+
+    #[test]
+    fn a_lost_capture_is_a_clear_invalid_error() {
+        let err = session_error(SessionError::CaptureLost("the window was closed".into()));
+        assert_eq!(err.kind, ErrorKind::Invalid);
+        assert_eq!(
+            err.message,
+            "Capture stopped: the window was closed. Stop to save what was recorded."
+        );
+        assert!(!lost_race(&err));
     }
 
     #[test]

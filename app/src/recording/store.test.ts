@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { RECORDING_SAVED_EVENT, RECORDING_SNAPSHOT_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
 import type { RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
-import { createRecordingStore, elapsedMs, formatElapsed, isActive, subscribe, type Listen } from "@/recording/store";
+import {
+  captureLostLabel,
+  captureLostMessage,
+  createRecordingStore,
+  elapsedMs,
+  formatElapsed,
+  isActive,
+  subscribe,
+  type Listen,
+} from "@/recording/store";
 
 const STARTED = "2026-10-15T10:00:00.000Z";
 const T0 = Date.parse(STARTED);
-const run = { startedAt: STARTED, title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null };
+const run = { startedAt: STARTED, title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null, captureLost: null };
 const recording: RecordingStatus = { state: "recording", ...run };
 const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
 const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0 };
@@ -276,6 +285,22 @@ describe("recording store", () => {
     expect(status.state === "recording" && status.excludedApp).toBe("com.1password.1password");
     store.getState().setStatus(recording);
     expect(store.getState().status).toEqual(recording);
+  });
+
+  it("follows a lost capture, and words it for the banner and toolbar", () => {
+    const { store } = setup();
+    store.getState().setStatus(stamp(recording, 1));
+    expect(captureLostMessage(store.getState().status)).toBeNull();
+    store.getState().setStatus(stamp({ ...recording, captureLost: "the window was closed" }, 2));
+    const status = store.getState().status;
+    expect(captureLostLabel(status)).toBe("Capture stopped: the window was closed");
+    expect(captureLostMessage(status)).toBe("Capture stopped: the window was closed. Stop to save what was recorded.");
+    // Kept while paused; a late sink event older than a newer status is dropped.
+    store.getState().setStatus(stamp({ ...paused, captureLost: "the window was closed" }, 4));
+    store.getState().setStatus(stamp({ ...recording, captureLost: null }, 3));
+    expect(captureLostLabel(store.getState().status)).toBe("Capture stopped: the window was closed");
+    expect(captureLostMessage({ state: "idle" })).toBeNull();
+    expect(captureLostMessage({ state: "saving", startedAt: STARTED, title: null })).toBeNull();
   });
 
   it("ignores a status older than the last one applied", async () => {

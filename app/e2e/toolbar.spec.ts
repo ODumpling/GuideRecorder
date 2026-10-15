@@ -66,6 +66,32 @@ test("toolbar names the excluded app in front and holds manual steps", async ({ 
   await expect(toolbar.getByRole("button", { name: "Add manual step" })).toBeEnabled();
 });
 
+test("toolbar says when capture stopped and holds manual steps", async ({ page, backend }) => {
+  await startRecording(backend);
+  const toolbar = await openToolbar(page);
+  await expect(toolbar.getByRole("status")).toHaveText("Recording");
+
+  await emitEvent(page, "recording://status", backend.loseCapture("the display was disconnected"));
+  const label = toolbar.getByRole("status");
+  await expect(label).toHaveText("Capture stopped: the display was disconnected");
+  await expect(label).toHaveAttribute(
+    "title",
+    "Capture stopped: the display was disconnected. Stop to save what was recorded.",
+  );
+  await expect(toolbar.getByRole("button", { name: "Add manual step" })).toBeDisabled();
+  await expect(toolbar.getByRole("button", { name: "Stop recording" })).toBeEnabled();
+
+  // A resume that captures again clears it.
+  await emitEvent(page, "recording://status", backend.loseCapture(null));
+  await expect(label).toHaveText("Recording");
+  await expect(toolbar.getByRole("button", { name: "Add manual step" })).toBeEnabled();
+
+  await emitEvent(page, "recording://status", backend.loseCapture("the display was disconnected"));
+  await toolbar.getByRole("button", { name: "Stop recording" }).click();
+  await expect.poll(() => backend.recordings.length).toBe(1);
+  expect(backend.manualSteps).toBe(0);
+});
+
 test("toolbar stops the recording and leaves the guide to the main window", async ({ page, backend }) => {
   await startRecording(backend);
   const toolbar = await openToolbar(page);

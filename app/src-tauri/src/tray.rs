@@ -231,6 +231,7 @@ mod tests {
             capture_area_fallback: false,
             paused_ms: 0,
             excluded_app: None,
+            capture_lost: None,
         };
         assert_eq!(TrayState::of(&recording), TrayState::Recording);
         let paused = RecordingStatus::Paused {
@@ -240,6 +241,7 @@ mod tests {
             paused_ms: 0,
             paused_at: "2026-10-15T01:01:00.000Z".into(),
             excluded_app: None,
+            capture_lost: None,
         };
         assert_eq!(TrayState::of(&paused), TrayState::Paused);
         let saving = RecordingStatus::Saving {

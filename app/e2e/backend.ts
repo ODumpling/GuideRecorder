@@ -40,6 +40,9 @@ const fail = (kind: string, message: string): never => {
   throw new CommandError({ kind, message });
 };
 
+/** Rust's `capture_lost_error`: a resume or manual step refused once capture is lost. */
+const captureLostError = (reason: string) => `Capture stopped: ${reason}. Stop to save what was recorded.`;
+
 interface Bundle {
   path: string;
   guide: Guide;
@@ -261,6 +264,17 @@ export class Backend {
     return this.stamped();
   }
 
+  /**
+   * Capture stops by itself (the window closed, the display was unplugged),
+   * as the Rust side's capture-lost sink reports it (`null`: a resume
+   * captured again). Returns the new status; the test emits it.
+   */
+  loseCapture(captureLost: string | null): StampedStatus {
+    this.recording = { ...this.active(), captureLost };
+    this.recordingSeq += 1;
+    return this.stamped();
+  }
+
   /** Replaces the running recording's status as is (e.g. to age it), without an event. */
   setActive(status: Extract<RecordingStatus, { state: "recording" | "paused" }>) {
     this.active();
@@ -477,6 +491,7 @@ export class Backend {
           captureAreaFallback: target ? false : this.captureAreaFallback,
           pausedMs: 0,
           excludedApp: null,
+          captureLost: null,
         });
         return this.stamped();
       }
@@ -488,6 +503,8 @@ export class Backend {
         if (cmd === "pause_recording" && status.state === "recording") {
           this.setRecording({ ...status, state: "paused", pausedAt: new Date().toISOString() });
         } else if (cmd === "resume_recording" && status.state === "paused") {
+          // Like Rust: the window or display is still gone; the session stays paused.
+          if (status.captureLost !== null) fail("invalid", captureLostError(status.captureLost));
           const { pausedAt, ...run } = status;
           const pausedMs = run.pausedMs + Math.max(0, Date.now() - Date.parse(pausedAt));
           this.setRecording({ ...run, state: "recording", pausedMs });
@@ -510,7 +527,9 @@ export class Backend {
         return this.stamped();
       case "add_manual_step": {
         // Like the Rust side: only while running (paused counts as not).
-        if (this.recording.state !== "recording") fail("invalid", "nothing is recording");
+        const status = this.recording;
+        if (status.state !== "recording") return fail("invalid", "nothing is recording");
+        if (status.captureLost !== null) fail("invalid", captureLostError(status.captureLost));
         if (this.manualStepError) fail(this.manualStepError.kind, this.manualStepError.message);
         this.manualSteps += 1;
         return null;

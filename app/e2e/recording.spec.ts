@@ -164,6 +164,40 @@ test("shows when an excluded app is in front", async ({ page, backend }) => {
   await expect(label).toHaveText("Paused");
 });
 
+test("says when capture stopped, refuses a resume and still stops and saves", async ({ page, backend }) => {
+  grantAll(backend.permissions);
+  await page.getByRole("button", { name: "Record" }).click();
+  const controls = page.getByRole("group", { name: "Recording" });
+  const label = controls.getByRole("status");
+  await expect(label).toHaveText("Recording");
+  const banner = page.getByRole("alert", { name: "Capture stopped" });
+  await expect(banner).toHaveCount(0);
+
+  // The recorded window closes: the sink reports it.
+  await emitEvent(page, "recording://status", backend.loseCapture("the window was closed"));
+  await expect(label).toHaveText("Capture stopped: the window was closed");
+  await expect(banner).toHaveText("Capture stopped: the window was closed. Stop to save what was recorded.");
+  // Not stopped for the user.
+  expect(backend.recording.state).toBe("recording");
+
+  // A pause reads as the loss still; a resume is refused and stays paused.
+  await controls.getByRole("button", { name: "Pause recording" }).click();
+  await expect.poll(() => backend.recording.state).toBe("paused");
+  await expect(label).toHaveText("Capture stopped: the window was closed");
+  await controls.getByRole("button", { name: "Resume recording" }).click();
+  await expect.poll(() => backend.calls.filter((c) => c.cmd === "resume_recording").length).toBe(1);
+  expect(backend.recording.state).toBe("paused");
+  // The refusal says what the notice already says: no second banner.
+  await expect(banner).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByText(/^Recording: /)).toHaveCount(0);
+
+  // Stop saves what was recorded.
+  await controls.getByRole("button", { name: "Stop recording" }).click();
+  await expect.poll(() => backend.recordings.length).toBe(1);
+  await expect(banner).toHaveCount(0);
+});
+
 test("the recording clock survives a reload, paused time included", async ({ page, backend }) => {
   grantAll(backend.permissions);
   await page.getByRole("button", { name: "Record" }).click();

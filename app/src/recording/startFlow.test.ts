@@ -11,6 +11,7 @@ const recording: RecordingStatus = {
   captureAreaFallback: false,
   pausedMs: 0,
   excludedApp: null,
+  captureLost: null,
 };
 const WINDOWS: CaptureWindow[] = [
   { windowId: 7, appName: "Safari", bundleId: "com.apple.Safari", title: "Apple", width: 1200, height: 800 },
