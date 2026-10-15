@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorApi } from "@/lib/ipc";
 import type { Guide, OpenedGuide } from "@/lib/types";
 import { deleteItem, insertItemAfter, moveItem, newNote, renameGuide, setItemTitle } from "@/editor/commands";
-import { createEditorStore } from "@/editor/store";
+import { createEditorStore, createQuitFlow, type QuitSteps } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 
 function fakeApi(opened: Partial<OpenedGuide> = {}) {
@@ -421,5 +421,148 @@ describe("closing in the backend", () => {
     expect(s().doc).toBeNull();
     expect(log).toHaveBeenCalled();
     log.mockRestore();
+  });
+});
+
+describe("quitting", () => {
+  it("waits while the editor is busy, then quits once", async () => {
+    const { s, api, block, unblock } = await opened();
+    s().dispatch(renameGuide(s().doc!.guide, "One"));
+    block();
+    const closing = s().closeGuide();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = s().requestQuit();
+    const second = s().requestQuit();
+    expect(s().notice).toBe("Quitting once the guide is saved…");
+    expect(api.quit).not.toHaveBeenCalled();
+    unblock();
+    expect(await closing).toBe(true);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(api.quit).toHaveBeenCalledTimes(1);
+    expect(s().notice).toBeNull();
+  });
+
+  it("a request during a quit joins it", async () => {
+    const { s, api, block, unblock } = await opened();
+    s().dispatch(renameGuide(s().doc!.guide, "One"));
+    block();
+    const first = s().requestQuit();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = s().requestQuit();
+    unblock();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(api.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejected quit shows an error and leaves the guide open and editable", async () => {
+    const { s, api } = await opened();
+    vi.mocked(api.quit).mockRejectedValueOnce({ kind: "internal", message: "no app" });
+    expect(await s().requestQuit()).toBe(false);
+    expect(s().notice).toBe("Could not quit: no app");
+    expect(s().busy).toBe(false);
+    expect(s().leave).toBeNull();
+    // Closed in the backend, so opened again.
+    expect(api.closeGuide).toHaveBeenCalledWith("G1");
+    expect(api.openGuide).toHaveBeenCalledTimes(2);
+    expect(s().doc?.guide.id).toBe("G1");
+    expect(s().dispatch(renameGuide(s().doc!.guide, "Still editing"))).toBe(true);
+    // And quitting again works.
+    expect(await s().requestQuit()).toBe(true);
+    expect(api.quit).toHaveBeenCalledTimes(2);
+  });
+
+  function steps(initial: string | null = null) {
+    let reason = initial;
+    const listeners = new Set<() => void>();
+    const fake = {
+      waitReason: vi.fn(() => reason),
+      subscribe: vi.fn((listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      prepare: vi.fn(async () => true),
+    } satisfies QuitSteps;
+    return {
+      fake,
+      listeners,
+      set(next: string | null) {
+        reason = next;
+        for (const listener of [...listeners]) listener();
+      },
+    };
+  }
+
+  it("the quit flow waits for its steps, shows why, and runs once", async () => {
+    const { store, s, api } = await opened();
+    const recording = steps("Quitting once the recording is saved…");
+    const quit = createQuitFlow(store, recording.fake);
+    const first = quit();
+    const second = quit();
+    expect(first).toBe(second);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s().notice).toBe("Quitting once the recording is saved…");
+    expect(recording.fake.prepare).not.toHaveBeenCalled();
+    recording.set("Quitting once the recording command finishes…");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recording.fake.prepare).not.toHaveBeenCalled();
+    recording.set(null);
+    await first;
+    expect(recording.fake.prepare).toHaveBeenCalledTimes(1);
+    expect(api.quit).toHaveBeenCalledTimes(1);
+    expect(recording.listeners.size).toBe(0);
+    expect(s().notice).toBeNull();
+  });
+
+  it("the quit flow follows the wait reason: pending, then saving, then idle", async () => {
+    const { store, s, api } = await opened();
+    const recording = steps("Quitting once the recording command finishes…");
+    const quit = createQuitFlow(store, recording.fake);
+    const done = quit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s().notice).toBe("Quitting once the recording command finishes…");
+    recording.set("Quitting once the recording is saved…");
+    expect(s().notice).toBe("Quitting once the recording is saved…");
+    expect(recording.fake.prepare).not.toHaveBeenCalled();
+    recording.set(null);
+    await done;
+    expect(s().notice).toBeNull();
+    expect(api.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the quit flow leaves a notice it did not set", async () => {
+    const { store, s } = await opened();
+    const recording = steps("Quitting once the recording command finishes…");
+    const quit = createQuitFlow(store, recording.fake);
+    const done = quit();
+    s().notify("Recording failed: disk full");
+    recording.set("Quitting once the recording is saved…");
+    expect(s().notice).toBe("Recording failed: disk full");
+    recording.set(null);
+    await done;
+    expect(s().notice).toBe("Recording failed: disk full");
+  });
+
+  it("the quit flow stays open when preparing fails, and can quit again", async () => {
+    const { store, api } = await opened();
+    const recording = steps();
+    recording.fake.prepare.mockResolvedValueOnce(false);
+    const quit = createQuitFlow(store, recording.fake);
+    await quit();
+    expect(api.quit).not.toHaveBeenCalled();
+    await quit();
+    expect(api.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the quit flow shows an error that escapes it and is not stuck", async () => {
+    const { store, s, api } = await opened();
+    const recording = steps();
+    recording.fake.prepare.mockRejectedValueOnce(new Error("stop failed"));
+    const quit = createQuitFlow(store, recording.fake);
+    await quit();
+    expect(s().notice).toBe("Could not quit: stop failed");
+    await quit();
+    expect(api.quit).toHaveBeenCalledTimes(1);
   });
 });

@@ -362,6 +362,16 @@ impl QuitGate {
         });
         true
     }
+
+    /// Handles the app menu's Quit item (Cmd+Q) as a user quit. The
+    /// default item sends NSApp `terminate:`, which never reaches
+    /// `on_exit_requested`, so the menu routes here instead.
+    pub fn on_quit_menu<R: Runtime>(self: &Arc<Self>, app: &AppHandle<R>) {
+        if !self.on_exit_requested(app, None) {
+            crate::recording::discard_on_quit(app);
+            app.exit(0);
+        }
+    }
 }
 
 #[tauri::command]

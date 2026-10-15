@@ -60,7 +60,10 @@ export interface EditorState {
    */
   openGuide(id: string): Promise<boolean>;
   closeGuide(): Promise<boolean>;
-  /** Saves, then quits the app (`api.quit`). */
+  /**
+   * Saves, then quits the app (`api.quit`). While the editor is busy the
+   * quit waits and runs once it is done; repeated requests share one quit.
+   */
   requestQuit(): Promise<boolean>;
   resolveLeave(choice: LeaveChoice): Promise<boolean>;
   select(id: string | null): void;
@@ -107,6 +110,8 @@ const cleanHistory = {
   notice: null,
 } satisfies Partial<EditorState>;
 
+const QUIT_WAITS_FOR_SAVE = "Quitting once the guide is saved…";
+
 export function createEditorStore({
   api,
   autosaveMs = 500,
@@ -115,6 +120,9 @@ export function createEditorStore({
   timers,
 }: EditorOptions): EditorStore {
   let saving: Promise<void> | null = null;
+  // The quit in progress, or one waiting for the editor to be idle.
+  let quitting: Promise<boolean> | null = null;
+  let queuedQuit: (() => void) | null = null;
   // Ignore list responses that a newer query has superseded.
   let listRequest = 0;
 
@@ -229,13 +237,46 @@ export function createEditorStore({
             break;
           case "quit":
             await release(leaving);
-            await api.quit();
+            try {
+              await api.quit();
+            } catch (error) {
+              // The backend closed the guide: open it again to keep editing.
+              if (leaving) await open(leaving);
+              get().notify(`Could not quit: ${errorMessage(error)}`);
+              return false;
+            }
             break;
         }
         return true;
       } finally {
         set({ busy: false });
+        const run = queuedQuit;
+        queuedQuit = null;
+        run?.();
       }
+    }
+
+    /** Runs one quit at a time, after whatever is keeping the editor busy. */
+    function quit(discard = false): Promise<boolean> {
+      if (quitting) return quitting;
+      const run = () => leaveTo({ kind: "quit" }, discard);
+      let started: Promise<boolean>;
+      if (get().busy) {
+        get().notify(QUIT_WAITS_FOR_SAVE);
+        started = new Promise((resolve) => {
+          queuedQuit = () => {
+            if (get().notice === QUIT_WAITS_FOR_SAVE) get().notify(null);
+            resolve(run());
+          };
+        });
+      } else {
+        started = run();
+      }
+      const current = started.finally(() => {
+        if (quitting === current) quitting = null;
+      });
+      quitting = current;
+      return current;
     }
 
     return {
@@ -278,7 +319,7 @@ export function createEditorStore({
 
       closeGuide: () => leaveTo({ kind: "close" }),
 
-      requestQuit: () => leaveTo({ kind: "quit" }),
+      requestQuit: () => quit(),
 
       async resolveLeave(choice) {
         const intent = get().leave;
@@ -287,7 +328,8 @@ export function createEditorStore({
           set({ leave: null });
           return false;
         }
-        return leaveTo(intent, choice === "discard");
+        const discard = choice === "discard";
+        return intent.kind === "quit" ? quit(discard) : leaveTo(intent, discard);
       },
 
       select(id) {
@@ -349,4 +391,57 @@ export function createEditorStore({
     };
   });
   return store;
+}
+
+/** What else a quit waits for, besides the editor (e.g. a recording). */
+export interface QuitSteps {
+  /** Why the quit must wait (shown to the user), or null when it can go ahead. */
+  waitReason(): string | null;
+  /** Calls `listener` whenever the wait reason may have changed. */
+  subscribe(listener: () => void): () => void;
+  /** Runs before the editor saves and quits; false keeps the app open. */
+  prepare(): Promise<boolean>;
+}
+
+/**
+ * Returns the app's quit: it waits until `steps` no longer hold it back,
+ * prepares, then saves and quits through `requestQuit`. A request while
+ * one is waiting or running joins it.
+ */
+export function createQuitFlow(editor: EditorStore, steps: QuitSteps): () => Promise<void> {
+  let current: Promise<void> | null = null;
+
+  function idle(): Promise<void> {
+    let shown = steps.waitReason();
+    if (!shown) return Promise.resolve();
+    editor.getState().notify(shown);
+    return new Promise((resolve) => {
+      const stop = steps.subscribe(() => {
+        const reason = steps.waitReason();
+        if (reason === shown) return;
+        // Replace or clear only our own notice, not one shown since.
+        const ours = editor.getState().notice === shown;
+        shown = reason;
+        if (ours) editor.getState().notify(reason);
+        if (reason) return;
+        stop();
+        resolve();
+      });
+    });
+  }
+
+  async function attempt() {
+    await idle();
+    if (!(await steps.prepare())) return;
+    await editor.getState().requestQuit();
+  }
+
+  return () => {
+    current ??= attempt()
+      .catch((error: unknown) => editor.getState().notify(`Could not quit: ${errorMessage(error)}`))
+      .finally(() => {
+        current = null;
+      });
+    return current;
+  };
 }

@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use guidesya_core::index::Index;
 use serde::Serialize;
-use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
+use tauri::menu::Menu;
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
 
 mod commands;
 mod editor;
@@ -31,9 +32,46 @@ fn app_info() -> AppInfo {
     }
 }
 
+/// Id of the app menu's own Quit item; see [`app_menu`].
+const QUIT_MENU_ID: &str = "guidesya-quit";
+
+/// Tauri's default menu with its Quit item swapped for one that goes
+/// through the `QuitGate`. The predefined item sends NSApp `terminate:`,
+/// which tao handles in `applicationWillTerminate` without a
+/// `RunEvent::ExitRequested`, so the editor would not get to save.
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app)?;
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::menu::{MenuItem, MenuItemKind};
+        if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+            let items = app_menu.items()?;
+            let quit = items.iter().position(|item| match item {
+                MenuItemKind::Predefined(item) => item.text().is_ok_and(|t| t.starts_with("Quit")),
+                _ => false,
+            });
+            if let Some(position) = quit {
+                app_menu.remove_at(position)?;
+                let label = format!("Quit {}", app.package_info().name);
+                let item = MenuItem::with_id(app, QUIT_MENU_ID, label, true, Some("CmdOrCtrl+Q"))?;
+                app_menu.insert(&item, position)?;
+                return Ok(menu);
+            }
+        }
+        eprintln!("guidesya: no Quit item in the default menu; Cmd+Q will quit without saving");
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .menu(app_menu)
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT_MENU_ID {
+                app.state::<Arc<commands::QuitGate>>().on_quit_menu(app);
+            }
+        })
         .plugin(navigation::guard())
         // Dialogs and Reveal run from Rust only: no capability grants them
         // to the webview.

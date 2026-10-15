@@ -15,6 +15,7 @@ import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
+import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
 import { QUIT_REQUESTED_EVENT, tauriSettingsApi } from "@/lib/ipc";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
@@ -136,23 +137,24 @@ export default function App() {
     void recordingStore.getState().load();
     const unsubscribe = subscribe(recordingStore, (event, handler) => listen(event, (e) => handler(e.payload)));
 
-    // Closing the window or Cmd+Q: save first. A running recording is
-    // stopped and saved as a guide (a failed stop is shown and the app
-    // stays open). `requestQuit` then exits the app once the open guide is
-    // saved, or shows the leave dialog if the save failed.
-    const quit = async () => {
-      const recording = recordingStore.getState();
-      if (recording.status.state === "saving") {
-        editorStore.getState().notify("The recording is still being saved. Quit again once it is done.");
-        return;
-      }
-      if (recording.pending) {
-        editorStore.getState().notify("A recording command is still running. Quit again in a moment.");
-        return;
-      }
-      if (isActive(recording.status) && !(await recording.stop({ open: false }))) return;
-      await editorStore.getState().requestQuit();
-    };
+    // Closing the window or Cmd+Q: save first. A quit waits while the
+    // recording is being saved or a recording command runs; then a running
+    // recording is stopped and saved as a guide (a failed stop is shown and
+    // the app stays open). `requestQuit` then exits the app once the open
+    // guide is saved, or shows the leave dialog if the save failed.
+    const quit = createQuitFlow(editorStore, {
+      waitReason() {
+        const recording = recordingStore.getState();
+        if (recording.status.state === "saving") return "Quitting once the recording is saved…";
+        if (recording.pending) return "Quitting once the recording command finishes…";
+        return null;
+      },
+      subscribe: (listener) => recordingStore.subscribe(listener),
+      async prepare() {
+        const recording = recordingStore.getState();
+        return !isActive(recording.status) || (await recording.stop({ open: false })) !== null;
+      },
+    });
     const unlisten = [
       getCurrentWindow().onCloseRequested((e) => {
         e.preventDefault();
