@@ -15,6 +15,7 @@ mod picker;
 mod recording;
 mod settings;
 mod settings_commands;
+mod terminate;
 mod toolbar;
 mod tray;
 
@@ -88,6 +89,8 @@ pub fn run() {
         ))
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
+            // Dock Quit, AppleScript `quit` and logout save first too.
+            terminate::install(app.handle());
             app.manage(Arc::new(DroppedFiles::default()));
             app.manage(Arc::new(recording::Recorder::default()));
             app.manage(Arc::new(picker::RegionPicker::default()));

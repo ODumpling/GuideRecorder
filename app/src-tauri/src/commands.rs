@@ -309,12 +309,50 @@ pub async fn verify_crop(
     with_session(cell, move |s| export::verify_crop(s, &guide_id, &image)).await
 }
 
-/// Emitted on a user quit (Cmd+Q, last window closed); see `QuitGate`.
+/// Emitted on a user quit (Cmd+Q, Dock Quit, logout, last window closed);
+/// see `QuitGate`.
 pub const QUIT_REQUESTED_EVENT: &str = "guidesya://quit-requested";
 
 /// How long the frontend has to answer [`QUIT_REQUESTED_EVENT`] before
 /// the app quits anyway (e.g. a hung or unloaded webview).
 const QUIT_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long a `terminate:` (Dock Quit, logout) is held for the frontend to
+/// save and quit. After that the app stays open and a logout is cancelled,
+/// e.g. while the leave dialog waits for the user; a later `quit_app`
+/// still quits.
+#[cfg(target_os = "macos")]
+const QUIT_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// What the quit gate does to the app: [`AppHandle`] in the app, a fake in
+/// the tests.
+trait QuitHost {
+    /// Sends [`QUIT_REQUESTED_EVENT`]; false if it could not be sent.
+    fn request_save(&self) -> bool;
+    /// Drops a recording still running; `exit` would skip its destructor.
+    fn discard_recording(&self);
+    /// Answers the held `terminate:`; false if the reply could not be sent.
+    fn reply(&self, quit: bool) -> bool;
+    fn exit(&self);
+}
+
+impl<R: Runtime> QuitHost for AppHandle<R> {
+    fn request_save(&self) -> bool {
+        self.emit(QUIT_REQUESTED_EVENT, ()).is_ok()
+    }
+
+    fn discard_recording(&self) {
+        crate::recording::discard_on_quit(self);
+    }
+
+    fn reply(&self, quit: bool) -> bool {
+        crate::terminate::reply(self, quit)
+    }
+
+    fn exit(&self) {
+        AppHandle::exit(self, 0);
+    }
+}
 
 /// Holds a user quit until the editor has saved: the frontend acks the
 /// event, saves (or asks the user), then calls `quit_app`.
@@ -322,6 +360,8 @@ const QUIT_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 pub struct QuitGate {
     allowed: AtomicBool,
     acked: AtomicBool,
+    /// A `terminate:` held with `NSTerminateLater`; see `terminate`.
+    pending: crate::terminate::PendingReply,
 }
 
 impl QuitGate {
@@ -331,35 +371,112 @@ impl QuitGate {
         app: &AppHandle<R>,
         code: Option<i32>,
     ) -> bool {
+        if !self.request(app, code) {
+            return false;
+        }
+        self.watch_ack(app);
+        true
+    }
+
+    /// Handles the app menu's Quit item (Cmd+Q) as a user quit. The
+    /// default item sends NSApp `terminate:`, which would reach
+    /// `on_terminate` and hold the app in AppKit's terminate wait, so the
+    /// menu routes here instead.
+    pub fn on_quit_menu<R: Runtime>(self: &Arc<Self>, app: &AppHandle<R>) {
+        if !self.on_exit_requested(app, None) {
+            self.quit(app);
+        }
+    }
+
+    /// Handles `applicationShouldTerminate:` (Dock Quit, AppleScript
+    /// `quit`, logout, shutdown) as a user quit: AppKit holds the
+    /// `terminate:` until [`QuitGate::quit`] or the reply deadline answers.
+    #[cfg(target_os = "macos")]
+    pub fn on_terminate<R: Runtime>(
+        self: &Arc<Self>,
+        app: &AppHandle<R>,
+    ) -> crate::terminate::TerminateReply {
+        let (reply, held) = self.terminate(app);
+        if let Some(id) = held {
+            self.watch_ack(app);
+            let gate = Arc::clone(self);
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(QUIT_REPLY_TIMEOUT);
+                gate.deadline(&app, id);
+            });
+        }
+        reply
+    }
+
+    /// Asks the frontend to save, unless this exit may pass. Returns true
+    /// if it was asked.
+    fn request(&self, host: &impl QuitHost, code: Option<i32>) -> bool {
         // `code` is set for `AppHandle::exit`, i.e. `quit_app` or a restart.
         if code.is_some() || self.allowed.load(Ordering::SeqCst) {
             return false;
         }
         self.acked.store(false, Ordering::SeqCst);
-        if app.emit(QUIT_REQUESTED_EVENT, ()).is_err() {
-            return false;
-        }
+        host.request_save()
+    }
+
+    /// Quits anyway if the frontend does not ack in time.
+    fn watch_ack<R: Runtime>(self: &Arc<Self>, app: &AppHandle<R>) {
         let gate = Arc::clone(self);
         let app = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(QUIT_ACK_TIMEOUT);
             if !gate.acked.load(Ordering::SeqCst) {
                 eprintln!("guidesya: no answer to the quit request, quitting");
-                gate.allowed.store(true, Ordering::SeqCst);
-                crate::recording::discard_on_quit(&app);
-                app.exit(0);
+                gate.quit(&app);
             }
         });
-        true
     }
 
-    /// Handles the app menu's Quit item (Cmd+Q) as a user quit. The
-    /// default item sends NSApp `terminate:`, which never reaches
-    /// `on_exit_requested`, so the menu routes here instead.
-    pub fn on_quit_menu<R: Runtime>(self: &Arc<Self>, app: &AppHandle<R>) {
-        if !self.on_exit_requested(app, None) {
-            crate::recording::discard_on_quit(app);
-            app.exit(0);
+    /// The decision for `applicationShouldTerminate:`, and the id of the
+    /// `terminate:` it holds, if a new one. A `terminate:` arriving while
+    /// one is held joins it: AppKit keeps a single terminate wait (a test
+    /// app showed it never asks the delegate again while waiting), so the
+    /// one reply owed to the held request answers it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn terminate(&self, host: &impl QuitHost) -> (crate::terminate::TerminateReply, Option<u64>) {
+        use crate::terminate::TerminateReply;
+        if self.allowed.load(Ordering::SeqCst) {
+            return (TerminateReply::Now, None);
+        }
+        // Held before the event goes out, so a `quit_app` always finds it.
+        let Some(id) = self.pending.begin() else {
+            return (TerminateReply::Later, None);
+        };
+        if !self.request(host, None) {
+            self.pending.take();
+            self.allowed.store(true, Ordering::SeqCst);
+            host.discard_recording();
+            return (TerminateReply::Now, None);
+        }
+        (TerminateReply::Later, Some(id))
+    }
+
+    /// The held `terminate:` `id` has waited [`QUIT_REPLY_TIMEOUT`]: if it
+    /// is still held, the app stays open (a logout is cancelled).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn deadline(&self, host: &impl QuitHost, id: u64) {
+        if self.pending.take_if(id) {
+            eprintln!("guidesya: the quit did not finish in time; staying open");
+            host.reply(false);
+        }
+    }
+
+    /// Quits now: lets a held `terminate:` go on, or exits. A recording
+    /// still running is discarded first.
+    fn quit(&self, host: &impl QuitHost) {
+        self.allowed.store(true, Ordering::SeqCst);
+        host.discard_recording();
+        // The reply only fails to reach the main thread once the event
+        // loop is gone; `exit` then cleans up and ends the process itself,
+        // so AppKit is not left waiting in a live app.
+        if !(self.pending.take() && host.reply(true)) {
+            host.exit();
         }
     }
 }
@@ -370,19 +487,129 @@ pub fn quit_ack(gate: State<'_, Arc<QuitGate>>) {
 }
 
 /// Exits the app; the frontend calls this once its changes are saved (and
-/// a recording stopped). `exit` skips destructors, so a recording still
-/// running is discarded first.
+/// a recording stopped).
 #[tauri::command]
 pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
-    gate.allowed.store(true, Ordering::SeqCst);
-    crate::recording::discard_on_quit(&app);
-    app.exit(0);
+    gate.quit(&app);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminate::TerminateReply;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    /// Records what the gate does; `emit_ok` decides whether the event
+    /// reaches the frontend.
+    struct FakeHost {
+        emit_ok: bool,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeHost {
+        fn new(emit_ok: bool) -> Self {
+            Self {
+                emit_ok,
+                calls: Mutex::default(),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            std::mem::take(&mut self.calls.lock().unwrap())
+        }
+
+        fn log(&self, call: &str) {
+            self.calls.lock().unwrap().push(call.to_owned());
+        }
+    }
+
+    impl QuitHost for FakeHost {
+        fn request_save(&self) -> bool {
+            self.log("request_save");
+            self.emit_ok
+        }
+
+        fn discard_recording(&self) {
+            self.log("discard");
+        }
+
+        fn reply(&self, quit: bool) -> bool {
+            self.log(&format!("reply {quit}"));
+            true
+        }
+
+        fn exit(&self) {
+            self.log("exit");
+        }
+    }
+
+    #[test]
+    fn terminate_passes_once_quitting_is_allowed() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        gate.quit(&host);
+        assert_eq!(host.calls(), ["discard", "exit"]);
+        assert_eq!(gate.terminate(&host), (TerminateReply::Now, None));
+        assert!(host.calls().is_empty(), "no second save request");
+    }
+
+    #[test]
+    fn terminate_quits_now_when_the_frontend_cannot_be_asked() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(false);
+        assert_eq!(gate.terminate(&host), (TerminateReply::Now, None));
+        assert_eq!(host.calls(), ["request_save", "discard"]);
+        assert!(!gate.pending.take(), "nothing left held");
+    }
+
+    #[test]
+    fn held_terminate_is_answered_by_the_quit() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        let (reply, held) = gate.terminate(&host);
+        assert_eq!(reply, TerminateReply::Later);
+        let id = held.expect("a new hold");
+        assert_eq!(host.calls(), ["request_save"]);
+        gate.quit(&host);
+        assert_eq!(
+            host.calls(),
+            ["discard", "reply true"],
+            "no exit: AppKit quits"
+        );
+        gate.deadline(&host, id);
+        assert!(
+            host.calls().is_empty(),
+            "the deadline has nothing to answer"
+        );
+    }
+
+    #[test]
+    fn held_terminate_is_cancelled_at_the_deadline() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        let (_, held) = gate.terminate(&host);
+        host.calls();
+        gate.deadline(&host, held.unwrap());
+        assert_eq!(host.calls(), ["reply false"]);
+        // The frontend can still quit later, now through `exit`.
+        gate.quit(&host);
+        assert_eq!(host.calls(), ["discard", "exit"]);
+    }
+
+    #[test]
+    fn terminate_while_held_joins_the_held_one() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        let (_, first) = gate.terminate(&host);
+        host.calls();
+        assert_eq!(gate.terminate(&host), (TerminateReply::Later, None));
+        assert!(host.calls().is_empty(), "no second request or hold");
+        gate.quit(&host);
+        assert_eq!(host.calls(), ["discard", "reply true"], "one reply");
+        gate.deadline(&host, first.unwrap());
+        assert!(host.calls().is_empty());
+    }
 
     #[test]
     fn body_bytes_from_raw_and_postmessage_bodies() {
