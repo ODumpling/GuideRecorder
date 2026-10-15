@@ -137,7 +137,8 @@ open ../target/debug/bundle/macos/GuidesYa.app
 ```
 
 That bundle is signed with `GuidesYa Local Dev` (from `tauri.conf.json`), so
-grants persist across rebuilds.
+grants persist across rebuilds. The Solo process "App (signed bundle)" in
+`solo.yml` runs exactly this (after checking the identity exists).
 
 ## Troubleshooting
 

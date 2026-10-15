@@ -14,6 +14,14 @@ processes:
     command: "mkdir -p target && { [ -d target/sample-library ] || cp -R fixtures/guides target/sample-library; } && cd app && GUIDESYA_LIBRARY=\"$PWD/../target/sample-library\" pnpm tauri dev"
     auto_start: false
 
+  "App (signed bundle)":
+    # Builds a debug .app signed with "GuidesYa Local Dev" and starts it as
+    # the app itself, so Screen Recording and Accessibility grants belong to
+    # GuidesYa and survive rebuilds (see docs/signing.md). Runs until the app
+    # quits. Needs `scripts/macos-signing.sh create` once.
+    command: "set -e; scripts/macos-signing.sh status; (cd app && pnpm tauri build --debug --bundles app); open -W target/debug/bundle/macos/GuidesYa.app"
+    auto_start: false
+
   "Reset sample guides":
     command: "rm -rf target/sample-library && mkdir -p target && cp -R fixtures/guides target/sample-library && echo 'sample guides reset'"
     auto_start: false
