@@ -14,7 +14,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use guidesya_core::export::md::{Branding, MAX_LOGO_BYTES};
-use guidesya_core::export::{docx, html, md, pdf, verify_crop_rect, ExportReport, RenderGuide};
+use guidesya_core::export::{
+    docx, html, md, pdf, verify_crop_rect, ExportReport, OutPathError, RenderGuide,
+};
 use guidesya_core::model::StepImage;
 use serde::{Deserialize, Serialize};
 
@@ -392,82 +394,28 @@ fn read_logo(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-// Copied from the CLI (crates/guidesya-cli/src/main.rs `check_out_path`,
-// `resolve_out`), pending CONTRACT REQUEST: move both to
-// `guidesya_core::export::check_out_path`. Keep the two in step until then.
-
-/// Refuses an output path inside this guide's bundle, inside any
-/// `.guidesya` folder, or inside the library folder, so an export can never
-/// change a library. The check uses the real location [`resolve_out`]
-/// finds, so symlinks and `..` can't get around it.
+/// Refuses an output path inside a guide bundle or the library; see
+/// [`guidesya_core::export::check_out_path`].
 pub fn check_out_path(out: &Path, bundle: &Path, library: &Path) -> Result<()> {
-    let resolved = resolve_out(out)?;
-    let refuse = |place: &str, folder: &Path| {
-        Err(AppError::new(
+    match guidesya_core::export::check_out_path(out, bundle, Some(library)) {
+        Ok(_) => Ok(()),
+        Err(e @ (OutPathError::InsideBundle(_) | OutPathError::InsideLibrary(_))) => {
+            Err(AppError::new(
+                ErrorKind::Invalid,
+                format!("{} is {e}; export somewhere else", out.display()),
+            ))
+        }
+        Err(OutPathError::Unresolvable { path, source }) if path == bundle => {
+            Err(file_error(&path, source))
+        }
+        Err(OutPathError::Unresolvable { path, source }) => Err(AppError::new(
             ErrorKind::Invalid,
-            format!(
-                "{} is inside {place} {}; export somewhere else",
-                out.display(),
-                folder.display()
-            ),
-        ))
-    };
-    let bundle = std::fs::canonicalize(bundle).map_err(|e| file_error(bundle, e))?;
-    if resolved.starts_with(&bundle) {
-        return refuse("the guide bundle", &bundle);
-    }
-    let is_bundle = |p: &&Path| {
-        p.extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("guidesya"))
-    };
-    if let Some(other) = resolved.ancestors().find(is_bundle) {
-        return refuse("the guide bundle", other);
-    }
-    if let Ok(library) = std::fs::canonicalize(library) {
-        if resolved.starts_with(&library) {
-            return refuse("the library", &library);
+            format!("{}: cannot resolve path: {source}", path.display()),
+        )),
+        Err(e @ OutPathError::DotDotAfterMissing(_)) => {
+            Err(AppError::new(ErrorKind::Invalid, e.to_string()))
         }
     }
-    Ok(())
-}
-
-/// The real location `out` names: its deepest part that exists (or is a
-/// link) canonicalized, so the OS resolves symlinks and `..` in it, plus
-/// the rest, which must be plain names. A dangling link is refused.
-fn resolve_out(out: &Path) -> Result<PathBuf> {
-    let cannot = |e: std::io::Error| {
-        AppError::new(
-            ErrorKind::Invalid,
-            format!("{}: cannot resolve path: {e}", out.display()),
-        )
-    };
-    let absolute = std::path::absolute(out).map_err(cannot)?;
-    let components: Vec<Component> = absolute.components().collect();
-    let mut split = components.len();
-    while split > 1 {
-        let prefix: PathBuf = components[..split].iter().collect();
-        if prefix.symlink_metadata().is_ok() {
-            break;
-        }
-        split -= 1;
-    }
-    let prefix: PathBuf = components[..split].iter().collect();
-    let mut resolved = std::fs::canonicalize(&prefix).map_err(cannot)?;
-    for component in &components[split..] {
-        match component {
-            Component::Normal(name) => resolved.push(name),
-            _ => {
-                return Err(AppError::new(
-                    ErrorKind::Invalid,
-                    format!(
-                        "{}: `..` after a folder that does not exist; give a plain path",
-                        out.display()
-                    ),
-                ))
-            }
-        }
-    }
-    Ok(resolved)
 }
 
 /// Whether a step's stored `cropRect` places its crop image exactly: the

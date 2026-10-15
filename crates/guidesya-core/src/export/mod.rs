@@ -11,12 +11,14 @@ pub mod blur;
 pub mod docx;
 pub mod html;
 pub mod md;
+pub mod out_path;
 pub mod pdf;
 pub mod raster;
 pub mod render;
 pub mod report;
 
 pub use md::{Branding, CheckedBranding};
+pub use out_path::{check_out_path, OutPathError};
 pub use raster::{render_step_image, verify_crop_rect, ImageOptions, RenderWarning, RenderedImage};
 pub use render::{RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep};
 pub use report::ExportReport;

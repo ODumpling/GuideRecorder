@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -26,7 +26,8 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use guidesya_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guidesya_core::export::{
-    docx, html, md, pdf, render_step_image, ExportReport, ImageOptions, RenderGuide, RenderWarning,
+    docx, html, md, pdf, render_step_image, ExportReport, ImageOptions, OutPathError, RenderGuide,
+    RenderWarning,
 };
 use guidesya_core::index::{
     list_library, list_with_fallback, search_library, search_with_fallback, Index, IndexError,
@@ -755,66 +756,21 @@ fn read_logo(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Refuses an output path inside this guide's bundle, inside any
-/// `.guidesya` folder, or inside the library folder when it is known, so an
-/// export can never change a library. The check uses the real location
-/// [`resolve_out`] finds, so symlinks and `..` can't get around it.
+/// Refuses an output path inside a guide bundle or the library; see
+/// [`guidesya_core::export::check_out_path`]. The messages name `--out`.
 fn check_out_path(out: &Path, bundle: &Path, library: Option<&Path>) -> Result<()> {
-    let resolved = resolve_out(out)?;
-    let refuse = |place: &str, folder: &Path| {
-        bail!(
-            "--out {}: inside {place} {}; export somewhere else",
-            out.display(),
-            folder.display()
-        )
-    };
-    let bundle = std::fs::canonicalize(bundle)
-        .with_context(|| format!("{}: cannot resolve path", bundle.display()))?;
-    if resolved.starts_with(&bundle) {
-        return refuse("the guide bundle", &bundle);
-    }
-    let is_bundle = |p: &&Path| {
-        p.extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("guidesya"))
-    };
-    if let Some(other) = resolved.ancestors().find(is_bundle) {
-        return refuse("the guide bundle", other);
-    }
-    if let Some(library) = library.and_then(|l| std::fs::canonicalize(l).ok()) {
-        if resolved.starts_with(&library) {
-            return refuse("the library", &library);
+    match guidesya_core::export::check_out_path(out, bundle, library) {
+        Ok(_) => Ok(()),
+        Err(e @ (OutPathError::InsideBundle(_) | OutPathError::InsideLibrary(_))) => {
+            bail!("--out {}: {e}; export somewhere else", out.display())
         }
-    }
-    Ok(())
-}
-
-/// The real location `out` names: its deepest part that exists (or is a
-/// link) canonicalized, so the OS resolves symlinks and `..` in it, plus
-/// the rest, which must be plain names. A dangling link is refused.
-fn resolve_out(out: &Path) -> Result<PathBuf> {
-    let cannot = || format!("--out {}: cannot resolve path", out.display());
-    let absolute = std::path::absolute(out).with_context(cannot)?;
-    let components: Vec<Component> = absolute.components().collect();
-    let mut split = components.len();
-    while split > 1 {
-        let prefix: PathBuf = components[..split].iter().collect();
-        if prefix.symlink_metadata().is_ok() {
-            break;
+        Err(OutPathError::Unresolvable { path, source }) => {
+            let flag = if path == out { "--out " } else { "" };
+            Err(anyhow::Error::new(source)
+                .context(format!("{flag}{}: cannot resolve path", path.display())))
         }
-        split -= 1;
+        Err(e @ OutPathError::DotDotAfterMissing(_)) => bail!("--out {e}"),
     }
-    let prefix: PathBuf = components[..split].iter().collect();
-    let mut resolved = std::fs::canonicalize(&prefix).with_context(cannot)?;
-    for component in &components[split..] {
-        match component {
-            Component::Normal(name) => resolved.push(name),
-            _ => bail!(
-                "--out {}: `..` after a folder that does not exist; give a plain path",
-                out.display()
-            ),
-        }
-    }
-    Ok(resolved)
 }
 
 fn print_export(out: &mut impl Write, export: &Export, as_json: bool) -> io::Result<()> {
