@@ -46,6 +46,20 @@
 //! position and the frame's `ContentRect` / `ContentScale` / `ScaleFactor`
 //! attachments, so it stays right when the window moves or resizes.
 //!
+//! # Excluded apps
+//! Display and region captures leave out, besides this process (see
+//! [`FrameStreamConfig::exclude_own_windows`]), every application matching
+//! [`FrameStreamConfig::excluded_bundle_ids`] by
+//! [`bundle_id_matches`]: an exact id, or the id followed by `.` and more
+//! (its helpers). ScreenCaptureKit then never puts their windows in a frame,
+//! whether they are in front, behind another app, or a non-activating panel
+//! such as 1Password's Quick Access. The filter is built from the
+//! applications listed when the run starts; one that launches (or opens its
+//! first window) later is only left out after [`FrameStream::refresh_filter`]
+//! or [`FilterHandle::refresh`] (the recording session does this on launch
+//! and activation). [`FrameStream::excluded_pids`] tells which are covered.
+//! Window captures are of one window only and need no exclusion.
+//!
 //! # Threading
 //! [`FrameStream::start`], [`FrameStream::pause`], [`FrameStream::resume`]
 //! and [`FrameStream::stop`] block until ScreenCaptureKit answers (normally
@@ -150,6 +164,10 @@ pub struct FrameStreamConfig {
     /// Leave this process's windows (toolbar, menu bar popover) out of
     /// display and region captures. See [`FrameStream::own_app_excluded`].
     pub exclude_own_windows: bool,
+    /// Applications whose windows are left out of display and region
+    /// captures, matched by [`bundle_id_matches`] (so their helpers too).
+    /// See `# Excluded apps` in the module docs.
+    pub excluded_bundle_ids: Vec<String>,
     /// Reuse pixel buffers of evicted frames instead of allocating a new
     /// one per frame.
     pub reuse_buffers: bool,
@@ -163,6 +181,7 @@ impl Default for FrameStreamConfig {
             ring_capacity: DEFAULT_RING_CAPACITY,
             shows_cursor: false,
             exclude_own_windows: true,
+            excluded_bundle_ids: Vec::new(),
             reuse_buffers: true,
         }
     }
@@ -691,6 +710,7 @@ pub struct FrameStream {
     reader: FrameReader,
     running: Option<Running>,
     stopped: bool,
+    filter: FilterHandle,
 }
 
 impl std::fmt::Debug for FrameStream {
@@ -714,13 +734,16 @@ impl FrameStream {
         }
         let reader = FrameReader::with_pool(cfg.ring_capacity, cfg.reuse_buffers);
         let generation = reader.begin_run();
+        let filter = FilterHandle::new(cfg.clone());
         let running =
             Running::start(&cfg, &reader, generation).inspect_err(|_| reader.end_run())?;
+        filter.attach(&running);
         Ok(Self {
             cfg,
             reader,
             running: Some(running),
             stopped: false,
+            filter,
         })
     }
 
@@ -751,30 +774,31 @@ impl FrameStream {
     /// filter was built; in that last case call
     /// [`FrameStream::refresh_filter`] once our windows exist.
     pub fn own_app_excluded(&self) -> bool {
-        self.running.as_ref().is_some_and(|r| r.own_app_excluded)
+        self.filter.coverage().own_app_excluded
+    }
+
+    /// Pids of the applications matching
+    /// [`FrameStreamConfig::excluded_bundle_ids`] that the current run's
+    /// filter leaves out (empty while paused and for window targets).
+    pub fn excluded_pids(&self) -> Vec<i32> {
+        self.filter.coverage().excluded_pids
     }
 
     /// Rebuilds the content filter without restarting the stream (e.g.
-    /// after this app opens its first window, so it can be excluded).
-    /// Returns [`FrameStream::own_app_excluded`]. The captured area and
-    /// geometry are unchanged.
+    /// after this app opens its first window, or an excluded app launches,
+    /// so they can be excluded). Returns [`FrameStream::own_app_excluded`].
+    /// The captured area and geometry are unchanged.
     pub fn refresh_filter(&mut self) -> Result<bool, FrameError> {
         if self.stopped {
             return Err(FrameError::Stopped);
         }
-        let Some(running) = self.running.as_mut() else {
-            return Ok(false);
-        };
-        let content = shareable_content()?;
-        let plan = plan_capture(&self.cfg, &content)?;
-        let stream = &running.stream;
-        // SAFETY: valid stream and filter; the handler only sends on a channel.
-        let done = wait_for_completion(|handler| unsafe {
-            stream.updateContentFilter_completionHandler(&plan.filter, Some(handler))
-        });
-        completion_result(done)?;
-        running.own_app_excluded = plan.own_app_excluded;
-        Ok(plan.own_app_excluded)
+        Ok(self.filter.refresh()?.is_some_and(|c| c.own_app_excluded))
+    }
+
+    /// A handle that refreshes this stream's content filter from any
+    /// thread, for as long as the stream runs; see [`FilterHandle`].
+    pub fn filter_handle(&self) -> FilterHandle {
+        self.filter.clone()
     }
 
     /// Stops the `SCStream`. Buffered frames stay readable. No-op if
@@ -804,6 +828,7 @@ impl FrameStream {
         let generation = self.reader.begin_run();
         match Running::start(&self.cfg, &self.reader, generation) {
             Ok(r) => {
+                self.filter.attach(&r);
                 self.running = Some(r);
                 self.reader.clear_error();
                 Ok(())
@@ -823,6 +848,9 @@ impl FrameStream {
     }
 
     fn halt(&mut self) -> Result<(), FrameError> {
+        // First, so no refresh touches a stream being stopped (this waits
+        // for one in progress).
+        self.filter.detach();
         let system_stopped = self.reader.stopped_by_system();
         self.reader.end_run();
         match self.running.take() {
@@ -866,7 +894,7 @@ struct Running {
     output: Retained<FrameOutput>,
     queue: DispatchRetained<DispatchQueue>,
     geometry: FrameGeometry,
-    own_app_excluded: bool,
+    coverage: FilterCoverage,
 }
 
 // SAFETY: SCStream is documented as usable from any thread, and we only
@@ -876,7 +904,7 @@ struct Running {
 // that is fine because its ivars are `Send + Sync` (a `FrameReader`, plain
 // data and a `Mutex`). `DispatchQueue` is thread-safe.
 unsafe impl Send for Running {}
-// SAFETY: as above; `&Running` only exposes `geometry` and the flag.
+// SAFETY: as above; `&Running` only exposes `geometry` and `coverage`.
 unsafe impl Sync for Running {}
 
 impl Running {
@@ -953,7 +981,7 @@ impl Running {
             output,
             queue,
             geometry,
-            own_app_excluded: plan.own_app_excluded,
+            coverage: plan.coverage,
         };
         let stream = &running.stream;
         // SAFETY: valid stream; the handler only sends on a channel.
@@ -1058,7 +1086,7 @@ struct CapturePlan {
     scale: f64,
     /// Crop in display-local points, for region targets.
     source_rect: Option<CGRect>,
-    own_app_excluded: bool,
+    coverage: FilterCoverage,
 }
 
 fn plan_capture(
@@ -1068,14 +1096,13 @@ fn plan_capture(
     match cfg.target {
         CaptureTarget::Display { display_id } => {
             let (display, info) = find_display(content, display_id)?;
-            let (filter, own_app_excluded) =
-                display_filter(content, &display, cfg.exclude_own_windows);
+            let (filter, coverage) = display_filter(content, &display, cfg);
             Ok(CapturePlan {
                 filter,
                 rect_points: info.bounds,
                 scale: info.scale,
                 source_rect: None,
-                own_app_excluded,
+                coverage,
             })
         }
         CaptureTarget::Region { display_id, rect } => {
@@ -1086,8 +1113,7 @@ fn plan_capture(
                     info.id, info.bounds
                 ))
             })?;
-            let (filter, own_app_excluded) =
-                display_filter(content, &display, cfg.exclude_own_windows);
+            let (filter, coverage) = display_filter(content, &display, cfg);
             let local = CGRect::new(
                 CGPoint::new(clipped.x - info.bounds.x, clipped.y - info.bounds.y),
                 CGSize::new(clipped.width, clipped.height),
@@ -1097,7 +1123,7 @@ fn plan_capture(
                 rect_points: clipped,
                 scale: info.scale,
                 source_rect: Some(local),
-                own_app_excluded,
+                coverage,
             })
         }
         CaptureTarget::Window { window_id } => {
@@ -1123,7 +1149,7 @@ fn plan_capture(
                 rect_points: frame,
                 scale,
                 source_rect: None,
-                own_app_excluded: false,
+                coverage: FilterCoverage::default(),
             })
         }
     }
@@ -1143,43 +1169,207 @@ fn find_display(
     Ok((display, info))
 }
 
-/// Display filter that leaves out this process, and whether it did.
-/// Excluding the application (rather than its current windows) also hides
-/// windows opened later, such as the recording toolbar. The content is
-/// listed with off-screen windows, so a hidden main window is enough for the
-/// app to be found; a process with no windows at all is not listed, and
-/// then there is nothing to exclude yet.
+/// Display filter that leaves out this process and the excluded
+/// applications ([`excluded_apps`]), and what it left out. Excluding an
+/// application (rather than its current windows) also hides windows it
+/// opens later, such as our recording toolbar or a password manager's
+/// Quick Access panel. The content is listed with off-screen windows, so a
+/// hidden window is enough for an app to be found; a process with no
+/// windows at all is not listed, and then there is nothing to exclude yet.
 fn display_filter(
     content: &SCShareableContent,
     display: &SCDisplay,
-    exclude_own: bool,
-) -> (Retained<SCContentFilter>, bool) {
-    let pid = std::process::id() as i32;
+    cfg: &FrameStreamConfig,
+) -> (Retained<SCContentFilter>, FilterCoverage) {
+    let own_pid = std::process::id() as i32;
     // SAFETY: read-only accessors on immutable content objects; the filter
     // initialisers take valid objects from the same content.
     unsafe {
-        let own_app = exclude_own
-            .then(|| content.applications().iter().find(|a| a.processID() == pid))
-            .flatten();
-        match own_app {
-            Some(app) => (
-                SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
-                    SCContentFilter::alloc(),
-                    display,
-                    &NSArray::from_retained_slice(&[app]),
-                    &NSArray::new(),
-                ),
-                true,
-            ),
-            None => (
-                SCContentFilter::initWithDisplay_excludingWindows(
-                    SCContentFilter::alloc(),
-                    display,
-                    &NSArray::<SCWindow>::new(),
-                ),
-                false,
-            ),
+        let apps = content.applications();
+        // An app without a bundle id has an empty one here.
+        let listed: Vec<(Option<String>, i32)> = apps
+            .iter()
+            .map(|a| {
+                let id = a.bundleIdentifier().to_string();
+                ((!id.is_empty()).then_some(id), a.processID())
+            })
+            .collect();
+        let pick = excluded_apps(
+            listed.iter().map(|(id, pid)| (id.as_deref(), *pid)),
+            own_pid,
+            cfg.exclude_own_windows,
+            &cfg.excluded_bundle_ids,
+        );
+        let coverage = FilterCoverage {
+            own_app_excluded: pick.iter().any(|&i| listed[i].1 == own_pid),
+            excluded_pids: pick
+                .iter()
+                .map(|&i| listed[i].1)
+                .filter(|&pid| pid != own_pid)
+                .collect(),
+        };
+        let filter = if pick.is_empty() {
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                display,
+                &NSArray::<SCWindow>::new(),
+            )
+        } else {
+            let excluded: Vec<_> = pick.iter().map(|&i| apps.objectAtIndex(i)).collect();
+            SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
+                SCContentFilter::alloc(),
+                display,
+                &NSArray::from_retained_slice(&excluded),
+                &NSArray::new(),
+            )
+        };
+        (filter, coverage)
+    }
+}
+
+/// True if an application with `bundle_id` is excluded by `excluded`: its
+/// id is one of them, or starts with one of them followed by `.` (a helper
+/// bundled with the app, e.g. `com.1password.1password.helper` for
+/// `com.1password.1password`). Case-sensitive, like bundle ids on disk.
+/// Other look-alike ids do not match (`com.1password.1password-launcher`,
+/// `com.bitwarden.desktopx`), nor does an empty entry.
+pub fn bundle_id_matches(bundle_id: &str, excluded: &[String]) -> bool {
+    excluded.iter().any(|e| {
+        !e.is_empty()
+            && bundle_id
+                .strip_prefix(e.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
+/// Indexes of the applications (`(bundle id, pid)`, as listed by
+/// ScreenCaptureKit) a display filter leaves out: this process (`own_pid`)
+/// when `exclude_own`, and every app whose bundle id matches `excluded` by
+/// [`bundle_id_matches`]. An app without a bundle id is only left out if it
+/// is this process.
+pub fn excluded_apps<'a>(
+    apps: impl IntoIterator<Item = (Option<&'a str>, i32)>,
+    own_pid: i32,
+    exclude_own: bool,
+    excluded: &[String],
+) -> Vec<usize> {
+    apps.into_iter()
+        .enumerate()
+        .filter(|(_, (id, pid))| {
+            (exclude_own && *pid == own_pid) || id.is_some_and(|id| bundle_id_matches(id, excluded))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// What a run's display filter leaves out (nothing for a window target).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterCoverage {
+    /// This process is left out.
+    pub own_app_excluded: bool,
+    /// Pids of the excluded applications (not this process) left out.
+    pub excluded_pids: Vec<i32>,
+}
+
+/// Refreshes a [`FrameStream`]'s content filter from any thread (see
+/// `# Excluded apps`), e.g. when an excluded app launches. Clones share the
+/// stream. While the stream is paused or stopped a refresh does nothing;
+/// after a resume it applies to the new run.
+#[derive(Clone)]
+pub struct FilterHandle(Arc<FilterSlot>);
+
+struct FilterSlot {
+    cfg: FrameStreamConfig,
+    live: Mutex<Option<LiveFilter>>,
+}
+
+/// The running stream and what its filter covers.
+struct LiveFilter {
+    stream: Retained<SCStream>,
+    coverage: FilterCoverage,
+}
+
+// SAFETY: SCStream is documented as usable from any thread; the slot only
+// calls `updateContentFilter` on it, under the mutex, so never concurrently
+// with another update, and `FrameStream::halt` detaches it (taking the same
+// mutex) before stopping the stream.
+unsafe impl Send for LiveFilter {}
+
+impl std::fmt::Debug for FilterHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilterHandle")
+            .field("coverage", &self.coverage())
+            .finish()
+    }
+}
+
+impl FilterHandle {
+    fn new(cfg: FrameStreamConfig) -> Self {
+        Self(Arc::new(FilterSlot {
+            cfg,
+            live: Mutex::new(None),
+        }))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<LiveFilter>> {
+        self.0.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn attach(&self, running: &Running) {
+        *self.lock() = Some(LiveFilter {
+            stream: running.stream.clone(),
+            coverage: running.coverage.clone(),
+        });
+    }
+
+    fn detach(&self) {
+        self.lock().take();
+    }
+
+    fn coverage(&self) -> FilterCoverage {
+        self.lock()
+            .as_ref()
+            .map(|l| l.coverage.clone())
+            .unwrap_or_default()
+    }
+
+    /// True for display and region targets, whose filter leaves apps out;
+    /// a window target captures one window and has nothing to refresh for.
+    pub fn filters_apps(&self) -> bool {
+        !matches!(self.0.cfg.target, CaptureTarget::Window { .. })
+    }
+
+    /// True while the stream runs and its filter leaves out `pid`.
+    pub fn covers(&self, pid: i32) -> bool {
+        self.lock()
+            .as_ref()
+            .is_some_and(|l| l.coverage.excluded_pids.contains(&pid))
+    }
+
+    /// Lists the shareable content again and gives the running stream a
+    /// new filter built from it (`SCStream.updateContentFilter`, macOS
+    /// 12.3+ like the rest of ScreenCaptureKit). Each ScreenCaptureKit call
+    /// waits at most 5 s; call it off the main thread.
+    /// Returns `Ok(None)` while the stream is not running. The captured
+    /// area and geometry are unchanged.
+    pub fn refresh(&self) -> Result<Option<FilterCoverage>, FrameError> {
+        if self.lock().is_none() {
+            return Ok(None);
         }
+        let content = shareable_content()?;
+        let plan = plan_capture(&self.0.cfg, &content)?;
+        let mut live = self.lock();
+        let Some(live) = live.as_mut() else {
+            return Ok(None);
+        };
+        let stream = &live.stream;
+        // SAFETY: valid stream and filter; the handler only sends on a channel.
+        let done = wait_for_completion(|handler| unsafe {
+            stream.updateContentFilter_completionHandler(&plan.filter, Some(handler))
+        });
+        completion_result(done)?;
+        live.coverage = plan.coverage;
+        Ok(Some(live.coverage.clone()))
     }
 }
 
@@ -2030,6 +2220,79 @@ mod tests {
         };
         assert_eq!((got.value, got.timescale), (1, 12));
         assert_eq!(got.flags.0 & CMTIME_VALID, CMTIME_VALID);
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|&s| s.to_owned()).collect()
+    }
+
+    #[test]
+    fn bundle_id_matcher_covers_helpers_only() {
+        let excluded = ids(&["com.1password.1password", "com.apple.Passwords"]);
+        // Exact ids and `<id>.` helpers (real ids from 1Password 8 and
+        // macOS 15's Passwords).
+        for id in [
+            "com.1password.1password",
+            "com.1password.1password.helper",
+            "com.1password.1password.helper.Renderer",
+            "com.apple.Passwords",
+            "com.apple.Passwords.MenuBarExtra",
+        ] {
+            assert!(bundle_id_matches(id, &excluded), "{id}");
+        }
+        // Look-alikes, other apps, and different case.
+        for id in [
+            "com.1password.1password-launcher",
+            "2BUA8C4S2C.com.1password.browser-helper",
+            "com.1password",
+            "com.apple.PasswordsX",
+            "com.apple.passwords",
+            "com.apple.Safari",
+            "",
+        ] {
+            assert!(!bundle_id_matches(id, &excluded), "{id}");
+        }
+        // An empty entry excludes nothing.
+        assert!(!bundle_id_matches("com.apple.Safari", &ids(&[""])));
+        assert!(!bundle_id_matches("", &ids(&[""])));
+        assert!(!bundle_id_matches("com.apple.Safari", &[]));
+    }
+
+    #[test]
+    fn filter_excludes_own_and_matching_apps() {
+        let apps = [
+            (Some("com.apple.Safari"), 10),
+            (Some("com.1password.1password"), 20),
+            (Some("com.1password.1password.helper"), 21),
+            (None, 30),
+            (Some("dev.guidesya.app"), 40),
+            (Some("com.bitwarden.desktop"), 50),
+            (Some("com.bitwarden.desktopx"), 51),
+        ];
+        let excluded = ids(&["com.1password.1password", "com.bitwarden.desktop"]);
+        assert_eq!(excluded_apps(apps, 40, true, &excluded), [1, 2, 4, 5]);
+        // Not our own app when that is off.
+        assert_eq!(excluded_apps(apps, 40, false, &excluded), [1, 2, 5]);
+        // An app without a bundle id only as our own process.
+        assert_eq!(excluded_apps(apps, 30, true, &[]), [3]);
+        assert!(excluded_apps(apps, 99, true, &[]).is_empty());
+        assert!(excluded_apps([], 40, true, &excluded).is_empty());
+    }
+
+    #[test]
+    fn config_excludes_no_apps_by_default() {
+        assert!(FrameStreamConfig::default().excluded_bundle_ids.is_empty());
+        let handle = FilterHandle::new(FrameStreamConfig::default());
+        assert!(handle.filters_apps());
+        assert!(!handle.covers(1));
+        assert_eq!(handle.coverage(), FilterCoverage::default());
+        // Not running: a refresh does nothing (and calls no SCK).
+        assert_eq!(handle.refresh().unwrap(), None);
+        let window = FilterHandle::new(FrameStreamConfig {
+            target: CaptureTarget::Window { window_id: 1 },
+            ..Default::default()
+        });
+        assert!(!window.filters_apps());
     }
 
     #[test]

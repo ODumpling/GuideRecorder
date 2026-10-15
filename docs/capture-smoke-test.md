@@ -263,6 +263,15 @@ Suggested script for one run, with the Finder and TextEdit open:
       fields and apps.
 - [ ] **Exclusion:** run again with `--exclude com.apple.TextEdit`.
       TextEdit clicks and typing give no steps and count as excluded.
+- [ ] **Excluded windows stay out of frames** (needs 1Password 8): run
+      with `--exclude com.1password.1password --raw DIR`. Leave the
+      1Password window visible behind Safari and click around in Safari.
+      Then press ⌘⇧Space to open Quick Access over Safari and click Safari
+      to dismiss it. In `DIR/frames/` and the bundle's step images, neither
+      the 1Password window nor Quick Access may show (the area shows what
+      is behind it, usually the desktop or Safari). Repeat with 1Password
+      quit at the start and launched partway through the run: after about
+      a second, its window must be gone from the frames too.
 - [ ] **Own pid:** the `own-pid dropped` count is 0 for a terminal-only
       run. The example has no windows; check this again with the app's
       toolbar when it exists.

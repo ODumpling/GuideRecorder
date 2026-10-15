@@ -134,6 +134,19 @@
 //!   [`SessionMetrics::dropped_excluded`]). Events before the notice are
 //!   kept: they get no head margin.
 //!
+//! - Separately, every frame stream's ScreenCaptureKit filter leaves the
+//!   excluded apps' windows out of the frames altogether (see
+//!   `frames::bundle_id_matches` for the rule, which also covers an app's
+//!   `<id>.` helpers), so a window behind the frontmost app or a
+//!   non-activating panel (1Password Quick Access) never reaches a frame.
+//!   The filter covers the apps running when the streams start (or
+//!   resume). A refresh thread rebuilds it
+//!   (`SCStream.updateContentFilter`, off the main thread) when the
+//!   observer sees an excluded app launch
+//!   (`NSWorkspaceDidLaunchApplicationNotification`) or activate while
+//!   the filter does not cover its pid yet, retrying after
+//!   [`FILTER_RETRY_MS`] while the app has no window to be listed by.
+//!
 //! [`RecordingSession::excluded_app`] and [`SessionConfig::on_excluded`]
 //! expose the state, e.g. for a "paused: excluded app" toolbar.
 //! Secure-field masking (below) does not depend on the exclusion list.
@@ -151,12 +164,18 @@
 //! # Known gaps
 //!
 //! - No "after" frame yet.
-//! - Exclusion only follows the frontmost app: a window of an excluded app
-//!   left visible behind another app shows in that app's snapshots. (A
-//!   ScreenCaptureKit content filter excluding those apps would cover it.)
-//!   The click that brings another app to the front from an excluded one
+//! - The click that brings another app to the front from an excluded one
 //!   is dropped with it. Without a main run loop (a CLI that never runs
-//!   it) only the reads at start and resume update the frontmost app.
+//!   it) only the reads at start and resume update the frontmost app, and
+//!   the content filter is only rebuilt at resume.
+//! - An excluded app that launches during a recording is out of the frames
+//!   only once the refresh after its launch notice lands (normally well
+//!   under a second; [`FILTER_RETRY_MS`] if it has no window yet). One
+//!   that opens its first window more than ~16 s after launching, without
+//!   activating, is not covered until it activates or the session resumes.
+//!   A helper process launched without a launch notice (not through
+//!   LaunchServices), whose bundle id matches, is only covered by the next
+//!   refresh.
 //! - The focus after a click is read when the focus thread handles the
 //!   click's `MouseUp`, which can be before the app has moved focus. This
 //!   only affects labels: each key does its own lookup.
@@ -199,7 +218,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2_app_kit::{
     NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
-    NSWorkspaceDidActivateApplicationNotification,
+    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
 };
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{CFRetained, CFString, CFType};
@@ -208,7 +227,7 @@ use objc2_foundation::{NSNotification, NSObjectProtocol};
 use super::ax;
 use super::event_tap::{self, EventTap, TargetedEvent};
 use super::frames::{
-    self, CaptureTarget, Frame, FrameError, FrameGeometry, FrameReader, FrameStream,
+    self, CaptureTarget, FilterHandle, Frame, FrameError, FrameGeometry, FrameReader, FrameStream,
     FrameStreamConfig,
 };
 
@@ -237,14 +256,21 @@ pub const EXCLUDED_FRAME_TAIL_MS: u64 = 250;
 /// Never snapshotted either. Same as the tail: a few frames of redraw plus
 /// main-thread latency.
 pub const EXCLUDED_FRAME_HEAD_MS: u64 = 250;
+/// Delays (ms) between attempts to cover an excluded app's pid in the
+/// frame streams' content filter, after its launch or activation was seen
+/// and a refresh did not list it yet (no window yet). About 16 s in all.
+pub const FILTER_RETRY_MS: &[u64] = &[250, 500, 1000, 2000, 4000, 8000];
 /// The suggested exclusion list (the app's settings default):
-/// 1Password 8, 7 and 6, Bitwarden, Keychain Access, Passwords (macOS 15+)
-/// and Messages. [`SessionConfig::default`] excludes nothing; the caller
+/// 1Password 8, 7 and 6 (with the 7 and 6 mini helpers, whose team-id
+/// prefixed ids no `<id>.` rule reaches), Bitwarden, Keychain Access,
+/// Passwords (macOS 15+) and Messages. [`SessionConfig::default`] excludes nothing; the caller
 /// passes the list it wants in [`SessionConfig::excluded_bundle_ids`].
 pub const DEFAULT_EXCLUDED_BUNDLE_IDS: &[&str] = &[
     "com.1password.1password",
     "com.agilebits.onepassword7",
     "com.agilebits.onepassword-osx",
+    "2BUA8C4S2C.com.agilebits.onepassword7-helper",
+    "2BUA8C4S2C.com.agilebits.onepassword-osx-helper",
     "com.bitwarden.desktop",
     "com.apple.keychainaccess",
     "com.apple.Passwords",
@@ -328,8 +354,11 @@ pub struct SessionConfig {
     /// every active display, one stream each; see [`stream_targets`].
     pub frames: FrameStreamConfig,
     /// Bundle ids whose events are dropped and never snapshotted; while one
-    /// of them is the frontmost app nothing is captured at all (see
-    /// `# Excluded apps`). [`DEFAULT_EXCLUDED_BUNDLE_IDS`] is the suggested
+    /// of them is the frontmost app nothing is captured at all, and their
+    /// windows are left out of every frame (added to
+    /// [`FrameStreamConfig::excluded_bundle_ids`]; see `# Excluded apps`).
+    /// An id also covers its `<id>.` helpers
+    /// ([`frames::bundle_id_matches`]). [`DEFAULT_EXCLUDED_BUNDLE_IDS`] is the suggested
     /// list; the default here is empty.
     pub excluded_bundle_ids: Vec<String>,
     /// Key press turned into a manual step (and not recorded as a key).
@@ -511,8 +540,12 @@ pub struct RecordingSession {
     pauses: Vec<PauseSpan>,
     /// The frontmost app's exclusion, shared with the router and encoder.
     front: Arc<Frontmost>,
-    /// Feeds `front` from app activations; removed when dropped.
+    /// Feeds `front` from app activations, and the filter refresh thread
+    /// from launches and activations; removed when dropped.
     observer: Option<FrontmostObserver>,
+    /// Refreshes the streams' content filters; ends once `observer` is
+    /// dropped.
+    filter_refresh: Option<JoinHandle<()>>,
 }
 
 impl RecordingSession {
@@ -533,12 +566,21 @@ impl RecordingSession {
         session.session_dir = Some(session_dir);
         // From here on, an error drops `session`, which joins whatever was
         // started and removes the session folder.
-        session.frames_cfg = Some(cfg.frames.clone());
+        session.frames_cfg = Some(stream_config(&cfg));
         session.start_frames()?;
         let sources = Arc::clone(&session.sources);
         session.spawn_threads(&cfg, sources, || AxFocus)?;
+        let (refresh_tx, refresh_rx) = mpsc::channel();
+        let sources = Arc::clone(&session.sources);
+        session.filter_refresh = Some(spawn("guidesya-session-filter", move || {
+            run_filter_refresh(refresh_rx, sources)
+        })?);
         // Before the tap, so the gate holds from the first event.
-        session.observer = Some(FrontmostObserver::start(Arc::clone(&session.front)));
+        session.observer = Some(FrontmostObserver::start(
+            Arc::clone(&session.front),
+            stream_config(&cfg).excluded_bundle_ids,
+            refresh_tx,
+        ));
         session.read_frontmost();
         session.start_tap()?;
         Ok(session)
@@ -569,6 +611,7 @@ impl RecordingSession {
             pauses: Vec::new(),
             front: Arc::new(Frontmost::new(cfg)),
             observer: None,
+            filter_refresh: None,
         }
     }
 
@@ -827,7 +870,9 @@ impl RecordingSession {
             .expect("session dir is set until stop");
 
         // No more activations count: the router and encoder have ended.
+        // This also ends the filter refresh (the streams are stopped).
         self.observer = None;
+        let _ = join(self.filter_refresh.take());
         let front = self.front.log();
         let mut events = router.events;
         events.extend(element.events);
@@ -965,6 +1010,8 @@ impl Drop for RecordingSession {
         let _ = join(self.focus.take());
         let _ = join(self.encoder.take());
         let _ = self.stop_frames();
+        self.observer = None;
+        let _ = join(self.filter_refresh.take());
         if let Some(dir) = self.session_dir.take() {
             let _ = fs::remove_dir_all(dir);
         }
@@ -986,6 +1033,18 @@ fn join<T>(handle: Option<JoinHandle<T>>) -> Result<T, SessionError> {
         .ok_or(SessionError::ThreadPanicked)?
         .join()
         .map_err(|_| SessionError::ThreadPanicked)
+}
+
+/// The frame stream config of a session: [`SessionConfig::frames`], also
+/// leaving out [`SessionConfig::excluded_bundle_ids`].
+fn stream_config(cfg: &SessionConfig) -> FrameStreamConfig {
+    let mut frames = cfg.frames.clone();
+    for id in &cfg.excluded_bundle_ids {
+        if !frames.excluded_bundle_ids.contains(id) {
+            frames.excluded_bundle_ids.push(id.clone());
+        }
+    }
+    frames
 }
 
 /// The display a target captures, for [`RecordingInfo`]; `None` for a
@@ -1028,6 +1087,8 @@ pub fn stream_targets(target: CaptureTarget) -> Vec<CaptureTarget> {
 struct FrameSource {
     rect: Rect,
     reader: FrameReader,
+    /// `None` in tests, which have no stream.
+    filter: Option<FilterHandle>,
 }
 
 impl FrameSource {
@@ -1043,6 +1104,7 @@ impl FrameSource {
                 |g| g.rect_points(),
             ),
             reader: stream.reader(),
+            filter: Some(stream.filter_handle()),
         }
     }
 }
@@ -2482,7 +2544,7 @@ impl FrontmostLog {
         bundle_id: Option<&str>,
         excluded: &[String],
     ) -> Option<Option<String>> {
-        let now = bundle_id.filter(|id| excluded.iter().any(|e| e == id));
+        let now = bundle_id.filter(|id| frames::bundle_id_matches(id, excluded));
         if self.current() == now {
             return None;
         }
@@ -2606,54 +2668,209 @@ fn frontmost_bundle_id() -> Option<String> {
 }
 
 /// Notes every app activation (`NSWorkspaceDidActivateApplicationNotification`)
-/// in a [`Frontmost`] until dropped. The notification is posted, and so
-/// handled, on the main thread: it needs the main run loop running, as in
-/// the app.
+/// in a [`Frontmost`] until dropped, and sends the pid of each excluded app
+/// that activates or launches (`NSWorkspaceDidLaunchApplicationNotification`)
+/// to the filter refresh thread ([`run_filter_refresh`]), which ends when
+/// this is dropped. The notifications are posted, and so handled, on the
+/// main thread: they need the main run loop running, as in the app.
 struct FrontmostObserver {
-    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    tokens: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
 
-// SAFETY: the token is only passed to `removeObserver:`, and
+// SAFETY: the tokens are only passed to `removeObserver:`, and
 // NSNotificationCenter is thread-safe.
 unsafe impl Send for FrontmostObserver {}
 
+/// The app a workspace notification is about: its bundle id and pid.
+fn notified_app(note: &NSNotification) -> Option<(Option<String>, i32)> {
+    objc2::rc::autoreleasepool(|_| {
+        note.userInfo()
+            // SAFETY: an NSString key, as the dictionary expects.
+            .and_then(|info| unsafe { info.objectForKey(NSWorkspaceApplicationKey) })
+            .and_then(|app| app.downcast::<NSRunningApplication>().ok())
+            .map(|app| {
+                (
+                    app.bundleIdentifier().map(|id| id.to_string()),
+                    app.processIdentifier(),
+                )
+            })
+    })
+}
+
 impl FrontmostObserver {
-    fn start(front: Arc<Frontmost>) -> Self {
-        let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+    /// `filtered`: the bundle ids the frame streams leave out (the
+    /// session's plus [`SessionConfig::frames`]'), which a launch or
+    /// activation is matched against for a refresh.
+    fn start(front: Arc<Frontmost>, filtered: Vec<String>, refresh: Sender<i32>) -> Self {
+        let filtered = Arc::new(filtered);
+        let filtered_launch = Arc::clone(&filtered);
+        let refresh_launch = refresh.clone();
+        let activated = RcBlock::new(move |note: NonNull<NSNotification>| {
             let ts = event_tap::now();
             // SAFETY: the center passes a valid notification for the call.
-            let note = unsafe { note.as_ref() };
-            let bundle_id = objc2::rc::autoreleasepool(|_| {
-                note.userInfo()
-                    // SAFETY: an NSString key, as the dictionary expects.
-                    .and_then(|info| unsafe { info.objectForKey(NSWorkspaceApplicationKey) })
-                    .and_then(|app| app.downcast::<NSRunningApplication>().ok())
-                    .and_then(|app| app.bundleIdentifier())
-                    .map(|id| id.to_string())
-            });
-            front.activated(ts, bundle_id.as_deref());
+            let app = notified_app(unsafe { note.as_ref() });
+            let bundle_id = app.as_ref().and_then(|(id, _)| id.as_deref());
+            front.activated(ts, bundle_id);
+            if let Some((Some(id), pid)) = &app {
+                if frames::bundle_id_matches(id, &filtered) {
+                    let _ = refresh.send(*pid);
+                }
+            }
+        });
+        let launched = RcBlock::new(move |note: NonNull<NSNotification>| {
+            // SAFETY: the center passes a valid notification for the call.
+            if let Some((Some(id), pid)) = notified_app(unsafe { note.as_ref() }) {
+                if frames::bundle_id_matches(&id, &filtered_launch) {
+                    let _ = refresh_launch.send(pid);
+                }
+            }
         });
         let center = NSWorkspace::sharedWorkspace().notificationCenter();
         // SAFETY: no object filter and no queue (handled on the posting
-        // thread); the block only touches `Send + Sync` state.
-        let token = unsafe {
-            center.addObserverForName_object_queue_usingBlock(
-                Some(NSWorkspaceDidActivateApplicationNotification),
-                None,
-                None,
-                &block,
-            )
+        // thread); the blocks only touch `Send + Sync` state.
+        let tokens = unsafe {
+            vec![
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(NSWorkspaceDidActivateApplicationNotification),
+                    None,
+                    None,
+                    &activated,
+                ),
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(NSWorkspaceDidLaunchApplicationNotification),
+                    None,
+                    None,
+                    &launched,
+                ),
+            ]
         };
-        Self { token }
+        Self { tokens }
     }
 }
 
 impl Drop for FrontmostObserver {
     fn drop(&mut self) {
         let center = NSWorkspace::sharedWorkspace().notificationCenter();
-        let token: &AnyObject = self.token.as_ref();
-        // SAFETY: the token this center returned.
-        unsafe { center.removeObserver(token) };
+        for token in &self.tokens {
+            let token: &AnyObject = token.as_ref();
+            // SAFETY: a token this center returned.
+            unsafe { center.removeObserver(token) };
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content filter refresh
+
+/// The excluded apps' pids the frame streams' content filters should
+/// cover, and when to check each again ([`FILTER_RETRY_MS`]). Pure, for
+/// the session's filter refresh thread.
+#[derive(Debug, Default)]
+pub struct RefreshQueue {
+    /// Pid → (retries done, when it is due).
+    pending: BTreeMap<i32, (usize, Instant)>,
+}
+
+impl RefreshQueue {
+    /// Asks for `pid` to be covered, due now. A pid already waiting keeps
+    /// its retry count, so repeated notices do not retry forever.
+    pub fn request(&mut self, pid: i32, now: Instant) {
+        self.pending
+            .entry(pid)
+            .and_modify(|(_, due)| *due = now)
+            .or_insert((0, now));
+    }
+
+    /// When the next pid is due, if any is waiting.
+    pub fn next_due(&self) -> Option<Instant> {
+        self.pending.values().map(|&(_, due)| due).min()
+    }
+
+    /// The pids due at `now` (they stay waiting until
+    /// [`RefreshQueue::covered`] or [`RefreshQueue::missed`]).
+    pub fn due(&self, now: Instant) -> Vec<i32> {
+        self.pending
+            .iter()
+            .filter(|(_, &(_, due))| due <= now)
+            .map(|(&pid, _)| pid)
+            .collect()
+    }
+
+    /// `pid` is covered (or there is nothing to cover it in): done.
+    pub fn covered(&mut self, pid: i32) {
+        self.pending.remove(&pid);
+    }
+
+    /// `pid` is still not covered: check again after the next
+    /// [`FILTER_RETRY_MS`] delay. Returns false, dropping it, once the
+    /// delays are used up.
+    pub fn missed(&mut self, pid: i32, now: Instant) -> bool {
+        let Some((tries, due)) = self.pending.get_mut(&pid) else {
+            return false;
+        };
+        match FILTER_RETRY_MS.get(*tries) {
+            Some(&ms) => {
+                *tries += 1;
+                *due = now + Duration::from_millis(ms);
+                true
+            }
+            None => {
+                self.pending.remove(&pid);
+                false
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+/// The filter refresh thread: for each excluded app pid received (from
+/// [`FrontmostObserver`]), rebuilds the content filter of every running
+/// display or region stream that does not cover it yet, retrying while it
+/// is still not covered ([`RefreshQueue`]). With no stream running
+/// (paused), there is nothing to do: resume builds a fresh filter. Ends
+/// when the sender is dropped. Each refresh waits at most twice the
+/// ScreenCaptureKit timeout.
+fn run_filter_refresh(rx: Receiver<i32>, sources: SharedSources) {
+    let mut queue = RefreshQueue::default();
+    loop {
+        let received = match queue.next_due() {
+            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
+        };
+        match received {
+            Ok(pid) => queue.request(pid, Instant::now()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        while let Ok(pid) = rx.try_recv() {
+            queue.request(pid, Instant::now());
+        }
+        let due = queue.due(Instant::now());
+        if due.is_empty() {
+            continue;
+        }
+        let handles: Vec<FilterHandle> = lock(&sources)
+            .iter()
+            .filter_map(|s| s.filter.clone())
+            .filter(FilterHandle::filters_apps)
+            .collect();
+        for handle in &handles {
+            if due.iter().any(|&pid| !handle.covers(pid)) {
+                // A failure leaves the old filter; the pid is retried.
+                let _ = handle.refresh();
+            }
+        }
+        let now = Instant::now();
+        for pid in due {
+            if handles.iter().all(|h| h.covers(pid)) {
+                queue.covered(pid);
+            } else {
+                queue.missed(pid, now);
+            }
+        }
     }
 }
 
@@ -2737,11 +2954,12 @@ fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
 // ---------------------------------------------------------------------------
 // Pure helpers
 
-/// True if `app`'s bundle id is in `excluded`.
+/// True if `app`'s bundle id is excluded by `excluded`
+/// ([`frames::bundle_id_matches`]: the id or one of its `<id>.` helpers).
 pub fn is_excluded_app(app: &AppRef, excluded: &[String]) -> bool {
     app.bundle_id
         .as_deref()
-        .is_some_and(|id| excluded.iter().any(|e| e == id))
+        .is_some_and(|id| frames::bundle_id_matches(id, excluded))
 }
 
 /// Drops events of excluded apps. A press is never split: its drag and
@@ -3238,6 +3456,113 @@ mod tests {
         ));
         assert!(!is_excluded_app(&app(Some("com.apple.finder")), &list));
         assert!(!is_excluded_app(&app(None), &list));
+    }
+
+    #[test]
+    fn excluded_app_covers_helpers() {
+        let list = vec!["com.apple.Passwords".to_owned()];
+        let app = |id: &str| AppRef {
+            pid: 1,
+            name: None,
+            bundle_id: Some(id.to_owned()),
+        };
+        assert!(is_excluded_app(
+            &app("com.apple.Passwords.MenuBarExtra"),
+            &list
+        ));
+        assert!(!is_excluded_app(&app("com.apple.PasswordsX"), &list));
+        let mut log = FrontmostLog::default();
+        assert_eq!(
+            log.activated(
+                Timestamp(1),
+                Some("com.apple.Passwords.MenuBarExtra"),
+                &list
+            ),
+            Some(Some("com.apple.Passwords.MenuBarExtra".into()))
+        );
+    }
+
+    #[test]
+    fn session_streams_exclude_the_session_apps() {
+        let cfg = SessionConfig {
+            frames: FrameStreamConfig {
+                excluded_bundle_ids: vec!["com.example.a".into()],
+                ..FrameStreamConfig::default()
+            },
+            excluded_bundle_ids: vec!["com.example.a".into(), "com.example.b".into()],
+            ..SessionConfig::default()
+        };
+        let frames = stream_config(&cfg);
+        assert_eq!(
+            frames.excluded_bundle_ids,
+            ["com.example.a", "com.example.b"]
+        );
+        assert!(stream_config(&SessionConfig::default())
+            .excluded_bundle_ids
+            .is_empty());
+    }
+
+    #[test]
+    fn refresh_queue_retries_then_gives_up() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut q = RefreshQueue::default();
+        assert_eq!(q.next_due(), None);
+        q.request(7, t0);
+        assert_eq!(q.next_due(), Some(t0));
+        assert_eq!(q.due(t0), [7]);
+        // Each miss waits the next delay; the pid is not due before it.
+        let mut now = t0;
+        for &delay in FILTER_RETRY_MS {
+            assert!(q.missed(7, now));
+            assert_eq!(q.next_due(), Some(now + ms(delay)));
+            assert!(q.due(now + ms(delay) - ms(1)).is_empty());
+            now += ms(delay);
+            assert_eq!(q.due(now), [7]);
+        }
+        // Delays used up: dropped.
+        assert!(!q.missed(7, now));
+        assert!(q.is_empty());
+        assert!(!q.missed(7, now));
+    }
+
+    #[test]
+    fn refresh_queue_request_keeps_retry_count() {
+        let t0 = Instant::now();
+        let mut q = RefreshQueue::default();
+        q.request(7, t0);
+        assert!(q.missed(7, t0));
+        // A new notice (e.g. activation after launch) makes it due now but
+        // does not restart the delays.
+        let t1 = t0 + Duration::from_millis(10);
+        q.request(7, t1);
+        q.request(8, t1);
+        assert_eq!(q.due(t1), [7, 8]);
+        assert!(q.missed(7, t1));
+        assert_eq!(
+            q.next_due(),
+            Some(t1),
+            "8 is still due; 7 waits the second delay"
+        );
+        q.covered(8);
+        assert_eq!(
+            q.next_due(),
+            Some(t1 + Duration::from_millis(FILTER_RETRY_MS[1]))
+        );
+        q.covered(7);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn filter_refresh_with_no_stream_is_done() {
+        // Paused (no sources): a request is dropped at once and the thread
+        // ends when the observer's sender goes.
+        let (tx, rx) = mpsc::channel();
+        let sources: SharedSources = Arc::default();
+        let t = thread::spawn(move || run_filter_refresh(rx, sources));
+        tx.send(7).unwrap();
+        drop(tx);
+        t.join().unwrap();
     }
 
     #[test]
@@ -4319,7 +4644,11 @@ mod tests {
     fn sources(list: Vec<(FrameReader, Rect)>) -> SharedSources {
         Arc::new(Mutex::new(
             list.into_iter()
-                .map(|(reader, rect)| FrameSource { rect, reader })
+                .map(|(reader, rect)| FrameSource {
+                    rect,
+                    reader,
+                    filter: None,
+                })
                 .collect(),
         ))
     }
@@ -4687,6 +5016,7 @@ mod tests {
                 height: 4.0,
             },
             reader,
+            filter: None,
         };
         let sources: SharedSources = Arc::new(Mutex::new(vec![source]));
         let focus = field("Search", false, "com.apple.Safari");

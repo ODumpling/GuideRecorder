@@ -19,6 +19,8 @@ describe("excluded apps", () => {
   it("names known apps and falls back to the id", () => {
     expect(appName("com.1password.1password")).toBe("1Password");
     expect(appName("com.apple.MobileSMS")).toBe("Messages");
+    expect(appName("2BUA8C4S2C.com.agilebits.onepassword7-helper")).toBe("1Password 7 mini");
+    expect(appName("2BUA8C4S2C.com.agilebits.onepassword-osx-helper")).toBe("1Password mini");
     expect(appName("com.example.vault")).toBe("com.example.vault");
   });
 });
