@@ -18,9 +18,11 @@ declare global {
 
 window.__guidesyaEmit = (event, payload) => emit(event, payload);
 
-// `?page=toolbar` loads the floating recording toolbar (toolbar.html) instead of the app.
+// `?page=toolbar` loads the floating recording toolbar (toolbar.html), and
+// `?page=region` the region overlay (region.html), instead of the app.
 const page = new URLSearchParams(location.search).get("page");
 if (page === "toolbar") mockWindows("toolbar", "main");
+else if (page === "region") mockWindows("region", "main");
 else mockWindows("main");
 mockIPC(
   async (cmd, args) => {
@@ -48,4 +50,5 @@ internals.invoke = (cmd, args, options) => {
 };
 
 if (page === "toolbar") void import("../src/toolbar/main.tsx");
+else if (page === "region") void import("../src/picker/region/main.tsx");
 else void import("../src/main.tsx");

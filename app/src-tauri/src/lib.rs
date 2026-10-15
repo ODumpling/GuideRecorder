@@ -11,6 +11,7 @@ mod editor;
 mod export;
 mod hotkeys;
 mod navigation;
+mod picker;
 mod recording;
 mod settings;
 mod settings_commands;
@@ -89,6 +90,7 @@ pub fn run() {
             app.manage(Arc::new(commands::QuitGate::default()));
             app.manage(Arc::new(DroppedFiles::default()));
             app.manage(Arc::new(recording::Recorder::default()));
+            app.manage(Arc::new(picker::RegionPicker::default()));
             if let Err(e) = tray::create(app.handle()) {
                 eprintln!("guidesya: cannot create the tray icon: {e}");
             }
@@ -182,6 +184,9 @@ pub fn run() {
             recording::recording_status,
             recording::recording_snapshot,
             recording::add_manual_step,
+            picker::list_capture_windows,
+            picker::pick_region,
+            picker::finish_region_pick,
             commands::quit_ack,
             commands::quit_app,
         ])

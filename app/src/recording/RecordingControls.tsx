@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";
-import { recordingStore, useRecording } from "@/recording/recording";
+import { WindowPicker } from "@/picker/WindowPicker";
+import { recordingStore, startFlow, useRecording } from "@/recording/recording";
 import { elapsedMs, formatElapsed } from "@/recording/store";
 import { makeThumbnail, THUMBNAIL_SIDE } from "@/recording/thumbnails";
 
@@ -58,15 +59,33 @@ function CancelButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-/** The toolbar's Record button, or the live recording's controls. */
+/**
+ * The toolbar's Record button, or the live recording's controls; and the
+ * window picker a Record asks with when the capture area is Window.
+ */
 export function RecordingControls() {
+  return (
+    <>
+      <Controls />
+      <WindowPicker flow={startFlow} recording={recordingStore} />
+    </>
+  );
+}
+
+function Controls() {
   const status = useRecording((s) => s.status);
   const pending = useRecording((s) => s.pending);
-  const { start, pause, resume, stop } = recordingStore.getState();
+  const { pause, resume, stop } = recordingStore.getState();
 
   if (status.state === "idle") {
     return (
-      <Button variant="outline" size="sm" className="ml-1" disabled={pending !== null} onClick={() => void start()}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="ml-1"
+        disabled={pending !== null}
+        onClick={() => void startFlow.getState().begin()}
+      >
         {pending === "start" ? <LoaderCircle className="animate-spin" /> : <Circle className="text-[var(--status-danger)]" />}
         {pending === "start" ? "Starting…" : "Record"}
       </Button>
@@ -151,7 +170,7 @@ export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
       {fallback && (
         <div className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
           <Info className="size-4 shrink-0 text-[var(--status-info)]" />
-          <span>Recording all displays; window and region capture are not available yet.</span>
+          <span>Recording all displays: no window or region was chosen for this recording.</span>
         </div>
       )}
     </>

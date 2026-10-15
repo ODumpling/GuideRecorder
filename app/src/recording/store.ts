@@ -6,7 +6,14 @@ import {
   RECORDING_STATUS_EVENT,
   type RecordingApi,
 } from "@/lib/ipc";
-import type { AppError, RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
+import type {
+  AppError,
+  CaptureTargetArg,
+  RecordingSaved,
+  RecordingSnapshot,
+  RecordingStatus,
+  StampedStatus,
+} from "@/lib/types";
 
 export type RecordingAction = "start" | "pause" | "resume" | "stop" | "cancel";
 
@@ -39,7 +46,14 @@ export interface RecordingState {
   addSnapshot(snapshot: RecordingSnapshot): void;
   /** Handles a `recording://saved` event or `stop`'s result, once per guide. */
   saved(saved: RecordingSaved): void;
-  start(): Promise<boolean>;
+  /** Starts recording `target`; without one, the capture area comes from the settings. */
+  start(target?: CaptureTargetArg): Promise<boolean>;
+  /**
+   * Starts recording what `pick` resolves to (null: cancelled, nothing
+   * starts). The pick runs as part of the start, so a second start
+   * meanwhile is ignored and a failed pick is shown like a failed start.
+   */
+  startPicked(pick: () => Promise<CaptureTargetArg | null>): Promise<boolean>;
   pause(): Promise<boolean>;
   resume(): Promise<boolean>;
   /**
@@ -182,8 +196,17 @@ export function createRecordingStore({ api, onSaved }: RecordingOptions): Record
         onSaved?.(saved);
       },
 
-      async start() {
-        const status = await run("start", () => api.start(null));
+      async start(target) {
+        const status = await run("start", () => (target ? api.start(null, target) : api.start(null)));
+        if (status) applyStatus(status);
+        return status !== null;
+      },
+
+      async startPicked(pick) {
+        const status = await run("start", async () => {
+          const target = await pick();
+          return target && (await api.start(null, target));
+        });
         if (status) applyStatus(status);
         return status !== null;
       },

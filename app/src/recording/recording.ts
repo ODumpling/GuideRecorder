@@ -1,8 +1,10 @@
 import { useStore } from "zustand";
 import { editorStore } from "@/editor/editor";
-import { tauriRecordingApi } from "@/lib/ipc";
+import { tauriPickerApi, tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSaved } from "@/lib/types";
+import { createStartFlow } from "@/recording/startFlow";
 import { createRecordingStore, type RecordingState } from "@/recording/store";
+import { settingsStore } from "@/settings/settings";
 
 /** Opens a saved recording in the editor (after the leave flow) and refreshes the library. */
 async function openSaved({ guideId, skipped }: RecordingSaved) {
@@ -25,3 +27,10 @@ export const recordingStore = createRecordingStore({
 export function useRecording<T>(selector: (state: RecordingState) => T): T {
   return useStore(recordingStore, selector);
 }
+
+/** Starting a recording as the capture area says (the Record button, `recording://pick-area`). */
+export const startFlow = createStartFlow({
+  recording: recordingStore,
+  picker: tauriPickerApi,
+  captureArea: () => settingsStore.getState().settings?.recording.captureArea ?? null,
+});

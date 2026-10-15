@@ -56,7 +56,7 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   backend.captureAreaFallback = true;
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
   await page.getByRole("button", { name: "Record" }).click();
-  await expect(page.getByText("Recording all displays; window and region capture are not available yet.")).toBeVisible();
+  await expect(page.getByText("Recording all displays: no window or region was chosen for this recording.")).toBeVisible();
 
   // A stop from elsewhere (a hotkey, later): saving, then the saved guide opens.
   const status = backend.recording;

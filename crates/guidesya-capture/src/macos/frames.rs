@@ -1262,6 +1262,86 @@ pub fn excluded_apps<'a>(
         .collect()
 }
 
+/// Smallest width and height, in points, of a window [`pickable_windows`]
+/// keeps.
+pub const MIN_PICKABLE_WINDOW_SIDE: f64 = 80.0;
+
+/// A window as ScreenCaptureKit lists it, for choosing a window target.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowInfo {
+    pub window_id: u32,
+    /// Owning process; 0 when ScreenCaptureKit names no owner.
+    pub pid: i32,
+    pub app_name: String,
+    pub bundle_id: Option<String>,
+    pub title: Option<String>,
+    /// Global points.
+    pub frame: Rect,
+    /// 0 is the normal window layer; menus, the Dock and overlays are
+    /// higher.
+    pub layer: isize,
+    pub on_screen: bool,
+}
+
+/// The windows a user can pick as a capture target, in the order given
+/// (ScreenCaptureKit lists front to back): on screen, on the normal layer,
+/// owned by an app, at least [`MIN_PICKABLE_WINDOW_SIDE`] on both sides,
+/// and neither this process's (`own_pid`) nor an excluded app's (by
+/// [`bundle_id_matches`]).
+pub fn pickable_windows(
+    windows: impl IntoIterator<Item = WindowInfo>,
+    own_pid: i32,
+    excluded: &[String],
+) -> Vec<WindowInfo> {
+    windows
+        .into_iter()
+        .filter(|w| {
+            w.on_screen
+                && w.layer == 0
+                && w.pid != 0
+                && w.pid != own_pid
+                && w.frame.width >= MIN_PICKABLE_WINDOW_SIDE
+                && w.frame.height >= MIN_PICKABLE_WINDOW_SIDE
+                && !w
+                    .bundle_id
+                    .as_deref()
+                    .is_some_and(|id| bundle_id_matches(id, excluded))
+        })
+        .collect()
+}
+
+/// The windows on screen now, front to back, as ScreenCaptureKit lists
+/// them (unfiltered: see [`pickable_windows`]). Checks Screen Recording
+/// permission first. Blocks until ScreenCaptureKit answers.
+pub fn list_windows() -> Result<Vec<WindowInfo>, FrameError> {
+    if !permissions::check(Permission::ScreenRecording).is_granted() {
+        return Err(FrameError::PermissionDenied);
+    }
+    let content = shareable_content_with(true)?;
+    let non_empty = |s: Retained<NSString>| Some(s.to_string()).filter(|s| !s.is_empty());
+    // SAFETY: read-only accessors on immutable content objects.
+    let windows = unsafe { content.windows() }
+        .iter()
+        .map(|w| unsafe {
+            let app = w.owningApplication();
+            WindowInfo {
+                window_id: w.windowID(),
+                pid: app.as_ref().map_or(0, |a| a.processID()),
+                app_name: app
+                    .as_ref()
+                    .map(|a| a.applicationName().to_string())
+                    .unwrap_or_default(),
+                bundle_id: app.as_ref().and_then(|a| non_empty(a.bundleIdentifier())),
+                title: w.title().and_then(non_empty),
+                frame: rect_from_cg(w.frame()),
+                layer: w.windowLayer(),
+                on_screen: w.isOnScreen(),
+            }
+        })
+        .collect();
+    Ok(windows)
+}
+
 /// What a run's display filter leaves out (nothing for a window target).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilterCoverage {
@@ -1382,6 +1462,14 @@ unsafe impl Send for SendContent {}
 /// All displays, applications and windows, including off-screen windows
 /// (so a hidden window still makes this app excludable).
 fn shareable_content() -> Result<Retained<SCShareableContent>, FrameError> {
+    shareable_content_with(false)
+}
+
+/// Like [`shareable_content`], listing only on-screen windows when
+/// `on_screen_only`.
+fn shareable_content_with(
+    on_screen_only: bool,
+) -> Result<Retained<SCShareableContent>, FrameError> {
     let (tx, rx) = mpsc::channel();
     let handler = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -1398,7 +1486,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, FrameError> {
     // SAFETY: the handler is a valid block; it is copied by the callee.
     unsafe {
         SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
-            true, false, &handler,
+            true, on_screen_only, &handler,
         )
     };
     match rx.recv_timeout(SCK_TIMEOUT) {
@@ -2277,6 +2365,66 @@ mod tests {
         assert_eq!(excluded_apps(apps, 30, true, &[]), [3]);
         assert!(excluded_apps(apps, 99, true, &[]).is_empty());
         assert!(excluded_apps([], 40, true, &excluded).is_empty());
+    }
+
+    #[test]
+    fn pickable_windows_keep_order_and_drop_the_unpickable() {
+        let window = |id: u32, pid: i32, bundle: Option<&str>| WindowInfo {
+            window_id: id,
+            pid,
+            app_name: format!("App {pid}"),
+            bundle_id: bundle.map(str::to_owned),
+            title: Some(format!("Window {id}")),
+            frame: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            layer: 0,
+            on_screen: true,
+        };
+        let sized = |id, width, height| WindowInfo {
+            frame: Rect {
+                x: -1200.0,
+                y: 40.0,
+                width,
+                height,
+            },
+            ..window(id, 20, Some("com.apple.Safari"))
+        };
+        let windows = vec![
+            window(1, 20, Some("com.apple.Safari")),
+            window(2, 99, Some("dev.guidesya.app")),
+            window(3, 30, Some("com.1password.1password")),
+            window(4, 31, Some("com.1password.1password.helper")),
+            WindowInfo {
+                layer: 25,
+                ..window(5, 20, Some("com.apple.Safari"))
+            },
+            WindowInfo {
+                on_screen: false,
+                ..window(6, 20, Some("com.apple.Safari"))
+            },
+            sized(7, 79.0, 600.0),
+            sized(8, 600.0, 79.5),
+            sized(9, 80.0, 80.0),
+            window(10, 0, None),
+            window(11, 40, None),
+            window(12, 50, Some("com.apple.finder")),
+        ];
+        let excluded = vec!["com.1password.1password".to_owned()];
+        let ids = |ws: Vec<WindowInfo>| ws.iter().map(|w| w.window_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(pickable_windows(windows.clone(), 99, &excluded)),
+            [1, 9, 11, 12]
+        );
+        // Nothing excluded and another own pid: the 1Password and
+        // GuidesYa windows come back, in place.
+        assert_eq!(
+            ids(pickable_windows(windows, 7, &[])),
+            [1, 2, 3, 4, 9, 11, 12]
+        );
     }
 
     #[test]

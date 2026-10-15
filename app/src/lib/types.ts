@@ -181,6 +181,38 @@ export interface ExportResult {
 
 export type CaptureArea = "display" | "window" | "region";
 
+/** A window recording can capture (`list_capture_windows`); size in points. */
+export interface CaptureWindow {
+  windowId: number;
+  appName: string;
+  bundleId: string | null;
+  title: string | null;
+  width: number;
+  height: number;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * What `start_recording` captures, when the user picked it. Region `rect`
+ * is in global display points.
+ */
+export type CaptureTargetArg =
+  | { kind: "display" }
+  | { kind: "window"; windowId: number }
+  | { kind: "region"; displayId: number | null; rect: Rect };
+
+/** A region drawn on the overlay (`pick_region`); `rect` in global points. */
+export interface RegionPick {
+  displayId: number | null;
+  rect: Rect;
+}
+
 /** App settings, as stored in Application Support (see settings.rs). */
 export interface Settings {
   version: number;
@@ -252,7 +284,8 @@ export interface McpSetup {
 /**
  * The recorder's state (see app/src-tauri/src/recording.rs). Times are
  * RFC 3339 UTC. `captureAreaFallback`: the settings asked for a window or
- * region, which can't be captured yet, so every display is recorded.
+ * region but the recording was started without one, so the display is
+ * recorded.
  * `pausedMs`: time spent in finished pauses; `pausedAt`: when the current
  * pause began (so recorded time is `now − startedAt − pausedMs`, less
  * `now − pausedAt` while paused). `excludedApp`: bundle id of the excluded

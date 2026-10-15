@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppError,
+  CaptureTargetArg,
+  CaptureWindow,
   ExportBranding,
   ExportFormat,
   ExportResult,
@@ -13,6 +15,8 @@ import type {
   PermissionStatus,
   RecordingReadiness,
   RecordingSaved,
+  Rect,
+  RegionPick,
   Settings,
   SettingsView,
   StampedStatus,
@@ -171,8 +175,11 @@ export const tauriSettingsApi: SettingsApi = {
 
 /** Recording commands (see app/src-tauri/src/recording.rs). */
 export interface RecordingApi {
-  /** Checks the permissions live, then starts. `title` null: named after the date. */
-  start(title: string | null): Promise<StampedStatus>;
+  /**
+   * Checks the permissions live, then starts. `title` null: named after the
+   * date. Without `target`, the capture area comes from the settings.
+   */
+  start(title: string | null, target?: CaptureTargetArg): Promise<StampedStatus>;
   pause(): Promise<StampedStatus>;
   resume(): Promise<StampedStatus>;
   /** Saves the recording as a new guide in the open library. */
@@ -185,7 +192,7 @@ export interface RecordingApi {
 }
 
 export const tauriRecordingApi: RecordingApi = {
-  start: (title) => invoke("start_recording", { title }),
+  start: (title, target) => invoke("start_recording", target ? { title, target } : { title }),
   pause: () => invoke("pause_recording"),
   resume: () => invoke("resume_recording"),
   stop: () => invoke("stop_recording"),
@@ -194,12 +201,50 @@ export const tauriRecordingApi: RecordingApi = {
   snapshotImage: async (id) => toArrayBuffer(await invoke("recording_snapshot", { id })),
 };
 
+/** Picking what to record (see app/src-tauri/src/picker.rs). */
+export interface PickerApi {
+  /** Windows that can be recorded, frontmost first. */
+  listCaptureWindows(): Promise<CaptureWindow[]>;
+  /** Shows the region overlay and waits for it; null if cancelled. */
+  pickRegion(): Promise<RegionPick | null>;
+}
+
+export const tauriPickerApi: PickerApi = {
+  listCaptureWindows: () => invoke("list_capture_windows"),
+  pickRegion: () => invoke("pick_region"),
+};
+
+/**
+ * The region overlay's answer (app/region.html): `rect` in the overlay's
+ * CSS px, null to cancel. `pick`: the pick the overlay was opened for
+ * (`region.html?pick=<id>`), if given. The Rust side closes the overlay.
+ */
+export function finishRegionPick(result: { rect: Rect } | null, pick?: number): Promise<void> {
+  return invoke("finish_region_pick", pick === undefined ? { result } : { result, pick });
+}
+
+/** The pick id in the region overlay's URL (`?pick=<id>`), if any. */
+export function regionPickId(search: string): number | undefined {
+  const raw = new URLSearchParams(search).get("pick");
+  if (raw === null || !/^\d+$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
+/** The region overlay's window (app/region.html), made by `pick_region`. */
+export const REGION_WINDOW_LABEL = "region";
+
 /** Emitted with a `StampedStatus` on every change of the recorder's state. */
 export const RECORDING_STATUS_EVENT = "recording://status";
 /** Emitted with a `RecordingSaved` after a recording was saved. */
 export const RECORDING_SAVED_EVENT = "recording://saved";
 /** Emitted with a `RecordingSnapshot` for each screenshot the running recording takes. */
 export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";
+/**
+ * Emitted (no payload) when the tray or the record hotkey starts a
+ * recording while the capture area is Window or Region: the main window
+ * asks what to record, then starts.
+ */
+export const RECORDING_PICK_AREA_EVENT = "recording://pick-area";
 
 /**
  * Adds a step from the screen as it is now (the toolbar's Manual step).

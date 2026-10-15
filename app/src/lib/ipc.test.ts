@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toArrayBuffer } from "@/lib/ipc";
+import { regionPickId, toArrayBuffer } from "@/lib/ipc";
 
 describe("toArrayBuffer", () => {
   it("passes ArrayBuffers through", () => {
@@ -26,5 +26,20 @@ describe("describeError", () => {
     expect(text).toMatch(/^TypeError: Load failed cause=Error: cancelled/);
     expect(text).toContain("ipc.test.ts");
     expect(describeError("plain")).toBe("plain");
+  });
+});
+
+describe("regionPickId", () => {
+  it("reads the pick id from the overlay's URL", () => {
+    expect(regionPickId("?pick=12")).toBe(12);
+    expect(regionPickId("?page=region&pick=0")).toBe(0);
+  });
+
+  it("is undefined when absent or not a whole number", () => {
+    expect(regionPickId("")).toBeUndefined();
+    expect(regionPickId("?page=region")).toBeUndefined();
+    expect(regionPickId("?pick=")).toBeUndefined();
+    expect(regionPickId("?pick=abc")).toBeUndefined();
+    expect(regionPickId("?pick=-1")).toBeUndefined();
   });
 });

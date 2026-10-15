@@ -47,3 +47,14 @@ export async function openToolbar(page: Page) {
   await expect(toolbar).toBeVisible();
   return toolbar;
 }
+
+/**
+ * Loads the region overlay (region.html) in place of the app, against the
+ * same backend; `pick`: the pick id Rust puts in its URL.
+ */
+export async function openRegionOverlay(page: Page, pick?: number) {
+  await page.goto(`/e2e/index.html?page=region${pick === undefined ? "" : `&pick=${pick}`}`);
+  const overlay = page.getByLabel("Select a region to record");
+  await expect(overlay).toBeFocused();
+  return overlay;
+}

@@ -1,0 +1,11 @@
+/* The region overlay covers a display; the page itself is transparent. */
+html.region-window,
+html.region-window body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+html.region-window #root {
+  height: 100%;
+}

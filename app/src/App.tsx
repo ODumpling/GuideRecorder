@@ -17,9 +17,9 @@ import { Button } from "@/components/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
-import { QUIT_REQUESTED_EVENT, tauriSettingsApi } from "@/lib/ipc";
+import { QUIT_REQUESTED_EVENT, RECORDING_PICK_AREA_EVENT, tauriSettingsApi } from "@/lib/ipc";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
-import { recordingStore } from "@/recording/recording";
+import { recordingStore, startFlow } from "@/recording/recording";
 import { RecordingBanner, RecordingControls, RecordingStrip } from "@/recording/RecordingControls";
 import { isActive, subscribe } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
@@ -164,6 +164,8 @@ export default function App() {
         void invoke("quit_ack");
         void quit();
       }),
+      // The tray or the record hotkey, with Window or Region as the capture area.
+      listen(RECORDING_PICK_AREA_EVENT, () => void startFlow.getState().begin()),
     ];
     return () => {
       window.removeEventListener("keydown", onKeyDown);

@@ -40,9 +40,15 @@
 //! commands through [`control`]; every status sent also updates the tray
 //! icon and opens or closes the recording toolbar window.
 //!
+//! `start_recording` takes an optional capture target (see
+//! [`crate::picker`]). Without one the area comes from the settings, where
+//! Window and Region fall back to every display (`captureAreaFallback`).
+//! A start from the tray or ⌃⌥R with Window or Region stored does not
+//! record: it shows the main window and sends [`PICK_AREA_EVENT`], and the
+//! main window picks the area and starts with it.
+//!
 //! Not in this slice: after-frames per step (the capture crate has no
-//! support yet) and the Window and Region capture areas (they need the
-//! picker from #357 and fall back to the display).
+//! support yet).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +69,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
+use crate::picker::{self, CaptureTargetArg};
 use crate::settings::{CaptureArea, Settings, SettingsStore};
 use crate::settings_commands;
 
@@ -74,6 +81,10 @@ pub const SAVED_EVENT: &str = "recording://saved";
 /// Emitted with a [`RecordingSnapshot`] for each screenshot the running
 /// session encodes.
 pub const SNAPSHOT_EVENT: &str = "recording://snapshot";
+/// Emitted (no payload) when the tray or the hotkey asks to start while
+/// the stored capture area needs picking: the main window picks it and
+/// calls `start_recording` with the target.
+pub const PICK_AREA_EVENT: &str = "recording://pick-area";
 
 /// What the recorder is doing. Serialized as `{"state": "idle"}`,
 /// `{"state": "recording", "startedAt": …, "title": …,
@@ -97,8 +108,8 @@ pub enum RecordingStatus {
         started_at: String,
         /// The title given to `start_recording`, if any.
         title: Option<String>,
-        /// The stored capture area is Window or Region, which have no
-        /// picker yet (#357), so every display is being captured.
+        /// Started without a target while the stored capture area is
+        /// Window or Region, so every display is being captured.
         capture_area_fallback: bool,
         /// Milliseconds spent in finished pauses.
         paused_ms: u64,
@@ -520,14 +531,16 @@ fn manual_hotkey(value: &str) -> Option<Hotkey> {
     }
 }
 
-/// The session config for the stored settings, and whether the capture
-/// area fell back to the displays.
-fn session_config(settings: &Settings) -> (SessionConfig, bool) {
+/// The session config for the stored settings capturing `target`, and
+/// whether the capture area fell back to the displays (no target given
+/// while the stored area is Window or Region).
+fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (SessionConfig, bool) {
     let recording = &settings.recording;
-    let fallback = !matches!(recording.capture_area, CaptureArea::Display);
+    let fallback = target.is_none() && !matches!(recording.capture_area, CaptureArea::Display);
     let mut cfg = SessionConfig::default();
-    // Every active display, one stream each (see `session::stream_targets`).
-    cfg.frames.target = CaptureTarget::Display { display_id: None };
+    // By default every active display, one stream each (see
+    // `session::stream_targets`).
+    cfg.frames.target = target.unwrap_or(CaptureTarget::Display { display_id: None });
     cfg.frames.exclude_own_windows = true;
     cfg.excluded_bundle_ids = recording.excluded_apps.clone();
     cfg.steps.typing_idle_ms = u64::from(recording.typing_idle_ms);
@@ -543,8 +556,10 @@ fn session_config(settings: &Settings) -> (SessionConfig, bool) {
 /// open library (so a recording can never be lost to a missing library at
 /// stop), and with `invalid` when a permission is missing (Screen
 /// Recording, Accessibility, Input Monitoring; checked live, never
-/// prompts). The session is configured from the stored settings; see the
-/// module docs for what is not supported yet. Returns the new status,
+/// prompts). The session is configured from the stored settings and
+/// captures `target` when given (`invalid` for a window no longer open or
+/// a region under 40×40 points; see [`crate::picker::capture_target`]),
+/// else the stored area (see the module docs). Returns the new status,
 /// which is also sent as [`STATUS_EVENT`].
 #[tauri::command]
 pub async fn start_recording<R: Runtime>(
@@ -553,11 +568,12 @@ pub async fn start_recording<R: Runtime>(
     store: State<'_, Arc<SettingsStore>>,
     cell: State<'_, Arc<SessionCell>>,
     title: Option<String>,
+    target: Option<CaptureTargetArg>,
 ) -> Result<StampedStatus> {
     let recorder = Arc::clone(&recorder);
     let store = Arc::clone(&store);
     let cell = Arc::clone(&cell);
-    blocking(move || start(&app, &recorder, &store, &cell, title)).await
+    blocking(move || start(&app, &recorder, &store, &cell, title, target)).await
 }
 
 /// The body of `start_recording` (blocking), also run from [`control`].
@@ -567,6 +583,7 @@ fn start<R: Runtime>(
     store: &SettingsStore,
     cell: &SessionCell,
     title: Option<String>,
+    target: Option<CaptureTargetArg>,
 ) -> Result<StampedStatus> {
     let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     let mut slot = recorder.slot();
@@ -576,7 +593,11 @@ fn start<R: Runtime>(
     // Waits for the library still starting; refuses if it did not open.
     cell.get()?;
     settings_commands::ensure_can_record()?;
-    let (mut cfg, capture_area_fallback) = session_config(&store.get());
+    let settings = store.get();
+    let target = target
+        .map(|t| picker::resolve_target(t, &settings.recording.excluded_apps))
+        .transpose()?;
+    let (mut cfg, capture_area_fallback) = session_config(&settings, target);
     let emitter = app.clone();
     cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
         if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
@@ -894,9 +915,31 @@ impl Control {
     }
 }
 
+/// What a start from the tray or a hotkey does for the stored capture
+/// area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartFrom {
+    /// Record now, from the stored settings.
+    Record,
+    /// Show the main window and send [`PICK_AREA_EVENT`] instead: the area
+    /// is picked there.
+    PickArea,
+}
+
+impl StartFrom {
+    pub fn of(area: CaptureArea) -> Self {
+        match area {
+            CaptureArea::Display => Self::Record,
+            CaptureArea::Window | CaptureArea::Region => Self::PickArea,
+        }
+    }
+}
+
 /// Runs `control` on the blocking pool through the same code as the
 /// commands, so statuses (and `recording://saved`) are sent as usual. A
-/// start uses the stored settings and no title. A stop shows the main
+/// start uses the stored settings and no title; with Window or Region
+/// stored it records nothing and asks the main window to pick the area
+/// (see [`StartFrom`]). A stop shows the main
 /// window, whose editor opens the saved guide. Errors are shown in a
 /// dialog. Ignored while another control is still running.
 pub fn control<R: Runtime>(app: &AppHandle<R>, control: Control) {
@@ -944,7 +987,21 @@ fn run_action<R: Runtime>(
     match action {
         Control::Start => {
             let store = Arc::clone(app.state::<Arc<SettingsStore>>().inner());
-            start(app, recorder, &store, &cell, None).map(drop)
+            match StartFrom::of(store.get().recording.capture_area) {
+                StartFrom::Record => start(app, recorder, &store, &cell, None, None).map(drop),
+                StartFrom::PickArea => {
+                    // A pick already under way: bring its overlay forward.
+                    if let Some(overlay) = app.get_webview_window(picker::LABEL) {
+                        let _ = overlay.set_focus();
+                        return Ok(());
+                    }
+                    crate::tray::show_main(app);
+                    if let Err(e) = app.emit(PICK_AREA_EVENT, ()) {
+                        eprintln!("guidesya: cannot emit {PICK_AREA_EVENT}: {e}");
+                    }
+                    Ok(())
+                }
+            }
         }
         Control::Pause => set_paused(app, recorder, true).map(drop),
         Control::Resume => set_paused(app, recorder, false).map(drop),
@@ -1083,7 +1140,7 @@ mod tests {
         settings.recording.excluded_apps = vec!["com.apple.keychainaccess".into()];
         settings.recording.typing_idle_ms = 700;
         settings.recording.hotkeys.manual_step = "Ctrl+Alt+S".into();
-        let (cfg, fallback) = session_config(&settings);
+        let (cfg, fallback) = session_config(&settings, None);
         assert!(!fallback);
         assert_eq!(
             cfg.frames.target,
@@ -1098,12 +1155,67 @@ mod tests {
         assert_eq!(cfg.work_dir, None);
 
         settings.recording.capture_area = CaptureArea::Window;
-        let (cfg, fallback) = session_config(&settings);
+        let (cfg, fallback) = session_config(&settings, None);
         assert!(fallback);
         assert_eq!(
             cfg.frames.target,
             CaptureTarget::Display { display_id: None }
         );
+    }
+
+    #[test]
+    fn a_given_target_is_used_and_never_a_fallback() {
+        let mut settings = Settings::default();
+        let window = CaptureTarget::Window { window_id: 42 };
+        let region = CaptureTarget::Region {
+            display_id: Some(1),
+            rect: guidesya_core::model::Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 300.0,
+                height: 200.0,
+            },
+        };
+        let display = CaptureTarget::Display { display_id: None };
+        for area in [
+            CaptureArea::Display,
+            CaptureArea::Window,
+            CaptureArea::Region,
+        ] {
+            settings.recording.capture_area = area;
+            for target in [window, region, display] {
+                let (cfg, fallback) = session_config(&settings, Some(target));
+                assert!(!fallback, "{area:?} {target:?}");
+                assert_eq!(cfg.frames.target, target);
+                assert!(cfg.frames.exclude_own_windows);
+            }
+        }
+        settings.recording.capture_area = CaptureArea::Region;
+        assert!(session_config(&settings, None).1);
+    }
+
+    #[test]
+    fn tray_and_hotkey_starts_pick_the_area_for_window_and_region() {
+        assert_eq!(StartFrom::of(CaptureArea::Display), StartFrom::Record);
+        assert_eq!(StartFrom::of(CaptureArea::Window), StartFrom::PickArea);
+        assert_eq!(StartFrom::of(CaptureArea::Region), StartFrom::PickArea);
+        // Only a start resolves to it: a toggle while recording stops.
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+        };
+        assert_eq!(
+            Control::ToggleRecording.resolve(&recording),
+            Some(Control::Stop)
+        );
+        assert_eq!(
+            Control::ToggleRecording.resolve(&RecordingStatus::Idle),
+            Some(Control::Start)
+        );
+        assert_eq!(PICK_AREA_EVENT, "recording://pick-area");
     }
 
     #[test]

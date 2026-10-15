@@ -4,11 +4,15 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type {
+  CaptureArea,
+  CaptureTargetArg,
+  CaptureWindow,
   ExportBranding,
   ExportResult,
   Guide,
   GuideListItem,
   OpenedGuide,
+  Rect,
   RecordingSaved,
   RecordingSnapshot,
   RecordingStatus,
@@ -63,6 +67,8 @@ export interface BackendOptions {
   firstRun?: boolean;
   /** The library failed to open at startup with this error. */
   libraryError?: string;
+  /** The stored capture area (default: display). */
+  captureArea?: CaptureArea;
 }
 
 /** An event the app receives, as the Rust side would emit it. */
@@ -154,6 +160,20 @@ export class Backend {
   manualSteps = 0;
   /** What the next `add_manual_step` fails with, if anything. */
   manualStepError: AppError | null = null;
+  /** What `list_capture_windows` returns, frontmost first. */
+  captureWindows: CaptureWindow[] = [
+    { windowId: 101, appName: "Safari", bundleId: "com.apple.Safari", title: "Apple Support", width: 1280, height: 800 },
+    { windowId: 102, appName: "Notes", bundleId: "com.apple.Notes", title: "Shopping list", width: 720, height: 540 },
+    { windowId: 103, appName: "Finder", bundleId: "com.apple.finder", title: null, width: 900, height: 600 },
+  ];
+  /** What the next `pick_region` returns (null: the user cancelled). */
+  regionPick: { displayId: number | null; rect: Rect } | null = null;
+  /** The region overlay's answers (`finish_region_pick`), in order. */
+  readonly regionFinishes: ({ rect: Rect } | null)[] = [];
+  /** The `pick` id each `finish_region_pick` carried (undefined: none), in order. */
+  readonly regionFinishPicks: (number | undefined)[] = [];
+  /** The `target` of each `start_recording` (undefined: none given), in order. */
+  readonly recordingTargets: (CaptureTargetArg | undefined)[] = [];
   /** Events the next command reply carries; mock-entry.ts emits them before resolving it. */
   private events: EmittedEvent[] = [];
 
@@ -167,6 +187,7 @@ export class Backend {
       this.bundles.set(guide.id, { path, guide, files });
     }
     if (options.firstRun) this.settings.general.onboarded = false;
+    if (options.captureArea) this.settings.recording.captureArea = options.captureArea;
     if (options.libraryError) {
       this.settings.general.library = "/Volumes/Team/Guides";
       this.library = { path: "/Volumes/Team/Guides", error: options.libraryError };
@@ -439,12 +460,21 @@ export class Backend {
         if (missing.length) {
           fail("invalid", `recording needs ${missing.map((p) => PERMISSION_NAMES[p]).join(", ")} permission`);
         }
+        const target = args.target as CaptureTargetArg | undefined;
+        if (target?.kind === "window" && !this.captureWindows.some((w) => w.windowId === target.windowId)) {
+          fail("invalid", "That window is no longer open.");
+        }
+        if (target?.kind === "region" && (target.rect.width < 40 || target.rect.height < 40)) {
+          fail("invalid", "the region must be at least 40 × 40 points");
+        }
+        this.recordingTargets.push(target === undefined ? undefined : structuredClone(target));
         const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
         this.setRecording({
           state: "recording",
           startedAt: new Date().toISOString(),
           title,
-          captureAreaFallback: this.captureAreaFallback,
+          // Like Rust: a given target is never a fallback.
+          captureAreaFallback: target ? false : this.captureAreaFallback,
           pausedMs: 0,
           excludedApp: null,
         });
@@ -495,6 +525,15 @@ export class Backend {
         if (!image) return fail("notFound", "the fixtures have no step image");
         return [...image[1]];
       }
+      case "list_capture_windows":
+        return structuredClone(this.captureWindows);
+      case "pick_region":
+        return structuredClone(this.regionPick);
+      case "finish_region_pick":
+        if (args.pick !== undefined && !Number.isInteger(args.pick)) fail("invalid", "pick must be a number");
+        this.regionFinishes.push(structuredClone((args.result ?? null) as { rect: Rect } | null));
+        this.regionFinishPicks.push(args.pick as number | undefined);
+        return null;
       case "quit_ack":
       case "quit_app":
         return null;
