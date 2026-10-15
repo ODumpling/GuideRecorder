@@ -356,6 +356,7 @@ impl QuitGate {
             if !gate.acked.load(Ordering::SeqCst) {
                 eprintln!("guidesya: no answer to the quit request, quitting");
                 gate.allowed.store(true, Ordering::SeqCst);
+                crate::recording::discard_on_quit(&app);
                 app.exit(0);
             }
         });
@@ -368,10 +369,13 @@ pub fn quit_ack(gate: State<'_, Arc<QuitGate>>) {
     gate.acked.store(true, Ordering::SeqCst);
 }
 
-/// Exits the app; the frontend calls this once its changes are saved.
+/// Exits the app; the frontend calls this once its changes are saved (and
+/// a recording stopped). `exit` skips destructors, so a recording still
+/// running is discarded first.
 #[tauri::command]
 pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
     gate.allowed.store(true, Ordering::SeqCst);
+    crate::recording::discard_on_quit(&app);
     app.exit(0);
 }
 

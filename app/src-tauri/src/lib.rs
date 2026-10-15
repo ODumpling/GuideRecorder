@@ -127,6 +127,8 @@ pub fn run() {
             settings_commands::recording_readiness,
             settings_commands::mcp_setup,
             recording::start_recording,
+            recording::pause_recording,
+            recording::resume_recording,
             recording::stop_recording,
             recording::cancel_recording,
             recording::recording_status,

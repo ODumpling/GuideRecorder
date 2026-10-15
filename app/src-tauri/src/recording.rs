@@ -1,10 +1,12 @@
-//! Tauri commands that record a guide: start a capture session, stop it and
-//! save the result into the open library, cancel it, and report its status.
+//! Tauri commands that record a guide: start a capture session, pause and
+//! resume it, stop it and save the result into the open library, cancel
+//! it, and report its status.
 //!
 //! The session lives in a managed [`Recorder`]. Every command runs on the
 //! blocking pool: starting a session blocks for a few seconds while
-//! ScreenCaptureKit starts, and stopping one joins the capture threads,
-//! runs step detection and writes the bundle.
+//! ScreenCaptureKit starts, resuming restarts the stream the same way, and
+//! stopping one joins the capture threads, runs step detection and writes
+//! the bundle.
 //!
 //! Status changes are pushed to the webview as [`STATUS_EVENT`] with a
 //! [`RecordingStatus`] payload; a saved recording is announced as
@@ -15,18 +17,21 @@
 //! read again at stop: switching the library mid-recording saves into the
 //! library open at stop time.
 //!
-//! Not in this slice: pause and resume, after-frames per step (the capture
-//! crate has no support yet) and the Window and Region capture areas (they
-//! need the picker from #357 and fall back to the display).
+//! Quitting the app drops any session still running ([`discard_on_quit`]),
+//! as `cancel_recording` would; the frontend stops and saves first.
+//!
+//! Not in this slice: after-frames per step (the capture crate has no
+//! support yet) and the Window and Region capture areas (they need the
+//! picker from #357 and fall back to the display).
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::{Local, SecondsFormat, Utc};
 use guidesya_capture::macos::frames::CaptureTarget;
 use guidesya_capture::macos::session::{Hotkey, RecordingSession, SessionConfig, SessionError};
 use guidesya_core::events::Modifiers;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
 use crate::settings::{CaptureArea, Settings, SettingsStore};
@@ -40,7 +45,8 @@ pub const SAVED_EVENT: &str = "recording://saved";
 
 /// What the recorder is doing. Serialized as `{"state": "idle"}`,
 /// `{"state": "recording", "startedAt": …, "title": …,
-/// "captureAreaFallback": …}` or `{"state": "saving", "startedAt": …,
+/// "captureAreaFallback": …}`, `{"state": "paused", …}` with the same
+/// fields as `recording`, or `{"state": "saving", "startedAt": …,
 /// "title": …}`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(
@@ -58,6 +64,13 @@ pub enum RecordingStatus {
         title: Option<String>,
         /// The stored capture area is Window or Region, which have no
         /// picker yet (#357), so the whole display is being captured.
+        capture_area_fallback: bool,
+    },
+    /// Between `pause_recording` and `resume_recording`; the fields are
+    /// those of the `Recording` it paused.
+    Paused {
+        started_at: String,
+        title: Option<String>,
         capture_area_fallback: bool,
     },
     Saving {
@@ -80,8 +93,8 @@ pub struct RecordingSaved {
 
 /// The managed recording state: at most one session at a time.
 ///
-/// `session` is held for the whole of a start, stop or cancel, so those
-/// serialize; `status` is only ever held briefly, so `recording_status`
+/// `session` is held for the whole of a start, pause, resume, stop or
+/// cancel, so those serialize; `status` is only ever held briefly, so `recording_status`
 /// never waits on a start or stop in progress.
 #[derive(Default)]
 pub struct Recorder {
@@ -98,9 +111,46 @@ impl Recorder {
         *lock(&self.status) = status;
     }
 
-    /// The session slot, held across a whole start, stop or cancel.
+    /// The session slot, held across a whole start, pause, resume, stop or
+    /// cancel.
     fn slot(&self) -> MutexGuard<'_, Option<RecordingSession>> {
         lock(&self.session)
+    }
+
+    /// Drops the session, if any, as `cancel_recording` does (the session
+    /// folder is removed) and sets the status to idle without an event.
+    /// Never waits: if a start, pause, resume, stop or cancel holds the
+    /// slot, it does nothing and returns false (a start in progress may be
+    /// waiting on the main thread, which is where `quit_app` runs). Returns
+    /// true if a session was dropped.
+    fn discard(&self) -> bool {
+        let mut slot = match self.session.try_lock() {
+            Ok(slot) => slot,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                eprintln!("guidesya: a recording command is running at quit, not waiting for it");
+                return false;
+            }
+        };
+        let Some(session) = slot.take() else {
+            return false;
+        };
+        // Dropping the session stops everything and removes its folder.
+        drop(session);
+        self.set_status(RecordingStatus::Idle);
+        true
+    }
+}
+
+/// The quit backstop: `AppHandle::exit` skips destructors, so a session
+/// left running would keep its folder in the cache dir. Drops it first
+/// (see [`Recorder::discard`]); the frontend normally stops and saves
+/// before quitting, so this only catches what it missed.
+pub fn discard_on_quit<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(recorder) = app.try_state::<Arc<Recorder>>() {
+        if recorder.discard() {
+            eprintln!("guidesya: discarded the recording still running at quit");
+        }
     }
 }
 
@@ -128,6 +178,44 @@ fn session_error(e: SessionError) -> AppError {
 
 fn not_recording() -> AppError {
     AppError::new(ErrorKind::Invalid, "no recording is running")
+}
+
+/// `status` with its `recording`/`paused` state set by `paused`, keeping
+/// its fields; `idle` and `saving` are returned unchanged.
+fn with_paused(status: RecordingStatus, paused: bool) -> RecordingStatus {
+    match status {
+        RecordingStatus::Recording {
+            started_at,
+            title,
+            capture_area_fallback,
+        }
+        | RecordingStatus::Paused {
+            started_at,
+            title,
+            capture_area_fallback,
+        } => {
+            if paused {
+                RecordingStatus::Paused {
+                    started_at,
+                    title,
+                    capture_area_fallback,
+                }
+            } else {
+                RecordingStatus::Recording {
+                    started_at,
+                    title,
+                    capture_area_fallback,
+                }
+            }
+        }
+        other => other,
+    }
+}
+
+/// The running session in `slot`; `invalid` when there is none (idle, or
+/// a stop is saving, which takes the session out of the slot).
+fn running(slot: &mut Option<RecordingSession>) -> Result<&mut RecordingSession> {
+    slot.as_mut().ok_or_else(not_recording)
 }
 
 fn now_rfc3339() -> String {
@@ -332,8 +420,64 @@ pub async fn start_recording<R: Runtime>(
     .await
 }
 
-/// Stops the recording, runs step detection and saves the guide into the
-/// open library (titled as given to `start_recording`, else
+/// Pauses the recording: input and screen capture stop until
+/// `resume_recording`, and nothing in between ends up in the guide.
+/// `invalid` when nothing is recording; already paused returns the current
+/// status unchanged. If stopping the screen stream fails the session is
+/// paused anyway: the status becomes `paused` and the error is returned.
+/// Returns the new status, also sent as [`STATUS_EVENT`].
+#[tauri::command]
+pub async fn pause_recording<R: Runtime>(
+    app: AppHandle<R>,
+    recorder: State<'_, Arc<Recorder>>,
+) -> Result<RecordingStatus> {
+    let recorder = Arc::clone(&recorder);
+    blocking(move || set_paused(&app, &recorder, true)).await
+}
+
+/// Resumes a paused recording (restarting screen capture takes a moment,
+/// as at start). `invalid` when nothing is recording; not paused returns
+/// the current status unchanged. On error the session stays paused, the
+/// status stays `paused` and the error is returned. Returns the new
+/// status, also sent as [`STATUS_EVENT`].
+#[tauri::command]
+pub async fn resume_recording<R: Runtime>(
+    app: AppHandle<R>,
+    recorder: State<'_, Arc<Recorder>>,
+) -> Result<RecordingStatus> {
+    let recorder = Arc::clone(&recorder);
+    blocking(move || set_paused(&app, &recorder, false)).await
+}
+
+/// Pauses (`paused`) or resumes the session, holding the slot throughout.
+/// The status follows `RecordingSession::is_paused` after the call, so it
+/// is right whether or not the call failed.
+fn set_paused<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Recorder,
+    paused: bool,
+) -> Result<RecordingStatus> {
+    let mut slot = recorder.slot();
+    let session = running(&mut slot)?;
+    if session.is_paused() == paused {
+        return Ok(recorder.status());
+    }
+    let result = if paused {
+        session.pause()
+    } else {
+        session.resume()
+    };
+    let current = recorder.status();
+    let status = with_paused(current.clone(), session.is_paused());
+    if status != current {
+        emit_status(app, recorder, status.clone());
+    }
+    result.map_err(session_error)?;
+    Ok(status)
+}
+
+/// Stops the recording (paused or not), runs step detection and saves the
+/// guide into the open library (titled as given to `start_recording`, else
 /// `Recording <date time>`). The status is `saving` meanwhile and `idle`
 /// after, whether or not the save succeeded; a failed save discards the
 /// recording. Returns the saved guide, also sent as [`SAVED_EVENT`].
@@ -350,6 +494,9 @@ pub async fn stop_recording<R: Runtime>(
         let session = slot.take().ok_or_else(not_recording)?;
         let (started_at, title) = match recorder.status() {
             RecordingStatus::Recording {
+                started_at, title, ..
+            }
+            | RecordingStatus::Paused {
                 started_at, title, ..
             } => (started_at, title),
             _ => (now_rfc3339(), None),
@@ -393,8 +540,8 @@ fn save(
     })
 }
 
-/// Stops the recording and discards it (the session folder is removed).
-/// `invalid` when nothing is recording.
+/// Stops the recording (paused or not) and discards it (the session
+/// folder is removed). `invalid` when nothing is recording.
 #[tauri::command]
 pub async fn cancel_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -588,6 +735,20 @@ mod tests {
             })
         );
         assert_eq!(
+            serde_json::to_value(RecordingStatus::Paused {
+                started_at: "2026-10-15T01:02:03.000Z".into(),
+                title: Some("Rotate a key".into()),
+                capture_area_fallback: false,
+            })
+            .unwrap(),
+            json!({
+                "state": "paused",
+                "startedAt": "2026-10-15T01:02:03.000Z",
+                "title": "Rotate a key",
+                "captureAreaFallback": false,
+            })
+        );
+        assert_eq!(
             serde_json::to_value(RecordingStatus::Saving {
                 started_at: "2026-10-15T01:02:03.000Z".into(),
                 title: Some("Rotate a key".into()),
@@ -619,6 +780,63 @@ mod tests {
             Ok(_) => panic!("a session out of nowhere"),
             Err(err) => assert_eq!(err.kind, ErrorKind::Invalid),
         }
+    }
+
+    #[test]
+    fn pause_and_resume_refuse_when_idle() {
+        let recorder = Recorder::default();
+        let mut slot = recorder.slot();
+        match running(&mut slot) {
+            Ok(_) => panic!("a session out of nowhere"),
+            Err(err) => {
+                assert_eq!(err.kind, ErrorKind::Invalid);
+                assert_eq!(err.message, "no recording is running");
+            }
+        }
+    }
+
+    #[test]
+    fn pausing_and_resuming_keep_the_status_fields() {
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: Some("Rotate a key".into()),
+            capture_area_fallback: true,
+        };
+        let paused = RecordingStatus::Paused {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: Some("Rotate a key".into()),
+            capture_area_fallback: true,
+        };
+        assert_eq!(with_paused(recording.clone(), true), paused);
+        assert_eq!(with_paused(paused.clone(), false), recording);
+        assert_eq!(with_paused(paused.clone(), true), paused);
+        assert_eq!(with_paused(recording.clone(), false), recording);
+        assert_eq!(
+            with_paused(RecordingStatus::Idle, true),
+            RecordingStatus::Idle
+        );
+        let saving = RecordingStatus::Saving {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: None,
+        };
+        assert_eq!(with_paused(saving.clone(), true), saving);
+    }
+
+    #[test]
+    fn discard_never_waits_and_is_a_no_op_when_idle() {
+        let recorder = Recorder::default();
+        assert!(!recorder.discard());
+        assert_eq!(recorder.status(), RecordingStatus::Idle);
+        // A command holding the slot (e.g. a start waiting on the main
+        // thread) must not block the quit.
+        let slot = recorder.slot();
+        recorder.set_status(RecordingStatus::Saving {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: None,
+        });
+        assert!(!recorder.discard());
+        assert!(matches!(recorder.status(), RecordingStatus::Saving { .. }));
+        drop(slot);
     }
 
     #[test]
