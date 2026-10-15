@@ -5,7 +5,7 @@ import { createSettingsStore } from "@/settings/store";
 
 const DEFAULTS: Settings = {
   version: 1,
-  general: { library: null, launchAtLogin: false, menuBarIcon: false },
+  general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true },
   recording: {
     hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
     captureArea: "display",
@@ -33,6 +33,8 @@ function api(overrides: Partial<SettingsApi> = {}): SettingsApi {
     deleteApiKey: fail,
     permissions: fail,
     openPermissionSettings: fail,
+    requestPermission: fail,
+    recordingReadiness: fail,
     mcpSetup: fail,
     ...overrides,
   };

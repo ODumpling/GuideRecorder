@@ -3,7 +3,9 @@ import { Check, Copy, ExternalLink, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CommitInput, HotkeyField, PathText, Row, Section, Select, Toggle } from "@/components/settings/controls";
-import { editorStore, useEditor } from "@/editor/editor";
+import { useEditor } from "@/editor/editor";
+import { setupStore } from "@/onboarding/onboarding";
+import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
 import type { CaptureArea, LibraryInfo, McpSetup, Permission, PermissionStatus, Settings } from "@/lib/types";
@@ -54,10 +56,7 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
     setError(null);
     setBusy(true);
     try {
-      if (editorStore.getState().doc && !(await editorStore.getState().closeGuide())) return;
-      await api.switchLibrary(path);
-      await settingsStore.getState().load();
-      await editorStore.getState().loadGuides();
+      await switchLibrary(api, path);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -118,6 +117,11 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
           disabled={readOnly}
           onChange={(on) => void setLogin(on)}
         />
+      </Row>
+      <Row label="First-run setup" note="Permissions, the library folder and the API key, step by step.">
+        <Button variant="outline" size="sm" onClick={() => setupStore.getState().open()}>
+          Run setup again
+        </Button>
       </Row>
       <Row label="Menu bar icon" note="Coming with recording; stored for now.">
         <Toggle
@@ -454,43 +458,75 @@ const STATUS: Record<PermissionStatus, { label: string; color: string }> = {
   unknown: { label: "Unknown", color: "var(--status-neutral)" },
 };
 
-export function PermissionsSection({ api }: { api: SettingsApi }) {
-  const [rows, setRows] = useState<{ permission: Permission; status: PermissionStatus }[] | null>(null);
+type PermissionRow = { permission: Permission; status: PermissionStatus };
+
+/**
+ * The live permission checklist: status, an "Allow…" button that asks
+ * macOS (only on a click), and a link to the System Settings pane. It
+ * checks again when the window regains focus (coming back from System
+ * Settings) and, with `poll`, every couple of seconds.
+ */
+export function PermissionList({
+  api,
+  poll = false,
+  onRows,
+}: {
+  api: SettingsApi;
+  poll?: boolean;
+  onRows?(rows: PermissionRow[]): void;
+}) {
+  const [rows, setRows] = useState<PermissionRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
     api.permissions().then(
       (r) => {
         setRows(r);
+        onRows?.(r);
         setError(null);
       },
       (e) => setError(errorMessage(e)),
     );
-  }, [api]);
+  }, [api, onRows]);
   useEffect(() => {
     refresh();
-    // Coming back from System Settings: check again.
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [refresh]);
+    const timer = poll ? setInterval(refresh, 2000) : undefined;
+    return () => {
+      window.removeEventListener("focus", refresh);
+      clearInterval(timer);
+    };
+  }, [refresh, poll]);
+
+  const ask = async (permission: Permission) => {
+    try {
+      await api.requestPermission(permission);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+    refresh();
+  };
 
   return (
-    <Section
-      title="Permissions"
-      intro="Recording needs these. Editing and exporting work without them. Some changes take effect only after GuidesYa restarts."
-    >
+    <div className="flex flex-col">
       {rows?.map(({ permission, status }) => (
         <Row key={permission} label={PERMISSIONS[permission].label} note={PERMISSIONS[permission].why}>
           <span className="text-xs font-medium" style={{ color: STATUS[status].color }}>
             {STATUS[status].label}
           </span>
           {status !== "granted" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => api.openPermissionSettings(permission).catch((e) => setError(errorMessage(e)))}
-            >
-              <ExternalLink /> Open System Settings
-            </Button>
+            <>
+              <Button variant="outline" size="sm" onClick={() => void ask(permission)}>
+                Allow…
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={`Open System Settings for ${PERMISSIONS[permission].label}`}
+                onClick={() => api.openPermissionSettings(permission).catch((e) => setError(errorMessage(e)))}
+              >
+                <ExternalLink /> System Settings
+              </Button>
+            </>
           )}
         </Row>
       ))}
@@ -500,6 +536,17 @@ export function PermissionsSection({ api }: { api: SettingsApi }) {
         </Button>
       </div>
       <ErrorText>{error}</ErrorText>
+    </div>
+  );
+}
+
+export function PermissionsSection({ api }: { api: SettingsApi }) {
+  return (
+    <Section
+      title="Permissions"
+      intro="Recording needs all of these and stays off until they are allowed. Editing and exporting work without them. Some changes take effect only after GuidesYa restarts."
+    >
+      <PermissionList api={api} />
     </Section>
   );
 }

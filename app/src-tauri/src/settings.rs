@@ -74,6 +74,8 @@ pub struct General {
     pub launch_at_login: bool,
     /// Placeholder: there is no menu bar icon yet.
     pub menu_bar_icon: bool,
+    /// First-run setup was finished (or skipped through to the end).
+    pub onboarded: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

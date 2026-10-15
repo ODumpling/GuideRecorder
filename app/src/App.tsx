@@ -6,6 +6,7 @@ import { FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleA
 import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
+import { Onboarding } from "@/components/Onboarding";
 import { LibrarySidebar } from "@/components/LibrarySidebar";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
@@ -15,7 +16,8 @@ import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import { shortcutFor } from "@/editor/shortcuts";
-import { QUIT_REQUESTED_EVENT } from "@/lib/ipc";
+import { QUIT_REQUESTED_EVENT, tauriSettingsApi } from "@/lib/ipc";
+import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
 import { settingsStore } from "@/settings/settings";
 
 function ReadOnlyBanner() {
@@ -94,10 +96,19 @@ export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
   const draggingImages = useImageDrop();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const setupStep = useSetupStep();
+  // Setup replaces Settings when Settings reopens it.
+  useEffect(() => {
+    if (setupStep) setSettingsOpen(false);
+  }, [setupStep]);
 
   useEffect(() => {
     void editorStore.getState().loadGuides();
-    void settingsStore.getState().load();
+    void settingsStore
+      .getState()
+      .load()
+      .then(() => setupAtStartup(tauriSettingsApi.libraryInfo, () => settingsStore.getState().settings))
+      .then((step) => step && setupStore.getState().open(step));
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "," && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
         e.preventDefault();
@@ -153,6 +164,7 @@ export default function App() {
       </div>
       <LeaveDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <Onboarding />
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">
           <span className="flex items-center gap-2 text-sm font-medium">

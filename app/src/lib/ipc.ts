@@ -11,6 +11,7 @@ import type {
   OpenedGuide,
   Permission,
   PermissionStatus,
+  RecordingReadiness,
   Settings,
   SettingsView,
   Step,
@@ -141,6 +142,10 @@ export interface SettingsApi {
   deleteApiKey(): Promise<void>;
   permissions(): Promise<{ permission: Permission; status: PermissionStatus }[]>;
   openPermissionSettings(permission: Permission): Promise<void>;
+  /** Asks macOS for the permission (may prompt); only from a click. */
+  requestPermission(permission: Permission): Promise<PermissionStatus>;
+  /** The live check recording starts with. */
+  recordingReadiness(): Promise<RecordingReadiness>;
   mcpSetup(): Promise<McpSetup>;
 }
 
@@ -157,5 +162,7 @@ export const tauriSettingsApi: SettingsApi = {
   deleteApiKey: () => invoke("delete_api_key"),
   permissions: () => invoke("permission_status"),
   openPermissionSettings: (permission) => invoke("open_permission_settings", { permission }),
+  requestPermission: (permission) => invoke("request_permission", { permission }),
+  recordingReadiness: () => invoke("recording_readiness"),
   mcpSetup: () => invoke("mcp_setup"),
 };

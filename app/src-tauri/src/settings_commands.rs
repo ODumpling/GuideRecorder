@@ -55,6 +55,33 @@ pub fn startup_library(
     configured.or_else(|| editor::library_root(None, documents))
 }
 
+/// Opens the library at startup. A folder chosen in Settings that is gone
+/// (an unplugged disk, a moved folder) is reported as missing rather than
+/// created again, so first-run setup can ask for it. The default folder and
+/// `$GUIDESYA_LIBRARY` are created as needed.
+pub fn open_startup_library(
+    root: Option<&Path>,
+    configured: bool,
+    index: Option<PathBuf>,
+) -> Result<Session> {
+    let root = root.ok_or_else(|| {
+        AppError::new(
+            ErrorKind::Io,
+            format!("no library folder: set {}", editor::LIBRARY_ENV),
+        )
+    })?;
+    if configured && !root.is_dir() {
+        return Err(AppError::new(
+            ErrorKind::NotFound,
+            format!(
+                "the library folder {} is missing (is its disk connected?)",
+                root.display()
+            ),
+        ));
+    }
+    Session::start(root, index)
+}
+
 #[tauri::command]
 pub fn get_settings(store: State<'_, Arc<SettingsStore>>) -> SettingsView {
     store.view()
@@ -333,6 +360,61 @@ pub async fn permission_status() -> Result<Vec<PermissionRow>> {
     .await
 }
 
+/// Asks macOS for `permission` (may show the system prompt) and returns
+/// its status. Only from an explicit click in setup or Settings; a grant
+/// made in System Settings may need a restart (Screen Recording).
+#[tauri::command]
+pub async fn request_permission(permission: Permission) -> Result<PermissionStatus> {
+    blocking(move || Ok(permissions::request(permission))).await
+}
+
+/// Whether recording may start, and what is missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingReadiness {
+    pub ready: bool,
+    pub missing: Vec<Permission>,
+}
+
+impl RecordingReadiness {
+    pub fn from_report(report: &permissions::PermissionReport) -> Self {
+        let missing = report.missing();
+        Self {
+            ready: missing.is_empty(),
+            missing,
+        }
+    }
+}
+
+/// The gate before every recording: checks the permissions live (never
+/// prompts). Editing and exporting never go through it. `start_recording`
+/// (#341) must call this first.
+#[allow(dead_code)] // Until `start_recording` exists (#341).
+pub fn ensure_can_record() -> Result<()> {
+    let readiness = RecordingReadiness::from_report(&permissions::check_all());
+    if readiness.ready {
+        return Ok(());
+    }
+    let names: Vec<&str> = readiness
+        .missing
+        .iter()
+        .map(|p| match p {
+            Permission::ScreenRecording => "Screen Recording",
+            Permission::Accessibility => "Accessibility",
+            Permission::InputMonitoring => "Input Monitoring",
+        })
+        .collect();
+    Err(AppError::new(
+        ErrorKind::Invalid,
+        format!("recording needs {} permission", names.join(", ")),
+    ))
+}
+
+#[tauri::command]
+pub async fn recording_readiness() -> Result<RecordingReadiness> {
+    blocking(|| Ok(RecordingReadiness::from_report(&permissions::check_all()))).await
+}
+
 /// Opens the System Settings pane for `permission` (a fixed deep link).
 #[tauri::command]
 pub async fn open_permission_settings(permission: Permission) -> Result<()> {
@@ -513,6 +595,51 @@ mod tests {
                 .get()
                 .general
                 .launch_at_login
+        );
+    }
+
+    #[test]
+    fn a_configured_library_that_is_gone_is_missing_not_recreated() {
+        let root = library();
+        let gone = root.join("Unplugged/Guides");
+        let err = open_startup_library(Some(&gone), true, None).err().unwrap();
+        assert_eq!(err.kind, ErrorKind::NotFound);
+        assert!(err.message.contains("missing"));
+        assert!(!gone.exists(), "not created");
+        // The default folder (or $GUIDESYA_LIBRARY) is created as needed.
+        open_startup_library(Some(&gone), false, None).unwrap();
+        assert!(gone.is_dir());
+        // A configured folder that exists opens.
+        open_startup_library(Some(&root), true, None).unwrap();
+        let err = open_startup_library(None, false, None).err().unwrap();
+        assert!(err.message.contains("no library folder"));
+    }
+
+    #[test]
+    fn recording_needs_every_permission() {
+        use permissions::PermissionReport;
+        let all = PermissionReport {
+            screen_recording: PermissionStatus::Granted,
+            accessibility: PermissionStatus::Granted,
+            input_monitoring: PermissionStatus::Granted,
+        };
+        assert_eq!(
+            RecordingReadiness::from_report(&all),
+            RecordingReadiness {
+                ready: true,
+                missing: vec![]
+            }
+        );
+        let some = PermissionReport {
+            accessibility: PermissionStatus::Denied,
+            input_monitoring: PermissionStatus::NotDetermined,
+            ..all
+        };
+        let readiness = RecordingReadiness::from_report(&some);
+        assert!(!readiness.ready);
+        assert_eq!(
+            readiness.missing,
+            [Permission::Accessibility, Permission::InputMonitoring]
         );
     }
 

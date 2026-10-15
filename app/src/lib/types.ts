@@ -189,6 +189,8 @@ export interface Settings {
     library: string | null;
     launchAtLogin: boolean;
     menuBarIcon: boolean;
+    /** First-run setup was finished. */
+    onboarded: boolean;
   };
   recording: {
     hotkeys: { record: string; pause: string; manualStep: string };
@@ -233,6 +235,12 @@ export interface LibraryInfo {
 
 export type Permission = "screen_recording" | "accessibility" | "input_monitoring";
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unknown";
+
+/** Whether recording may start (checked live before each recording). */
+export interface RecordingReadiness {
+  ready: boolean;
+  missing: Permission[];
+}
 
 export interface McpSetup {
   command: string;

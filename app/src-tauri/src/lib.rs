@@ -11,7 +11,7 @@ mod navigation;
 mod settings;
 mod settings_commands;
 
-use editor::{AppError, DroppedFiles, ErrorKind, Session, SessionCell};
+use editor::{DroppedFiles, SessionCell};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,8 +59,11 @@ pub fn run() {
             app.manage(Arc::new(chosen));
             let cell = Arc::new(SessionCell::default());
             app.manage(Arc::clone(&cell));
+            let from_env = std::env::var_os(editor::LIBRARY_ENV).filter(|v| !v.is_empty());
+            // Only a folder from Settings must already exist.
+            let configured = from_env.is_none() && stored.general.library.is_some();
             let root = settings_commands::startup_library(
-                std::env::var_os(editor::LIBRARY_ENV),
+                from_env,
                 stored.general.library,
                 app.path().document_dir().ok(),
             );
@@ -70,13 +73,11 @@ pub fn run() {
             // Recovery and the index sync touch the disk: keep them off the
             // main thread. Commands wait for the session.
             tauri::async_runtime::spawn_blocking(move || {
-                let session = match root {
-                    Some(root) => Session::start(&root, Index::default_path()),
-                    None => Err(AppError::new(
-                        ErrorKind::Io,
-                        format!("no library folder: set {}", editor::LIBRARY_ENV),
-                    )),
-                };
+                let session = settings_commands::open_startup_library(
+                    root.as_deref(),
+                    configured,
+                    Index::default_path(),
+                );
                 if let Err(e) = &session {
                     eprintln!("guidesya: cannot open library: {}", e.message);
                 }
@@ -120,6 +121,8 @@ pub fn run() {
             settings_commands::delete_api_key,
             settings_commands::permission_status,
             settings_commands::open_permission_settings,
+            settings_commands::request_permission,
+            settings_commands::recording_readiness,
             settings_commands::mcp_setup,
             commands::quit_ack,
             commands::quit_app,

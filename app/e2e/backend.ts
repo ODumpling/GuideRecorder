@@ -54,6 +54,10 @@ export interface BackendOptions {
    * app's opens read-only, as a guide from a newer GuidesYa would.
    */
   schemaVersions?: Record<string, number>;
+  /** First-run setup not finished yet (default: finished, so setup stays out of the way). */
+  firstRun?: boolean;
+  /** The library failed to open at startup with this error. */
+  libraryError?: string;
 }
 
 export class Backend {
@@ -85,7 +89,7 @@ export class Backend {
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 1,
-    general: { library: null, launchAtLogin: false, menuBarIcon: false },
+    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true },
     recording: {
       hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
       captureArea: "display",
@@ -106,6 +110,16 @@ export class Backend {
   };
   /** Whether an API key is "stored"; the key itself is never kept. */
   apiKeyStored = false;
+  /** Permission states; `request_permission` grants. */
+  permissions: Record<string, string> = {
+    screen_recording: "granted",
+    accessibility: "denied",
+    input_monitoring: "not_determined",
+  };
+  /** The library as `library_info` reports it. */
+  library: { path: string; error: string | null } = { path: "/Users/me/Documents/GuidesYa", error: null };
+  /** What `choose_library_folder` returns next (null: cancelled). */
+  nextLibrary: string | null = null;
 
   constructor(options: BackendOptions = {}) {
     for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guidesya")).sort()) {
@@ -115,6 +129,11 @@ export class Backend {
       files.delete("guide.json");
       guide.schemaVersion = options.schemaVersions?.[guide.id] ?? guide.schemaVersion;
       this.bundles.set(guide.id, { path, guide, files });
+    }
+    if (options.firstRun) this.settings.general.onboarded = false;
+    if (options.libraryError) {
+      this.settings.general.library = "/Volumes/Team/Guides";
+      this.library = { path: "/Volumes/Team/Guides", error: options.libraryError };
     }
   }
 
@@ -259,9 +278,22 @@ export class Backend {
         return structuredClone(next);
       }
       case "library_info":
-        return { path: "/Users/me/Documents/GuidesYa", error: null, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuidesYa" };
+        return { ...this.library, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuidesYa" };
       case "choose_library_folder":
-        return null;
+        return this.nextLibrary;
+      case "switch_library": {
+        const path = (args.path as string | null) ?? "/Users/me/Documents/GuidesYa";
+        this.library = { path, error: null };
+        this.settings.general.library = (args.path as string | null) ?? null;
+        return path;
+      }
+      case "request_permission":
+        this.permissions[String(args.permission)] = "granted";
+        return "granted";
+      case "recording_readiness": {
+        const missing = Object.keys(this.permissions).filter((p) => this.permissions[p] !== "granted");
+        return { ready: missing.length === 0, missing };
+      }
       case "launch_at_login":
         return this.settings.general.launchAtLogin;
       case "set_launch_at_login":
@@ -277,11 +309,7 @@ export class Backend {
         this.apiKeyStored = false;
         return null;
       case "permission_status":
-        return [
-          { permission: "screen_recording", status: "granted" },
-          { permission: "accessibility", status: "denied" },
-          { permission: "input_monitoring", status: "not_determined" },
-        ];
+        return Object.entries(this.permissions).map(([permission, status]) => ({ permission, status }));
       case "open_permission_settings":
         return null;
       case "mcp_setup":
