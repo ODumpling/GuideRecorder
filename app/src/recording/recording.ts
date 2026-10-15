@@ -1,12 +1,17 @@
 import { useStore } from "zustand";
+import { aiStore } from "@/ai/ai";
+import { autoRun } from "@/ai/controller";
 import { editorStore } from "@/editor/editor";
-import { tauriPickerApi, tauriRecordingApi } from "@/lib/ipc";
+import { tauriPickerApi, tauriRecordingApi, tauriSettingsApi } from "@/lib/ipc";
 import type { RecordingSaved } from "@/lib/types";
 import { createStartFlow } from "@/recording/startFlow";
 import { createRecordingStore, type RecordingState } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
 
-/** Opens a saved recording in the editor (after the leave flow) and refreshes the library. */
+/**
+ * Opens a saved recording in the editor (after the leave flow) and refreshes
+ * the library; then auto-runs AI writing if the settings ask for it.
+ */
 async function openSaved({ guideId, skipped }: RecordingSaved) {
   const editor = editorStore.getState();
   void editor.loadGuides();
@@ -16,6 +21,8 @@ async function openSaved({ guideId, skipped }: RecordingSaved) {
   // After opening, which clears the notice.
   if (skipped === 1) editor.notify("1 step had no screenshot and was left out.");
   else if (skipped > 1) editor.notify(`${skipped} steps had no screenshot and were left out.`);
+  // Write it with AI when the settings say so and a key is set.
+  await autoRun(aiStore, guideId, settingsStore.getState().settings, tauriSettingsApi.apiKeyStored);
 }
 
 /** The app's recording store. */

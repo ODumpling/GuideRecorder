@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorApi } from "@/lib/ipc";
 import type { Guide, OpenedGuide } from "@/lib/types";
-import { deleteItem, insertItemAfter, moveItem, newNote, renameGuide, setItemTitle } from "@/editor/commands";
+import {
+  deleteItem,
+  insertItemAfter,
+  moveItem,
+  newNote,
+  renameGuide,
+  setGuideField,
+  setItemTitle,
+} from "@/editor/commands";
 import { createEditorStore, createQuitFlow, type QuitSteps } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 
@@ -585,5 +593,114 @@ describe("quitting", () => {
     expect(api.cancelQuit).toHaveBeenCalledTimes(1);
     await quit();
     expect(api.quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AI state of edits", () => {
+  it("marks the guide edited on a guide-level edit, undoably", async () => {
+    const { s } = await opened();
+    s().dispatch(setGuideField(s().doc!.guide, "intro", "Hello"));
+    expect(s().doc!.guide.aiState).toEqual({ status: "edited" });
+    s().undo();
+    expect(s().doc!.guide.aiState).toBeUndefined();
+    expect(s().doc!.guide.intro).toBe("");
+    s().redo();
+    expect(s().doc!.guide).toMatchObject({ intro: "Hello", aiState: { status: "edited" } });
+  });
+
+  it("typing a step title and deleting it back leaves the step as it was", async () => {
+    const { s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Step Ax"));
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Step A"));
+    expect(s().undoStack).toHaveLength(0);
+    expect(s().doc!.guide.items[1]).toMatchObject({ aiState: { status: "template" } });
+  });
+
+  it("keeps the AI fields when saving", async () => {
+    const { s, saved } = await opened();
+    const aiState = { status: "ai" as const, error: "boom", redactionSuggestions: [{ rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email" }] };
+    s().applyUntracked([
+      { op: "setGuide", key: "aiState", value: { status: "ai", model: "m" } },
+      { op: "setItem", id: "A", key: "aiState", value: aiState },
+    ]);
+    await s().flush();
+    expect(saved.at(-1)!.aiState).toEqual({ status: "ai", model: "m" });
+    expect(saved.at(-1)!.items[1]).toMatchObject({ aiState });
+  });
+});
+
+describe("untracked changes", () => {
+  it("autosave but stay out of the undo history", async () => {
+    const { s, saved } = await opened();
+    s().dispatch(renameGuide(s().doc!.guide, "Mine"));
+    expect(s().applyUntracked([{ op: "setItem", id: "B", key: "title", value: "AI title" }])).toBe(true);
+    expect(s().undoStack).toHaveLength(1);
+    expect(s().saveStatus).toBe("pending");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(saved.at(-1)!.items[2]).toMatchObject({ title: "AI title" });
+
+    // Undo reverts the user's edit only.
+    s().undo();
+    expect(s().doc!.guide.title).toBe("Guide");
+    expect(s().doc!.guide.items[2]).toMatchObject({ title: "AI title" });
+  });
+
+  it("are refused when they no longer apply or the guide is read-only", async () => {
+    const { s } = await opened();
+    expect(s().applyUntracked([{ op: "setItem", id: "gone", key: "title", value: "x" }])).toBe(false);
+    expect(s().revision).toBe(0);
+    const ro = await opened({ readOnly: true });
+    expect(ro.s().applyUntracked([{ op: "setItem", id: "A", key: "title", value: "x" }])).toBe(false);
+  });
+});
+
+describe("history after untracked changes", () => {
+  it("drops entries whose stale guide field would come back over AI text", async () => {
+    const { s } = await opened();
+    s().dispatch(renameGuide(s().doc!.guide, "Mine"));
+    s().undo();
+    // The guide is no longer edited, so AI writes the title.
+    s().applyUntracked([
+      { op: "setGuide", key: "title", value: "AI title" },
+      { op: "setGuide", key: "aiState", value: { status: "ai" } },
+    ]);
+    expect(s().redoStack).toHaveLength(0);
+    s().redo();
+    s().undo();
+    expect(s().doc!.guide).toMatchObject({ title: "AI title", aiState: { status: "ai" } });
+  });
+
+  it("drops entries whose stale step text would come back over AI text", async () => {
+    const { s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Mine"));
+    clock += 5000;
+    s().dispatch(moveItem(s().doc!.guide, "C", 1));
+    clock += 5000;
+    s().undo(); // the move
+    s().undo(); // the title edit
+    s().applyUntracked([
+      { op: "setItem", id: "A", key: "title", value: "AI title" },
+      { op: "setItem", id: "A", key: "aiState", value: { status: "ai" } },
+    ]);
+    // The move does not touch the step's text, so it stays.
+    expect(s().redoStack.map((entry) => entry.command.label)).toEqual(["Move item"]);
+    s().redo();
+    s().undo();
+    expect(s().doc!.guide.items[1]).toMatchObject({ id: "A", title: "AI title", aiState: { status: "ai" } });
+  });
+
+  it("drops an undoable delete of a step AI then wrote", async () => {
+    const { s } = await opened();
+    s().dispatch(deleteItem(s().doc!.guide, "B"));
+    s().undo();
+    s().applyUntracked([{ op: "setItem", id: "B", key: "title", value: "AI title" }]);
+    expect(s().redoStack).toHaveLength(0);
+  });
+
+  it("keeps entries for other fields and items", async () => {
+    const { s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "B", "Mine"));
+    s().applyUntracked([{ op: "setItem", id: "A", key: "title", value: "AI title" }]);
+    expect(s().undoStack).toHaveLength(1);
   });
 });

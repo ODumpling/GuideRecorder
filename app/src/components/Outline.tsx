@@ -11,6 +11,7 @@ import {
   Plus,
   TriangleAlert,
 } from "lucide-react";
+import { WritingIndicator } from "@/ai/WriteWithAi";
 import { Button } from "@/components/ui/button";
 import { deleteSelected } from "@/editor/actions";
 import { Input } from "@/components/ui/input";
@@ -170,6 +171,7 @@ export function Outline() {
                 </span>
               )}
               <span className="truncate">{itemLabel(item)}</span>
+              {item.type === "step" && <WritingIndicator stepId={item.id} />}
             </button>
             {!readOnly && (
               <span className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">

@@ -14,6 +14,7 @@ import {
   moveItem,
   PatchError,
   renameGuide,
+  setGuideField,
   setImageShow,
   setItemText,
   setItemTitle,
@@ -288,5 +289,45 @@ describe("item operations", () => {
     expect(after.items[2]).toMatchObject({ id: "A2", aiState: { status: "template" } });
     expect(() => splitStep(g, "N1", "X", "", "")).toThrow(PatchError);
     expect(() => splitStep(g, "A", "B", "", "")).toThrow(PatchError);
+  });
+});
+
+describe("guide-level fields", () => {
+  it("mark the guide edited when the title, intro, prerequisites, summary or tags change", () => {
+    const edits = [
+      renameGuide(guide(), "New"),
+      setGuideField(guide(), "intro", "Before you start…"),
+      setGuideField(guide(), "prerequisites", "- An account"),
+      setGuideField(guide(), "summary", "Shares an event."),
+      setGuideField(guide(), "tags", ["calendar"]),
+    ];
+    for (const command of edits) {
+      const after = roundTrip(command);
+      expect(after.aiState).toEqual({ status: "edited" });
+    }
+    expect(roundTrip(setGuideField(guide(), "tags", ["a", "b"])).tags).toEqual(["a", "b"]);
+  });
+
+  it("keep the guide's other AI state, and undo back to it", () => {
+    const before = { ...guide(), aiState: { status: "ai" as const, model: "m", promptVersion: "guide.v1" } };
+    const command = setGuideField(before, "summary", "Mine");
+    const after = applyPatches(before, command.forward);
+    expect(after.aiState).toEqual({ status: "edited", model: "m", promptVersion: "guide.v1" });
+    expect(applyPatches(after, command.inverse)).toEqual(before);
+  });
+
+  it("coalesce typing into one undo step that still marks the guide edited", () => {
+    const g0 = guide();
+    const first = setGuideField(g0, "intro", "H");
+    const g1 = applyPatches(g0, first.forward);
+    const merged = coalesce(first, setGuideField(g1, "intro", "Hi"))!;
+    const g2 = applyPatches(g0, merged.forward);
+    expect(g2).toMatchObject({ intro: "Hi", aiState: { status: "edited" } });
+    expect(applyPatches(g2, merged.inverse)).toEqual(g0);
+  });
+
+  it("change nothing, not even the AI state, when the value is the same", () => {
+    const command = setGuideField(guide(), "title", "Guide");
+    expect(command.forward).toEqual(command.inverse);
   });
 });

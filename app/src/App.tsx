@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
+import { WriteWithAi } from "@/ai/WriteWithAi";
 import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
@@ -81,6 +82,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
         >
           <Redo2 />
         </Button>
+        {doc && <WriteWithAi />}
         {doc && (
           <>
             <Button variant="outline" size="sm" className="ml-1" onClick={() => setExporting(true)}>

@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
 import type { Guide, GuideListItem } from "@/lib/types";
-import { applyPatches, coalesce, type Command } from "@/editor/commands";
+import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
 
 /** The guide being edited, as opened. */
@@ -75,6 +75,16 @@ export interface EditorState {
   notify(message: string | null): void;
   /** Applies an undoable command. Returns false if it was refused. */
   dispatch(command: Command): boolean;
+  /**
+   * Applies a change that is not the user's (AI results) and autosaves it,
+   * outside the undo history. Undo and redo entries that touch a field it
+   * sets (or insert or remove a step it writes) are dropped: their inverses
+   * hold the text from before, and undoing or redoing them would put that
+   * back over the new text. That field loses its undo depth; nothing else
+   * does. Returns false if it was refused (no guide, read-only, busy, or it
+   * no longer applies).
+   */
+  applyUntracked(patches: Patch[]): boolean;
   undo(): void;
   redo(): void;
   /**
@@ -98,6 +108,35 @@ export type EditorStore = StoreApi<EditorState>;
 /** The state change for a command's selection hint (none when absent). */
 function selection(id: string | null | undefined): Partial<EditorState> {
   return id === undefined ? {} : { selectedId: id };
+}
+
+/** What a patch writes: `guide.<key>`, `item.<id>.<key>`, or `item.<id>.*` for a whole item. */
+function targets(patch: Patch): string[] {
+  switch (patch.op) {
+    case "setGuide":
+      return [`guide.${patch.key}`];
+    case "setItem":
+      return [`item.${patch.id}.${patch.key}`];
+    case "insertItem":
+      return [`item.${patch.item.id}.*`];
+    case "removeItem":
+      return [`item.${patch.id}.*`];
+    case "moveItem":
+      return [];
+  }
+}
+
+/** Whether two targets overlap (a whole item overlaps each of its fields). */
+function overlaps(a: string, b: string): boolean {
+  if (a === b) return true;
+  const item = (t: string) => (t.startsWith("item.") ? t.slice(0, t.lastIndexOf(".")) : null);
+  return item(a) !== null && item(a) === item(b) && (a.endsWith(".*") || b.endsWith(".*"));
+}
+
+/** Whether a history entry writes anything `written` overlaps. */
+function touches(entry: HistoryEntry, written: string[]): boolean {
+  const { forward, inverse } = entry.command;
+  return [...forward, ...inverse].some((patch) => targets(patch).some((t) => written.some((w) => overlaps(t, w))));
 }
 
 /** True if a command would change nothing (e.g. typing the same title). */
@@ -353,16 +392,17 @@ export function createEditorStore({
       dispatch(command) {
         const { doc, undoStack, busy } = get();
         if (!doc || doc.readOnly || busy || isNoop(command)) return false;
+        const time = now();
+        const top = undoStack[undoStack.length - 1];
+        const merged = top && time - top.at <= coalesceMs ? coalesce(top.command, command) : null;
         let guide: Guide;
         try {
-          guide = applyPatches(doc.guide, command.forward);
+          // A merge's forward can differ from the command's (see `coalesce`).
+          guide = applyPatches(doc.guide, (merged ?? command).forward);
         } catch (error) {
           console.error(`command "${command.label}" failed:`, error);
           return false;
         }
-        const time = now();
-        const top = undoStack[undoStack.length - 1];
-        const merged = top && time - top.at <= coalesceMs ? coalesce(top.command, command) : null;
         const entry = { command: merged ?? command, at: time };
         // A merge that ends where it started (typed, then deleted) undoes nothing.
         const stack = merged ? undoStack.slice(0, -1) : undoStack;
@@ -371,6 +411,22 @@ export function createEditorStore({
           redoStack: [],
           ...selection(command.select?.forward),
         });
+        return true;
+      },
+
+      applyUntracked(patches) {
+        const { doc, busy } = get();
+        if (!doc || doc.readOnly || busy || patches.length === 0) return false;
+        let guide: Guide;
+        try {
+          guide = applyPatches(doc.guide, patches);
+        } catch (error) {
+          console.error("untracked change failed:", error);
+          return false;
+        }
+        const written = patches.flatMap(targets);
+        const keep = (stack: HistoryEntry[]) => stack.filter((entry) => !touches(entry, written));
+        changed(guide, { undoStack: keep(get().undoStack), redoStack: keep(get().redoStack) });
         return true;
       },
 

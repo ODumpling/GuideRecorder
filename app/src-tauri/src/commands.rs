@@ -344,6 +344,7 @@ impl<R: Runtime> QuitHost for AppHandle<R> {
 
     fn discard_recording(&self) {
         crate::recording::discard_on_quit(self);
+        crate::ai::cancel_on_quit(self);
     }
 
     fn reply(&self, quit: bool) -> bool {

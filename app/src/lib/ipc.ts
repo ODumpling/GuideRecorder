@@ -259,3 +259,29 @@ export function addManualStep(): Promise<void> {
 
 /** The floating recording toolbar's window (app/toolbar.html), made by the Rust side while recording. */
 export const TOOLBAR_WINDOW_LABEL = "toolbar";
+
+/** AI writing (see app/src-tauri/src/ai.rs). Results arrive as `ai://` events. */
+export interface AiApi {
+  /**
+   * Starts writing the guide as last saved, in the background. Defaults:
+   * every step that is not `edited`, and the guide pass. Rejects with
+   * `invalid` when AI is off, no key is set or a run is already going.
+   */
+  generate(guideId: string, options?: { stepIds?: string[]; guidePass?: boolean }): Promise<{ runId: number }>;
+  /** Stops a run; nothing if it is over. */
+  cancel(runId: number): Promise<void>;
+}
+
+export const tauriAiApi: AiApi = {
+  generate: (guideId, options) => invoke("ai_generate", options ? { guideId, options } : { guideId }),
+  cancel: (runId) => invoke("ai_cancel", { runId }),
+};
+
+/** `AiStartedEvent`. */
+export const AI_STARTED_EVENT = "ai://started";
+/** `AiStepEvent`. */
+export const AI_STEP_EVENT = "ai://step";
+/** `AiGuideEvent`. */
+export const AI_GUIDE_EVENT = "ai://guide";
+/** `AiFinishedEvent`. */
+export const AI_FINISHED_EVENT = "ai://finished";

@@ -58,3 +58,8 @@ export async function openRegionOverlay(page: Page, pick?: number) {
   await expect(overlay).toBeFocused();
   return overlay;
 }
+
+/** Emits events in order (e.g. a held AI run's, from `backend.aiRelease()`). */
+export async function emitEvents(page: Page, events: { event: string; payload: unknown }[]) {
+  for (const { event, payload } of events) await emitEvent(page, event, payload);
+}

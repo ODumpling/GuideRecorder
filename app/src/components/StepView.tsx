@@ -191,6 +191,11 @@ export function StepView() {
             placeholder="Add a description"
             className="text-sm"
           />
+          {item.aiState.error && (
+            <p className="text-xs text-muted-foreground" data-testid="ai-error">
+              AI could not write this step: {item.aiState.error}
+            </p>
+          )}
         </>
       )}
       {item.type === "section" && (

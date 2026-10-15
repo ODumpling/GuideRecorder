@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::menu::Menu;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
 
+mod ai;
 mod blocking;
 mod commands;
 mod editor;
@@ -94,6 +95,7 @@ pub fn run() {
             app.manage(Arc::new(DroppedFiles::default()));
             app.manage(Arc::new(recording::Recorder::default()));
             app.manage(Arc::new(picker::RegionPicker::default()));
+            app.manage(Arc::new(ai::AiRuns::default()));
             if let Err(e) = tray::create(app.handle()) {
                 eprintln!("guidesya: cannot create the tray icon: {e}");
             }
@@ -190,6 +192,8 @@ pub fn run() {
             picker::list_capture_windows,
             picker::pick_region,
             picker::finish_region_pick,
+            ai::ai_generate,
+            ai::ai_cancel,
             commands::quit_ack,
             commands::quit_app,
             commands::quit_cancel,

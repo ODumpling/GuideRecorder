@@ -85,6 +85,16 @@ export interface AiState {
   status: "template" | "generating" | "ai" | "edited";
   model?: string;
   promptVersion?: string;
+  /** Short message from the last failed AI pass; the text was left as it was. */
+  error?: string | null;
+  /** Blur regions the AI suggests for the step's screenshot; never applied by themselves. */
+  redactionSuggestions?: RedactionSuggestion[];
+}
+
+/** A suggested blur region; `rect` in full-screenshot pixels, like annotations. */
+export interface RedactionSuggestion {
+  rect: Rect;
+  reason: string;
 }
 
 export interface Step {
@@ -133,6 +143,12 @@ export interface Guide {
   updatedAt: string;
   recording?: unknown;
   items: Item[];
+  /**
+   * Provenance of the guide-level fields (title, intro, prerequisites,
+   * summary, tags). `edited` once the user changes one; AI then leaves them.
+   * Absent in older guides (as `template`).
+   */
+  aiState?: AiState;
 }
 
 export interface GuideListItem {
@@ -339,4 +355,58 @@ export interface RecordingSnapshot {
   height: number;
   /** Where the click landed, in image pixels; null for a key. */
   point: Point | null;
+}
+
+/** What the guide pass writes (`ai://guide`). */
+export interface AiGuideFields {
+  title: string;
+  intro: string;
+  prerequisites: string;
+  summary: string;
+  tags: string[];
+}
+
+/** `ai://started`: the run began; `stepIds` are the steps it will write. */
+export interface AiStartedEvent {
+  runId: number;
+  guideId: Ulid;
+  stepIds: Ulid[];
+}
+
+export type AiStepOutcome = "applied" | "failed" | "skippedEdited" | "cancelled";
+
+/** `ai://step`: one step's result. `step` is the pipeline's updated step. */
+export interface AiStepEvent {
+  runId: number;
+  guideId: Ulid;
+  stepId: Ulid;
+  outcome: AiStepOutcome;
+  step: Step | null;
+  redactionSuggestions: RedactionSuggestion[];
+  error: string | null;
+}
+
+/** `ai://guide`: the guide pass; `fields` null when it was skipped, cancelled or failed. */
+export interface AiGuideEvent {
+  runId: number;
+  guideId: Ulid;
+  fields: AiGuideFields | null;
+  aiState: AiState;
+  error: string | null;
+}
+
+/** `ai://finished`: the run is over. */
+export interface AiFinishedEvent {
+  runId: number;
+  guideId: Ulid;
+  cancelled: boolean;
+  applied: number;
+  failed: number;
+  skippedEdited: number;
+  usage: { inputTokens: number; outputTokens: number };
+  /**
+   * Why the run broke off, if it did; the counts are zero then, and step
+   * results already sent still stand.
+   */
+  error: string | null;
 }

@@ -6,7 +6,8 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
 type Event = { event: string; payload: unknown };
-type Reply = ({ ok: unknown } | { error: { kind: string; message: string } }) & { events?: Event[] };
+/** `events` are emitted before the result resolves; `after` once it has (a background run's events). */
+type Reply = ({ ok: unknown } | { error: { kind: string; message: string } }) & { events?: Event[]; after?: Event[] };
 
 declare global {
   interface Window {
@@ -32,6 +33,12 @@ mockIPC(
     const reply = await window.__guidesyaInvoke(cmd, payload);
     // Events the command emitted arrive before its result, as from Tauri.
     for (const e of reply.events ?? []) await emit(e.event, e.payload);
+    if (reply.after?.length) {
+      const after = reply.after;
+      setTimeout(() => void (async () => {
+        for (const e of after) await emit(e.event, e.payload);
+      })());
+    }
     if ("error" in reply) throw reply.error;
     return reply.ok;
   },

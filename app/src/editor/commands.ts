@@ -96,13 +96,43 @@ export function findStep(guide: Guide, id: string): Step {
   return item;
 }
 
-export function renameGuide(guide: Guide, title: string): Command {
-  return {
-    label: "Rename guide",
-    forward: [{ op: "setGuide", key: "title", value: title }],
-    inverse: [{ op: "setGuide", key: "title", value: guide.title }],
-    coalesceKey: "guide.title",
+/** The guide-level fields the AI guide pass writes. */
+export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
+
+const GUIDE_LABELS: Record<GuideTextField, string> = {
+  title: "Rename guide",
+  intro: "Edit introduction",
+  prerequisites: "Edit prerequisites",
+  summary: "Edit summary",
+  tags: "Edit tags",
+};
+
+/**
+ * Sets a guide-level field. Like step text, this marks the guide's
+ * `aiState` `edited`, so the AI guide pass no longer overwrites these fields.
+ */
+export function setGuideField<K extends GuideTextField>(guide: Guide, key: K, value: Guide[K]): Command {
+  const field: Command = {
+    label: GUIDE_LABELS[key],
+    forward: [{ op: "setGuide", key, value }],
+    inverse: [{ op: "setGuide", key, value: guide[key] }],
+    coalesceKey: `guide.${key}`,
   };
+  // Unchanged (e.g. retyping the title): a no-op the store refuses.
+  if (JSON.stringify(value) === JSON.stringify(guide[key])) return field;
+  return {
+    ...field,
+    // Always in `forward`: a coalesced command keeps only the last forward.
+    forward: [
+      ...field.forward,
+      { op: "setGuide", key: "aiState", value: { ...(guide.aiState ?? { status: "template" }), status: "edited" } },
+    ],
+    inverse: [...field.inverse, { op: "setGuide", key: "aiState", value: guide.aiState }],
+  };
+}
+
+export function renameGuide(guide: Guide, title: string): Command {
+  return setGuideField(guide, "title", title);
 }
 
 /** The Markdown text fields of items. */
@@ -171,7 +201,10 @@ export function setImageShow(guide: Guide, id: string, show: ImageShow): Command
  */
 export function coalesce(prev: Command, next: Command): Command | null {
   if (!prev.coalesceKey || prev.coalesceKey !== next.coalesceKey) return null;
-  return { ...next, inverse: prev.inverse };
+  const merged = { ...next, inverse: prev.inverse };
+  // Typed, then deleted back: the text is as it was, so its AI state is too.
+  const text = (patches: Patch[]) => JSON.stringify(patches.filter((p) => !("key" in p) || p.key !== "aiState"));
+  return text(merged.forward) === text(merged.inverse) ? { ...merged, forward: merged.inverse } : merged;
 }
 
 // ---------------------------------------------------------------------------

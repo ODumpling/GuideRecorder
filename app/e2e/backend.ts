@@ -4,6 +4,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type {
+  AiFinishedEvent,
+  AiGuideEvent,
+  AiStepEvent,
   CaptureArea,
   CaptureTargetArg,
   CaptureWindow,
@@ -18,6 +21,7 @@ import type {
   RecordingStatus,
   Settings,
   StampedStatus,
+  Step,
   StepImage,
 } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
@@ -179,6 +183,27 @@ export class Backend {
   readonly recordingTargets: (CaptureTargetArg | undefined)[] = [];
   /** Events the next command reply carries; mock-entry.ts emits them before resolving it. */
   private events: EmittedEvent[] = [];
+  /** Events the next command reply carries; mock-entry.ts emits them after resolving it. */
+  private after: EmittedEvent[] = [];
+
+  /**
+   * AI runs (`ai_generate`) send `ai://started` at once. Unless `aiHold`
+   * is set, the rest follows straight away too: each step not edited in the
+   * saved guide is "written" as `AI step <n>` (n: its 1-based step number),
+   * then the guide pass, then `ai://finished`. With `aiHold`, the rest waits
+   * for `aiRelease()` (the test emits it) or `ai_cancel`.
+   */
+  aiHold = false;
+  /** The AI run still holding its events, if any. */
+  private aiRun: { runId: number; guideId: string; pending: EmittedEvent[] } | null = null;
+  private aiRuns = 0;
+  /** Every `ai_generate` that started a run, in order, with its options. */
+  readonly aiGenerations: { guideId: string; runId: number; options?: { stepIds?: string[]; guidePass?: boolean } }[] =
+    [];
+  /** Guides opened and not closed since, as the Rust session tracks them. */
+  private openGuides = new Set<string>();
+  /** Run ids `ai_cancel` was called with. */
+  readonly aiCancels: number[] = [];
 
   constructor(options: BackendOptions = {}) {
     for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guidesya")).sort()) {
@@ -225,12 +250,14 @@ export class Backend {
   async invoke(
     cmd: string,
     args: unknown,
-  ): Promise<({ ok: unknown } | { error: AppError }) & { events: EmittedEvent[] }> {
+  ): Promise<({ ok: unknown } | { error: AppError }) & { events: EmittedEvent[]; after?: EmittedEvent[] }> {
     this.calls.push({ cmd, args });
     try {
-      return { ok: this.run(cmd, (args ?? {}) as Record<string, unknown>), events: this.takeEvents() };
+      const ok = this.run(cmd, (args ?? {}) as Record<string, unknown>);
+      return { ok, events: this.takeEvents(), after: this.after.splice(0) };
     } catch (error) {
       const events = this.takeEvents();
+      this.after = [];
       if (error instanceof CommandError) return { error: error.error, events };
       return { error: { kind: "io", message: String(error) }, events };
     }
@@ -238,6 +265,108 @@ export class Backend {
 
   private takeEvents(): EmittedEvent[] {
     return this.events.splice(0);
+  }
+
+  /** The held AI run's remaining events (`aiHold`), for the test to emit; the run is over. */
+  aiRelease(): EmittedEvent[] {
+    const run = this.aiRun ?? fail("invalid", "no AI run is held");
+    this.aiRun = null;
+    return run.pending;
+  }
+
+  /** The text the mock AI writes for step `n`. */
+  static aiStepText(n: number) {
+    return { title: `AI step ${n}`, description: `Written by AI for step ${n}.` };
+  }
+
+  /**
+   * Starts an AI run on the guide as last saved, like Rust's `ai_generate`:
+   * the same checks in the same order, and step events only for the steps
+   * it writes (`stepIds`, default all, less the edited ones).
+   */
+  private aiGenerate(guideId: string, options?: { stepIds?: string[]; guidePass?: boolean }): { runId: number } {
+    if (!this.settings.ai.enabled) fail("invalid", "AI is turned off in Settings.");
+    if (!this.apiKeyStored) fail("invalid", "Add an API key in Settings to write with AI.");
+    if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
+    const bundle = this.bundle(guideId);
+    if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
+    const guide = bundle.guide;
+    const steps = guide.items.filter((item): item is Step => item.type === "step");
+    for (const id of options?.stepIds ?? []) {
+      if (!steps.some((step) => step.id === id)) fail("invalid", `step ${id} is not in the saved guide`);
+    }
+    if (this.aiRun?.guideId === guideId) fail("invalid", "Already writing this guide.");
+    const runId = ++this.aiRuns;
+    this.aiGenerations.push(options ? { guideId, runId, options: structuredClone(options) } : { guideId, runId });
+    const wanted = (step: Step) => !options?.stepIds || options.stepIds.includes(step.id);
+    const targets = steps.filter((step) => wanted(step) && step.aiState.status !== "edited");
+    const base = { runId, guideId };
+    const stepEvents = targets.map(
+      (step): AiStepEvent => ({
+        ...base,
+        stepId: step.id,
+        outcome: "applied",
+        step: {
+          ...structuredClone(step),
+          ...Backend.aiStepText(steps.indexOf(step) + 1),
+          aiState: { status: "ai", model: this.settings.ai.stepModel, promptVersion: "step.v1" },
+        },
+        redactionSuggestions: [],
+        error: null,
+      }),
+    );
+    // Edited, or not asked for: no fields.
+    const guideSkipped = guide.aiState?.status === "edited" || options?.guidePass === false;
+    const guidePass: AiGuideEvent = {
+      ...base,
+      fields: guideSkipped
+        ? null
+        : { title: `AI: ${guide.title}`, intro: "Written by AI.", prerequisites: "", summary: "An AI summary.", tags: ["ai"] },
+      aiState: guideSkipped
+        ? structuredClone(guide.aiState ?? { status: "template" })
+        : { status: "ai", model: this.settings.ai.guideModel, promptVersion: "guide.v1" },
+      error: null,
+    };
+    const finished: AiFinishedEvent = {
+      ...base,
+      cancelled: false,
+      applied: targets.length,
+      failed: 0,
+      // Steps left out by `stepIds` are not counted, as in Rust.
+      skippedEdited: steps.filter((step) => wanted(step) && step.aiState.status === "edited").length,
+      usage: { inputTokens: 1000, outputTokens: 200 },
+      error: null,
+    };
+    const rest: EmittedEvent[] = [
+      ...stepEvents.map((payload) => ({ event: "ai://step", payload })),
+      { event: "ai://guide", payload: guidePass },
+      { event: "ai://finished", payload: finished },
+    ];
+    this.after.push({ event: "ai://started", payload: { ...base, stepIds: targets.map((step) => step.id) } });
+    if (this.aiHold) this.aiRun = { runId, guideId, pending: rest };
+    else this.after.push(...rest);
+    return { runId };
+  }
+
+  /** Cancels the held AI run: what was left comes back cancelled. */
+  private aiCancel(runId: number) {
+    this.aiCancels.push(runId);
+    const run = this.aiRun;
+    if (run?.runId !== runId) return;
+    this.aiRun = null;
+    for (const { event, payload } of run.pending) {
+      if (event === "ai://step") {
+        const step = payload as AiStepEvent;
+        this.after.push({
+          event,
+          payload: step.outcome === "applied" ? { ...step, outcome: "cancelled", step: null } : step,
+        });
+      } else if (event === "ai://guide") {
+        this.after.push({ event, payload: { ...(payload as AiGuideEvent), fields: null } });
+      } else {
+        this.after.push({ event, payload: { ...(payload as AiFinishedEvent), cancelled: true, applied: 0 } });
+      }
+    }
   }
 
   /** Stores `status` under the next `seq`, as the Rust `Recorder` does, and queues its event. */
@@ -343,6 +472,7 @@ export class Backend {
       }
       case "open_guide": {
         const bundle = this.bundle(String(args.id));
+        this.openGuides.add(bundle.guide.id);
         return {
           guide: structuredClone(bundle.guide),
           path: bundle.path,
@@ -361,6 +491,7 @@ export class Backend {
       }
       case "close_guide":
         this.bundle(String(args.id));
+        this.openGuides.delete(String(args.id));
         return [];
       case "step_image": {
         const path = String(args.path);
@@ -552,6 +683,14 @@ export class Backend {
         if (args.pick !== undefined && !Number.isInteger(args.pick)) fail("invalid", "pick must be a number");
         this.regionFinishes.push(structuredClone((args.result ?? null) as { rect: Rect } | null));
         this.regionFinishPicks.push(args.pick as number | undefined);
+        return null;
+      case "ai_generate":
+        return this.aiGenerate(
+          String(args.guideId),
+          (args.options ?? undefined) as { stepIds?: string[]; guidePass?: boolean } | undefined,
+        );
+      case "ai_cancel":
+        this.aiCancel(Number(args.runId));
         return null;
       case "quit_ack":
       case "quit_app":

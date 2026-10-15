@@ -322,6 +322,23 @@ impl Session {
         Ok(())
     }
 
+    /// An opened guide as last opened or saved, with its bundle: the
+    /// snapshot an AI run works on (see `ai.rs`). Refuses read-only guides,
+    /// whose results the editor could not save.
+    pub(crate) fn saved_guide(&self, id: Ulid) -> Result<(Guide, GuideHandle)> {
+        let open = self.open.lock().unwrap();
+        let entry = open
+            .get(&id)
+            .ok_or_else(|| AppError::new(ErrorKind::NotOpen, format!("guide {id} is not open")))?;
+        if entry.read_only {
+            return Err(AppError::new(
+                ErrorKind::ReadOnly,
+                format!("guide {id} is read-only"),
+            ));
+        }
+        Ok((entry.guide.clone(), entry.handle.clone()))
+    }
+
     /// The bundle of an opened guide that may be written.
     fn writable_handle(&self, id: Ulid) -> Result<GuideHandle> {
         let open = self.open.lock().unwrap();
