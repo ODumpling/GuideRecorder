@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import type { Editor } from "@tiptap/core";
 import type { Annotation, Step } from "../src/lib/types";
 import type { Backend } from "./backend";
 import { API_KEY, CALENDAR, expect, openGuide, outlineItems, saved, test } from "./fixtures";
@@ -19,6 +20,8 @@ async function drawOnScreenshot(page: Page, from: [number, number], to: [number,
 /** The items of the last saved guide; none before the first save. */
 const lastItems = (backend: Backend) => backend.saves.at(-1)?.items ?? [];
 const step = (items: { id: string }[], id: string) => items.find((item) => item.id === id) as Step | undefined;
+/** A TipTap editor's root element, which carries its editor. */
+type EditorElement = HTMLElement & { editor: Editor };
 const blurs = (s: Pick<Step, "annotations">) => s.annotations.filter((a: Annotation) => a.type === "blur");
 
 test("opens a guide from the library", async ({ page, backend }) => {
@@ -101,12 +104,26 @@ test("splits a step, and both halves keep the blur", async ({ page, backend }) =
   const description = page.getByRole("textbox", { name: "Step description" });
   await description.click();
   await expect(description).toBeFocused();
-  await page.keyboard.press("End");
-  for (let i = 0; i < " in its own window.".length; i++) await page.keyboard.press("ArrowLeft");
-  // ProseMirror takes arrow-key moves from `selectionchange`, which comes
-  // later: wait for the DOM cursor, then a couple of frames for the editor.
-  await expect.poll(() => page.evaluate(() => getSelection()?.anchorOffset)).toBe("The event opens".length);
-  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  // Arrow keys move the DOM cursor, and ProseMirror reads it back later from
+  // `selectionchange`. Until it has, a timer it set on focus can put its own
+  // older cursor back into the DOM, dropping the moves made so far. Repeat the
+  // moves until both the DOM and the editor have the cursor after "opens".
+  const cut = "The event opens".length;
+  await expect(async () => {
+    await page.keyboard.press("End");
+    for (let i = 0; i < " in its own window.".length; i++) await page.keyboard.press("ArrowLeft");
+    await expect
+      .poll(
+        () =>
+          description.evaluate((el) => [
+            getSelection()?.anchorOffset,
+            (el as unknown as EditorElement).editor.state.selection.$from.parentOffset,
+          ]),
+        // A dropped move never recovers: retry soon.
+        { timeout: 1_000 },
+      )
+      .toEqual([cut, cut]);
+  }).toPass();
   await page.getByRole("button", { name: "Split" }).click();
 
   await expect(outlineItems(page)).toHaveCount(count + 1);
