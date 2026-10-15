@@ -10,7 +10,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { LibrarySidebar } from "@/components/LibrarySidebar";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
-import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ import { editorStore, useEditor } from "@/editor/editor";
 import { shortcutFor } from "@/editor/shortcuts";
 import { QUIT_REQUESTED_EVENT, tauriSettingsApi } from "@/lib/ipc";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
+import { recordingStore } from "@/recording/recording";
+import { RecordingBanner, RecordingControls } from "@/recording/RecordingControls";
+import { isActive, subscribe } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
 
 function ReadOnlyBanner() {
@@ -62,6 +65,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
         <span className="text-xs text-muted-foreground">upgraded from schema v{doc.migratedFrom}</span>
       )}
       <div className="ml-auto flex items-center gap-1">
+        <RecordingControls />
         {doc && <SaveIndicator />}
         <Button variant="ghost" size="icon" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
           <Undo2 />
@@ -96,6 +100,11 @@ export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
   const draggingImages = useImageDrop();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("general");
+  const openSettings = (page: SettingsPage = "general") => {
+    setSettingsPage(page);
+    setSettingsOpen(true);
+  };
   const setupStep = useSetupStep();
   // Setup replaces Settings when Settings reopens it.
   useEffect(() => {
@@ -112,7 +121,7 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "," && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        setSettingsOpen(true);
+        openSettings();
         return;
       }
       const action = shortcutFor(e);
@@ -123,21 +132,40 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
 
-    // Closing the window or Cmd+Q: save first. `requestQuit` exits the app
-    // once saved, or shows the leave dialog if the save failed.
-    const quit = () => void editorStore.getState().requestQuit();
+    // The app may have been reloaded mid-recording.
+    void recordingStore.getState().load();
+    const unsubscribe = subscribe(recordingStore, (event, handler) => listen(event, (e) => handler(e.payload)));
+
+    // Closing the window or Cmd+Q: save first. A running recording is
+    // stopped and saved as a guide (a failed stop is shown and the app
+    // stays open). `requestQuit` then exits the app once the open guide is
+    // saved, or shows the leave dialog if the save failed.
+    const quit = async () => {
+      const recording = recordingStore.getState();
+      if (recording.status.state === "saving") {
+        editorStore.getState().notify("The recording is still being saved. Quit again once it is done.");
+        return;
+      }
+      if (recording.pending) {
+        editorStore.getState().notify("A recording command is still running. Quit again in a moment.");
+        return;
+      }
+      if (isActive(recording.status) && !(await recording.stop({ open: false }))) return;
+      await editorStore.getState().requestQuit();
+    };
     const unlisten = [
       getCurrentWindow().onCloseRequested((e) => {
         e.preventDefault();
-        quit();
+        void quit();
       }),
       listen(QUIT_REQUESTED_EVENT, () => {
         void invoke("quit_ack");
-        quit();
+        void quit();
       }),
     ];
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      unsubscribe();
       for (const p of unlisten) void p.then((stop) => stop());
     };
   }, []);
@@ -148,7 +176,8 @@ export default function App() {
         {hasDoc ? <Outline /> : <LibrarySidebar />}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar onSettings={() => setSettingsOpen(true)} />
+        <Toolbar onSettings={() => openSettings()} />
+        <RecordingBanner onPermissions={() => openSettings("permissions")} />
         <ReadOnlyBanner />
         <Notice />
         <div className="flex min-h-0 flex-1">
@@ -163,7 +192,7 @@ export default function App() {
         </div>
       </div>
       <LeaveDialog />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <Onboarding />
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">

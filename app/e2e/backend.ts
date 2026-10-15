@@ -9,6 +9,8 @@ import type {
   Guide,
   GuideListItem,
   OpenedGuide,
+  RecordingSaved,
+  RecordingStatus,
   Settings,
   StepImage,
 } from "../src/lib/types";
@@ -59,6 +61,18 @@ export interface BackendOptions {
   /** The library failed to open at startup with this error. */
   libraryError?: string;
 }
+
+/** An event the app receives, as the Rust side would emit it. */
+export interface EmittedEvent {
+  event: string;
+  payload: unknown;
+}
+
+const PERMISSION_NAMES: Record<string, string> = {
+  screen_recording: "Screen Recording",
+  accessibility: "Accessibility",
+  input_monitoring: "Input Monitoring",
+};
 
 export class Backend {
   private bundles = new Map<string, Bundle>();
@@ -121,6 +135,17 @@ export class Backend {
   /** What `choose_library_folder` returns next (null: cancelled). */
   nextLibrary: string | null = null;
 
+  /** The recorder's state, as `recording_status` reports it. */
+  recording: RecordingStatus = { state: "idle" };
+  /** The capture area falls back to the whole display (settings say window or region). */
+  captureAreaFallback = false;
+  /** Steps the next saved recording leaves out for lack of a screenshot. */
+  recordingSkipped = 0;
+  /** Guides made by `stop_recording`, in order. */
+  readonly recordings: RecordingSaved[] = [];
+  /** Events the next command reply carries; mock-entry.ts emits them before resolving it. */
+  private events: EmittedEvent[] = [];
+
   constructor(options: BackendOptions = {}) {
     for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guidesya")).sort()) {
       const path = join(FIXTURES, name);
@@ -162,14 +187,53 @@ export class Backend {
   }
 
   /** Runs a command; the reply shape is what mock-entry.ts expects. */
-  async invoke(cmd: string, args: unknown): Promise<{ ok: unknown } | { error: AppError }> {
+  async invoke(
+    cmd: string,
+    args: unknown,
+  ): Promise<({ ok: unknown } | { error: AppError }) & { events: EmittedEvent[] }> {
     this.calls.push({ cmd, args });
     try {
-      return { ok: this.run(cmd, (args ?? {}) as Record<string, unknown>) };
+      return { ok: this.run(cmd, (args ?? {}) as Record<string, unknown>), events: this.takeEvents() };
     } catch (error) {
-      if (error instanceof CommandError) return { error: error.error };
-      return { error: { kind: "io", message: String(error) } };
+      const events = this.takeEvents();
+      if (error instanceof CommandError) return { error: error.error, events };
+      return { error: { kind: "io", message: String(error) }, events };
     }
+  }
+
+  private takeEvents(): EmittedEvent[] {
+    return this.events.splice(0);
+  }
+
+  private setRecording(status: RecordingStatus) {
+    this.recording = status;
+    this.events.push({ event: "recording://status", payload: structuredClone(status) });
+  }
+
+  private active(): Extract<RecordingStatus, { state: "recording" | "paused" }> {
+    const status = this.recording;
+    if (status.state !== "recording" && status.state !== "paused") return fail("invalid", "nothing is recording");
+    return status;
+  }
+
+  /** Saves the recording as a new guide: a copy of the first fixture guide. */
+  private saveRecording(title: string | null): RecordingSaved {
+    const n = this.recordings.length + 1;
+    const id = `01M4X${"0".repeat(17)}REC${n}`;
+    const source = [...this.bundles.values()][0];
+    const guide = structuredClone(source.guide);
+    guide.id = id;
+    guide.title = title ?? `Recording 2026-10-15 10:0${n}`;
+    guide.schemaVersion = SCHEMA_VERSION;
+    const path = `/Users/me/Documents/GuidesYa/${guide.title}.guidesya`;
+    this.bundles.set(id, { path, guide, files: new Map(source.files) });
+    const saved: RecordingSaved = {
+      guideId: id,
+      steps: guide.items.filter((item) => item.type === "step").length,
+      skipped: this.recordingSkipped,
+    };
+    this.recordings.push(saved);
+    return saved;
   }
 
   private run(cmd: string, args: Record<string, unknown>): unknown {
@@ -319,6 +383,43 @@ export class Backend {
           found: true,
           library: "/Users/me/Documents/GuidesYa",
         };
+      case "start_recording": {
+        if (this.recording.state !== "idle") fail("invalid", "a recording is already running");
+        const missing = Object.keys(this.permissions).filter((p) => this.permissions[p] !== "granted");
+        if (missing.length) {
+          fail("invalid", `recording needs ${missing.map((p) => PERMISSION_NAMES[p]).join(", ")} permission`);
+        }
+        const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
+        this.setRecording({
+          state: "recording",
+          startedAt: new Date().toISOString(),
+          title,
+          captureAreaFallback: this.captureAreaFallback,
+        });
+        return this.recording;
+      }
+      case "pause_recording":
+      case "resume_recording": {
+        // Like Rust's `set_paused`: no event when nothing changes.
+        const state = cmd === "pause_recording" ? "paused" : "recording";
+        const status = this.active();
+        if (status.state !== state) this.setRecording({ ...status, state });
+        return this.recording;
+      }
+      case "stop_recording": {
+        const { startedAt, title } = this.active();
+        this.setRecording({ state: "saving", startedAt, title });
+        const saved = this.saveRecording(title);
+        this.setRecording({ state: "idle" });
+        this.events.push({ event: "recording://saved", payload: saved });
+        return saved;
+      }
+      case "cancel_recording":
+        this.active();
+        this.setRecording({ state: "idle" });
+        return null;
+      case "recording_status":
+        return this.recording;
       case "quit_ack":
       case "quit_app":
         return null;

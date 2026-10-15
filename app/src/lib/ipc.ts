@@ -12,6 +12,8 @@ import type {
   Permission,
   PermissionStatus,
   RecordingReadiness,
+  RecordingSaved,
+  RecordingStatus,
   Settings,
   SettingsView,
   Step,
@@ -166,3 +168,30 @@ export const tauriSettingsApi: SettingsApi = {
   recordingReadiness: () => invoke("recording_readiness"),
   mcpSetup: () => invoke("mcp_setup"),
 };
+
+/** Recording commands (see app/src-tauri/src/recording.rs). */
+export interface RecordingApi {
+  /** Checks the permissions live, then starts. `title` null: named after the date. */
+  start(title: string | null): Promise<RecordingStatus>;
+  pause(): Promise<RecordingStatus>;
+  resume(): Promise<RecordingStatus>;
+  /** Saves the recording as a new guide in the open library. */
+  stop(): Promise<RecordingSaved>;
+  /** Discards the recording. */
+  cancel(): Promise<void>;
+  status(): Promise<RecordingStatus>;
+}
+
+export const tauriRecordingApi: RecordingApi = {
+  start: (title) => invoke("start_recording", { title }),
+  pause: () => invoke("pause_recording"),
+  resume: () => invoke("resume_recording"),
+  stop: () => invoke("stop_recording"),
+  cancel: () => invoke("cancel_recording"),
+  status: () => invoke("recording_status"),
+};
+
+/** Emitted with a `RecordingStatus` on every change of the recorder's state. */
+export const RECORDING_STATUS_EVENT = "recording://status";
+/** Emitted with a `RecordingSaved` after a recording was saved. */
+export const RECORDING_SAVED_EVENT = "recording://saved";

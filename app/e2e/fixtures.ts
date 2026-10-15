@@ -30,3 +30,8 @@ export const outlineItems = (page: Page) => page.locator("[data-outline-item]");
 export async function saved(page: Page) {
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 }
+
+/** Emits an app event (e.g. `recording://status`) as the Rust side would. */
+export async function emitEvent(page: Page, event: string, payload: unknown) {
+  await page.evaluate(([e, p]) => window.__guidesyaEmit(e as string, p), [event, payload] as const);
+}

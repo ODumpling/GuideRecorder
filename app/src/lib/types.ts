@@ -248,3 +248,20 @@ export interface McpSetup {
   found: boolean;
   library: string | null;
 }
+
+/**
+ * The recorder's state (see app/src-tauri/src/recording.rs). `startedAt` is
+ * RFC 3339 UTC. `captureAreaFallback`: the settings asked for a window or
+ * region, which can't be captured yet, so the whole display is recorded.
+ */
+export type RecordingStatus =
+  | { state: "idle" }
+  | { state: "recording" | "paused"; startedAt: string; title: string | null; captureAreaFallback: boolean }
+  | { state: "saving"; startedAt: string; title: string | null };
+
+/** A recording saved as a new guide. `skipped`: steps left out for lack of a screenshot. */
+export interface RecordingSaved {
+  guideId: Ulid;
+  steps: number;
+  skipped: number;
+}

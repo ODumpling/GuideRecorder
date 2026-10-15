@@ -160,7 +160,7 @@ export function RecordingSection() {
   };
 
   return (
-    <Section title="Recording" intro="Stored now; recording uses them once it is available.">
+    <Section title="Recording" intro="The next recording uses these. The record and pause shortcuts, window and region capture, and after frames are not supported yet.">
       <Row label="Start or stop recording">
         <HotkeyField label="Record shortcut" value={r.hotkeys.record} disabled={readOnly} onChange={(v) => setHotkey("record", v)} />
       </Row>
