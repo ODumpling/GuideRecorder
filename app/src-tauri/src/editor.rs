@@ -214,6 +214,17 @@ impl Session {
         &self.library
     }
 
+    /// Adds or refreshes a bundle written outside the editor (a recording)
+    /// in the index, as [`Session::save_guide`] does. A failed update is
+    /// only logged: listing falls back to a scan.
+    pub(crate) fn index_bundle(&self, handle: &GuideHandle) {
+        if let Some(index) = self.index.lock().unwrap().as_mut() {
+            if let Err(e) = index.update(&self.library, &handle.path) {
+                eprintln!("guidesya: index update failed: {e}");
+            }
+        }
+    }
+
     /// The bundle of an opened guide.
     pub(crate) fn open_handle(&self, id: Ulid) -> Result<GuideHandle> {
         let open = self.open.lock().unwrap();

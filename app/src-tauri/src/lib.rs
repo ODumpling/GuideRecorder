@@ -8,6 +8,7 @@ mod commands;
 mod editor;
 mod export;
 mod navigation;
+mod recording;
 mod settings;
 mod settings_commands;
 
@@ -44,6 +45,7 @@ pub fn run() {
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
             app.manage(Arc::new(DroppedFiles::default()));
+            app.manage(Arc::new(recording::Recorder::default()));
             // A few kB, read once before the library is chosen.
             let store = settings::SettingsStore::load(settings::default_path());
             let stored = store.get();
@@ -124,6 +126,10 @@ pub fn run() {
             settings_commands::request_permission,
             settings_commands::recording_readiness,
             settings_commands::mcp_setup,
+            recording::start_recording,
+            recording::stop_recording,
+            recording::cancel_recording,
+            recording::recording_status,
             commands::quit_ack,
             commands::quit_app,
         ])

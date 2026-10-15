@@ -389,7 +389,6 @@ impl RecordingReadiness {
 /// The gate before every recording: checks the permissions live (never
 /// prompts). Editing and exporting never go through it. `start_recording`
 /// (#341) must call this first.
-#[allow(dead_code)] // Until `start_recording` exists (#341).
 pub fn ensure_can_record() -> Result<()> {
     let readiness = RecordingReadiness::from_report(&permissions::check_all());
     if readiness.ready {

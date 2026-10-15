@@ -20,6 +20,7 @@ guidesya-capture.workspace = true
 tauri = { version = "2", features = [] }
 serde.workspace = true
 serde_json.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

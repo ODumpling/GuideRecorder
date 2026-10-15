@@ -2235,6 +2235,7 @@ dependencies = [
 name = "guidesya-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "guidesya-capture",
  "guidesya-core",
  "image",
