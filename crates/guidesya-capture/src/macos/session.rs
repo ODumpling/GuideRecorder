@@ -104,6 +104,40 @@
 //! the step detector. A key whose focused element belongs to an excluded
 //! app is dropped.
 //!
+//! # Excluded apps
+//!
+//! Events are checked against [`SessionConfig::excluded_bundle_ids`] one by
+//! one (the target pid in the router, the clicked element in the element
+//! thread, the focused element in the focus thread). On top of that,
+//! nothing is captured while an excluded app is frontmost:
+//!
+//! - A `FrontmostObserver` notes each app activation
+//!   (`NSWorkspaceDidActivateApplicationNotification`, on the main thread)
+//!   at `event_tap::now()` in a [`FrontmostLog`] of excluded spans; start
+//!   and resume also read the frontmost app directly.
+//! - The router drops any event from inside a span, whatever app it is
+//!   aimed at, through the [`ExclusionFilter`]: a press is never split, it
+//!   goes or stays whole as its `MouseDown` does. So no key, click, manual
+//!   step or step comes from inside a span, and the focus thread never
+//!   sees its keys.
+//! - The router takes no snapshot from a frame captured inside a span,
+//!   less than [`EXCLUDED_FRAME_HEAD_MS`] before its start (the span starts
+//!   when the main thread handles the notification, after the app came to
+//!   the front and drew) or less than [`EXCLUDED_FRAME_TAIL_MS`] after its
+//!   end. The encoder checks each frame again before writing it and
+//!   reporting it through [`SessionConfig::on_snapshot`].
+//! - Until the notice arrives, nothing is known: a frame of the excluded
+//!   app taken in that time is written and **can flash up live** as a
+//!   thumbnail. At stop the final log removes it (snapshot and file), and
+//!   the events from inside a span that slipped through, by the same
+//!   press rule ([`SessionMetrics::excluded_frames`],
+//!   [`SessionMetrics::dropped_excluded`]). Events before the notice are
+//!   kept: they get no head margin.
+//!
+//! [`RecordingSession::excluded_app`] and [`SessionConfig::on_excluded`]
+//! expose the state, e.g. for a "paused: excluded app" toolbar.
+//! Secure-field masking (below) does not depend on the exclusion list.
+//!
 //! # Snapshots
 //!
 //! A snapshot is taken for each `MouseDown`, `ManualStep`, shortcut, Return
@@ -117,6 +151,12 @@
 //! # Known gaps
 //!
 //! - No "after" frame yet.
+//! - Exclusion only follows the frontmost app: a window of an excluded app
+//!   left visible behind another app shows in that app's snapshots. (A
+//!   ScreenCaptureKit content filter excluding those apps would cover it.)
+//!   The click that brings another app to the front from an excluded one
+//!   is dropped with it. Without a main run loop (a CLI that never runs
+//!   it) only the reads at start and resume update the frontmost app.
 //! - The focus after a click is read when the focus thread handles the
 //!   click's `MouseUp`, which can be before the app has moved focus. This
 //!   only affects labels: each key does its own lookup.
@@ -143,6 +183,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use block2::RcBlock;
 use guidesya_core::events::{
     AppRef, CaptureEvent, Key, Modifiers, RawElement, TimedEvent, Timestamp,
 };
@@ -154,9 +195,15 @@ use guidesya_core::model::{
 };
 use guidesya_core::steps::{detect_steps, DraftStep, StepConfig};
 use guidesya_core::Ulid;
-use objc2_app_kit::NSRunningApplication;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2_app_kit::{
+    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+    NSWorkspaceDidActivateApplicationNotification,
+};
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{CFRetained, CFString, CFType};
+use objc2_foundation::{NSNotification, NSObjectProtocol};
 
 use super::ax;
 use super::event_tap::{self, EventTap, TargetedEvent};
@@ -180,6 +227,38 @@ pub const STALE_SESSION_MS: u64 = 6 * 60 * 60 * 1000;
 /// Frames waiting for the encoder at most; a snapshot that finds the queue
 /// full is dropped (see [`SessionMetrics::snapshots_dropped_queue_full`]).
 pub const ENCODER_QUEUE: usize = 4;
+/// A frame captured this soon after an excluded app stopped being
+/// frontmost may still show it (redraw and capture lag); it is never
+/// snapshotted. See `# Excluded apps`.
+pub const EXCLUDED_FRAME_TAIL_MS: u64 = 250;
+/// A frame captured this soon before an excluded app's activation was
+/// noted may already show it: the span starts when the main thread handles
+/// the activation notification, after the app came to the front and drew.
+/// Never snapshotted either. Same as the tail: a few frames of redraw plus
+/// main-thread latency.
+pub const EXCLUDED_FRAME_HEAD_MS: u64 = 250;
+/// The suggested exclusion list (the app's settings default):
+/// 1Password 8, 7 and 6, Bitwarden, Keychain Access, Passwords (macOS 15+)
+/// and Messages. [`SessionConfig::default`] excludes nothing; the caller
+/// passes the list it wants in [`SessionConfig::excluded_bundle_ids`].
+pub const DEFAULT_EXCLUDED_BUNDLE_IDS: &[&str] = &[
+    "com.1password.1password",
+    "com.agilebits.onepassword7",
+    "com.agilebits.onepassword-osx",
+    "com.bitwarden.desktop",
+    "com.apple.keychainaccess",
+    "com.apple.Passwords",
+    "com.apple.MobileSMS",
+];
+
+/// [`DEFAULT_EXCLUDED_BUNDLE_IDS`] as owned strings, ready for
+/// [`SessionConfig::excluded_bundle_ids`].
+pub fn default_excluded_bundle_ids() -> Vec<String> {
+    DEFAULT_EXCLUDED_BUNDLE_IDS
+        .iter()
+        .map(|&id| id.to_owned())
+        .collect()
+}
 
 const KEY_RETURN: u16 = 36;
 const KEY_TAB: u16 = 48;
@@ -248,7 +327,10 @@ pub struct SessionConfig {
     /// The capture. A display target without an id (the default) records
     /// every active display, one stream each; see [`stream_targets`].
     pub frames: FrameStreamConfig,
-    /// Bundle ids whose events are dropped and never snapshotted.
+    /// Bundle ids whose events are dropped and never snapshotted; while one
+    /// of them is the frontmost app nothing is captured at all (see
+    /// `# Excluded apps`). [`DEFAULT_EXCLUDED_BUNDLE_IDS`] is the suggested
+    /// list; the default here is empty.
     pub excluded_bundle_ids: Vec<String>,
     /// Key press turned into a manual step (and not recorded as a key).
     pub manual_hotkey: Option<Hotkey>,
@@ -263,6 +345,38 @@ pub struct SessionConfig {
     /// soon as the file exists; `None` reports nothing. Keep it quick: the
     /// encoder waits for it.
     pub on_snapshot: Option<SnapshotSink>,
+    /// Called when an excluded app becomes frontmost (with its bundle id)
+    /// and when a non-excluded one does (`None`), e.g. to show "paused:
+    /// excluded app". Called on the main thread, from the activation
+    /// notification, or on the thread calling [`RecordingSession::start`]
+    /// or [`RecordingSession::resume`] for the initial read; also while
+    /// paused. Keep it quick. `None` reports nothing; the state can also
+    /// be polled with [`RecordingSession::excluded_app`].
+    pub on_excluded: Option<ExclusionSink>,
+}
+
+/// The callback behind [`SessionConfig::on_excluded`]: `Some(bundle id)`
+/// when an excluded app becomes frontmost (or replaces another excluded
+/// one), `None` when a non-excluded app does.
+#[derive(Clone)]
+pub struct ExclusionSink(Arc<ExclusionFn>);
+
+type ExclusionFn = dyn Fn(Option<&str>) + Send + Sync;
+
+impl ExclusionSink {
+    pub fn new(f: impl Fn(Option<&str>) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn report(&self, excluded: Option<&str>) {
+        (self.0)(excluded);
+    }
+}
+
+impl fmt::Debug for ExclusionSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExclusionSink")
+    }
 }
 
 /// A snapshot frame the encoder wrote, reported live through
@@ -319,6 +433,7 @@ impl Default for SessionConfig {
             crop_size: DEFAULT_CROP_SIZE,
             work_dir: None,
             on_snapshot: None,
+            on_excluded: None,
         }
     }
 }
@@ -394,6 +509,10 @@ pub struct RecordingSession {
     paused_at: Option<Timestamp>,
     /// Pauses over, in order.
     pauses: Vec<PauseSpan>,
+    /// The frontmost app's exclusion, shared with the router and encoder.
+    front: Arc<Frontmost>,
+    /// Feeds `front` from app activations; removed when dropped.
+    observer: Option<FrontmostObserver>,
 }
 
 impl RecordingSession {
@@ -418,6 +537,9 @@ impl RecordingSession {
         session.start_frames()?;
         let sources = Arc::clone(&session.sources);
         session.spawn_threads(&cfg, sources, || AxFocus)?;
+        // Before the tap, so the gate holds from the first event.
+        session.observer = Some(FrontmostObserver::start(Arc::clone(&session.front)));
+        session.read_frontmost();
         session.start_tap()?;
         Ok(session)
     }
@@ -445,6 +567,8 @@ impl RecordingSession {
             pause: SharedPause::default(),
             paused_at: None,
             pauses: Vec::new(),
+            front: Arc::new(Frontmost::new(cfg)),
+            observer: None,
         }
     }
 
@@ -503,7 +627,12 @@ impl RecordingSession {
         let (encode_tx, encode_rx) = mpsc::sync_channel::<EncodeJob>(ENCODER_QUEUE);
         let backlog = Arc::new(AtomicUsize::new(0));
 
-        let mut encoder = Encoder::new(session_dir, Arc::clone(&backlog), cfg.on_snapshot.clone());
+        let mut encoder = Encoder::new(
+            session_dir,
+            Arc::clone(&backlog),
+            cfg.on_snapshot.clone(),
+            Arc::clone(&self.front),
+        );
         self.encoder = Some(spawn("guidesya-session-encode", move || {
             encoder.run(encode_rx);
             encoder.finish()
@@ -530,6 +659,7 @@ impl RecordingSession {
                 backlog,
             },
             Arc::clone(&self.pause),
+            Arc::clone(&self.front),
         );
         self.router = Some(spawn("guidesya-session-router", move || {
             router.run(tap_rx);
@@ -537,6 +667,18 @@ impl RecordingSession {
         })?);
         self.tap_tx = Some(tap_tx);
         Ok(())
+    }
+
+    /// Records the app frontmost now (the initial read; activations after
+    /// it come from the observer). Not in a headless test session, whose
+    /// tests script the frontmost app.
+    fn read_frontmost(&self) {
+        #[cfg(test)]
+        if self.headless {
+            return;
+        }
+        self.front
+            .activated(event_tap::now(), frontmost_bundle_id().as_deref());
     }
 
     /// Starts a tap feeding the router (none in a headless test session).
@@ -577,6 +719,20 @@ impl RecordingSession {
         self.paused_at.is_some()
     }
 
+    /// The bundle id of the frontmost app when it is excluded, during which
+    /// nothing is captured (see `# Excluded apps`); `None` otherwise.
+    /// Tracked while paused too. [`SessionConfig::on_excluded`] reports
+    /// the same changes as they happen.
+    pub fn excluded_app(&self) -> Option<String> {
+        self.front.current()
+    }
+
+    /// True while an excluded app is frontmost
+    /// ([`RecordingSession::excluded_app`] is `Some`).
+    pub fn is_excluded(&self) -> bool {
+        self.excluded_app().is_some()
+    }
+
     /// Pauses recording: stops the tap (joining its thread, so every event
     /// it saw is already on its way to the router), notes the time, from
     /// which on the router drops any event, and stops the frame streams so
@@ -613,6 +769,8 @@ impl RecordingSession {
             let _ = self.stop_frames();
             return Err(e);
         }
+        // In case an activation was missed (no main run loop while paused).
+        self.read_frontmost();
         let at = event_tap::now();
         let before = std::mem::replace(
             &mut *lock(&self.pause),
@@ -668,15 +826,42 @@ impl RecordingSession {
             .take()
             .expect("session dir is set until stop");
 
+        // No more activations count: the router and encoder have ended.
+        self.observer = None;
+        let front = self.front.log();
+        let mut events = router.events;
+        events.extend(element.events);
+        events.extend(focus.events);
+        // Stable: at equal ts, router events (AppActivated) come first, and
+        // each thread's own order is kept (FocusChanged before its key).
+        events.sort_by_key(|ev| ev.ts);
+        // Events the router let through before it heard that an excluded
+        // app had become frontmost (the activation is noted on the main
+        // thread, a little late).
+        let late_excluded = remove_excluded(&mut events, &front);
+
         let mut metas = router.snapshots;
         let mut latency = router.latency_ns;
         let dropped: Vec<Timestamp> = element
             .dropped_ts
             .iter()
             .chain(&focus.dropped_ts)
+            .chain(&late_excluded)
             .copied()
             .collect();
         prune_snapshots(&mut metas, &mut latency, &dropped);
+        // Frames taken while an excluded app was frontmost (or just before
+        // its activation was noted, or just after), that the router took
+        // before it knew.
+        let before = metas.len();
+        metas.retain(|ts, meta| {
+            let keep = !front.frame_excluded(meta.frame.ts);
+            if !keep {
+                latency.remove(ts);
+            }
+            keep
+        });
+        let excluded_frames = router.excluded_frames + before - metas.len();
         // Nothing routed from inside a pause (there should be none).
         metas.retain(|ts, _| !in_pause(&self.pauses, *ts));
         latency.retain(|ts, _| !in_pause(&self.pauses, *ts));
@@ -711,12 +896,6 @@ impl RecordingSession {
             }
         }
 
-        let mut events = router.events;
-        events.extend(element.events);
-        events.extend(focus.events);
-        // Stable: at equal ts, router events (AppActivated) come first, and
-        // each thread's own order is kept (FocusChanged before its key).
-        events.sort_by_key(|ev| ev.ts);
         let dropped_paused = router.dropped_paused + remove_paused(&mut events, &self.pauses);
         let drafts = detect_steps_between_pauses(&events, &self.pauses, &self.steps);
 
@@ -730,7 +909,9 @@ impl RecordingSession {
             dropped_own: router.dropped_own,
             dropped_excluded: router.dropped_excluded
                 + element.dropped_ts.len()
-                + focus.dropped_ts.len(),
+                + focus.dropped_ts.len()
+                + late_excluded.len(),
+            excluded_frames,
             snapshots: snapshots.len(),
             missing_frames: router.missing_frames,
             unencoded_snapshots: unencoded,
@@ -1118,8 +1299,13 @@ pub struct SessionMetrics {
     pub events: usize,
     pub dropped_own: usize,
     /// Events of excluded apps (by target pid, clicked element or focused
-    /// element).
+    /// element), or from while an excluded app was frontmost.
     pub dropped_excluded: usize,
+    /// Snapshot frames not taken or removed because they were captured
+    /// while an excluded app was frontmost, less than
+    /// [`EXCLUDED_FRAME_HEAD_MS`] before its activation was noted, or less
+    /// than [`EXCLUDED_FRAME_TAIL_MS`] after it left.
+    pub excluded_frames: usize,
     pub snapshots: usize,
     /// Step-triggering events for which the ring had no earlier frame.
     pub missing_frames: usize,
@@ -1280,7 +1466,9 @@ struct Router {
     dropped_queue_full: usize,
     dropped_own: usize,
     dropped_excluded: usize,
+    excluded_frames: usize,
     pause: SharedPause,
+    front: Arc<Frontmost>,
     /// The resume already applied, so it is applied once.
     resumed_at: Option<Timestamp>,
     dropped_paused: usize,
@@ -1295,11 +1483,18 @@ struct RouterOut {
     dropped_queue_full: usize,
     dropped_own: usize,
     dropped_excluded: usize,
+    excluded_frames: usize,
     dropped_paused: usize,
 }
 
 impl Router {
-    fn new(cfg: &SessionConfig, sources: SharedSources, out: Outputs, pause: SharedPause) -> Self {
+    fn new(
+        cfg: &SessionConfig,
+        sources: SharedSources,
+        out: Outputs,
+        pause: SharedPause,
+        front: Arc<Frontmost>,
+    ) -> Self {
         Self {
             own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
             excluded: cfg.excluded_bundle_ids.clone(),
@@ -1320,7 +1515,9 @@ impl Router {
             dropped_queue_full: 0,
             dropped_own: 0,
             dropped_excluded: 0,
+            excluded_frames: 0,
             pause,
+            front,
             resumed_at: None,
             dropped_paused: 0,
         }
@@ -1361,9 +1558,13 @@ impl Router {
                 .or_insert_with(|| app_for_pid(target_pid))
                 .clone()
         });
-        let excluded = app
-            .as_ref()
-            .is_some_and(|app| is_excluded_app(app, &self.excluded));
+        // Its own app, or whatever app is in front: a key or a click
+        // aimed elsewhere (pid 0, a background window) while an excluded
+        // app is frontmost is dropped too.
+        let excluded = self.front.excluded_at(event.ts)
+            || app
+                .as_ref()
+                .is_some_and(|app| is_excluded_app(app, &self.excluded));
         if !self.filter.keep(&event.event, excluded) {
             self.dropped_excluded += 1;
             return;
@@ -1470,6 +1671,10 @@ impl Router {
             self.missing_frames += 1;
             return;
         };
+        if self.front.frame_excluded(frame.ts) {
+            self.excluded_frames += 1;
+            return;
+        }
         let meta = SnapshotMeta {
             frame: FrameKey {
                 source,
@@ -1524,6 +1729,7 @@ impl Router {
             dropped_queue_full: self.dropped_queue_full,
             dropped_own: self.dropped_own,
             dropped_excluded: self.dropped_excluded,
+            excluded_frames: self.excluded_frames,
             dropped_paused: self.dropped_paused,
         }
     }
@@ -2150,6 +2356,7 @@ struct Encoder {
     dir: PathBuf,
     backlog: Arc<AtomicUsize>,
     sink: Option<SnapshotSink>,
+    front: Arc<Frontmost>,
     written: HashMap<FrameKey, PathBuf>,
     errors: usize,
     total: Duration,
@@ -2164,11 +2371,17 @@ struct EncoderOut {
 }
 
 impl Encoder {
-    fn new(dir: PathBuf, backlog: Arc<AtomicUsize>, sink: Option<SnapshotSink>) -> Self {
+    fn new(
+        dir: PathBuf,
+        backlog: Arc<AtomicUsize>,
+        sink: Option<SnapshotSink>,
+        front: Arc<Frontmost>,
+    ) -> Self {
         Self {
             dir,
             backlog,
             sink,
+            front,
             written: HashMap::new(),
             errors: 0,
             total: Duration::ZERO,
@@ -2184,7 +2397,10 @@ impl Encoder {
     }
 
     /// Writes the frame (once per [`FrameKey`]), drops its pixels and
-    /// reports it to the sink.
+    /// reports it to the sink. Checks the frame against the excluded apps
+    /// again first: the router may have taken it just before it heard of
+    /// an excluded app's activation. Such a frame is neither written nor
+    /// reported (and its snapshot is removed at stop).
     fn encode(&mut self, job: EncodeJob) {
         let EncodeJob {
             source,
@@ -2196,7 +2412,7 @@ impl Encoder {
             source,
             ts: frame.ts,
         };
-        if self.written.contains_key(&key) {
+        if self.written.contains_key(&key) || self.front.frame_excluded(frame.ts) {
             return;
         }
         let start = Instant::now();
@@ -2232,6 +2448,212 @@ impl Encoder {
             total: self.total,
             max: self.max,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frontmost app
+
+/// A stretch of event time during which an excluded app was frontmost.
+/// `end` is `None` while it still is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExcludedSpan {
+    pub bundle_id: String,
+    pub start: Timestamp,
+    pub end: Option<Timestamp>,
+}
+
+/// The excluded apps that were frontmost, in order, built from app
+/// activations (see `# Excluded apps`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrontmostLog {
+    spans: Vec<ExcludedSpan>,
+}
+
+impl FrontmostLog {
+    /// Notes that `bundle_id` became frontmost at `ts` (activations come
+    /// in order). Returns the change, if any: `Some(Some(id))` when an
+    /// excluded app `id` is now in front (also replacing another excluded
+    /// one), `Some(None)` when an excluded app left the front. An app
+    /// without a bundle id is not excluded.
+    pub fn activated(
+        &mut self,
+        ts: Timestamp,
+        bundle_id: Option<&str>,
+        excluded: &[String],
+    ) -> Option<Option<String>> {
+        let now = bundle_id.filter(|id| excluded.iter().any(|e| e == id));
+        if self.current() == now {
+            return None;
+        }
+        if let Some(open) = self.spans.last_mut().filter(|s| s.end.is_none()) {
+            open.end = Some(ts);
+        }
+        if let Some(id) = now {
+            self.spans.push(ExcludedSpan {
+                bundle_id: id.to_owned(),
+                start: ts,
+                end: None,
+            });
+        }
+        Some(now.map(str::to_owned))
+    }
+
+    /// The excluded app in front now, if any.
+    pub fn current(&self) -> Option<&str> {
+        self.spans
+            .last()
+            .filter(|s| s.end.is_none())
+            .map(|s| s.bundle_id.as_str())
+    }
+
+    pub fn spans(&self) -> &[ExcludedSpan] {
+        &self.spans
+    }
+
+    /// True if an excluded app was frontmost at `ts` (as noted: events
+    /// get no head margin).
+    pub fn excluded_at(&self, ts: Timestamp) -> bool {
+        self.within(ts, 0, 0)
+    }
+
+    /// True if a frame captured at `ts` may show an excluded app: one was
+    /// frontmost then, was noted as frontmost less than
+    /// [`EXCLUDED_FRAME_HEAD_MS`] after, or stopped being so less than
+    /// [`EXCLUDED_FRAME_TAIL_MS`] before.
+    pub fn frame_excluded(&self, ts: Timestamp) -> bool {
+        const MS: u64 = 1_000_000;
+        self.within(ts, EXCLUDED_FRAME_HEAD_MS * MS, EXCLUDED_FRAME_TAIL_MS * MS)
+    }
+
+    /// True if `ts` falls in a span widened by `head_ns` before its start
+    /// and `tail_ns` after its end.
+    fn within(&self, ts: Timestamp, head_ns: u64, tail_ns: u64) -> bool {
+        self.spans.iter().rev().any(|s| {
+            ts.0 >= s.start.0.saturating_sub(head_ns)
+                && s.end.is_none_or(|end| ts.0 < end.0.saturating_add(tail_ns))
+        })
+    }
+}
+
+/// Removes the events (sorted by ts) from while an excluded app was
+/// frontmost, by the router's rule ([`ExclusionFilter`]): a press goes or
+/// stays whole, as its `MouseDown` does. Returns their timestamps.
+fn remove_excluded(events: &mut Vec<TimedEvent>, log: &FrontmostLog) -> Vec<Timestamp> {
+    let mut filter = ExclusionFilter::default();
+    let mut removed = Vec::new();
+    events.retain(|ev| {
+        let keep = filter.keep(&ev.event, log.excluded_at(ev.ts));
+        if !keep {
+            removed.push(ev.ts);
+        }
+        keep
+    });
+    removed
+}
+
+/// The frontmost app's exclusion, shared by the session (which notes
+/// activations), the router and the encoder (which gate on it).
+struct Frontmost {
+    excluded: Vec<String>,
+    sink: Option<ExclusionSink>,
+    log: Mutex<FrontmostLog>,
+}
+
+impl Frontmost {
+    fn new(cfg: &SessionConfig) -> Self {
+        Self {
+            excluded: cfg.excluded_bundle_ids.clone(),
+            sink: cfg.on_excluded.clone(),
+            log: Mutex::default(),
+        }
+    }
+
+    /// Notes an activation and reports a change to the sink (outside the
+    /// lock).
+    fn activated(&self, ts: Timestamp, bundle_id: Option<&str>) {
+        let change = lock(&self.log).activated(ts, bundle_id, &self.excluded);
+        if let (Some(change), Some(sink)) = (change, &self.sink) {
+            sink.report(change.as_deref());
+        }
+    }
+
+    fn current(&self) -> Option<String> {
+        lock(&self.log).current().map(str::to_owned)
+    }
+
+    fn excluded_at(&self, ts: Timestamp) -> bool {
+        lock(&self.log).excluded_at(ts)
+    }
+
+    fn frame_excluded(&self, ts: Timestamp) -> bool {
+        lock(&self.log).frame_excluded(ts)
+    }
+
+    fn log(&self) -> FrontmostLog {
+        lock(&self.log).clone()
+    }
+}
+
+/// The bundle id of the frontmost app now.
+fn frontmost_bundle_id() -> Option<String> {
+    objc2::rc::autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .and_then(|app| app.bundleIdentifier())
+            .map(|id| id.to_string())
+    })
+}
+
+/// Notes every app activation (`NSWorkspaceDidActivateApplicationNotification`)
+/// in a [`Frontmost`] until dropped. The notification is posted, and so
+/// handled, on the main thread: it needs the main run loop running, as in
+/// the app.
+struct FrontmostObserver {
+    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+}
+
+// SAFETY: the token is only passed to `removeObserver:`, and
+// NSNotificationCenter is thread-safe.
+unsafe impl Send for FrontmostObserver {}
+
+impl FrontmostObserver {
+    fn start(front: Arc<Frontmost>) -> Self {
+        let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+            let ts = event_tap::now();
+            // SAFETY: the center passes a valid notification for the call.
+            let note = unsafe { note.as_ref() };
+            let bundle_id = objc2::rc::autoreleasepool(|_| {
+                note.userInfo()
+                    // SAFETY: an NSString key, as the dictionary expects.
+                    .and_then(|info| unsafe { info.objectForKey(NSWorkspaceApplicationKey) })
+                    .and_then(|app| app.downcast::<NSRunningApplication>().ok())
+                    .and_then(|app| app.bundleIdentifier())
+                    .map(|id| id.to_string())
+            });
+            front.activated(ts, bundle_id.as_deref());
+        });
+        let center = NSWorkspace::sharedWorkspace().notificationCenter();
+        // SAFETY: no object filter and no queue (handled on the posting
+        // thread); the block only touches `Send + Sync` state.
+        let token = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+                None,
+                &block,
+            )
+        };
+        Self { token }
+    }
+}
+
+impl Drop for FrontmostObserver {
+    fn drop(&mut self) {
+        let center = NSWorkspace::sharedWorkspace().notificationCenter();
+        let token: &AnyObject = self.token.as_ref();
+        // SAFETY: the token this center returned.
+        unsafe { center.removeObserver(token) };
     }
 }
 
@@ -2322,11 +2744,18 @@ pub fn is_excluded_app(app: &AppRef, excluded: &[String]) -> bool {
         .is_some_and(|id| excluded.iter().any(|e| e == id))
 }
 
-/// Drops events of excluded apps, plus the drag and release of a press
-/// that started in one (even if the pointer leaves it).
+/// Drops events of excluded apps. A press is never split: its drag and
+/// release go or stay as its `MouseDown` did, whatever app or exclusion
+/// span they end in (a press that started in an excluded app is dropped
+/// even if the pointer leaves it; one that started outside is kept even
+/// if it ends over, or after the activation of, an excluded app). Drags
+/// and releases carry only points and take no snapshot. A release or drag
+/// without a press seen (after a resume) goes by its own `excluded`.
 #[derive(Debug, Default, Clone)]
 pub struct ExclusionFilter {
-    in_excluded_press: bool,
+    /// Whether the current press's `MouseDown` was kept; `None` outside a
+    /// press.
+    press_kept: Option<bool>,
 }
 
 impl ExclusionFilter {
@@ -2334,15 +2763,11 @@ impl ExclusionFilter {
     pub fn keep(&mut self, event: &CaptureEvent, excluded: bool) -> bool {
         match event {
             CaptureEvent::MouseDown { .. } => {
-                self.in_excluded_press = excluded;
+                self.press_kept = Some(!excluded);
                 !excluded
             }
-            CaptureEvent::MouseDragged { .. } => !excluded && !self.in_excluded_press,
-            CaptureEvent::MouseUp { .. } => {
-                let keep = !excluded && !self.in_excluded_press;
-                self.in_excluded_press = false;
-                keep
-            }
+            CaptureEvent::MouseDragged { .. } => self.press_kept.unwrap_or(!excluded),
+            CaptureEvent::MouseUp { .. } => self.press_kept.take().unwrap_or(!excluded),
             _ => !excluded,
         }
     }
@@ -2761,6 +3186,42 @@ mod tests {
         assert!(f.keep(&mouse("up"), false));
         assert!(!f.keep(&CaptureEvent::ManualStep, true));
         assert!(f.keep(&CaptureEvent::ManualStep, false));
+        // A press kept at its start is kept whole, even if it ends over an
+        // excluded app or after one was activated.
+        assert!(f.keep(&mouse("down"), false));
+        assert!(f.keep(&mouse("drag"), true));
+        assert!(f.keep(&mouse("up"), true));
+        // A release without a press seen goes by itself.
+        assert!(!f.keep(&mouse("up"), true));
+        assert!(f.keep(&mouse("up"), false));
+    }
+
+    #[test]
+    fn stop_pass_never_splits_a_click() {
+        let excluded = vec![ONE_PASSWORD.to_owned()];
+        let mut log = FrontmostLog::default();
+        log.activated(Timestamp(10 * MS), Some(ONE_PASSWORD), &excluded);
+        log.activated(Timestamp(20 * MS), Some("com.apple.Safari"), &excluded);
+        let at = |ms: u64, kind: &str| TimedEvent {
+            ts: Timestamp(ms * MS),
+            event: mouse(kind),
+        };
+        let mut events = vec![
+            // Pressed before the span, released inside: kept whole.
+            at(5, "down"),
+            at(12, "up"),
+            // Pressed inside, released after: removed whole.
+            at(15, "down"),
+            key_down(16, 0, "x", mods()),
+            at(17, "drag"),
+            at(25, "up"),
+            key_down(26, 0, "a", mods()),
+        ];
+        let removed = remove_excluded(&mut events, &log);
+        let ms = |ts: &[Timestamp]| ts.iter().map(|t| t.0 / MS).collect::<Vec<_>>();
+        assert_eq!(ms(&removed), [15, 16, 17, 25]);
+        let kept: Vec<Timestamp> = events.iter().map(|ev| ev.ts).collect();
+        assert_eq!(ms(&kept), [5, 12, 26]);
     }
 
     #[test]
@@ -3184,7 +3645,12 @@ mod tests {
         let seen: Arc<Mutex<Vec<LiveSnapshot>>> = Arc::default();
         let sink = Arc::clone(&seen);
         let sink = SnapshotSink::new(move |snap| lock(&sink).push(snap.clone()));
-        let mut enc = Encoder::new(scratch.0.clone(), Arc::clone(&backlog), Some(sink));
+        let mut enc = Encoder::new(
+            scratch.0.clone(),
+            Arc::clone(&backlog),
+            Some(sink),
+            no_exclusions(),
+        );
         let (tx, rx) = mpsc::channel();
         let f = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
         for i in 0..2 {
@@ -3880,6 +4346,7 @@ mod tests {
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             SharedPause::default(),
+            no_exclusions(),
         );
         router.snapshot(Timestamp(10 * MS), None);
         // A new frame, but the queue (size 1) is still full.
@@ -3893,6 +4360,11 @@ mod tests {
         );
         assert_eq!(out.latency_ns.len(), 1);
         assert_eq!(encode_rx.try_iter().count(), 1);
+    }
+
+    /// Nothing excluded, no app activation noted.
+    fn no_exclusions() -> Arc<Frontmost> {
+        Arc::new(Frontmost::new(&SessionConfig::default()))
     }
 
     fn targeted(event: TimedEvent) -> TargetedEvent {
@@ -3965,6 +4437,7 @@ mod tests {
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             SharedPause::default(),
+            no_exclusions(),
         );
         // A click on the right display.
         let [down, up] = click(10, 6.0, 1.0);
@@ -4036,6 +4509,7 @@ mod tests {
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             Arc::clone(&pause),
+            no_exclusions(),
         );
         // From after the pause began: dropped, and no AX work asked for.
         router.route(targeted(key_down(60, 0, "a", mods())));
@@ -4391,6 +4865,297 @@ mod tests {
         assert_eq!(rec.drafts.len(), 1);
         assert_eq!(rec.snapshots.len(), 1);
         assert!(rec.session_dir().starts_with(&scratch.0));
+    }
+
+    const ONE_PASSWORD: &str = "com.1password.1password";
+
+    #[test]
+    fn default_exclusions_cover_password_managers_and_messages() {
+        let ids = default_excluded_bundle_ids();
+        for id in [
+            ONE_PASSWORD,
+            "com.agilebits.onepassword7",
+            "com.bitwarden.desktop",
+            "com.apple.keychainaccess",
+            "com.apple.MobileSMS",
+        ] {
+            assert!(ids.iter().any(|e| e == id), "{id}");
+        }
+        // The session itself excludes nothing unless told.
+        assert!(SessionConfig::default().excluded_bundle_ids.is_empty());
+    }
+
+    #[test]
+    fn frontmost_log_tracks_excluded_spans() {
+        let excluded = default_excluded_bundle_ids();
+        let mut log = FrontmostLog::default();
+        let at = |ms: u64| Timestamp(ms * MS);
+        assert_eq!(
+            log.activated(at(0), Some("com.apple.Safari"), &excluded),
+            None
+        );
+        assert_eq!(log.activated(at(5), None, &excluded), None);
+        assert_eq!(
+            log.activated(at(10), Some(ONE_PASSWORD), &excluded),
+            Some(Some(ONE_PASSWORD.to_owned()))
+        );
+        // Again (a resume's initial read): no change.
+        assert_eq!(log.activated(at(15), Some(ONE_PASSWORD), &excluded), None);
+        assert_eq!(log.current(), Some(ONE_PASSWORD));
+        // Straight to another excluded app: a new span.
+        assert_eq!(
+            log.activated(at(20), Some("com.apple.MobileSMS"), &excluded),
+            Some(Some("com.apple.MobileSMS".to_owned()))
+        );
+        assert_eq!(
+            log.activated(at(30), Some("com.apple.Safari"), &excluded),
+            Some(None)
+        );
+        assert_eq!(log.current(), None);
+        assert_eq!(log.spans().len(), 2);
+        assert_eq!(log.spans()[0].end, Some(at(20)));
+        assert!(!log.excluded_at(at(9)));
+        assert!(log.excluded_at(at(10)));
+        assert!(log.excluded_at(at(29)));
+        assert!(!log.excluded_at(at(30)));
+        // Frames: a margin on both sides. Just before the activation was
+        // noted, and just after the app left, the screen may show it.
+        let mut log = FrontmostLog::default();
+        let (enter, leave) = (1000, 2000);
+        log.activated(at(enter), Some(ONE_PASSWORD), &excluded);
+        log.activated(at(leave), Some("com.apple.Safari"), &excluded);
+        assert!(!log.frame_excluded(at(enter - EXCLUDED_FRAME_HEAD_MS - 1)));
+        assert!(log.frame_excluded(at(enter - EXCLUDED_FRAME_HEAD_MS)));
+        assert!(!log.excluded_at(at(enter - 1)), "events get no head margin");
+        assert!(log.frame_excluded(at(leave)));
+        assert!(log.frame_excluded(at(leave + EXCLUDED_FRAME_TAIL_MS - 1)));
+        assert!(!log.frame_excluded(at(leave + EXCLUDED_FRAME_TAIL_MS)));
+        assert!(!log.excluded_at(at(leave)), "events get no tail margin");
+        // An open span excludes everything after its start.
+        log.activated(at(1000), Some("com.apple.keychainaccess"), &excluded);
+        assert!(log.excluded_at(Timestamp(u64::MAX)));
+        // Not in the list: never excluded.
+        let mut log = FrontmostLog::default();
+        assert_eq!(log.activated(at(0), Some(ONE_PASSWORD), &[]), None);
+        assert!(!log.excluded_at(at(1)));
+    }
+
+    fn event_at(ts: Timestamp, event: CaptureEvent) -> TargetedEvent {
+        targeted(TimedEvent { ts, event })
+    }
+
+    fn shortcut_at(ts: Timestamp) -> TargetedEvent {
+        event_at(
+            ts,
+            CaptureEvent::KeyDown {
+                key: key(KEY_S, Some("s")),
+                modifiers: cmd(),
+                is_repeat: false,
+                secure: false,
+            },
+        )
+    }
+
+    fn webp_files(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".webp"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    type Seen<T> = Arc<Mutex<Vec<T>>>;
+
+    /// A config excluding the default list, recording live snapshots and
+    /// exclusion changes.
+    fn excluding_cfg() -> (SessionConfig, Seen<LiveSnapshot>, Seen<Option<String>>) {
+        let snaps: Seen<LiveSnapshot> = Arc::default();
+        let changes: Seen<Option<String>> = Arc::default();
+        let (s, c) = (Arc::clone(&snaps), Arc::clone(&changes));
+        let cfg = SessionConfig {
+            excluded_bundle_ids: default_excluded_bundle_ids(),
+            on_snapshot: Some(SnapshotSink::new(move |snap| lock(&s).push(snap.clone()))),
+            on_excluded: Some(ExclusionSink::new(move |id| {
+                lock(&c).push(id.map(str::to_owned))
+            })),
+            ..SessionConfig::default()
+        };
+        (cfg, snaps, changes)
+    }
+
+    #[test]
+    fn excluded_frontmost_app_captures_nothing_live() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, snaps, changes) = excluding_cfg();
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let push = |ts: Timestamp| reader.push(frame(ts.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let t0 = event_tap::now();
+        push(t0);
+        let a = Timestamp(t0.0 + 1);
+        tx.send(key_at(a, "a")).unwrap();
+
+        // 1Password comes to the front (later than the head margin, so the
+        // frame for "a" stays).
+        let enter = Timestamp(t0.0 + (EXCLUDED_FRAME_HEAD_MS + 50) * MS);
+        session.front.activated(enter, Some(ONE_PASSWORD));
+        assert!(session.is_excluded());
+        assert_eq!(session.excluded_app().as_deref(), Some(ONE_PASSWORD));
+        push(Timestamp(enter.0 + MS));
+        // Whatever these are aimed at (pid 5 is not 1Password): a key, a
+        // click and the manual-step hotkey are all dropped.
+        tx.send(key_at(Timestamp(enter.0 + 2 * MS), "x")).unwrap();
+        tx.send(event_at(Timestamp(enter.0 + 3 * MS), mouse("down")))
+            .unwrap();
+        tx.send(event_at(Timestamp(enter.0 + 4 * MS), mouse("up")))
+            .unwrap();
+        tx.send(event_at(
+            Timestamp(enter.0 + 5 * MS),
+            CaptureEvent::KeyDown {
+                key: key(KEY_S, Some("ß")),
+                modifiers: Hotkey::MANUAL_STEP.modifiers,
+                is_repeat: false,
+                secure: false,
+            },
+        ))
+        .unwrap();
+
+        // Back to Safari.
+        let leave = Timestamp(enter.0 + 100 * MS);
+        session.front.activated(leave, Some("com.apple.Safari"));
+        assert!(!session.is_excluded());
+        // Within the tail the screen may still show 1Password: the shortcut
+        // is kept but takes no snapshot.
+        push(Timestamp(leave.0 + MS));
+        let s1 = Timestamp(leave.0 + 2 * MS);
+        tx.send(shortcut_at(s1)).unwrap();
+        // After the tail: snapshotted again.
+        let later = Timestamp(leave.0 + (EXCLUDED_FRAME_TAIL_MS + 10) * MS);
+        push(later);
+        let s2 = Timestamp(later.0 + 1);
+        tx.send(shortcut_at(s2)).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+
+        assert_eq!(
+            *lock(&changes),
+            [Some(ONE_PASSWORD.to_owned()), None],
+            "entered and left"
+        );
+        // No "x". The shortcuts are masked: the dropped click still armed
+        // the settle guard, and the scripted focus never moves.
+        assert_eq!(typed_text(&rec), "a••");
+        assert_eq!(
+            count(&rec, |ev| matches!(
+                ev,
+                CaptureEvent::MouseDown { .. }
+                    | CaptureEvent::MouseUp { .. }
+                    | CaptureEvent::ManualStep
+            )),
+            0
+        );
+        assert_eq!(rec.metrics.dropped_excluded, 4);
+        assert_eq!(rec.metrics.excluded_frames, 1);
+        assert!(rec.drafts.iter().all(|d| {
+            d.kind != StepKind::Click
+                && d.kind != StepKind::Manual
+                && !d.keystrokes.as_deref().unwrap_or_default().contains('x')
+        }));
+        // Only the frames from before and well after were snapshotted,
+        // written and reported.
+        assert_eq!(rec.snapshots.keys().copied().collect::<Vec<_>>(), [a, s2]);
+        let reported: Vec<Timestamp> = lock(&snaps).iter().map(|s| s.frame.ts).collect();
+        assert_eq!(reported, [t0, later]);
+        assert_eq!(
+            webp_files(rec.session_dir()),
+            [
+                format!("{}.webp", FrameKey { source: 0, ts: t0 }.file_stem()),
+                format!(
+                    "{}.webp",
+                    FrameKey {
+                        source: 0,
+                        ts: later
+                    }
+                    .file_stem()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn late_activation_notice_still_removes_what_slipped_through() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, snaps, _) = excluding_cfg();
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let push = |ts: Timestamp| reader.push(frame(ts.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let t0 = event_tap::now();
+        push(t0);
+        let a = Timestamp(t0.0 + 1);
+        tx.send(key_at(a, "a")).unwrap();
+        // 1Password has come to the front and drawn (frame t1), and a
+        // shortcut is pressed, but its activation is not noted yet.
+        let t1 = Timestamp(t0.0 + (EXCLUDED_FRAME_HEAD_MS + 150) * MS);
+        push(t1);
+        let y = Timestamp(t1.0 + 1);
+        tx.send(shortcut_at(y)).unwrap();
+        // The router handles the shortcut first: its frame is written and
+        // even reported live (the flash the docs admit to).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while lock(&snaps).len() < 2 {
+            assert!(Instant::now() < deadline, "the snapshot was never reported");
+            thread::sleep(Duration::from_millis(1));
+        }
+        // Then the notice: noted after the frame and the event, within the
+        // head margin, as the observer would.
+        let noted = Timestamp(t1.0 + 5 * MS);
+        session.front.activated(noted, Some(ONE_PASSWORD));
+        // From now on, dropped live.
+        tx.send(key_at(Timestamp(noted.0 + MS), "z")).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        // The shortcut came before the notice and stays (events get no head
+        // margin), but its frame may show 1Password: its snapshot and file
+        // are gone.
+        assert_eq!(typed_text(&rec), "as");
+        assert_eq!(rec.metrics.dropped_excluded, 1);
+        assert_eq!(rec.metrics.excluded_frames, 1);
+        assert_eq!(rec.snapshots.keys().copied().collect::<Vec<_>>(), [a]);
+        assert_eq!(
+            webp_files(rec.session_dir()),
+            [format!(
+                "{}.webp",
+                FrameKey { source: 0, ts: t0 }.file_stem()
+            )]
+        );
+    }
+
+    #[test]
+    fn secure_key_is_masked_without_any_exclusions() {
+        let password = field("Password", true, "com.apple.Safari");
+        assert_eq!(
+            key_verdict(&Ok(Some(password.clone())), &[]),
+            KeyVerdict::Secure
+        );
+        let mut w = FocusWorker::new(
+            &SessionConfig::default(),
+            FakeFocus {
+                current: Some((1, password)),
+                clock: Timestamp(0),
+            },
+        );
+        type_key(&mut w, 0, 0, "p");
+        type_key(&mut w, 50, 1, "w");
+        assert_eq!(
+            typed(&w.events),
+            vec![
+                (0, Some("•".to_owned()), true),
+                (50, Some("•".to_owned()), true),
+            ]
+        );
     }
 
     #[test]
