@@ -44,3 +44,7 @@ The server is read-only. See [crates/guiderecorder-mcp/README.md](crates/guidere
 cargo run -p guiderecorder-cli -- --library <dir> list | search <q> | validate <bundle>
 cargo run -p guiderecorder-cli -- --library <dir> --index <path> reindex   # the only writer
 ```
+
+## Licence
+
+GuideRecorder is released under the [MIT License](LICENSE). Third-party licences are listed in [docs/licences.md](docs/licences.md).

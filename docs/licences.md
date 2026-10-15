@@ -1,7 +1,7 @@
 # Dependency licences
 
-Audit of 2026-10-14 (Solo todo #373). GuideRecorder is closed source, so only
-permissive licences are acceptable; nothing GPL/LGPL/AGPL is linked.
+Audit of 2026-10-14 (Solo todo #373). GuideRecorder is MIT-licensed (see `LICENSE`), so only
+permissive dependency licences are used; nothing GPL/LGPL/AGPL is linked.
 
 ## Rust (`cargo metadata`, ~800 third-party crates)
 
@@ -12,8 +12,8 @@ permissive licences are acceptable; nothing GPL/LGPL/AGPL is linked.
 - `aws-lc-sys` (rustls crypto via reqwest): ISC / Apache-2.0 / MIT /
   BSD-3-Clause / OpenSSL-style terms, all permissive.
 - MPL-2.0 (weak, file-level copyleft) only via Tauri: `cssparser`,
-  `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`. Fine for a
-  closed-source app as long as those files are not modified.
+  `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`. Fine for an
+  MIT app as long as those files are not modified.
 
 ## Frontend (`pnpm licenses list --prod`)
 
