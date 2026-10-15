@@ -10,6 +10,7 @@ import type {
   GuideListItem,
   OpenedGuide,
   RecordingSaved,
+  RecordingSnapshot,
   RecordingStatus,
   Settings,
   StepImage,
@@ -137,12 +138,14 @@ export class Backend {
 
   /** The recorder's state, as `recording_status` reports it. */
   recording: RecordingStatus = { state: "idle" };
-  /** The capture area falls back to the whole display (settings say window or region). */
+  /** The capture area falls back to all displays (settings say window or region). */
   captureAreaFallback = false;
   /** Steps the next saved recording leaves out for lack of a screenshot. */
   recordingSkipped = 0;
   /** Guides made by `stop_recording`, in order. */
   readonly recordings: RecordingSaved[] = [];
+  /** Screenshots `recording_snapshot` serves (any fixture image), by id. */
+  readonly snapshots = new Map<string, RecordingSnapshot>();
   /** Events the next command reply carries; mock-entry.ts emits them before resolving it. */
   private events: EmittedEvent[] = [];
 
@@ -207,7 +210,21 @@ export class Backend {
 
   private setRecording(status: RecordingStatus) {
     this.recording = status;
+    if (status.state === "idle") this.snapshots.clear();
     this.events.push({ event: "recording://status", payload: structuredClone(status) });
+  }
+
+  /**
+   * A screenshot the running recording takes, as the Rust side announces
+   * it: the event is queued (sent with the next command's reply) and
+   * `recording_snapshot` serves the first fixture step image for it.
+   */
+  takeSnapshot(id: string, point: RecordingSnapshot["point"] = null): RecordingSnapshot {
+    this.active();
+    const snapshot: RecordingSnapshot = { id, ts: this.snapshots.size * 1_000_000, width: 1600, height: 1000, point };
+    this.snapshots.set(id, snapshot);
+    this.events.push({ event: "recording://snapshot", payload: structuredClone(snapshot) });
+    return snapshot;
   }
 
   private active(): Extract<RecordingStatus, { state: "recording" | "paused" }> {
@@ -420,6 +437,16 @@ export class Backend {
         return null;
       case "recording_status":
         return this.recording;
+      case "recording_snapshot": {
+        const id = String(args.id);
+        if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");
+        this.active();
+        if (!this.snapshots.has(id)) fail("notFound", `no snapshot ${id}`);
+        const source = [...this.bundles.values()][0];
+        const image = [...source.files.entries()].find(([path]) => path.startsWith("steps/") && path.endsWith(".webp"));
+        if (!image) fail("notFound", "the fixtures have no step image");
+        return [...image[1]];
+      }
       case "quit_ack":
       case "quit_app":
         return null;

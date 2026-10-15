@@ -132,6 +132,7 @@ pub fn run() {
             recording::stop_recording,
             recording::cancel_recording,
             recording::recording_status,
+            recording::recording_snapshot,
             commands::quit_ack,
             commands::quit_app,
         ])

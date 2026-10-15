@@ -14,7 +14,7 @@ test("records a guide: start, pause, resume, stop, then edit it", async ({ page,
   await expect(controls.getByText("Recording", { exact: true })).toBeVisible();
   await expect(controls.getByLabel("Recording time")).toHaveText(/^0:0\d$/);
   expect(backend.calls.find((c) => c.cmd === "start_recording")?.args).toEqual({ title: null });
-  await expect(page.getByText(/Recording the whole display/)).toBeHidden();
+  await expect(page.getByText(/Recording all displays/)).toBeHidden();
 
   await controls.getByRole("button", { name: "Pause recording" }).click();
   await expect(controls.getByText("Paused", { exact: true })).toBeVisible();
@@ -56,7 +56,7 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   backend.captureAreaFallback = true;
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
   await page.getByRole("button", { name: "Record" }).click();
-  await expect(page.getByText("Recording the whole display; window and region capture are not available yet.")).toBeVisible();
+  await expect(page.getByText("Recording all displays; window and region capture are not available yet.")).toBeVisible();
 
   // A stop from elsewhere (a hotkey, later): saving, then the saved guide opens.
   const status = backend.recording;
@@ -67,6 +67,36 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   await emitEvent(page, "recording://saved", { guideId: CALENDAR, steps: 3, skipped: 0 });
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue("Share a calendar event");
   await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+});
+
+test("shows the screenshots taken so far while recording", async ({ page, backend }) => {
+  grantAll(backend.permissions);
+  await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
+  await page.getByRole("button", { name: "Record" }).click();
+  const controls = page.getByRole("group", { name: "Recording" });
+  await expect(controls).toBeVisible();
+  const strip = page.getByRole("region", { name: "Screenshots so far" });
+  await expect(strip).toBeHidden();
+
+  // Two screenshots, announced as the Rust side would (with the next reply).
+  backend.takeSnapshot("0-5000000", { x: 400, y: 250 });
+  backend.takeSnapshot("0-9000000");
+  await controls.getByRole("button", { name: "Pause recording" }).click();
+  await expect(strip).toContainText("2 screenshots so far");
+  await expect(strip.getByRole("img", { name: "Screenshot 1" })).toBeVisible();
+  await expect(strip.getByRole("img", { name: "Screenshot 2" })).toBeVisible();
+  // The same screenshot again: not listed twice.
+  backend.takeSnapshot("0-9000000");
+  await controls.getByRole("button", { name: "Resume recording" }).click();
+  await expect(strip).toContainText("2 screenshots so far");
+  // Only the two images were fetched (StrictMode's second mount repeats a fetch in dev).
+  const fetched = backend.calls.filter((c) => c.cmd === "recording_snapshot").map((c) => (c.args as { id: string }).id);
+  expect([...new Set(fetched)]).toEqual(["0-5000000", "0-9000000"]);
+
+  // Gone once the recording is over.
+  await controls.getByRole("button", { name: "Stop recording" }).click();
+  await expect(page.getByRole("textbox", { name: "Guide title" })).toBeVisible();
+  await expect(strip).toBeHidden();
 });
 
 test("cancelling asks first and discards the recording", async ({ page, backend }) => {

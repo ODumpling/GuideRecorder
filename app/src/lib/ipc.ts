@@ -180,6 +180,8 @@ export interface RecordingApi {
   /** Discards the recording. */
   cancel(): Promise<void>;
   status(): Promise<RecordingStatus>;
+  /** WebP bytes of a screenshot the running recording announced, by its id. */
+  snapshotImage(id: string): Promise<ArrayBuffer>;
 }
 
 export const tauriRecordingApi: RecordingApi = {
@@ -189,9 +191,12 @@ export const tauriRecordingApi: RecordingApi = {
   stop: () => invoke("stop_recording"),
   cancel: () => invoke("cancel_recording"),
   status: () => invoke("recording_status"),
+  snapshotImage: async (id) => toArrayBuffer(await invoke("recording_snapshot", { id })),
 };
 
 /** Emitted with a `RecordingStatus` on every change of the recorder's state. */
 export const RECORDING_STATUS_EVENT = "recording://status";
 /** Emitted with a `RecordingSaved` after a recording was saved. */
 export const RECORDING_SAVED_EVENT = "recording://saved";
+/** Emitted with a `RecordingSnapshot` for each screenshot the running recording takes. */
+export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";

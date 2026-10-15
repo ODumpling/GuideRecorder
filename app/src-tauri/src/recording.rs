@@ -13,6 +13,13 @@
 //! [`SAVED_EVENT`] with a [`RecordingSaved`] payload (the same value the
 //! `stop_recording` command returns).
 //!
+//! While recording, each screenshot the session encodes is announced as
+//! [`SNAPSHOT_EVENT`] with a [`RecordingSnapshot`] payload, so the UI can
+//! show what has been captured so far; `recording_snapshot` serves the
+//! image. These are provisional: the steps, and which screenshots they
+//! keep, are only decided at stop (see the capture crate's
+//! `LiveSnapshot`).
+//!
 //! The library is checked at start (no open library, no recording) and
 //! read again at stop: switching the library mid-recording saves into the
 //! library open at stop time.
@@ -24,13 +31,18 @@
 //! support yet) and the Window and Region capture areas (they need the
 //! picker from #357 and fall back to the display).
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::{Local, SecondsFormat, Utc};
 use guidesya_capture::macos::frames::CaptureTarget;
-use guidesya_capture::macos::session::{Hotkey, RecordingSession, SessionConfig, SessionError};
+use guidesya_capture::macos::session::{
+    Hotkey, LiveSnapshot, RecordingSession, SessionConfig, SessionError, SnapshotSink,
+};
 use guidesya_core::events::Modifiers;
+use guidesya_core::model::Point;
 use serde::Serialize;
+use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
@@ -42,6 +54,9 @@ pub const STATUS_EVENT: &str = "recording://status";
 /// Emitted with a [`RecordingSaved`] once a stopped recording is in the
 /// library.
 pub const SAVED_EVENT: &str = "recording://saved";
+/// Emitted with a [`RecordingSnapshot`] for each screenshot the running
+/// session encodes.
+pub const SNAPSHOT_EVENT: &str = "recording://snapshot";
 
 /// What the recorder is doing. Serialized as `{"state": "idle"}`,
 /// `{"state": "recording", "startedAt": …, "title": …,
@@ -63,7 +78,7 @@ pub enum RecordingStatus {
         /// The title given to `start_recording`, if any.
         title: Option<String>,
         /// The stored capture area is Window or Region, which have no
-        /// picker yet (#357), so the whole display is being captured.
+        /// picker yet (#357), so every display is being captured.
         capture_area_fallback: bool,
     },
     /// Between `pause_recording` and `resume_recording`; the fields are
@@ -89,6 +104,42 @@ pub struct RecordingSaved {
     pub steps: usize,
     /// Detected steps left out because no snapshot was close enough.
     pub skipped: usize,
+}
+
+/// A screenshot the running session took (sent as [`SNAPSHOT_EVENT`]).
+/// Provisional: see the module docs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingSnapshot {
+    /// Names the image for `recording_snapshot`; unique within the
+    /// recording.
+    pub id: String,
+    /// When the event that took it happened: host monotonic nanoseconds,
+    /// for ordering only.
+    pub ts: u64,
+    /// Image size in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Where the click landed, in image pixels; none for a key.
+    pub point: Option<Point>,
+}
+
+impl RecordingSnapshot {
+    fn of(snapshot: &LiveSnapshot) -> Self {
+        Self {
+            id: snapshot.frame.file_stem(),
+            ts: snapshot.ts.0,
+            width: snapshot.width,
+            height: snapshot.height,
+            point: snapshot.point,
+        }
+    }
+}
+
+/// True for an id `recording_snapshot` accepts: a file stem as
+/// `FrameKey::file_stem` makes them, so never a path.
+fn is_snapshot_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
 
 /// The managed recording state: at most one session at a time.
@@ -351,11 +402,12 @@ fn manual_hotkey(value: &str) -> Option<Hotkey> {
 }
 
 /// The session config for the stored settings, and whether the capture
-/// area fell back to the display.
+/// area fell back to the displays.
 fn session_config(settings: &Settings) -> (SessionConfig, bool) {
     let recording = &settings.recording;
     let fallback = !matches!(recording.capture_area, CaptureArea::Display);
     let mut cfg = SessionConfig::default();
+    // Every active display, one stream each (see `session::stream_targets`).
     cfg.frames.target = CaptureTarget::Display { display_id: None };
     cfg.frames.exclude_own_windows = true;
     cfg.excluded_bundle_ids = recording.excluded_apps.clone();
@@ -406,7 +458,13 @@ pub async fn start_recording<R: Runtime>(
         // Waits for the library still starting; refuses if it did not open.
         cell.get()?;
         settings_commands::ensure_can_record()?;
-        let (cfg, capture_area_fallback) = session_config(&store.get());
+        let (mut cfg, capture_area_fallback) = session_config(&store.get());
+        let emitter = app.clone();
+        cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
+            if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
+                eprintln!("guidesya: cannot emit {SNAPSHOT_EVENT}: {e}");
+            }
+        }));
         let session = RecordingSession::start(cfg).map_err(session_error)?;
         *slot = Some(session);
         let status = RecordingStatus::Recording {
@@ -555,6 +613,41 @@ pub async fn cancel_recording<R: Runtime>(
         drop(session);
         emit_status(&app, &recorder, RecordingStatus::Idle);
         Ok(())
+    })
+    .await
+}
+
+/// The WebP bytes of a screenshot the running session announced as
+/// [`SNAPSHOT_EVENT`], by its `id`. `invalid` for an id that is not one
+/// or when nothing is recording (paused is fine), `notFound` when the file
+/// is gone (the session pruned it at stop). The session slot is held only
+/// to find the session folder, not while reading.
+#[tauri::command]
+pub async fn recording_snapshot(
+    recorder: State<'_, Arc<Recorder>>,
+    id: String,
+) -> Result<Response> {
+    if !is_snapshot_id(&id) {
+        return Err(AppError::new(ErrorKind::Invalid, "not a snapshot id"));
+    }
+    let recorder = Arc::clone(&recorder);
+    blocking(move || {
+        let dir = {
+            let slot = recorder.slot();
+            slot.as_ref()
+                .and_then(|session| session.session_dir().map(Path::to_path_buf))
+                .ok_or_else(not_recording)?
+        };
+        let path = dir.join(format!("{id}.webp"));
+        let bytes = std::fs::read(&path).map_err(|e| {
+            let kind = if e.kind() == std::io::ErrorKind::NotFound {
+                ErrorKind::NotFound
+            } else {
+                ErrorKind::Io
+            };
+            AppError::new(kind, format!("{}: {e}", path.display()))
+        })?;
+        Ok(Response::new(bytes))
     })
     .await
 }
@@ -769,6 +862,44 @@ mod tests {
             .unwrap(),
             json!({"guideId": "01J", "steps": 3, "skipped": 1})
         );
+        assert_eq!(
+            serde_json::to_value(RecordingSnapshot {
+                id: "0-5000000".into(),
+                ts: 7_000_000,
+                width: 16,
+                height: 10,
+                point: Some(Point { x: 8.0, y: 5.0 }),
+            })
+            .unwrap(),
+            json!({
+                "id": "0-5000000",
+                "ts": 7_000_000,
+                "width": 16,
+                "height": 10,
+                "point": {"x": 8.0, "y": 5.0},
+            })
+        );
+    }
+
+    #[test]
+    fn snapshot_ids_are_file_stems_never_paths() {
+        assert!(is_snapshot_id("0-5000000"));
+        assert!(is_snapshot_id("12-0"));
+        for bad in ["", "..", "../x", "0-5.webp", "a-1", "0/1", &"1".repeat(65)] {
+            assert!(!is_snapshot_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn recording_snapshot_needs_a_session() {
+        let recorder = Recorder::default();
+        let slot = recorder.slot();
+        let err = slot
+            .as_ref()
+            .and_then(|session| session.session_dir().map(Path::to_path_buf))
+            .ok_or_else(not_recording)
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Invalid);
     }
 
     #[test]

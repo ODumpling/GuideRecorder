@@ -70,7 +70,7 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
-    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGGetActiveDisplayList,
+    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGEvent, CGGetActiveDisplayList,
     CGMainDisplayID, CGWindowListCopyWindowInfo, CGWindowListOption,
 };
 use objc2_foundation::{
@@ -669,6 +669,14 @@ impl DisplayInfo {
     pub fn point_to_pixel(&self, p: Point) -> Point {
         self.geometry().point_to_pixel(p)
     }
+}
+
+/// Where the mouse pointer is now, in global points (top-left origin, the
+/// same space as event points). `None` if no event can be created.
+pub fn mouse_location() -> Option<Point> {
+    let event = CGEvent::new(None)?;
+    let p = CGEvent::location(Some(&event));
+    Some(Point { x: p.x, y: p.y })
 }
 
 /// A running (or paused) ScreenCaptureKit capture.

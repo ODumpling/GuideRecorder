@@ -29,7 +29,11 @@
 //!   [`ENCODER_QUEUE`] frames; a snapshot that finds it full is dropped and
 //!   counted, so memory stays bounded however slow encoding is. Session
 //!   folders a crash left behind are swept at the next start once older
-//!   than [`STALE_SESSION_MS`].
+//!   than [`STALE_SESSION_MS`]. With [`SessionConfig::on_snapshot`] set,
+//!   it reports each frame it wrote as a [`LiveSnapshot`], from its own
+//!   thread, so a UI can show the screenshots while recording. They are
+//!   provisional: which steps the guide ends up with, and which frames
+//!   are pruned, is only known at stop (see `# Snapshots`).
 //!
 //! No AX call runs on the main or tap thread (see `ax`'s `# Threading`).
 //! [`RecordingSession::stop`] stops the tap, drains and joins all threads,
@@ -41,9 +45,10 @@
 //!
 //! [`RecordingSession::pause`] stops the tap (joining its thread, so every
 //! event it saw is already queued for the router), notes the time and
-//! stops the frame stream, so capture CPU drops to idle; the four threads
-//! stay up, idle. [`RecordingSession::resume`] restarts the frames (the
-//! ring is cleared and the display re-read, as at start), notes the time
+//! stops the frame streams, so capture CPU and the frame rings' memory
+//! drop to idle; the four threads stay up, idle.
+//! [`RecordingSession::resume`] starts fresh frame streams (for the
+//! displays active now, with empty rings, as at start), notes the time
 //! and starts a new tap. The router compares event timestamps with the
 //! pause and resume times the session shares with it (`PauseState`, same
 //! clock as the events), so queue lag cannot reorder them: an event from
@@ -52,7 +57,7 @@
 //! is emitted again) and the exclusion filter, and tells the focus thread
 //! (`FocusMsg::Resume`) to drop its cache and settle guard, report the
 //! focus again and move the scrub boundary to the resume. A pre-pause
-//! event still queued when `resume()` clears the frame ring may find no
+//! event still queued when `pause()` drops the frame streams may find no
 //! frame and count in `missing_frames`; its step then borrows a neighbour's
 //! snapshot or is skipped, as for any event without one. At stop, events
 //! inside a pause are removed and [`detect_steps`] runs separately on each
@@ -115,10 +120,19 @@
 //! - The focus after a click is read when the focus thread handles the
 //!   click's `MouseUp`, which can be before the app has moved focus. This
 //!   only affects labels: each key does its own lookup.
-//! - Frames are captured for one display (or window/region); clicks on
-//!   another display get no point and no crop.
+//! - With a window or region target, frames come from that one source;
+//!   clicks elsewhere get no point and no crop. (A display target without
+//!   an id captures every active display, one stream each, and each
+//!   snapshot comes from the display under the event: see
+//!   [`stream_targets`].)
+//! - For an event without a point (a key, the manual-step hotkey), the
+//!   display is the one the pointer was last seen on, which is normally
+//!   where the user clicked to focus the window they type in. Typing into
+//!   a window on another display after a keyboard-only switch (⌘Tab)
+//!   snapshots the pointer's display.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -231,6 +245,8 @@ impl Hotkey {
 
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
+    /// The capture. A display target without an id (the default) records
+    /// every active display, one stream each; see [`stream_targets`].
     pub frames: FrameStreamConfig,
     /// Bundle ids whose events are dropped and never snapshotted.
     pub excluded_bundle_ids: Vec<String>,
@@ -243,6 +259,51 @@ pub struct SessionConfig {
     /// is [`default_work_dir`], a local cache that is not synced. Never use
     /// a library root: libraries live in synced folders.
     pub work_dir: Option<PathBuf>,
+    /// Called on the encoder thread for each snapshot frame it writes, as
+    /// soon as the file exists; `None` reports nothing. Keep it quick: the
+    /// encoder waits for it.
+    pub on_snapshot: Option<SnapshotSink>,
+}
+
+/// A snapshot frame the encoder wrote, reported live through
+/// [`SessionConfig::on_snapshot`]. Provisional: the frame is removed at
+/// stop if every event that took it turns out to be from an excluded app
+/// or inside a pause, a frame can end up serving several steps or none,
+/// and a step may borrow a neighbouring frame ([`match_snapshot`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveSnapshot {
+    /// The event that took the snapshot: the first one, when several share
+    /// the frame.
+    pub ts: Timestamp,
+    pub frame: FrameKey,
+    /// Lossless WebP in the session folder, named
+    /// `<frame.file_stem()>.webp`.
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    /// The event's point in frame pixels, when it has one and it is on
+    /// the frame (a click; `None` for a key or the manual-step hotkey).
+    pub point: Option<Point>,
+}
+
+/// The callback behind [`SessionConfig::on_snapshot`].
+#[derive(Clone)]
+pub struct SnapshotSink(Arc<dyn Fn(&LiveSnapshot) + Send + Sync>);
+
+impl SnapshotSink {
+    pub fn new(f: impl Fn(&LiveSnapshot) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn report(&self, snapshot: &LiveSnapshot) {
+        (self.0)(snapshot);
+    }
+}
+
+impl fmt::Debug for SnapshotSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SnapshotSink")
+    }
 }
 
 impl Default for SessionConfig {
@@ -257,6 +318,7 @@ impl Default for SessionConfig {
             steps: StepConfig::default(),
             crop_size: DEFAULT_CROP_SIZE,
             work_dir: None,
+            on_snapshot: None,
         }
     }
 }
@@ -302,7 +364,15 @@ pub struct RecordingSession {
     /// The router's input, kept so the router outlives the tap across a
     /// pause; dropped at stop, which ends the router.
     tap_tx: Option<Sender<TargetedEvent>>,
-    frames: Option<FrameStream>,
+    /// One stream per captured display (or one for a window or region
+    /// target); empty while paused and in headless tests.
+    frames: Vec<FrameStream>,
+    /// The frame stream config, kept to restart the streams on resume;
+    /// `None` in a headless test session, which has no streams.
+    frames_cfg: Option<FrameStreamConfig>,
+    /// The streams' readers and the rects they show, shared with the
+    /// router, which picks the one under each event's point.
+    sources: SharedSources,
     router: Option<JoinHandle<RouterOut>>,
     element: Option<JoinHandle<ElementOut>>,
     focus: Option<JoinHandle<FocusOut>>,
@@ -312,9 +382,10 @@ pub struct RecordingSession {
     cpu_start: Option<CpuTime>,
     steps: StepConfig,
     crop_size: (u32, u32),
-    display: Option<frames::DisplayInfo>,
+    /// The captured displays, for [`RecordingInfo`].
+    displays: Vec<frames::DisplayInfo>,
     /// No tap is ever started: tests feed events through `tap_tx` and
-    /// frames through the router's reader.
+    /// frames through the router's sources.
     #[cfg(test)]
     headless: bool,
     /// Shared with the router (see the module docs on pausing).
@@ -334,7 +405,7 @@ impl RecordingSession {
     /// see `event_tap`). Blocks for up to a few seconds while
     /// ScreenCaptureKit starts.
     pub fn start(cfg: SessionConfig) -> Result<Self, SessionError> {
-        let mut session = Self::new(&cfg, display_for(cfg.frames.target));
+        let mut session = Self::new(&cfg);
         let work_dir = cfg.work_dir.clone().unwrap_or_else(default_work_dir);
         fs::create_dir_all(&work_dir).map_err(io_err(&work_dir))?;
         sweep_stale_sessions(&work_dir);
@@ -343,20 +414,22 @@ impl RecordingSession {
         session.session_dir = Some(session_dir);
         // From here on, an error drops `session`, which joins whatever was
         // started and removes the session folder.
-        let frames = FrameStream::start(cfg.frames.clone())?;
-        let reader = frames.reader();
-        session.frames = Some(frames);
-        session.spawn_threads(&cfg, reader, || AxFocus)?;
+        session.frames_cfg = Some(cfg.frames.clone());
+        session.start_frames()?;
+        let sources = Arc::clone(&session.sources);
+        session.spawn_threads(&cfg, sources, || AxFocus)?;
         session.start_tap()?;
         Ok(session)
     }
 
     /// A session with nothing running and no session folder yet.
-    fn new(cfg: &SessionConfig, display: Option<frames::DisplayInfo>) -> Self {
+    fn new(cfg: &SessionConfig) -> Self {
         Self {
             tap: None,
             tap_tx: None,
-            frames: None,
+            frames: Vec::new(),
+            frames_cfg: None,
+            sources: Arc::default(),
             router: None,
             element: None,
             focus: None,
@@ -366,7 +439,7 @@ impl RecordingSession {
             cpu_start: process_cpu_time(),
             steps: cfg.steps.clone(),
             crop_size: cfg.crop_size,
-            display,
+            displays: Vec::new(),
             #[cfg(test)]
             headless: false,
             pause: SharedPause::default(),
@@ -375,12 +448,49 @@ impl RecordingSession {
         }
     }
 
+    /// Starts the frame streams for [`RecordingSession::frames_cfg`] (see
+    /// [`stream_targets`]) and publishes their readers to the router. On
+    /// error no stream is left running.
+    fn start_frames(&mut self) -> Result<(), SessionError> {
+        let Some(cfg) = self.frames_cfg.clone() else {
+            return Ok(());
+        };
+        let mut streams = Vec::new();
+        for target in stream_targets(cfg.target) {
+            streams.push(FrameStream::start(FrameStreamConfig {
+                target,
+                ..cfg.clone()
+            })?);
+        }
+        *lock(&self.sources) = streams.iter().map(FrameSource::of).collect();
+        self.displays = streams
+            .iter()
+            .filter_map(|s| display_for(s.config().target))
+            .collect();
+        self.frames = streams;
+        Ok(())
+    }
+
+    /// Stops every frame stream (releasing their rings) and removes them
+    /// from the router's sources. Returns the first stop error; a failed
+    /// stream is abandoned (see [`FrameStream::pause`]).
+    fn stop_frames(&mut self) -> Result<(), SessionError> {
+        lock(&self.sources).clear();
+        let mut first = None;
+        for stream in self.frames.drain(..) {
+            if let Err(e) = stream.stop() {
+                first.get_or_insert(e);
+            }
+        }
+        first.map_or(Ok(()), |e| Err(e.into()))
+    }
+
     /// Starts the encoder, element, focus and router threads. `make_focus`
     /// runs on the focus thread (AX references stay there).
     fn spawn_threads<S: FocusSource + 'static>(
         &mut self,
         cfg: &SessionConfig,
-        reader: FrameReader,
+        sources: SharedSources,
         make_focus: impl FnOnce() -> S + Send + 'static,
     ) -> Result<(), SessionError> {
         let session_dir = self
@@ -390,10 +500,10 @@ impl RecordingSession {
         let (tap_tx, tap_rx) = mpsc::channel::<TargetedEvent>();
         let (element_tx, element_rx) = mpsc::channel::<TimedEvent>();
         let (focus_tx, focus_rx) = mpsc::channel::<FocusMsg>();
-        let (encode_tx, encode_rx) = mpsc::sync_channel::<Frame>(ENCODER_QUEUE);
+        let (encode_tx, encode_rx) = mpsc::sync_channel::<EncodeJob>(ENCODER_QUEUE);
         let backlog = Arc::new(AtomicUsize::new(0));
 
-        let mut encoder = Encoder::new(session_dir, Arc::clone(&backlog));
+        let mut encoder = Encoder::new(session_dir, Arc::clone(&backlog), cfg.on_snapshot.clone());
         self.encoder = Some(spawn("guidesya-session-encode", move || {
             encoder.run(encode_rx);
             encoder.finish()
@@ -412,7 +522,7 @@ impl RecordingSession {
         })?);
         let mut router = Router::new(
             cfg,
-            reader,
+            sources,
             Outputs {
                 element: element_tx,
                 focus: focus_tx,
@@ -443,9 +553,22 @@ impl RecordingSession {
         Ok(())
     }
 
-    /// The frame stream, e.g. for a live preview.
-    pub fn frames(&self) -> Option<&FrameStream> {
-        self.frames.as_ref()
+    /// The frame streams (one per captured display), e.g. for a live
+    /// preview. Empty while paused.
+    pub fn frames(&self) -> &[FrameStream] {
+        &self.frames
+    }
+
+    /// The displays being captured (none for a window target, and none
+    /// while paused).
+    pub fn displays(&self) -> &[frames::DisplayInfo] {
+        &self.displays
+    }
+
+    /// The hidden folder the encoded snapshots are written to (the
+    /// [`LiveSnapshot`] paths are in it); `None` only before a start.
+    pub fn session_dir(&self) -> Option<&Path> {
+        self.session_dir.as_deref()
     }
 
     /// True between [`RecordingSession::pause`] and
@@ -456,10 +579,11 @@ impl RecordingSession {
 
     /// Pauses recording: stops the tap (joining its thread, so every event
     /// it saw is already on its way to the router), notes the time, from
-    /// which on the router drops any event, and stops the frame stream so
-    /// capture CPU drops to idle. Pausing while paused is a no-op.
+    /// which on the router drops any event, and stops the frame streams so
+    /// capture CPU and the frame rings' memory drop to idle. Pausing while
+    /// paused is a no-op.
     ///
-    /// The session is paused even if stopping the frame stream fails (the
+    /// The session is paused even if stopping a frame stream fails (that
     /// stream is then abandoned, see [`FrameStream::pause`]); the error is
     /// returned.
     pub fn pause(&mut self) -> Result<(), SessionError> {
@@ -472,25 +596,22 @@ impl RecordingSession {
         let at = event_tap::now();
         self.paused_at = Some(at);
         lock(&self.pause).paused_at = Some(at);
-        if let Some(frames) = self.frames.as_mut() {
-            frames.pause()?;
-        }
-        Ok(())
+        self.stop_frames()
     }
 
-    /// Resumes after [`RecordingSession::pause`]: restarts the frame
-    /// stream (which clears its ring and re-reads the display, as at
-    /// start), notes the time and starts a new tap. The first event after
-    /// that time resets what would link it to the events from before the
-    /// pause (see the module docs). Resuming while not paused is a no-op.
-    /// On error the session stays paused.
+    /// Resumes after [`RecordingSession::pause`]: starts fresh frame
+    /// streams for the displays active now (so a display plugged in or
+    /// removed during the pause is picked up), notes the time and starts a
+    /// new tap. The first event after that time resets what would link it
+    /// to the events from before the pause (see the module docs). Resuming
+    /// while not paused is a no-op. On error the session stays paused.
     pub fn resume(&mut self) -> Result<(), SessionError> {
         let Some(paused_at) = self.paused_at else {
             return Ok(());
         };
-        if let Some(frames) = self.frames.as_mut() {
-            frames.resume()?;
-            self.display = display_for(frames.config().target);
+        if let Err(e) = self.start_frames() {
+            let _ = self.stop_frames();
+            return Err(e);
         }
         let at = event_tap::now();
         let before = std::mem::replace(
@@ -503,9 +624,7 @@ impl RecordingSession {
         if let Err(e) = self.start_tap() {
             // The tap never started, so no event from after `at` exists.
             *lock(&self.pause) = before;
-            if let Some(frames) = self.frames.as_mut() {
-                let _ = frames.pause();
-            }
+            let _ = self.stop_frames();
             return Err(e);
         }
         self.paused_at = None;
@@ -531,12 +650,10 @@ impl RecordingSession {
         let element = join(self.element.take())?;
         let focus = join(self.focus.take())?;
         let encoder = join(self.encoder.take())?;
-        let mut frames_error = self.frames.as_ref().and_then(|f| f.reader().last_error());
-        if let Some(frames) = self.frames.take() {
-            // The snapshots are already taken; a failed stop is only reported.
-            if let Err(e) = frames.stop() {
-                frames_error.get_or_insert_with(|| e.to_string());
-            }
+        let mut frames_error = self.frames.iter().find_map(|f| f.reader().last_error());
+        // The snapshots are already taken; a failed stop is only reported.
+        if let Err(e) = self.stop_frames() {
+            frames_error.get_or_insert_with(|| e.to_string());
         }
         let wall = self.started.elapsed();
         let (cpu_user, cpu_system) = match (self.cpu_start, process_cpu_time()) {
@@ -566,12 +683,13 @@ impl RecordingSession {
         let mut snapshots = BTreeMap::new();
         let mut unencoded = 0;
         for (ts, meta) in metas {
-            match encoder.written.get(&meta.frame_ts) {
+            match encoder.written.get(&meta.frame) {
                 Some(path) => {
                     snapshots.insert(
                         ts,
                         SnapshotRef {
-                            frame_ts: meta.frame_ts,
+                            frame_ts: meta.frame.ts,
+                            source: meta.frame.source,
                             path: path.clone(),
                             geometry: meta.geometry,
                             width: meta.width,
@@ -586,9 +704,9 @@ impl RecordingSession {
             }
         }
         // Frames no snapshot uses any more (e.g. of excluded apps).
-        let used: HashSet<Timestamp> = snapshots.values().map(|s| s.frame_ts).collect();
-        for (frame_ts, path) in &encoder.written {
-            if !used.contains(frame_ts) {
+        let used: HashSet<FrameKey> = snapshots.values().map(SnapshotRef::frame_key).collect();
+        for (frame, path) in &encoder.written {
+            if !used.contains(frame) {
                 let _ = fs::remove_file(path);
             }
         }
@@ -640,7 +758,7 @@ impl RecordingSession {
             snapshots,
             drafts,
             metrics,
-            display: self.display,
+            displays: std::mem::take(&mut self.displays),
             crop_size: self.crop_size,
             fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
             pauses: std::mem::take(&mut self.pauses),
@@ -665,9 +783,7 @@ impl Drop for RecordingSession {
         let _ = join(self.element.take());
         let _ = join(self.focus.take());
         let _ = join(self.encoder.take());
-        if let Some(frames) = self.frames.take() {
-            let _ = frames.stop();
-        }
+        let _ = self.stop_frames();
         if let Some(dir) = self.session_dir.take() {
             let _ = fs::remove_dir_all(dir);
         }
@@ -692,7 +808,7 @@ fn join<T>(handle: Option<JoinHandle<T>>) -> Result<T, SessionError> {
 }
 
 /// The display a target captures, for [`RecordingInfo`]; `None` for a
-/// window. Read again when the frame stream restarts after a pause.
+/// window. Read again when the frame streams restart after a pause.
 fn display_for(target: CaptureTarget) -> Option<frames::DisplayInfo> {
     match target {
         CaptureTarget::Display { display_id } | CaptureTarget::Region { display_id, .. } => {
@@ -702,15 +818,110 @@ fn display_for(target: CaptureTarget) -> Option<frames::DisplayInfo> {
     }
 }
 
+/// The stream targets a session target stands for: a display target
+/// without an id means every active display, one stream each, so a click
+/// on any display finds its frame; anything else is one stream. With no
+/// active display listed, the main display (the target as given).
+pub fn stream_targets(target: CaptureTarget) -> Vec<CaptureTarget> {
+    match target {
+        CaptureTarget::Display { display_id: None } => {
+            let displays: Vec<CaptureTarget> = frames::DisplayInfo::all()
+                .into_iter()
+                .map(|d| CaptureTarget::Display {
+                    display_id: Some(d.id),
+                })
+                .collect();
+            if displays.is_empty() {
+                vec![target]
+            } else {
+                displays
+            }
+        }
+        other => vec![other],
+    }
+}
+
+/// A frame stream the router can snapshot from: its reader and the global
+/// rect it shows, so a click picks the display it landed on.
+#[derive(Debug, Clone)]
+struct FrameSource {
+    rect: Rect,
+    reader: FrameReader,
+}
+
+impl FrameSource {
+    fn of(stream: &FrameStream) -> Self {
+        Self {
+            rect: stream.geometry().map_or(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                },
+                |g| g.rect_points(),
+            ),
+            reader: stream.reader(),
+        }
+    }
+}
+
+/// The sources, indexed as [`FrameKey::source`]; replaced whole when the
+/// streams restart.
+type SharedSources = Arc<Mutex<Vec<FrameSource>>>;
+
+/// The source whose rect contains `point`; the only source if there is
+/// one; the first source for a point on no source (its frame then has no
+/// crop); `None` with no sources.
+fn pick_source(sources: &[FrameSource], point: Option<Point>) -> Option<usize> {
+    if sources.len() <= 1 {
+        return (!sources.is_empty()).then_some(0);
+    }
+    point
+        .and_then(|p| sources.iter().position(|s| rect_contains(s.rect, p)))
+        .or(Some(0))
+}
+
+fn rect_contains(r: Rect, p: Point) -> bool {
+    p.x >= r.x && p.y >= r.y && p.x < r.x + r.width && p.y < r.y + r.height
+}
+
+/// Identifies a snapshot frame: the source it came from and its
+/// presentation time. Two streams can stamp frames with the same time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FrameKey {
+    pub source: usize,
+    pub ts: Timestamp,
+}
+
+impl FrameKey {
+    /// File stem of the encoded frame: `<source>-<frame ts>`.
+    pub fn file_stem(&self) -> String {
+        format!("{}-{}", self.source, self.ts.0)
+    }
+}
+
 /// An encoded snapshot frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotRef {
     pub frame_ts: Timestamp,
+    /// Index of the stream the frame came from (see
+    /// [`RecordingSession::frames`]).
+    pub source: usize,
     /// Lossless WebP in the session folder.
     pub path: PathBuf,
     pub geometry: FrameGeometry,
     pub width: u32,
     pub height: u32,
+}
+
+impl SnapshotRef {
+    pub fn frame_key(&self) -> FrameKey {
+        FrameKey {
+            source: self.source,
+            ts: self.frame_ts,
+        }
+    }
 }
 
 /// What a session recorded. Dropping it removes the session folder with
@@ -723,8 +934,9 @@ pub struct Recording {
     pub snapshots: BTreeMap<Timestamp, SnapshotRef>,
     pub drafts: Vec<DraftStep>,
     pub metrics: SessionMetrics,
-    /// The captured display, for [`RecordingInfo`].
-    pub display: Option<frames::DisplayInfo>,
+    /// The captured displays, for [`RecordingInfo`]; none for a window
+    /// target.
+    pub displays: Vec<frames::DisplayInfo>,
     pub crop_size: (u32, u32),
     /// How far a step may be from the snapshot it borrows.
     pub fallback_ms: u64,
@@ -784,7 +996,7 @@ impl Recording {
         let max_gap_ns = self.fallback_ms.saturating_mul(1_000_000);
         let mut skipped = 0;
         // The last decoded frame (RGBA), for crops.
-        let mut decoded: Option<(Timestamp, u32, Vec<u8>)> = None;
+        let mut decoded: Option<(FrameKey, u32, Vec<u8>)> = None;
         for draft in &self.drafts {
             let Some((_, snap)) = match_snapshot(&self.snapshots, draft.at, max_gap_ns) else {
                 skipped += 1;
@@ -799,9 +1011,9 @@ impl Recording {
             let (point, end_point) = step_points(&snap.geometry, draft);
             let (crop, crop_rect_px) = match point {
                 Some(center) => {
-                    if decoded.as_ref().map(|d| d.0) != Some(snap.frame_ts) {
+                    if decoded.as_ref().map(|d| d.0) != Some(snap.frame_key()) {
                         let img = library::read_webp(&snap.path)?;
-                        decoded = Some((snap.frame_ts, img.width(), img.into_raw()));
+                        decoded = Some((snap.frame_key(), img.width(), img.into_raw()));
                     }
                     let (_, width, rgba) = decoded.as_ref().expect("decoded above");
                     let height = (rgba.len() / (*width as usize * 4).max(1)) as u32;
@@ -834,15 +1046,16 @@ impl Recording {
         Ok(skipped)
     }
 
-    /// Copies each distinct snapshot frame to `dir/frames/<frame ts>.webp`.
-    /// Returns the number written.
+    /// Copies each distinct snapshot frame to
+    /// `dir/frames/<source>-<frame ts>.webp`. Returns the number written.
     pub fn write_raw_frames(&self, dir: &Path) -> Result<usize, SessionError> {
         let frames_dir = dir.join("frames");
         fs::create_dir_all(&frames_dir).map_err(io_err(&frames_dir))?;
         let mut seen = HashSet::new();
         for snap in self.snapshots.values() {
-            if seen.insert(snap.frame_ts) {
-                let dest = frames_dir.join(format!("{}.webp", snap.frame_ts.0));
+            let key = snap.frame_key();
+            if seen.insert(key) {
+                let dest = frames_dir.join(format!("{}.webp", key.file_stem()));
                 fs::copy(&snap.path, &dest).map_err(io_err(&dest))?;
             }
         }
@@ -871,7 +1084,7 @@ impl Recording {
             }
         }
         let displays = self
-            .display
+            .displays
             .iter()
             .map(|d| {
                 let (width, height) = d.pixel_size();
@@ -1022,13 +1235,24 @@ enum FocusMsg {
 struct Outputs {
     element: Sender<TimedEvent>,
     focus: Sender<FocusMsg>,
-    encode: SyncSender<Frame>,
+    /// Frames to encode.
+    encode: SyncSender<EncodeJob>,
     backlog: Arc<AtomicUsize>,
+}
+
+/// A snapshot frame for the encoder, with the event that took it (for
+/// [`LiveSnapshot`]).
+struct EncodeJob {
+    source: usize,
+    frame: Frame,
+    ts: Timestamp,
+    /// The event's point in frame pixels, if on the frame.
+    point: Option<Point>,
 }
 
 /// A snapshot before its frame is encoded.
 struct SnapshotMeta {
-    frame_ts: Timestamp,
+    frame: FrameKey,
     geometry: FrameGeometry,
     width: u32,
     height: u32,
@@ -1042,9 +1266,12 @@ struct Router {
     runs: KeyRunTracker,
     apps: HashMap<i32, AppRef>,
     app_pid: Option<i32>,
-    reader: FrameReader,
+    sources: SharedSources,
+    /// Where the pointer was last seen (any mouse event, kept or dropped),
+    /// to pick the display for events without a point (keys, manual steps).
+    pointer: Option<Point>,
     out: Outputs,
-    sent_frames: HashSet<Timestamp>,
+    sent_frames: HashSet<FrameKey>,
     events: Vec<TimedEvent>,
     snapshots: BTreeMap<Timestamp, SnapshotMeta>,
     latency_ns: BTreeMap<Timestamp, u64>,
@@ -1072,7 +1299,7 @@ struct RouterOut {
 }
 
 impl Router {
-    fn new(cfg: &SessionConfig, reader: FrameReader, out: Outputs, pause: SharedPause) -> Self {
+    fn new(cfg: &SessionConfig, sources: SharedSources, out: Outputs, pause: SharedPause) -> Self {
         Self {
             own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
             excluded: cfg.excluded_bundle_ids.clone(),
@@ -1081,7 +1308,8 @@ impl Router {
             runs: KeyRunTracker::new(cfg.steps.typing_idle_ms),
             apps: HashMap::new(),
             app_pid: None,
-            reader,
+            sources,
+            pointer: None,
             out,
             sent_frames: HashSet::new(),
             events: Vec::new(),
@@ -1112,6 +1340,9 @@ impl Router {
         if !self.admit(event.ts) {
             self.dropped_paused += 1;
             return;
+        }
+        if let Some(point) = event_point(&event.event) {
+            self.pointer = Some(point);
         }
         // Any click may move focus, including clicks we drop.
         if matches!(
@@ -1160,7 +1391,7 @@ impl Router {
             self.note_app(event.ts, target_pid, app);
         }
         if self.runs.should_snapshot(&event, target_pid) {
-            self.snapshot(event.ts);
+            self.snapshot(event.ts, event_point(&event.event));
         }
         match event.event {
             CaptureEvent::MouseDown { .. } | CaptureEvent::MouseDragged { .. } => {
@@ -1224,27 +1455,48 @@ impl Router {
         });
     }
 
-    fn snapshot(&mut self, ts: Timestamp) {
-        let Some(frame) = self.reader.frame_before(ts) else {
+    /// Takes the pre-event frame from the source under `point`, or under
+    /// the pointer as last seen for an event without one (a key), or
+    /// under the mouse now if no mouse event has been seen yet.
+    fn snapshot(&mut self, ts: Timestamp, point: Option<Point>) {
+        let picked = {
+            let sources = lock(&self.sources);
+            let under = point
+                .or(self.pointer)
+                .or_else(|| sources.len().gt(&1).then(frames::mouse_location).flatten());
+            pick_source(&sources, under).map(|i| (i, sources[i].reader.frame_before(ts)))
+        };
+        let Some((source, Some(frame))) = picked else {
             self.missing_frames += 1;
             return;
         };
         let meta = SnapshotMeta {
-            frame_ts: frame.ts,
+            frame: FrameKey {
+                source,
+                ts: frame.ts,
+            },
             geometry: frame.geometry,
             width: frame.width,
             height: frame.height,
         };
         let latency = ts.0.saturating_sub(frame.ts.0);
-        if !self.sent_frames.contains(&frame.ts) {
+        if !self.sent_frames.contains(&meta.frame) {
             let waiting = self.out.backlog.fetch_add(1, Ordering::SeqCst) + 1;
+            // The event's own point (not the pointer fallback), on the frame.
+            let point = point.and_then(|p| frame.geometry.point_to_pixel_checked(p));
+            let job = EncodeJob {
+                source,
+                frame,
+                ts,
+                point,
+            };
             // The encoder now owns the only extra reference to the frame.
             // Never wait for it: a full queue drops this snapshot, and the
             // step borrows a neighbour within the gap or is skipped.
-            match self.out.encode.try_send(frame) {
+            match self.out.encode.try_send(job) {
                 Ok(()) => {
                     self.max_backlog = self.max_backlog.max(waiting);
-                    self.sent_frames.insert(meta.frame_ts);
+                    self.sent_frames.insert(meta.frame);
                 }
                 Err(TrySendError::Full(_)) => {
                     self.out.backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1274,6 +1526,17 @@ impl Router {
             dropped_excluded: self.dropped_excluded,
             dropped_paused: self.dropped_paused,
         }
+    }
+}
+
+/// The pointer position of a mouse event.
+fn event_point(event: &CaptureEvent) -> Option<Point> {
+    match event {
+        CaptureEvent::MouseDown { point, .. }
+        | CaptureEvent::MouseUp { point, .. }
+        | CaptureEvent::MouseDragged { point, .. }
+        | CaptureEvent::Scroll { point, .. } => Some(*point),
+        _ => None,
     }
 }
 
@@ -1886,24 +2149,26 @@ impl<S: FocusSource> FocusWorker<S> {
 struct Encoder {
     dir: PathBuf,
     backlog: Arc<AtomicUsize>,
-    written: HashMap<Timestamp, PathBuf>,
+    sink: Option<SnapshotSink>,
+    written: HashMap<FrameKey, PathBuf>,
     errors: usize,
     total: Duration,
     max: Duration,
 }
 
 struct EncoderOut {
-    written: HashMap<Timestamp, PathBuf>,
+    written: HashMap<FrameKey, PathBuf>,
     errors: usize,
     total: Duration,
     max: Duration,
 }
 
 impl Encoder {
-    fn new(dir: PathBuf, backlog: Arc<AtomicUsize>) -> Self {
+    fn new(dir: PathBuf, backlog: Arc<AtomicUsize>, sink: Option<SnapshotSink>) -> Self {
         Self {
             dir,
             backlog,
+            sink,
             written: HashMap::new(),
             errors: 0,
             total: Duration::ZERO,
@@ -1911,30 +2176,53 @@ impl Encoder {
         }
     }
 
-    fn run(&mut self, rx: Receiver<Frame>) {
-        for frame in rx {
-            self.encode(&frame);
-            drop(frame);
+    fn run(&mut self, rx: Receiver<EncodeJob>) {
+        for job in rx {
+            self.encode(job);
             self.backlog.fetch_sub(1, Ordering::SeqCst);
         }
     }
 
-    fn encode(&mut self, frame: &Frame) {
-        if self.written.contains_key(&frame.ts) {
+    /// Writes the frame (once per [`FrameKey`]), drops its pixels and
+    /// reports it to the sink.
+    fn encode(&mut self, job: EncodeJob) {
+        let EncodeJob {
+            source,
+            frame,
+            ts,
+            point,
+        } = job;
+        let key = FrameKey {
+            source,
+            ts: frame.ts,
+        };
+        if self.written.contains_key(&key) {
             return;
         }
         let start = Instant::now();
-        let path = self.dir.join(format!("{}.webp", frame.ts.0));
+        let path = self.dir.join(format!("{}.webp", key.file_stem()));
         let pixels = PixelBuffer::bgra(frame.width, frame.height, &frame.pixels);
-        match library::write_webp(&path, &pixels) {
-            Ok(()) => {
-                self.written.insert(frame.ts, path);
-            }
-            Err(_) => self.errors += 1,
-        }
+        let written = library::write_webp(&path, &pixels).is_ok();
         let took = start.elapsed();
         self.total += took;
         self.max = self.max.max(took);
+        let (width, height) = (frame.width, frame.height);
+        drop(frame);
+        if !written {
+            self.errors += 1;
+            return;
+        }
+        self.written.insert(key, path.clone());
+        if let Some(sink) = &self.sink {
+            sink.report(&LiveSnapshot {
+                ts,
+                frame: key,
+                path,
+                width,
+                height,
+                point,
+            });
+        }
     }
 
     fn finish(self) -> EncoderOut {
@@ -2018,8 +2306,10 @@ struct PauseState {
 
 type SharedPause = Arc<Mutex<PauseState>>;
 
-fn lock(pause: &Mutex<PauseState>) -> MutexGuard<'_, PauseState> {
-    pause.lock().unwrap_or_else(PoisonError::into_inner)
+/// Locks state shared between the session and the router; a panic while
+/// holding it cannot leave it unusable.
+fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+    shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -2891,20 +3181,41 @@ mod tests {
     fn encoder_writes_each_frame_once() {
         let scratch = ScratchDir::new();
         let backlog = Arc::new(AtomicUsize::new(0));
-        let mut enc = Encoder::new(scratch.0.clone(), Arc::clone(&backlog));
+        let seen: Arc<Mutex<Vec<LiveSnapshot>>> = Arc::default();
+        let sink = Arc::clone(&seen);
+        let sink = SnapshotSink::new(move |snap| lock(&sink).push(snap.clone()));
+        let mut enc = Encoder::new(scratch.0.clone(), Arc::clone(&backlog), Some(sink));
         let (tx, rx) = mpsc::channel();
         let f = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
-        for _ in 0..2 {
+        for i in 0..2 {
             backlog.fetch_add(1, Ordering::SeqCst);
-            tx.send(f.clone()).unwrap();
+            tx.send(EncodeJob {
+                source: 0,
+                frame: f.clone(),
+                ts: Timestamp((10 + i) * MS),
+                point: Some(Point { x: 8.0, y: 5.0 }),
+            })
+            .unwrap();
         }
         drop(tx);
         enc.run(rx);
         let out = enc.finish();
         assert_eq!(out.written.len(), 1);
+        // Reported once, for the first event that took the frame.
+        let seen = lock(&seen);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].ts, Timestamp(10 * MS));
+        assert_eq!(seen[0].point, Some(Point { x: 8.0, y: 5.0 }));
+        assert_eq!((seen[0].width, seen[0].height), (16, 10));
+        assert_eq!(seen[0].path, scratch.0.join(format!("0-{}.webp", 5 * MS)));
+        assert!(seen[0].path.exists());
         assert_eq!(out.errors, 0);
         assert_eq!(backlog.load(Ordering::SeqCst), 0);
-        let img = library::read_webp(&out.written[&Timestamp(5 * MS)]).unwrap();
+        let key = FrameKey {
+            source: 0,
+            ts: Timestamp(5 * MS),
+        };
+        let img = library::read_webp(&out.written[&key]).unwrap();
         assert_eq!(img.dimensions(), (16, 10));
         // BGRA (x, y, 0, 255) is stored as RGBA (0, y, x, 255).
         assert_eq!(img.get_pixel(3, 2).0, [0, 2, 3, 255]);
@@ -2931,6 +3242,7 @@ mod tests {
                 Timestamp(event_ms * MS),
                 SnapshotRef {
                     frame_ts: f.ts,
+                    source: 0,
                     path,
                     geometry: f.geometry,
                     width: f.width,
@@ -2944,7 +3256,7 @@ mod tests {
             snapshots,
             drafts,
             metrics: SessionMetrics::default(),
-            display: None,
+            displays: Vec::new(),
             crop_size: (40, 20),
             fallback_ms: 3000,
             pauses: Vec::new(),
@@ -3048,7 +3360,7 @@ mod tests {
 
         let raw = scratch.0.join("raw");
         assert_eq!(rec.write_raw_frames(&raw).unwrap(), 1);
-        assert!(raw.join(format!("frames/{}.webp", 5 * MS)).exists());
+        assert!(raw.join(format!("frames/0-{}.webp", 5 * MS)).exists());
 
         // Dropping the recording removes its session folder.
         let session_dir = rec.session_dir().to_path_buf();
@@ -3528,6 +3840,29 @@ mod tests {
         assert!(other.exists());
     }
 
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Router sources, each a reader and the global rect it shows.
+    fn sources(list: Vec<(FrameReader, Rect)>) -> SharedSources {
+        Arc::new(Mutex::new(
+            list.into_iter()
+                .map(|(reader, rect)| FrameSource { rect, reader })
+                .collect(),
+        ))
+    }
+
+    /// One 4×4-point source at the origin.
+    fn single_source(reader: FrameReader) -> SharedSources {
+        sources(vec![(reader, rect(0.0, 0.0, 4.0, 4.0))])
+    }
+
     #[test]
     fn full_encoder_queue_drops_snapshots() {
         let reader = FrameReader::detached(4);
@@ -3537,7 +3872,7 @@ mod tests {
         let (encode, encode_rx) = mpsc::sync_channel(1);
         let mut router = Router::new(
             &SessionConfig::default(),
-            reader.clone(),
+            single_source(reader.clone()),
             Outputs {
                 element,
                 focus,
@@ -3546,10 +3881,10 @@ mod tests {
             },
             SharedPause::default(),
         );
-        router.snapshot(Timestamp(10 * MS));
+        router.snapshot(Timestamp(10 * MS), None);
         // A new frame, but the queue (size 1) is still full.
         reader.push(frame(15 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
-        router.snapshot(Timestamp(20 * MS));
+        router.snapshot(Timestamp(20 * MS), None);
         let out = router.finish();
         assert_eq!(out.dropped_queue_full, 1);
         assert_eq!(
@@ -3568,6 +3903,121 @@ mod tests {
     }
 
     #[test]
+    fn picks_the_source_under_the_point() {
+        let a = FrameReader::detached(2);
+        let b = FrameReader::detached(2);
+        let list = vec![
+            (a.clone(), rect(0.0, 0.0, 4.0, 4.0)),
+            (b.clone(), rect(4.0, 0.0, 4.0, 4.0)),
+        ];
+        let sources = sources(list);
+        let sources = lock(&sources);
+        assert_eq!(
+            pick_source(&sources, Some(Point { x: 1.0, y: 1.0 })),
+            Some(0)
+        );
+        assert_eq!(
+            pick_source(&sources, Some(Point { x: 6.0, y: 1.0 })),
+            Some(1)
+        );
+        // Edges: the right edge is exclusive.
+        assert_eq!(
+            pick_source(&sources, Some(Point { x: 4.0, y: 0.0 })),
+            Some(1)
+        );
+        // On no source, or unknown: the first one.
+        assert_eq!(
+            pick_source(&sources, Some(Point { x: 9.0, y: 9.0 })),
+            Some(0)
+        );
+        assert_eq!(pick_source(&sources, None), Some(0));
+        // A single source is used whatever the point.
+        assert_eq!(
+            pick_source(&sources[1..], Some(Point { x: 1.0, y: 1.0 })),
+            Some(0)
+        );
+        assert_eq!(pick_source(&[], Some(Point { x: 1.0, y: 1.0 })), None);
+    }
+
+    /// With a stream per display, a click snapshots the display it is on,
+    /// and a key the display the pointer was last seen on.
+    #[test]
+    fn snapshots_come_from_the_display_under_the_event() {
+        let left = FrameReader::detached(4);
+        let right = FrameReader::detached(4);
+        let left_geometry = geometry(4.0, 4.0, 4, 4);
+        let right_geometry = FrameGeometry::from_rect(rect(4.0, 0.0, 4.0, 4.0), 4, 4);
+        left.push(frame(5 * MS, 4, 4, left_geometry));
+        right.push(frame(6 * MS, 4, 4, right_geometry));
+        let (element, _er) = mpsc::channel();
+        let (focus, _fr) = mpsc::channel();
+        let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let mut router = Router::new(
+            &SessionConfig::default(),
+            sources(vec![
+                (left, rect(0.0, 0.0, 4.0, 4.0)),
+                (right, rect(4.0, 0.0, 4.0, 4.0)),
+            ]),
+            Outputs {
+                element,
+                focus,
+                encode,
+                backlog: Arc::new(AtomicUsize::new(0)),
+            },
+            SharedPause::default(),
+        );
+        // A click on the right display.
+        let [down, up] = click(10, 6.0, 1.0);
+        router.route(targeted(down));
+        router.route(targeted(up));
+        // A key (no point): the pointer is still on the right display.
+        router.route(targeted(key_down(20, 0, "a", mods())));
+        // A click on the left display.
+        let [down, up] = click(30, 1.0, 1.0);
+        router.route(targeted(down));
+        router.route(targeted(up));
+        let out = router.finish();
+        let by_event: Vec<(Timestamp, usize, Timestamp, f64)> = out
+            .snapshots
+            .iter()
+            .map(|(ts, m)| (*ts, m.frame.source, m.frame.ts, m.geometry.origin.x))
+            .collect();
+        assert_eq!(
+            by_event,
+            [
+                (Timestamp(10 * MS), 1, Timestamp(6 * MS), 4.0),
+                (Timestamp(20 * MS), 1, Timestamp(6 * MS), 4.0),
+                (Timestamp(30 * MS), 0, Timestamp(5 * MS), 0.0),
+            ]
+        );
+        // Each frame went to the encoder once, tagged with its source, the
+        // event that took it and that event's point in the frame's pixels
+        // (none for the key).
+        let encoded: Vec<(usize, Timestamp, Timestamp, Option<Point>)> = encode_rx
+            .try_iter()
+            .map(|j| (j.source, j.frame.ts, j.ts, j.point))
+            .collect();
+        assert_eq!(
+            encoded,
+            [
+                (
+                    1,
+                    Timestamp(6 * MS),
+                    Timestamp(10 * MS),
+                    Some(Point { x: 2.0, y: 1.0 })
+                ),
+                (
+                    0,
+                    Timestamp(5 * MS),
+                    Timestamp(30 * MS),
+                    Some(Point { x: 1.0, y: 1.0 })
+                ),
+            ]
+        );
+        assert_eq!(out.missing_frames, 0);
+    }
+
+    #[test]
     fn paused_router_drops_events_and_takes_no_snapshots() {
         let reader = FrameReader::detached(4);
         reader.push(frame(5 * MS, 4, 4, geometry(4.0, 4.0, 4, 4)));
@@ -3578,7 +4028,7 @@ mod tests {
         let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
         let mut router = Router::new(
             &SessionConfig::default(),
-            reader.clone(),
+            single_source(reader.clone()),
             Outputs {
                 element,
                 focus,
@@ -3599,7 +4049,10 @@ mod tests {
             focus_rx.try_recv(),
             Ok(FocusMsg::Key { pid: 5, .. })
         ));
-        assert_eq!(encode_rx.try_recv().map(|f| f.ts), Ok(Timestamp(5 * MS)));
+        assert_eq!(
+            encode_rx.try_recv().map(|j| j.frame.ts),
+            Ok(Timestamp(5 * MS))
+        );
         // Resumed: the first event after the resume starts a new run even
         // though the last key was less than `typing_idle_ms` ago, and the
         // focus thread is told first.
@@ -3739,15 +4192,32 @@ mod tests {
         scratch: &ScratchDir,
         reader: FrameReader,
     ) -> (RecordingSession, Sender<TargetedEvent>) {
-        let cfg = SessionConfig::default();
+        headless_session_with(scratch, reader, SessionConfig::default())
+    }
+
+    fn headless_session_with(
+        scratch: &ScratchDir,
+        reader: FrameReader,
+        cfg: SessionConfig,
+    ) -> (RecordingSession, Sender<TargetedEvent>) {
         let session_dir = scratch.0.join(format!("{SESSION_DIR_PREFIX}headless"));
         fs::create_dir_all(&session_dir).unwrap();
-        let mut session = RecordingSession::new(&cfg, None);
+        let mut session = RecordingSession::new(&cfg);
         session.headless = true;
         session.session_dir = Some(session_dir);
+        let source = FrameSource {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 4.0,
+            },
+            reader,
+        };
+        let sources: SharedSources = Arc::new(Mutex::new(vec![source]));
         let focus = field("Search", false, "com.apple.Safari");
         session
-            .spawn_threads(&cfg, reader, move || FakeFocus {
+            .spawn_threads(&cfg, sources, move || FakeFocus {
                 current: Some((1, focus)),
                 clock: Timestamp(0),
             })
@@ -3843,6 +4313,62 @@ mod tests {
         );
         // Strictly ordered.
         assert!(rec.events.windows(2).all(|w| w[0].ts <= w[1].ts));
+    }
+
+    #[test]
+    fn reports_each_encoded_frame_live() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let seen: Arc<Mutex<Vec<LiveSnapshot>>> = Arc::default();
+        let sink = Arc::clone(&seen);
+        let cfg = SessionConfig {
+            on_snapshot: Some(SnapshotSink::new(move |snap| {
+                lock(&sink).push(snap.clone())
+            })),
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        assert!(session.session_dir().unwrap().starts_with(&scratch.0));
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        // Two keys of one typing run: one snapshot, one frame, one report.
+        tx.send(key_at(Timestamp(t0.0 + 1), "a")).unwrap();
+        tx.send(key_at(Timestamp(t0.0 + 2), "b")).unwrap();
+        // Later, a second frame and a shortcut: a second snapshot.
+        let t1 = Timestamp(t0.0 + 10 * MS);
+        reader.push(frame(t1.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        let shortcut = TimedEvent {
+            ts: Timestamp(t1.0 + 1),
+            event: CaptureEvent::KeyDown {
+                key: key(KEY_S, Some("s")),
+                modifiers: Modifiers {
+                    command: true,
+                    ..mods()
+                },
+                is_repeat: false,
+                secure: false,
+            },
+        };
+        tx.send(targeted(shortcut)).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.snapshots.len(), 2);
+
+        let seen = lock(&seen);
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        let first = &seen[0];
+        assert_eq!(first.ts, Timestamp(t0.0 + 1));
+        assert_eq!(first.frame, FrameKey { source: 0, ts: t0 });
+        assert_eq!((first.width, first.height), (4, 4));
+        assert_eq!(first.point, None);
+        assert_eq!(
+            first.path,
+            rec.session_dir()
+                .join(format!("{}.webp", first.frame.file_stem()))
+        );
+        assert!(first.path.exists());
+        assert_eq!(seen[1].ts, Timestamp(t1.0 + 1));
+        assert_eq!(seen[1].frame.ts, t1);
     }
 
     #[test]

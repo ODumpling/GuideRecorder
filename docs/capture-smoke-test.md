@@ -143,9 +143,10 @@ fps is `DEFAULT_FPS`; also try `frames 30`.
 - [ ] **CPU** (open check on #336): with `top -pid <pid>` or Activity
       Monitor, note the CPU % at the default fps and at 30 fps, with a static
       screen and with a busy one.
-- [ ] **Multiple displays** (if you have them): only the main display is
-      captured. Note what happens when the menu bar display changes during
-      a run.
+- [ ] **Multiple displays** (if you have them): this example captures only
+      the main display (the session runs one stream per display, see
+      section 4). Note what happens when the menu bar display changes
+      during a run.
 
 Window capture is not in this example. When it is wired into the session,
 check that moving the window during a recording still puts clicks on the
@@ -200,7 +201,8 @@ With `--raw DIR` it also writes:
 - `events.jsonl`: the enriched events;
 - `snapshots.jsonl`: event ts, frame ts and latency for each snapshot;
 - `drafts.json`: the detected draft steps;
-- `frames/<frame ts>.webp`: the snapshot frames.
+- `frames/<source>-<frame ts>.webp`: the snapshot frames; `source` is the
+  index of the display stream the frame came from.
 
 Other options:
 
@@ -283,6 +285,13 @@ Suggested script for one run, with the Finder and TextEdit open:
 - [ ] Move a window between clicks and confirm that the crops are still
       centred on the clicked control (display capture, so this should
       hold).
+- [ ] **Multiple displays** (if you have them): click in a window on each
+      display. Every step image shows the display that was clicked (not
+      the wallpaper of the main one), the crop is centred on the click, and
+      `recording.displays` in `guide.json` lists every display. Type right
+      after clicking on the second display: the typing step's image shows
+      that display too. Pause, unplug or plug a display, resume, and click
+      again: no error, and the new display set is captured.
 - [ ] Copy one `events.jsonl` from a good run into
       `crates/guidesya-core/testdata/traces/`, with the secure parts
       checked, as a step-detection fixture (the coordinator lands it).

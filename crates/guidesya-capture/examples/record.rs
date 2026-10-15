@@ -10,7 +10,7 @@
 //!
 //! - `--library`: library folder; defaults to `target/record/library`.
 //! - `--raw`: also write `events.jsonl`, `snapshots.jsonl`, `drafts.json`
-//!   and the snapshot frames as WebP (`frames/<frame ts>.webp`) there.
+//!   and the snapshot frames as WebP (`frames/<source>-<frame ts>.webp`) there.
 //! - `--exclude`: bundle id whose events are dropped (repeatable).
 //!
 //! Snapshot frames are encoded to WebP while recording, so build with

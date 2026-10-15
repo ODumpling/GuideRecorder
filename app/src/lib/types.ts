@@ -252,7 +252,7 @@ export interface McpSetup {
 /**
  * The recorder's state (see app/src-tauri/src/recording.rs). `startedAt` is
  * RFC 3339 UTC. `captureAreaFallback`: the settings asked for a window or
- * region, which can't be captured yet, so the whole display is recorded.
+ * region, which can't be captured yet, so every display is recorded.
  */
 export type RecordingStatus =
   | { state: "idle" }
@@ -264,4 +264,21 @@ export interface RecordingSaved {
   guideId: Ulid;
   steps: number;
   skipped: number;
+}
+
+/**
+ * A screenshot the running recording took (`recording://snapshot`).
+ * Provisional: which steps the guide gets, and which screenshots they
+ * keep, is decided when the recording stops.
+ */
+export interface RecordingSnapshot {
+  /** Names the image for `recording_snapshot`; unique within the recording. */
+  id: string;
+  /** When the event that took it happened; monotonic nanoseconds, for ordering only. */
+  ts: number;
+  /** Image size in pixels. */
+  width: number;
+  height: number;
+  /** Where the click landed, in image pixels; null for a key. */
+  point: Point | null;
 }

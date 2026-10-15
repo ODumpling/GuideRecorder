@@ -19,7 +19,7 @@ import { shortcutFor } from "@/editor/shortcuts";
 import { QUIT_REQUESTED_EVENT, tauriSettingsApi } from "@/lib/ipc";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
 import { recordingStore } from "@/recording/recording";
-import { RecordingBanner, RecordingControls } from "@/recording/RecordingControls";
+import { RecordingBanner, RecordingControls, RecordingStrip } from "@/recording/RecordingControls";
 import { isActive, subscribe } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
 
@@ -178,6 +178,7 @@ export default function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Toolbar onSettings={() => openSettings()} />
         <RecordingBanner onPermissions={() => openSettings("permissions")} />
+        <RecordingStrip />
         <ReadOnlyBanner />
         <Notice />
         <div className="flex min-h-0 flex-1">

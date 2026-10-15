@@ -137,7 +137,7 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
 }
 
 const CAPTURE_AREAS: { value: CaptureArea; label: string }[] = [
-  { value: "display", label: "Whole display" },
+  { value: "display", label: "All displays" },
   { value: "window", label: "One window" },
   { value: "region", label: "A region" },
 ];

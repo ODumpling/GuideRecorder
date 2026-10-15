@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { RECORDING_SAVED_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
-import type { RecordingSaved, RecordingStatus } from "@/lib/types";
+import { RECORDING_SAVED_EVENT, RECORDING_SNAPSHOT_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
+import type { RecordingSaved, RecordingSnapshot, RecordingStatus } from "@/lib/types";
 import { createRecordingStore, elapsedMs, formatElapsed, isActive, subscribe, type Listen } from "@/recording/store";
 
 const STARTED = "2026-10-15T10:00:00.000Z";
@@ -8,6 +8,8 @@ const T0 = Date.parse(STARTED);
 const recording: RecordingStatus = { state: "recording", startedAt: STARTED, title: null, captureAreaFallback: false };
 const paused: RecordingStatus = { ...recording, state: "paused" };
 const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0 };
+const SNAP1: RecordingSnapshot = { id: "0-5000000", ts: 7_000_000, width: 16, height: 10, point: { x: 8, y: 5 } };
+const SNAP2: RecordingSnapshot = { id: "0-9000000", ts: 12_000_000, width: 16, height: 10, point: null };
 
 function fakeApi(overrides: Partial<RecordingApi> = {}) {
   let status: RecordingStatus = { state: "idle" };
@@ -23,6 +25,7 @@ function fakeApi(overrides: Partial<RecordingApi> = {}) {
       status = { state: "idle" };
     }),
     status: vi.fn(async () => status),
+    snapshotImage: vi.fn(async () => new ArrayBuffer(0)),
     ...overrides,
   };
   return api;
@@ -189,9 +192,46 @@ describe("recording store", () => {
     expect(store.getState().status.state).toBe("saving");
     handlers.get(RECORDING_SAVED_EVENT)!(SAVED);
     expect(onSaved).toHaveBeenCalledExactlyOnceWith(SAVED);
+    handlers.get(RECORDING_STATUS_EVENT)!(recording);
+    handlers.get(RECORDING_SNAPSHOT_EVENT)!(SNAP1);
+    expect(store.getState().snapshots).toEqual([SNAP1]);
 
     unsubscribe();
-    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(3));
+  });
+
+  it("collects the screenshots of the running recording, once each, until it ends", async () => {
+    const { store } = setup();
+    // Nothing recording: not kept (a late event from a recording already over).
+    store.getState().addSnapshot(SNAP1);
+    expect(store.getState().snapshots).toEqual([]);
+
+    await store.getState().start();
+    store.getState().addSnapshot(SNAP1);
+    store.getState().addSnapshot(SNAP2);
+    store.getState().addSnapshot(SNAP1);
+    expect(store.getState().snapshots).toEqual([SNAP1, SNAP2]);
+    // Kept across a pause and while saving.
+    await store.getState().pause();
+    store.getState().setStatus({ state: "saving", startedAt: STARTED, title: null });
+    expect(store.getState().snapshots).toEqual([SNAP1, SNAP2]);
+    store.getState().setStatus({ state: "idle" });
+    expect(store.getState().snapshots).toEqual([]);
+
+    // A new recording starts empty.
+    await store.getState().start();
+    store.getState().addSnapshot(SNAP2);
+    expect(store.getState().snapshots).toEqual([SNAP2]);
+    await store.getState().cancel();
+    expect(store.getState().snapshots).toEqual([]);
+  });
+
+  it("drops the screenshots when the status says another recording is running", async () => {
+    const { store } = setup();
+    await store.getState().start();
+    store.getState().addSnapshot(SNAP1);
+    store.getState().setStatus({ ...recording, startedAt: "2026-10-15T11:00:00.000Z" });
+    expect(store.getState().snapshots).toEqual([]);
   });
 
   it("does not count pauses in the elapsed time", () => {

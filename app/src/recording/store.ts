@@ -1,6 +1,12 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { errorMessage, RECORDING_SAVED_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
-import type { AppError, RecordingSaved, RecordingStatus } from "@/lib/types";
+import {
+  errorMessage,
+  RECORDING_SAVED_EVENT,
+  RECORDING_SNAPSHOT_EVENT,
+  RECORDING_STATUS_EVENT,
+  type RecordingApi,
+} from "@/lib/ipc";
+import type { AppError, RecordingSaved, RecordingSnapshot, RecordingStatus } from "@/lib/types";
 
 export type RecordingAction = "start" | "pause" | "resume" | "stop" | "cancel";
 
@@ -21,11 +27,18 @@ export interface RecordingState {
    */
   pausedMs: number;
   pausedAt: number | null;
+  /**
+   * Screenshots the running recording has taken, oldest first. Provisional
+   * (the steps are decided at stop); cleared when the recording ends.
+   */
+  snapshots: RecordingSnapshot[];
 
   /** Reads the recorder's state (once at startup: the app may have reloaded mid-recording). */
   load(): Promise<void>;
   /** Applies a `recording://status` event or a command's result. */
   setStatus(status: RecordingStatus): void;
+  /** Handles a `recording://snapshot` event (ignored when idle, and once per id). */
+  addSnapshot(snapshot: RecordingSnapshot): void;
   /** Handles a `recording://saved` event or `stop`'s result, once per guide. */
   saved(saved: RecordingSaved): void;
   start(): Promise<boolean>;
@@ -87,6 +100,7 @@ export function subscribe(store: RecordingStore, listen: Listen): () => void {
   const stops = [
     listen(RECORDING_STATUS_EVENT, (status) => store.getState().setStatus(status as RecordingStatus)),
     listen(RECORDING_SAVED_EVENT, (saved) => store.getState().saved(saved as RecordingSaved)),
+    listen(RECORDING_SNAPSHOT_EVENT, (snapshot) => store.getState().addSnapshot(snapshot as RecordingSnapshot)),
   ];
   return () => {
     for (const stop of stops) void stop.then((unlisten) => unlisten());
@@ -125,7 +139,9 @@ export function createRecordingStore({ api, onSaved, now = Date.now }: Recording
         pausedMs += t - pausedAt;
         pausedAt = null;
       }
-      set({ status, pausedMs, pausedAt });
+      // The strip stays up while saving; it is gone once the guide opens.
+      const snapshots = status.state === "idle" ? [] : sameRun ? get().snapshots : [];
+      set({ status, pausedMs, pausedAt, snapshots });
     }
 
     return {
@@ -134,6 +150,7 @@ export function createRecordingStore({ api, onSaved, now = Date.now }: Recording
       error: null,
       pausedMs: 0,
       pausedAt: null,
+      snapshots: [],
 
       async load() {
         try {
@@ -144,6 +161,13 @@ export function createRecordingStore({ api, onSaved, now = Date.now }: Recording
       },
 
       setStatus: applyStatus,
+
+      addSnapshot(snapshot) {
+        const { status, snapshots } = get();
+        if (status.state === "idle") return;
+        if (snapshots.some((s) => s.id === snapshot.id)) return;
+        set({ snapshots: [...snapshots, snapshot] });
+      },
 
       saved(saved) {
         if (handled.has(saved.guideId)) return;

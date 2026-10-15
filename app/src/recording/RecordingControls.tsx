@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertDialog } from "radix-ui";
 import { Circle, Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { tauriRecordingApi } from "@/lib/ipc";
+import type { RecordingSnapshot } from "@/lib/types";
 import { recordingStore, useRecording } from "@/recording/recording";
 import { elapsedMs, formatElapsed } from "@/recording/store";
+import { makeThumbnail, THUMBNAIL_SIDE } from "@/recording/thumbnails";
 
 /** Recorded time, ticking while recording and frozen while paused. */
 function Elapsed() {
@@ -136,9 +139,96 @@ export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
       {fallback && (
         <div className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
           <Info className="size-4 shrink-0 text-[var(--status-info)]" />
-          <span>Recording the whole display; window and region capture are not available yet.</span>
+          <span>Recording all displays; window and region capture are not available yet.</span>
         </div>
       )}
     </>
+  );
+}
+
+/** One screenshot of the strip, fetched and scaled down once; a dot marks the click. */
+function Thumbnail({ snapshot, index }: { snapshot: RecordingSnapshot; index: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let revoke: string | null = null;
+    let gone = false;
+    tauriRecordingApi
+      .snapshotImage(snapshot.id)
+      .then((bytes) => makeThumbnail(bytes, THUMBNAIL_SIDE * Math.min(2, window.devicePixelRatio || 1)))
+      .then((made) => {
+        if (gone || !made) {
+          if (made) URL.revokeObjectURL(made);
+          else setFailed(true);
+          return;
+        }
+        revoke = made;
+        setUrl(made);
+      })
+      .catch(() => setFailed(true));
+    return () => {
+      gone = true;
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [snapshot.id]);
+
+  const label = `Screenshot ${index + 1}`;
+  const { point, width, height } = snapshot;
+  return (
+    <figure
+      className="relative h-14 shrink-0 overflow-hidden rounded border border-border bg-background"
+      style={{ aspectRatio: `${width} / ${height}` }}
+      title={label}
+    >
+      {url ? (
+        <img src={url} alt={label} className="size-full object-cover" />
+      ) : (
+        <span className="flex size-full items-center justify-center text-muted-foreground">
+          {failed ? (
+            <TriangleAlert className="size-3" aria-label={`${label} unavailable`} />
+          ) : (
+            <LoaderCircle className="size-3 animate-spin" aria-label={`${label} loading`} />
+          )}
+        </span>
+      )}
+      {url && point && (
+        <span
+          aria-hidden
+          className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-[var(--status-danger)]"
+          style={{ left: `${(point.x / width) * 100}%`, top: `${(point.y / height) * 100}%` }}
+        />
+      )}
+    </figure>
+  );
+}
+
+/**
+ * Below the banner while recording: the screenshots taken so far, oldest
+ * first and scrolled to the newest. They are provisional: the steps, and
+ * the screenshots they keep, are decided when the recording stops.
+ */
+export function RecordingStrip() {
+  const active = useRecording((s) => s.status.state !== "idle");
+  const snapshots = useRecording((s) => s.snapshots);
+  const list = useRef<HTMLUListElement>(null);
+  const count = snapshots.length;
+  useEffect(() => {
+    const el = list.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [count]);
+  if (!active || count === 0) return null;
+  return (
+    <section aria-label="Screenshots so far" className="flex items-center gap-3 border-b border-border bg-muted px-4 py-2">
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {count === 1 ? "1 screenshot" : `${count} screenshots`} so far. Steps are worked out when you stop.
+      </span>
+      <ul ref={list} className="flex min-w-0 flex-1 gap-2 overflow-x-auto">
+        {snapshots.map((snapshot, index) => (
+          <li key={snapshot.id} className="flex shrink-0">
+            <Thumbnail snapshot={snapshot} index={index} />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
