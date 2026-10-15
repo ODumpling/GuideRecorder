@@ -20,12 +20,12 @@ export function installIpcDiagnostics() {
     warn(...args);
     if (typeof args[0] === "string" && args[0].startsWith(IPC_FALLBACK)) {
       warn(
-        `[guidesya] IPC fallback at ${Math.round(performance.now())} ms after ${navigation?.type ?? "unknown"} load` +
+        `[guiderecorder] IPC fallback at ${Math.round(performance.now())} ms after ${navigation?.type ?? "unknown"} load` +
           ` (document ${document.readyState}): ${describeError(args[1])}`,
       );
     }
   };
   import.meta.hot?.on("vite:beforeFullReload", (payload) => {
-    warn("[guidesya] Vite full reload; in-flight IPC requests are cancelled", payload);
+    warn("[guiderecorder] Vite full reload; in-flight IPC requests are cancelled", payload);
   });
 }

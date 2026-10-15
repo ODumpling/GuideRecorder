@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::recording::{self, Control, Recorder, RecordingStatus};
 
-const TRAY_ID: &str = "guidesya-tray";
+const TRAY_ID: &str = "guiderecorder-tray";
 
 const START_ID: &str = "tray-start";
 const PAUSE_ID: &str = "tray-pause";
@@ -56,15 +56,15 @@ impl TrayState {
 
     fn tooltip(self) -> &'static str {
         match self {
-            Self::Idle => "GuidesYa",
-            Self::Recording => "GuidesYa — recording",
-            Self::Paused => "GuidesYa — paused",
-            Self::Saving => "GuidesYa — saving the recording",
+            Self::Idle => "GuideRecorder",
+            Self::Recording => "GuideRecorder — recording",
+            Self::Paused => "GuideRecorder — paused",
+            Self::Saving => "GuideRecorder — saving the recording",
         }
     }
 }
 
-/// Which menu items are enabled; Open GuidesYa and Quit always are.
+/// Which menu items are enabled; Open GuideRecorder and Quit always are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Enabled {
     pub start: bool,
@@ -130,8 +130,8 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         resume: item(RESUME_ID, "Resume", enabled.resume)?,
         stop: item(STOP_ID, "Stop and Save", enabled.stop)?,
     };
-    let open = item(OPEN_ID, "Open GuidesYa", true)?;
-    let quit = item(QUIT_ID, "Quit GuidesYa", true)?;
+    let open = item(OPEN_ID, "Open GuideRecorder", true)?;
+    let quit = item(QUIT_ID, "Quit GuideRecorder", true)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -184,7 +184,7 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
         .and_then(|()| tray.icon.set_tooltip(Some(state.tooltip())))
         .and_then(|()| tray.items.apply(Enabled::of(state)));
     if let Err(e) = result {
-        eprintln!("guidesya: cannot update the tray: {e}");
+        eprintln!("guiderecorder: cannot update the tray: {e}");
     }
 }
 
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(control_for(PAUSE_ID), Some(Control::Pause));
         assert_eq!(control_for(RESUME_ID), Some(Control::Resume));
         assert_eq!(control_for(STOP_ID), Some(Control::Stop));
-        for other in [OPEN_ID, QUIT_ID, "guidesya-quit", ""] {
+        for other in [OPEN_ID, QUIT_ID, "guiderecorder-quit", ""] {
             assert_eq!(control_for(other), None, "{other}");
         }
     }

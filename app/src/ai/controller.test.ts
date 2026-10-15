@@ -32,7 +32,7 @@ async function setup({
     listGuides: vi.fn(async () => []),
     openGuide: vi.fn(async (id: string) => ({
       guide: { ...guide(), id },
-      path: "/lib/Guide.guidesya",
+      path: "/lib/Guide.guiderecorder",
       readOnly: false,
       migratedFrom: null,
       migrationError: null,

@@ -73,7 +73,7 @@ function readFiles(root: string, dir = root, files = new Map<string, Buffer>()):
 export interface BackendOptions {
   /**
    * Schema versions to serve guides with, by guide id. One newer than the
-   * app's opens read-only, as a guide from a newer GuidesYa would.
+   * app's opens read-only, as a guide from a newer GuideRecorder would.
    */
   schemaVersions?: Record<string, number>;
   /** First-run setup not finished yet (default: finished, so setup stays out of the way). */
@@ -153,7 +153,7 @@ export class Backend {
     input_monitoring: "not_determined",
   };
   /** The library as `library_info` reports it. */
-  library: { path: string; error: string | null } = { path: "/Users/me/Documents/GuidesYa", error: null };
+  library: { path: string; error: string | null } = { path: "/Users/me/Documents/GuideRecorder", error: null };
   /** What `choose_library_folder` returns next (null: cancelled). */
   nextLibrary: string | null = null;
 
@@ -215,7 +215,7 @@ export class Backend {
   readonly aiCancels: number[] = [];
 
   constructor(options: BackendOptions = {}) {
-    for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guidesya")).sort()) {
+    for (const name of readdirSync(FIXTURES).filter((n) => n.endsWith(".guiderecorder")).sort()) {
       const path = join(FIXTURES, name);
       const files = readFiles(path);
       const guide = JSON.parse(files.get("guide.json")!.toString("utf8")) as Guide;
@@ -490,7 +490,7 @@ export class Backend {
     guide.id = id;
     guide.title = title ?? `Recording 2026-10-15 10:0${n}`;
     guide.schemaVersion = SCHEMA_VERSION;
-    const path = `/Users/me/Documents/GuidesYa/${guide.title}.guidesya`;
+    const path = `/Users/me/Documents/GuideRecorder/${guide.title}.guiderecorder`;
     this.bundles.set(id, { path, guide, files: new Map(source.files) });
     const saved: RecordingSaved = {
       guideId: id,
@@ -609,11 +609,11 @@ export class Backend {
         return structuredClone(next);
       }
       case "library_info":
-        return { ...this.library, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuidesYa" };
+        return { ...this.library, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuideRecorder" };
       case "choose_library_folder":
         return this.nextLibrary;
       case "switch_library": {
-        const path = (args.path as string | null) ?? "/Users/me/Documents/GuidesYa";
+        const path = (args.path as string | null) ?? "/Users/me/Documents/GuideRecorder";
         this.library = { path, error: null };
         this.settings.general.library = (args.path as string | null) ?? null;
         return path;
@@ -645,10 +645,10 @@ export class Backend {
         return null;
       case "mcp_setup":
         return {
-          command: "claude mcp add guidesya -- /Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp --library /Users/me/Documents/GuidesYa",
-          mcpPath: "/Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp",
+          command: "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder",
+          mcpPath: "/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp",
           found: true,
-          library: "/Users/me/Documents/GuidesYa",
+          library: "/Users/me/Documents/GuideRecorder",
         };
       case "start_recording": {
         if (this.recording.state !== "idle") fail("invalid", "a recording is already running");

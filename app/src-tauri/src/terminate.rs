@@ -190,13 +190,15 @@ mod macos {
                 std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let delegate = send(ns_app(), sel_registerName(c"delegate".as_ptr()));
             if delegate.is_null() {
-                eprintln!("guidesya: no app delegate; Dock Quit and logout will not save first");
+                eprintln!(
+                    "guiderecorder: no app delegate; Dock Quit and logout will not save first"
+                );
                 return;
             }
             let class = object_getClass(delegate);
             if CStr::from_ptr(class_getName(class)) != TAO_DELEGATE_CLASS {
                 eprintln!(
-                    "guidesya: unknown app delegate; Dock Quit and logout will not save first"
+                    "guiderecorder: unknown app delegate; Dock Quit and logout will not save first"
                 );
                 return;
             }
@@ -207,7 +209,9 @@ mod macos {
                 c"Q@:@".as_ptr(),
             );
             if added == ObjcBool::default() {
-                eprintln!("guidesya: the app delegate already handles applicationShouldTerminate:");
+                eprintln!(
+                    "guiderecorder: the app delegate already handles applicationShouldTerminate:"
+                );
                 return;
             }
             // NSApp may cache which optional methods the delegate answers
@@ -246,7 +250,9 @@ mod macos {
                 class,
             ) == ObjcBool::default()
         {
-            eprintln!("guidesya: unknown NSApplication class; a second quit may skip the save");
+            eprintln!(
+                "guiderecorder: unknown NSApplication class; a second quit may skip the save"
+            );
             return;
         }
         let sel = sel_registerName(c"terminate:".as_ptr());
@@ -261,7 +267,7 @@ mod macos {
         let added = class_addMethod(class, sel, terminate as *const c_void, c"v@:@".as_ptr());
         if added == ObjcBool::default() {
             eprintln!(
-                "guidesya: NSApp already overrides terminate:; a second quit may skip the save"
+                "guiderecorder: NSApp already overrides terminate:; a second quit may skip the save"
             );
         }
     }
@@ -271,7 +277,7 @@ mod macos {
     /// AppKit would terminate at once; otherwise NSApplication's.
     extern "C" fn terminate(this: *mut c_void, cmd: *const c_void, sender: *mut c_void) {
         if WAIT.holds() {
-            eprintln!("guidesya: a quit is already waiting for the save; ignoring terminate:");
+            eprintln!("guiderecorder: a quit is already waiting for the save; ignoring terminate:");
             return;
         }
         if let Some(inherited) = SUPER_TERMINATE.get() {

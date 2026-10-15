@@ -1,5 +1,5 @@
 // Converts guide text (core's Markdown subset, see
-// crates/guidesya-core/src/markdown.rs and design #444 "Text format") to and
+// crates/guiderecorder-core/src/markdown.rs and design #444 "Text format") to and
 // from TipTap documents.
 //
 // The serializer is a port of core's `normalize` renderer, so text written by

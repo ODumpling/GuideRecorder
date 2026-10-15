@@ -96,7 +96,7 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
               : library?.starting
                 ? "Opening…"
                 : "Where your guides are stored."}
-            {library?.fromEnv && " GUIDESYA_LIBRARY sets the folder at startup."}
+            {library?.fromEnv && " GUIDERECORDER_LIBRARY sets the folder at startup."}
             {hasDoc && " The open guide is saved and closed first."}
           </>
         }
@@ -111,7 +111,7 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
           </Button>
         )}
       </Row>
-      <Row label="Launch at login" note="Start GuidesYa when you log in.">
+      <Row label="Launch at login" note="Start GuideRecorder when you log in.">
         <Toggle
           label="Launch at login"
           checked={loginOn ?? settings.general.launchAtLogin}
@@ -314,7 +314,7 @@ export function AiSection({ api }: { api: SettingsApi }) {
   };
 
   return (
-    <Section title="AI" intro="GuidesYa sends step screenshots and their text to Anthropic to write guide text.">
+    <Section title="AI" intro="GuideRecorder sends step screenshots and their text to Anthropic to write guide text.">
       <Row label="Use AI">
         <Toggle label="Use AI" checked={ai.enabled} disabled={readOnly} onChange={(enabled) => setAi({ enabled })} />
       </Row>
@@ -570,7 +570,7 @@ export function PermissionsSection({ api }: { api: SettingsApi }) {
   return (
     <Section
       title="Permissions"
-      intro="Recording needs all of these and stays off until they are allowed. Editing and exporting work without them. Some changes take effect only after GuidesYa restarts."
+      intro="Recording needs all of these and stays off until they are allowed. Editing and exporting work without them. Some changes take effect only after GuideRecorder restarts."
     >
       <PermissionList api={api} />
     </Section>
@@ -631,8 +631,8 @@ export function McpSection({ api }: { api: SettingsApi }) {
           </div>
           {!setup.found && (
             <p className="text-xs text-[var(--status-warning)]">
-              guidesya-mcp was not found next to the app ({setup.mcpPath}). In a development build, run
-              <code className="mx-1 font-mono">cargo build -p guidesya-mcp</code> first.
+              guiderecorder-mcp was not found next to the app ({setup.mcpPath}). In a development build, run
+              <code className="mx-1 font-mono">cargo build -p guiderecorder-mcp</code> first.
             </p>
           )}
         </div>

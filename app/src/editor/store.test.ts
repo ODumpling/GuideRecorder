@@ -24,7 +24,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
         : [
             {
               id: "G1",
-              path: "/lib/Guide.guidesya",
+              path: "/lib/Guide.guiderecorder",
               title: "Guide",
               summary: "",
               tags: [],
@@ -37,7 +37,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     ),
     openGuide: vi.fn(async (id: string) => ({
       guide: { ...guide(), id },
-      path: "/lib/Guide.guidesya",
+      path: "/lib/Guide.guiderecorder",
       readOnly: false,
       migratedFrom: null,
       migrationError: null,

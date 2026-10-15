@@ -34,7 +34,7 @@ function ReadOnlyBanner() {
       <span>
         {doc.migrationError
           ? `This guide was upgraded but could not be saved (${doc.migrationError}). It is read-only.`
-          : "This guide was made with a newer version of GuidesYa. It is read-only."}
+          : "This guide was made with a newer version of GuideRecorder. It is read-only."}
       </span>
     </div>
   );
@@ -62,7 +62,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
   const [exporting, setExporting] = useState(false);
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-      <span className="truncate text-sm font-medium">{doc ? doc.guide.title || "Untitled" : "GuidesYa"}</span>
+      <span className="truncate text-sm font-medium">{doc ? doc.guide.title || "Untitled" : "GuideRecorder"}</span>
       {doc?.migratedFrom != null && !doc.migrationError && (
         <span className="text-xs text-muted-foreground">upgraded from schema v{doc.migratedFrom}</span>
       )}

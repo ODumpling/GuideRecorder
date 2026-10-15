@@ -5,7 +5,7 @@
 //! session's event tap turns the manual-step hotkey into a manual step and
 //! drops the key itself.
 
-use guidesya_capture::macos::session::Hotkey;
+use guiderecorder_capture::macos::session::Hotkey;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_global_shortcut::{
@@ -69,7 +69,7 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
 pub fn register<R: Runtime>(app: &AppHandle<R>) {
     for (shortcut, _) in bindings() {
         if let Err(e) = app.global_shortcut().register(shortcut) {
-            eprintln!("guidesya: cannot register the hotkey {shortcut}: {e}");
+            eprintln!("guiderecorder: cannot register the hotkey {shortcut}: {e}");
         }
     }
 }

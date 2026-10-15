@@ -1,4 +1,4 @@
-# GuidesYa
+# GuideRecorder
 
 Desktop step recorder. Record what you do, then edit the guide and export it to PDF, DOCX, Markdown or HTML. Local-first, with AI-written step text and a read-only MCP server.
 
@@ -8,12 +8,12 @@ Design docs live in Solo project 51 scratchpads (overview: #437).
 
 ```
 crates/
-  guidesya-core/      format, library, index, step detection, export, AI
-  guidesya-capture/   CaptureBackend trait + macOS backend
-  guidesya-mcp/       stdio MCP server (binary: guidesya-mcp)
-  guidesya-cli/       CLI (binary: guidesya)
+  guiderecorder-core/      format, library, index, step detection, export, AI
+  guiderecorder-capture/   CaptureBackend trait + macOS backend
+  guiderecorder-mcp/       stdio MCP server (binary: guiderecorder-mcp)
+  guiderecorder-cli/       CLI (binary: guiderecorder)
 app/                  Tauri 2 app: React/Vite/TS/Tailwind/shadcn
-  src-tauri/          guidesya-app crate
+  src-tauri/          guiderecorder-app crate
 fixtures/guides/      fixture guides for tests
 ```
 
@@ -32,15 +32,15 @@ once; see [docs/signing.md](docs/signing.md).
 ## Use with Claude Code (MCP)
 
 ```sh
-cargo build --release -p guidesya-mcp
-claude mcp add guidesya -- "$PWD/target/release/guidesya-mcp" --library ~/Documents/GuidesYa
+cargo build --release -p guiderecorder-mcp
+claude mcp add guiderecorder -- "$PWD/target/release/guiderecorder-mcp" --library ~/Documents/GuideRecorder
 ```
 
-The server is read-only. See [crates/guidesya-mcp/README.md](crates/guidesya-mcp/README.md).
+The server is read-only. See [crates/guiderecorder-mcp/README.md](crates/guiderecorder-mcp/README.md).
 
 ## CLI
 
 ```sh
-cargo run -p guidesya-cli -- --library <dir> list | search <q> | validate <bundle>
-cargo run -p guidesya-cli -- --library <dir> --index <path> reindex   # the only writer
+cargo run -p guiderecorder-cli -- --library <dir> list | search <q> | validate <bundle>
+cargo run -p guiderecorder-cli -- --library <dir> --index <path> reindex   # the only writer
 ```

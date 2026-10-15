@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GuidesYa",
+  "productName": "GuideRecorder",
   "version": "0.1.0",
-  "identifier": "dev.guidesya.app",
+  "identifier": "dev.dufflebear.guiderecorder",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1430",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "GuidesYa",
+        "title": "GuideRecorder",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -36,7 +36,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "GuidesYa Local Dev"
+      "signingIdentity": "GuideRecorder Local Dev"
     }
   }
 }

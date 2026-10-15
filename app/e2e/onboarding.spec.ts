@@ -4,7 +4,7 @@ test.describe("on first launch", () => {
   test.use({ backendOptions: { firstRun: true } });
 
   test("walks through permissions, library and API key, then stays done", async ({ page, backend }) => {
-    const setup = page.getByRole("dialog", { name: "Set up GuidesYa" });
+    const setup = page.getByRole("dialog", { name: "Set up GuideRecorder" });
     await expect(setup).toBeVisible();
 
     // 1. Permissions: recording is off until all are allowed; editing isn't blocked.
@@ -16,7 +16,7 @@ test.describe("on first launch", () => {
     await setup.getByRole("button", { name: "Continue", exact: true }).click();
 
     // 2. Library: another folder.
-    await expect(setup.getByText("/Users/me/Documents/GuidesYa")).toBeVisible();
+    await expect(setup.getByText("/Users/me/Documents/GuideRecorder")).toBeVisible();
     backend.nextLibrary = "/Users/me/Team Guides";
     await setup.getByRole("button", { name: "Choose a folder…" }).click();
     await expect(setup.getByText("/Users/me/Team Guides")).toBeVisible();
@@ -37,7 +37,7 @@ test.describe("on first launch", () => {
   });
 
   test("can be skipped through without recording or a key", async ({ page, backend }) => {
-    const setup = page.getByRole("dialog", { name: "Set up GuidesYa" });
+    const setup = page.getByRole("dialog", { name: "Set up GuideRecorder" });
     await setup.getByRole("button", { name: "Continue without recording" }).click();
     await setup.getByRole("button", { name: "Continue" }).click();
     await setup.getByRole("button", { name: "Skip" }).click();
@@ -52,11 +52,11 @@ test.describe("with a missing library", () => {
   test.use({ backendOptions: { libraryError: "the library folder /Volumes/Team/Guides is missing (is its disk connected?)" } });
 
   test("opens on the library step and needs a working library to continue", async ({ page, backend }) => {
-    const setup = page.getByRole("dialog", { name: "Set up GuidesYa" });
+    const setup = page.getByRole("dialog", { name: "Set up GuideRecorder" });
     await expect(setup.getByRole("button", { name: /Library folder/ })).toHaveAttribute("aria-current", "step");
     await expect(setup.getByText(/is missing/)).toBeVisible();
     await expect(setup.getByRole("button", { name: "Continue" })).toBeDisabled();
-    await setup.getByRole("button", { name: "Use ~/Documents/GuidesYa" }).click();
+    await setup.getByRole("button", { name: "Use ~/Documents/GuideRecorder" }).click();
     await expect(setup.getByText(/is missing/)).toBeHidden();
     await setup.getByRole("button", { name: "Continue" }).click();
     expect(backend.settings.general.library).toBeNull();
@@ -71,5 +71,5 @@ test("Settings reopens setup", async ({ page, backend }) => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Run setup again" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
-  await expect(page.getByRole("dialog", { name: "Set up GuidesYa" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Set up GuideRecorder" })).toBeVisible();
 });

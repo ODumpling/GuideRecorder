@@ -21,8 +21,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use guidesya_capture::macos::frames::{self, CaptureTarget, DisplayInfo, FrameError, WindowInfo};
-use guidesya_core::model::{Point, Rect};
+use guiderecorder_capture::macos::frames::{
+    self, CaptureTarget, DisplayInfo, FrameError, WindowInfo,
+};
+use guiderecorder_core::model::{Point, Rect};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -178,7 +180,7 @@ fn listing_error(e: FrameError) -> AppError {
 }
 
 /// The windows the user can record, frontmost first: on screen, on the
-/// normal layer, at least 80 points on both sides, and neither GuidesYa's
+/// normal layer, at least 80 points on both sides, and neither GuideRecorder's
 /// nor an excluded app's (settings: `recording.excludedApps`). `invalid`
 /// without Screen Recording permission.
 #[tauri::command]
@@ -372,7 +374,7 @@ pub async fn pick_region<R: Runtime>(
     let frame = frame.unwrap_or(display.bounds);
     let display_id = if differs(frame, display.bounds) {
         eprintln!(
-            "guidesya: the region picker covers {frame:?}, not display {} at {:?}",
+            "guiderecorder: the region picker covers {frame:?}, not display {} at {:?}",
             display.id, display.bounds
         );
         DisplayInfo::containing(Point {
@@ -401,7 +403,7 @@ fn open_overlay<R: Runtime>(
     }
     let url = WebviewUrl::App(format!("{URL}?pick={id}").into());
     let window = WebviewWindowBuilder::new(app, LABEL, url)
-        .title("GuidesYa Region")
+        .title("GuideRecorder Region")
         .position(bounds.x, bounds.y)
         .inner_size(bounds.width, bounds.height)
         .decorations(false)
@@ -461,11 +463,11 @@ pub fn finish_region_pick<R: Runtime>(
         frame: overlay_frame(&window),
     });
     if !picker.finish(pick, picked) && picker.is_open() {
-        eprintln!("guidesya: ignored an answer for region pick {pick:?}, not the open one");
+        eprintln!("guiderecorder: ignored an answer for region pick {pick:?}, not the open one");
         return Ok(());
     }
     if let Err(e) = window.destroy() {
-        eprintln!("guidesya: cannot close the region picker: {e}");
+        eprintln!("guiderecorder: cannot close the region picker: {e}");
     }
     Ok(())
 }
@@ -737,7 +739,7 @@ mod tests {
         let listed = || {
             vec![
                 window(1, 20, "com.apple.Safari"),
-                window(2, 99, "dev.guidesya.app"),
+                window(2, 99, "dev.dufflebear.guiderecorder"),
                 window(3, 30, "com.1password.1password"),
                 WindowInfo {
                     frame: rect(0.0, 0.0, 60.0, 600.0),

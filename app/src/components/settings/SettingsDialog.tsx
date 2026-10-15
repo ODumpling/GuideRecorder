@@ -82,13 +82,13 @@ export function SettingsDialog({
                 </Button>
               </Dialog.Close>
             </div>
-            <Dialog.Description className="sr-only">GuidesYa settings</Dialog.Description>
+            <Dialog.Description className="sr-only">GuideRecorder settings</Dialog.Description>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
               {readOnly && (
                 <p className="mb-3 flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-xs">
                   <Lock className="size-3.5 shrink-0" />
                   {loadError ??
-                    "These settings were saved by a newer GuidesYa. They are shown but can't be changed here."}
+                    "These settings were saved by a newer GuideRecorder. They are shown but can't be changed here."}
                 </p>
               )}
               {((loadError && !readOnly) || error) && (

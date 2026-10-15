@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; img-src data:; style-src &#x27;unsafe-inline&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="GuideRecorder">
+<title>Kurzanleitung Drucker</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --accent: #2563eb;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #59636e;
+  --border: #d8dee4;
+  --code-bg: #eff2f5;
+  --tip: #1a7f37;
+  --warning: #9a6700;
+  --note: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --code-bg: #262c36;
+    --tip: #3fb950;
+    --warning: #d29922;
+    --note: #4493f8;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.guide { max-width: 52rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+.guide-header { margin-bottom: 2rem; border-bottom: 3px solid var(--accent); padding-bottom: 1rem; }
+.logo { display: block; max-height: 3rem; max-width: 12rem; margin-bottom: 1rem; }
+h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+h2 { font-size: 1.4rem; line-height: 1.3; margin: 2.5rem 0 1rem; overflow-wrap: anywhere; }
+.summary { color: var(--muted); font-size: 1.125rem; margin: 0; }
+p { margin: 0 0 .75rem; }
+p:last-child { margin-bottom: 0; }
+ul, ol { margin: 0 0 .75rem; padding-left: 1.5rem; }
+li > ul, li > ol { margin-bottom: 0; }
+a { color: var(--accent); }
+code {
+  font: .9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: .1em .3em;
+  overflow-wrap: anywhere;
+}
+.intro, .prerequisites { margin-bottom: 1.5rem; }
+.step {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.step-title { display: flex; align-items: flex-start; gap: .75rem; font-size: 1.1rem; line-height: 1.4; margin: 0 0 1rem; }
+.step-number {
+  flex: none;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 .5rem;
+  border-radius: 1rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 2rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.step-text { padding-top: .2rem; overflow-wrap: anywhere; }
+.step-image { margin: 0 0 1rem; }
+.step-image:last-child { margin-bottom: 0; }
+.step-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.note {
+  border-left: 4px solid var(--note);
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+  padding: .75rem 1rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.note-tip { border-left-color: var(--tip); }
+.note-warning { border-left-color: var(--warning); }
+.note-label { font-weight: 600; margin-bottom: .25rem; }
+.note-tip .note-label { color: var(--tip); }
+.note-warning .note-label { color: var(--warning); }
+.note-note .note-label { color: var(--note); }
+@media print {
+  :root { --bg: #fff; --card: #fff; --text: #000; --muted: #444; --border: #bbb; --code-bg: #f0f0f0; }
+  body { font-size: 11pt; }
+  .guide { max-width: none; padding: 0; }
+  .step { border-color: #bbb; }
+  a { color: inherit; }
+  h2 { break-after: avoid; page-break-after: avoid; }
+}
+</style>
+</head>
+<body>
+<main class="guide">
+<header class="guide-header">
+<h1>Kurzanleitung Drucker</h1>
+</header>
+<section class="intro">
+<p>Für den Drucker im <strong>2. Stock</strong>.</p>
+</section>
+<article class="step" id="step-1">
+<h2 class="step-title"><span class="step-number" aria-label="Schritt 1">1</span><span class="step-text">Papierfach <strong>2</strong> öffnen</span></h2>
+<figure class="step-image">
+<img src="data:image/png;base64,…" width="64" height="40" alt="Papierfach 2 öffnen">
+</figure>
+<div class="step-description">
+<p>Fach ganz herausziehen.<br>
+Dann Papier einlegen.</p>
+<ul>
+<li>A4</li>
+<li>A5</li>
+</ul>
+<p>Hinweis</p>
+<p>Nicht <strong>überfüllen</strong>.</p>
+</div>
+</article>
+<aside class="note note-note" role="note">
+<p class="note-label">Hinweis</p>
+<p>Mehr dazu im <a href="handbuch.pdf" rel="noopener noreferrer">Handbuch</a> und unter <a href="https://example.com/drucker" rel="noopener noreferrer">https://example.com/drucker</a>.</p>
+</aside>
+</main>
+</body>
+</html>
+<!-- warnings
+-->

@@ -26,9 +26,9 @@ function PermissionsStep({ api, onNext }: { api: SettingsApi; onNext(): void }) 
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        To record a guide, GuidesYa needs to see the screen and notice your clicks and typing. Allow each one in
+        To record a guide, GuideRecorder needs to see the screen and notice your clicks and typing. Allow each one in
         System Settings. You can edit and export guides without them; recording stays off until all three are
-        allowed. Screen Recording may need GuidesYa to restart.
+        allowed. Screen Recording may need GuideRecorder to restart.
       </p>
       <PermissionList api={api} poll onRows={onRows} />
       <p className={cn("text-xs", granted ? "text-[var(--status-success)]" : "text-muted-foreground")}>
@@ -85,7 +85,7 @@ function LibraryStep({ api, onNext }: { api: SettingsApi; onNext(): void }) {
           </span>
         )}
         {info?.fromEnv && (
-          <span className="text-xs text-muted-foreground">GUIDESYA_LIBRARY sets this folder at startup.</span>
+          <span className="text-xs text-muted-foreground">GUIDERECORDER_LIBRARY sets this folder at startup.</span>
         )}
       </div>
       <div className="flex flex-wrap gap-2">
@@ -94,7 +94,7 @@ function LibraryStep({ api, onNext }: { api: SettingsApi; onNext(): void }) {
         </Button>
         {info?.defaultPath && (info.path !== info.defaultPath || info.error) && (
           <Button variant="outline" disabled={busy} onClick={() => void useDefault()} title={info.defaultPath}>
-            Use ~/Documents/GuidesYa
+            Use ~/Documents/GuideRecorder
           </Button>
         )}
       </div>
@@ -140,7 +140,7 @@ function ApiKeyStep({ api, onDone }: { api: SettingsApi; onDone(): void }) {
       }}
     >
       <p className="text-sm text-muted-foreground">
-        With an Anthropic API key, GuidesYa writes the step text for you from the screenshots. It's optional: you
+        With an Anthropic API key, GuideRecorder writes the step text for you from the screenshots. It's optional: you
         can write guides yourself, or add a key later in Settings. The key is kept in your Keychain.
       </p>
       {stored && <p className="text-xs text-[var(--status-success)]">A key is already stored.</p>}
@@ -199,7 +199,7 @@ export function Onboarding({ api = tauriSettingsApi }: { api?: SettingsApi }) {
           onPointerDownOutside={(e) => e.preventDefault()}
           className="fixed top-1/2 left-1/2 z-50 flex max-h-[90vh] w-[34rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-background p-6 text-foreground shadow-lg"
         >
-          <Dialog.Title className="text-lg font-semibold">Set up GuidesYa</Dialog.Title>
+          <Dialog.Title className="text-lg font-semibold">Set up GuideRecorder</Dialog.Title>
           <Dialog.Description className="sr-only">First-run setup in three steps.</Dialog.Description>
           <ol aria-label="Setup steps" className="flex gap-2">
             {STEPS.map((s, i) => {

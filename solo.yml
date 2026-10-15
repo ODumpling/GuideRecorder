@@ -1,25 +1,25 @@
-name: GuidesYa
+name: GuideRecorder
 icon: app/src-tauri/icons/128x128.png
 
 # Everyday commands. None auto-start; run them from Solo.
 processes:
   "App":
-    # Your real library (Settings, or ~/Documents/GuidesYa).
+    # Your real library (Settings, or ~/Documents/GuideRecorder).
     command: pnpm tauri dev
     working_dir: app
     auto_start: false
 
   "App (sample guides)":
     # A throwaway copy of fixtures/guides in target/sample-library.
-    command: "mkdir -p target && { [ -d target/sample-library ] || cp -R fixtures/guides target/sample-library; } && cd app && GUIDESYA_LIBRARY=\"$PWD/../target/sample-library\" pnpm tauri dev"
+    command: "mkdir -p target && { [ -d target/sample-library ] || cp -R fixtures/guides target/sample-library; } && cd app && GUIDERECORDER_LIBRARY=\"$PWD/../target/sample-library\" pnpm tauri dev"
     auto_start: false
 
   "App (signed bundle)":
-    # Builds a debug .app signed with "GuidesYa Local Dev" and starts it as
+    # Builds a debug .app signed with "GuideRecorder Local Dev" and starts it as
     # the app itself, so Screen Recording and Accessibility grants belong to
-    # GuidesYa and survive rebuilds (see docs/signing.md). Runs until the app
+    # GuideRecorder and survive rebuilds (see docs/signing.md). Runs until the app
     # quits. Needs `scripts/macos-signing.sh create` once.
-    command: "set -e; scripts/macos-signing.sh status; (cd app && pnpm tauri build --debug --bundles app); open -W target/debug/bundle/macos/GuidesYa.app"
+    command: "set -e; scripts/macos-signing.sh status; (cd app && pnpm tauri build --debug --bundles app); open -W target/debug/bundle/macos/GuideRecorder.app"
     auto_start: false
 
   "Reset sample guides":

@@ -5,7 +5,7 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await page.keyboard.press("ControlOrMeta+,");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByTitle("/Users/me/Documents/GuidesYa")).toHaveText("GuidesYa");
+  await expect(dialog.getByTitle("/Users/me/Documents/GuideRecorder")).toHaveText("GuideRecorder");
 
   // Recording: a shortcut is recorded from a key press; a bad pause is refused.
   await dialog.getByRole("button", { name: "Recording" }).click();
@@ -43,7 +43,7 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await dialog.getByRole("button", { name: "Permissions" }).click();
   await expect(dialog.getByText("Not allowed")).toBeVisible();
   await dialog.getByRole("button", { name: "MCP" }).click();
-  await expect(dialog.getByText(/claude mcp add guidesya --/)).toBeVisible();
+  await expect(dialog.getByText(/claude mcp add guiderecorder --/)).toBeVisible();
 
   await dialog.getByRole("button", { name: "Close settings" }).click();
   await openGuide(page, "Rotate an API key");

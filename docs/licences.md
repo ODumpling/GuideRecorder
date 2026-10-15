@@ -1,6 +1,6 @@
 # Dependency licences
 
-Audit of 2026-10-14 (Solo todo #373). GuidesYa is closed source, so only
+Audit of 2026-10-14 (Solo todo #373). GuideRecorder is closed source, so only
 permissive licences are acceptable; nothing GPL/LGPL/AGPL is linked.
 
 ## Rust (`cargo metadata`, ~800 third-party crates)
@@ -27,7 +27,7 @@ permissive. Direct additions: 13 TipTap 3.32 packages and markdown-it 15
 ## Bundled assets
 
 - Lato Regular/Bold/Italic/BoldItalic 2.015: SIL OFL 1.1
-  (`crates/guidesya-core/assets/fonts`, hashes in its README).
+  (`crates/guiderecorder-core/assets/fonts`, hashes in its README).
 - typst-assets fonts (DejaVu Sans Mono, New Computer Modern, Libertinus
   Serif): their own free font licences (Bitstream Vera/DejaVu, GUST/OFL,
   OFL), redistributable; embedded as PDF subsets.

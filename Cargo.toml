@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/guidesya-core",
-    "crates/guidesya-capture",
-    "crates/guidesya-mcp",
-    "crates/guidesya-cli",
+    "crates/guiderecorder-core",
+    "crates/guiderecorder-capture",
+    "crates/guiderecorder-mcp",
+    "crates/guiderecorder-cli",
     "app/src-tauri",
 ]
 
@@ -15,8 +15,8 @@ license = "LicenseRef-Proprietary"
 publish = false
 
 [workspace.dependencies]
-guidesya-core = { path = "crates/guidesya-core" }
-guidesya-capture = { path = "crates/guidesya-capture" }
+guiderecorder-core = { path = "crates/guiderecorder-core" }
+guiderecorder-capture = { path = "crates/guiderecorder-capture" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

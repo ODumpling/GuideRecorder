@@ -81,7 +81,7 @@ describe("settings store", () => {
     await store.getState().load();
     expect(await store.getState().change((s) => s)).toBe(false);
     expect(update).not.toHaveBeenCalled();
-    expect(store.getState().error).toContain("newer GuidesYa");
+    expect(store.getState().error).toContain("newer GuideRecorder");
   });
 
   it("reports a failed load", async () => {

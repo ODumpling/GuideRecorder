@@ -71,7 +71,7 @@ export function toArrayBuffer(response: ArrayBuffer | ArrayBufferView | number[]
  * not inserted: the editor inserts it as an undoable command.
  */
 export function addImageStep(guideId: string, png: Uint8Array): Promise<Step> {
-  return invoke("add_image_step", png, { headers: { "guidesya-guide-id": guideId } });
+  return invoke("add_image_step", png, { headers: { "guiderecorder-guide-id": guideId } });
 }
 
 /** Copies a step's image files for the new step `newStepId`; returns its image. */
@@ -125,7 +125,7 @@ export const tauriExportApi: ExportApi = {
 };
 
 /** Emitted by the Rust side on Cmd+Q; answer with `quit_ack`, then save and quit. */
-export const QUIT_REQUESTED_EVENT = "guidesya://quit-requested";
+export const QUIT_REQUESTED_EVENT = "guiderecorder://quit-requested";
 
 /** A readable message from a rejected command (an `AppError`) or anything else. */
 export function errorMessage(error: unknown): string {

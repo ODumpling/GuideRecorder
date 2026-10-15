@@ -1,4 +1,4 @@
-// Mirrors guidesya_core::model (guide.json) and the app's IPC types.
+// Mirrors guiderecorder_core::model (guide.json) and the app's IPC types.
 
 export type Ulid = string;
 
@@ -233,7 +233,7 @@ export interface RegionPick {
 export interface Settings {
   version: number;
   general: {
-    /** null: ~/Documents/GuidesYa. */
+    /** null: ~/Documents/GuideRecorder. */
     library: string | null;
     launchAtLogin: boolean;
     menuBarIcon: boolean;
@@ -267,7 +267,7 @@ export interface Settings {
 
 export interface SettingsView {
   settings: Settings;
-  /** Saved by a newer GuidesYa: shown, not saved over. */
+  /** Saved by a newer GuideRecorder: shown, not saved over. */
   readOnly: boolean;
   /** Why the stored settings could not be used, if so. */
   loadError: string | null;

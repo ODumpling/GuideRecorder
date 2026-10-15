@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use guidesya_core::index::Index;
+use guiderecorder_core::index::Index;
 use serde::Serialize;
 use tauri::menu::Menu;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
@@ -34,13 +34,13 @@ struct AppInfo {
 fn app_info() -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION"),
-        schema_version: guidesya_core::SCHEMA_VERSION,
-        capture_backend: guidesya_capture::backend_name(),
+        schema_version: guiderecorder_core::SCHEMA_VERSION,
+        capture_backend: guiderecorder_capture::backend_name(),
     }
 }
 
 /// Id of the app menu's own Quit item; see [`app_menu`].
-const QUIT_MENU_ID: &str = "guidesya-quit";
+const QUIT_MENU_ID: &str = "guiderecorder-quit";
 
 /// Tauri's default menu with its Quit item swapped for one that goes
 /// through the `QuitGate`. The predefined item sends NSApp `terminate:`,
@@ -65,7 +65,9 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 return Ok(menu);
             }
         }
-        eprintln!("guidesya: no Quit item in the default menu; Cmd+Q will quit without saving");
+        eprintln!(
+            "guiderecorder: no Quit item in the default menu; Cmd+Q will quit without saving"
+        );
     }
     Ok(menu)
 }
@@ -97,7 +99,7 @@ pub fn run() {
             app.manage(Arc::new(picker::RegionPicker::default()));
             app.manage(Arc::new(ai::AiRuns::default()));
             if let Err(e) = tray::create(app.handle()) {
-                eprintln!("guidesya: cannot create the tray icon: {e}");
+                eprintln!("guiderecorder: cannot create the tray icon: {e}");
             }
             hotkeys::register(app.handle());
             toolbar::sync(app.handle());
@@ -136,7 +138,7 @@ pub fn run() {
                     Index::default_path(),
                 );
                 if let Err(e) = &session {
-                    eprintln!("guidesya: cannot open library: {}", e.message);
+                    eprintln!("guiderecorder: cannot open library: {}", e.message);
                 }
                 cell.set(session);
             });
@@ -200,7 +202,7 @@ pub fn run() {
             commands::quit_cancel,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building GuidesYa")
+        .expect("error while building GuideRecorder")
         .run(|app, event| {
             if let RunEvent::ExitRequested { code, api, .. } = event {
                 let gate = app.state::<Arc<commands::QuitGate>>();

@@ -1,5 +1,5 @@
 //! Exporting the open guide from the app (design #443; the CLI's
-//! `guidesya export` is the reference), plus the crop check the annotation
+//! `guiderecorder export` is the reference), plus the crop check the annotation
 //! layer uses before it shows a crop view.
 //!
 //! The webview never names a file the app reads or writes on its own: the
@@ -13,11 +13,11 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use guidesya_core::export::md::{Branding, MAX_LOGO_BYTES};
-use guidesya_core::export::{
+use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
+use guiderecorder_core::export::{
     docx, html, md, pdf, verify_crop_rect, ExportReport, OutPathError, RenderGuide,
 };
-use guidesya_core::model::StepImage;
+use guiderecorder_core::model::StepImage;
 use serde::{Deserialize, Serialize};
 
 use crate::editor::{check_image_path, file_error, parse_id, AppError, ErrorKind, Result, Session};
@@ -395,9 +395,9 @@ fn read_logo(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// Refuses an output path inside a guide bundle or the library; see
-/// [`guidesya_core::export::check_out_path`].
+/// [`guiderecorder_core::export::check_out_path`].
 pub fn check_out_path(out: &Path, bundle: &Path, library: &Path) -> Result<()> {
-    match guidesya_core::export::check_out_path(out, bundle, Some(library)) {
+    match guiderecorder_core::export::check_out_path(out, bundle, Some(library)) {
         Ok(_) => Ok(()),
         Err(e @ (OutPathError::InsideBundle(_) | OutPathError::InsideLibrary(_))) => {
             Err(AppError::new(
@@ -450,7 +450,7 @@ mod tests {
     fn scratch() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/guidesya-app-tests")
+            .join("../../target/guiderecorder-app-tests")
             .join(format!(
                 "export-{}-{}",
                 std::process::id(),
@@ -531,7 +531,7 @@ mod tests {
     fn out_paths_inside_a_library_or_bundle_are_refused() {
         let dir = scratch();
         let library = dir.join("Library");
-        let bundle = library.join("Guide.guidesya");
+        let bundle = library.join("Guide.guiderecorder");
         fs::create_dir_all(&bundle).unwrap();
         let elsewhere = dir.join("Exports");
         fs::create_dir_all(&elsewhere).unwrap();
@@ -541,7 +541,7 @@ mod tests {
         for out in [
             bundle.join("export"),
             library.join("Guide"),
-            dir.join("Other.guidesya/out"),
+            dir.join("Other.guiderecorder/out"),
             elsewhere.join("../Library/Guide"),
         ] {
             let err = check_out_path(&out, &bundle, &library).unwrap_err();
@@ -572,8 +572,8 @@ mod tests {
     }
 
     use crate::editor::tests::{fixture_id, library, FIXTURE};
-    use guidesya_core::library::{write_webp, PixelBuffer};
-    use guidesya_core::model::{ImageShow, Rect};
+    use guiderecorder_core::library::{write_webp, PixelBuffer};
+    use guiderecorder_core::model::{ImageShow, Rect};
 
     /// A started session over a copy of the fixtures, the fixture guide's
     /// id, and a folder outside the library the user "chose".
@@ -783,14 +783,14 @@ mod tests {
 
     #[test]
     fn report_becomes_a_result() {
-        let step = guidesya_core::Ulid::new();
+        let step = guiderecorder_core::Ulid::new();
         let mut report = ExportReport {
             files: vec![PathBuf::from("/out/guide.md")],
             ..ExportReport::default()
         };
         report.add_warnings(
             step,
-            [guidesya_core::export::RenderWarning::CropOffsetUnknown],
+            [guiderecorder_core::export::RenderWarning::CropOffsetUnknown],
         );
         report.notes.push("a note".into());
         let result = ExportResult::from(report);

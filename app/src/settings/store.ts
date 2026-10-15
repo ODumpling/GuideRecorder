@@ -49,7 +49,7 @@ export function createSettingsStore(api: SettingsApi): SettingsStore {
       const current = get().settings;
       if (!current) return Promise.resolve(false);
       if (get().readOnly) {
-        set({ error: "These settings were saved by a newer GuidesYa and can't be changed here." });
+        set({ error: "These settings were saved by a newer GuideRecorder and can't be changed here." });
         return Promise.resolve(false);
       }
       const next = update(structuredClone(current));

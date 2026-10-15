@@ -32,7 +32,7 @@ pub fn guard<R: Runtime>() -> TauriPlugin<R> {
             };
             let allowed = is_app_url(url, dev_url);
             if !allowed {
-                eprintln!("guidesya: blocked navigation to {url}");
+                eprintln!("guiderecorder: blocked navigation to {url}");
             }
             allowed
         })

@@ -1,5 +1,5 @@
 //! AI writing for an open guide (#350): `ai_generate` runs the core
-//! pipeline (`guidesya_core::ai::pipeline`) in the background on the guide
+//! pipeline (`guiderecorder_core::ai::pipeline`) in the background on the guide
 //! as last saved and streams each result to the editor as `ai://` events;
 //! `ai_cancel` stops a run. `ai_rewrite_step` rewrites one step's text and
 //! returns it (no events).
@@ -25,15 +25,15 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use guidesya_core::ai::claude::{ClaudeConfig, ClaudeProvider};
-use guidesya_core::ai::pipeline::{self, GuidePassOutcome, StepOutcome};
-use guidesya_core::ai::{
+use guiderecorder_core::ai::claude::{ClaudeConfig, ClaudeProvider};
+use guiderecorder_core::ai::pipeline::{self, GuidePassOutcome, StepOutcome};
+use guiderecorder_core::ai::{
     keychain, AiError, AiProvider, ApiKey, CancelToken, ImageSource, PipelineEvent,
     PipelineOptions, PipelineSummary, RedactionSuggestion, RewriteInput, RewriteStyle,
 };
-use guidesya_core::library::GuideHandle;
-use guidesya_core::model::{AiState, AiStatus, Guide, Item, Step};
-use guidesya_core::Ulid;
+use guiderecorder_core::library::GuideHandle;
+use guiderecorder_core::model::{AiState, AiStatus, Guide, Item, Step};
+use guiderecorder_core::Ulid;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -182,7 +182,7 @@ pub trait EventSink: Send + Sync + 'static {
 impl<R: Runtime> EventSink for AppHandle<R> {
     fn send(&self, event: AiEvent) {
         if let Err(e) = self.emit(event.name(), &event) {
-            eprintln!("guidesya: cannot send {}: {e}", event.name());
+            eprintln!("guiderecorder: cannot send {}: {e}", event.name());
         }
     }
 }
@@ -453,7 +453,7 @@ async fn drive(
             finished(run_id, guide_id, &summary, selection.unselected)
         }
         Err(e) => {
-            eprintln!("guidesya: AI run {run_id} failed: {e}");
+            eprintln!("guiderecorder: AI run {run_id} failed: {e}");
             sink.send(AiEvent::Guide(GuidePayload {
                 run_id,
                 guide_id: guide_id.clone(),
@@ -768,7 +768,7 @@ pub fn cancel_on_quit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(runs) = app.try_state::<Arc<AiRuns>>() {
         let cancelled = runs.cancel_all();
         if cancelled > 0 {
-            eprintln!("guidesya: cancelled {cancelled} AI run(s) at quit");
+            eprintln!("guiderecorder: cancelled {cancelled} AI run(s) at quit");
         }
     }
 }
@@ -776,9 +776,9 @@ pub fn cancel_on_quit<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use guidesya_core::ai::mock::{mock_meta, MockProvider};
-    use guidesya_core::ai::{prompts, GuideOutput, StepEdit, StepOutput, Usage};
-    use guidesya_core::model::{Audience, Rect, StepImage, StepKind};
+    use guiderecorder_core::ai::mock::{mock_meta, MockProvider};
+    use guiderecorder_core::ai::{prompts, GuideOutput, StepEdit, StepOutput, Usage};
+    use guiderecorder_core::model::{Audience, Rect, StepImage, StepKind};
     use serde_json::json;
     use std::sync::atomic::AtomicBool;
 
@@ -887,7 +887,7 @@ mod tests {
                     },
                     reason: "email address".into(),
                 }],
-                meta: guidesya_core::ai::GenerationMeta {
+                meta: guiderecorder_core::ai::GenerationMeta {
                     usage: Usage {
                         input_tokens: 100,
                         output_tokens: 10,
@@ -1803,7 +1803,7 @@ mod tests {
                 seen.lock()
                     .unwrap()
                     .push((input.style.clone(), input.language.clone()));
-                Ok(guidesya_core::ai::RewriteOutput {
+                Ok(guiderecorder_core::ai::RewriteOutput {
                     title: "T".into(),
                     description: None,
                     meta: mock_meta(prompts::REWRITE.version),

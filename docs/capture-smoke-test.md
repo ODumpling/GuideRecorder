@@ -3,7 +3,7 @@
 The capture layer talks to macOS (CGEventTap, ScreenCaptureKit, the
 Accessibility API) and needs TCC permissions, so it is not covered by CI.
 Tests that need permissions are `#[ignore]`d. Run this checklist by hand
-after changing anything in `crates/guidesya-capture`, after a macOS update,
+after changing anything in `crates/guiderecorder-capture`, after a macOS update,
 and before a release.
 
 Each example runs for a few seconds, prints what it sees, and exits.
@@ -12,7 +12,7 @@ Each example runs for a few seconds, prints what it sees, and exits.
 
 - [ ] Note the macOS version and the Mac model (Retina or not, number of
       displays). Write them in the results.
-- [ ] Build once: `cargo build -p guidesya-capture --examples`.
+- [ ] Build once: `cargo build -p guiderecorder-capture --examples`.
 - [ ] Grant permissions to **the terminal app you run the examples from**
       (Terminal, iTerm, Ghostty, …), not to the binary. Open the panes in
       System Settings → Privacy & Security:
@@ -28,7 +28,7 @@ Each example runs for a few seconds, prints what it sees, and exits.
 - [ ] Optional: start with the permissions **off** for one run of each
       example, to check the failure paths described below.
 
-## 1. Event tap: `cargo run -p guidesya-capture --example event_tap`
+## 1. Event tap: `cargo run -p guiderecorder-capture --example event_tap`
 
 Listens for 10 s and prints one JSON line per event. `targetPid` and `ts`
 are at the top level, and the event itself is under `event`, tagged by
@@ -79,7 +79,7 @@ are at the top level, and the event itself is under `event`, tagged by
       only shows that the conversion works.
 - [ ] After 10 s it prints `stopped` and exits by itself.
 
-### 1b. Hardware timestamp unit: `cargo run -p guidesya-capture --example event_tap -- --raw-ts`
+### 1b. Hardware timestamp unit: `cargo run -p guiderecorder-capture --example event_tap -- --raw-ts`
 
 This is an open check on #336. `--raw-ts` runs its own minimal tap for
 10 s. For each event it prints a line like this:
@@ -109,7 +109,7 @@ latency.
       `CGEventPost` tool or an automation app) and note its `reading`.
       It is expected to be `ns`.
 
-## 2. Frames: `cargo run -p guidesya-capture --example frames [fps]`
+## 2. Frames: `cargo run -p guiderecorder-capture --example frames [fps]`
 
 Captures the main display for 3 s and prints one line per frame. The default
 fps is `DEFAULT_FPS`; also try `frames 30`.
@@ -153,7 +153,7 @@ check that moving the window during a recording still puts clicks on the
 right pixels: the origin is fixed at start/resume today, so it doesn't yet
 (see #336).
 
-## 3. Accessibility: `cargo run -p guidesya-capture --example ax`
+## 3. Accessibility: `cargo run -p guiderecorder-capture --example ax`
 
 Prints, once a second for 10 s, the AX element under the mouse and the
 focused element, with how long the lookups took.
@@ -178,13 +178,13 @@ focused element, with how long the lookups took.
 - [ ] Focus something that times out or has no focused element. `mask
       keys` is `true`: masking fails closed.
 
-## 4. Record: `cargo run --release -p guidesya-capture --example record -- --seconds 20 [--raw DIR]`
+## 4. Record: `cargo run --release -p guiderecorder-capture --example record -- --seconds 20 [--raw DIR]`
 
 This runs the M0 recording session: tap, frames and AX together. It needs
 all three permissions. Use `--release`: snapshot frames are encoded to
 WebP while recording, and a debug build encodes too slowly to keep up
 (see the `encoder:` line in the output). It records for `--seconds` (default 20) and then
-writes a `.guidesya` bundle to `--library` (default
+writes a `.guiderecorder` bundle to `--library` (default
 `target/record/library`). It prints:
 
 - the bundle path;
@@ -254,8 +254,8 @@ Suggested script for one run, with the Finder and TextEdit open:
       release build expect no queue-full drops at a normal pace. Note the
       count after a burst of quick clicks.
 - [ ] **Session folder:** snapshots are written to
-      `~/Library/Caches/dev.guidesya.app/sessions/.guidesya-session-<ulid>`,
-      never to the library. After the run, no `.guidesya-session-*` folder
+      `~/Library/Caches/dev.dufflebear.guiderecorder/sessions/.guiderecorder-session-<ulid>`,
+      never to the library. After the run, no `.guiderecorder-session-*` folder
       is left there or in the library. Kill a run with ⌃C partway through:
       its folder stays, and it is removed at a later start once it is more
       than 6 hours old.
@@ -302,12 +302,12 @@ Suggested script for one run, with the Finder and TextEdit open:
       that display too. Pause, unplug or plug a display, resume, and click
       again: no error, and the new display set is captured.
 - [ ] Copy one `events.jsonl` from a good run into
-      `crates/guidesya-core/testdata/traces/`, with the secure parts
+      `crates/guiderecorder-core/testdata/traces/`, with the secure parts
       checked, as a step-detection fixture (the coordinator lands it).
 
 ## 5. Other integration checks from #336
 
-- [ ] Clicking GuidesYa's own recording toolbar: check that `targetPid` is
+- [ ] Clicking GuideRecorder's own recording toolbar: check that `targetPid` is
       filled in, and that those clicks are left out of the guide (needs the
       app).
 - [ ] **TCC survives rebuilds:** grant Screen Recording to the signed app

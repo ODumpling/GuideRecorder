@@ -9,18 +9,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use guidesya_core::index::{self, Index, IndexedGuide, ListFilter};
-use guidesya_core::library::{
+use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
+use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError, PixelBuffer,
     StepImageVariant, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
-use guidesya_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
-use guidesya_core::Ulid;
+use guiderecorder_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
+use guiderecorder_core::Ulid;
 use image::{ImageFormat, ImageReader, Limits};
 use serde::Serialize;
 
 /// Environment variable that overrides the library folder.
-pub const LIBRARY_ENV: &str = "GUIDESYA_LIBRARY";
+pub const LIBRARY_ENV: &str = "GUIDERECORDER_LIBRARY";
 
 /// An error the UI can show: `kind` picks the presentation, `message` is
 /// for people.
@@ -173,19 +173,19 @@ impl Session {
         let recovery = library.recover();
         if !recovery.removed.is_empty() || !recovery.restored.is_empty() {
             eprintln!(
-                "guidesya: recovered library: removed {:?}, restored {:?}",
+                "guiderecorder: recovered library: removed {:?}, restored {:?}",
                 recovery.removed, recovery.restored
             );
         }
         let index = index_path.and_then(|path| match Index::open(&path) {
             Ok(mut index) => {
                 if let Err(e) = index.sync(&library) {
-                    eprintln!("guidesya: index sync failed: {e}");
+                    eprintln!("guiderecorder: index sync failed: {e}");
                 }
                 Some(index)
             }
             Err(e) => {
-                eprintln!("guidesya: index unavailable ({}): {e}", path.display());
+                eprintln!("guiderecorder: index unavailable ({}): {e}", path.display());
                 None
             }
         });
@@ -220,7 +220,7 @@ impl Session {
     pub(crate) fn index_bundle(&self, handle: &GuideHandle) {
         if let Some(index) = self.index.lock().unwrap().as_mut() {
             if let Err(e) = index.update(&self.library, &handle.path) {
-                eprintln!("guidesya: index update failed: {e}");
+                eprintln!("guiderecorder: index update failed: {e}");
             }
         }
     }
@@ -255,7 +255,7 @@ impl Session {
             let listed = index.sync(&self.library).and_then(|_| index.list(&filter));
             match listed {
                 Ok(guides) => return Ok(guides.into_iter().map(Into::into).collect()),
-                Err(e) => eprintln!("guidesya: index list failed, scanning: {e}"),
+                Err(e) => eprintln!("guiderecorder: index list failed, scanning: {e}"),
             }
         }
         let guides = index::list_library(&self.library, &filter)
@@ -313,7 +313,7 @@ impl Session {
         self.library.save_to(&handle, &guide)?;
         if let Some(index) = self.index.lock().unwrap().as_mut() {
             if let Err(e) = index.update(&self.library, &handle.path) {
-                eprintln!("guidesya: index update failed: {e}");
+                eprintln!("guiderecorder: index update failed: {e}");
             }
         }
         if let Some(entry) = self.open.lock().unwrap().get_mut(&guide.id) {
@@ -601,7 +601,7 @@ fn sweep_step_images(handle: &GuideHandle) -> Result<Vec<String>> {
         }
         match std::fs::remove_file(&path) {
             Ok(()) => removed.push(format!("{STEPS_DIR}/{name}")),
-            Err(e) => eprintln!("guidesya: cannot remove {}: {e}", path.display()),
+            Err(e) => eprintln!("guiderecorder: cannot remove {}: {e}", path.display()),
         }
     }
     removed.sort();
@@ -664,7 +664,7 @@ fn referenced_step_images(handle: &GuideHandle) -> Result<Option<HashSet<StepIma
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
         let Some(json) = json else {
             eprintln!(
-                "guidesya: not sweeping images: cannot read {}",
+                "guiderecorder: not sweeping images: cannot read {}",
                 path.display()
             );
             return Ok(None);
@@ -798,15 +798,15 @@ pub(crate) fn parse_id(id: &str) -> Result<Ulid> {
         .map_err(|_| AppError::new(ErrorKind::Invalid, format!("invalid id {id:?}")))
 }
 
-/// The library folder: `$GUIDESYA_LIBRARY` if set, else
-/// `<documents>/GuidesYa`.
+/// The library folder: `$GUIDERECORDER_LIBRARY` if set, else
+/// `<documents>/GuideRecorder`.
 pub fn library_root(
     env: Option<std::ffi::OsString>,
     documents: Option<PathBuf>,
 ) -> Option<PathBuf> {
     env.filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| documents.map(|d| d.join("GuidesYa")))
+        .or_else(|| documents.map(|d| d.join("GuideRecorder")))
 }
 
 /// Starts the [`Session`] once in the background; commands wait for it.
@@ -843,13 +843,13 @@ pub(crate) mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    pub(crate) const FIXTURE: &str = "Rotate an API key.guidesya";
+    pub(crate) const FIXTURE: &str = "Rotate an API key.guiderecorder";
 
     /// A fresh library under `target/` holding a copy of the fixtures.
     pub(crate) fn library() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/guidesya-app-tests")
+            .join("../../target/guiderecorder-app-tests")
             .join(format!(
                 "{}-{}",
                 std::process::id(),
@@ -894,7 +894,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             library_root(Some("".into()), docs.clone()),
-            Some(PathBuf::from("/Users/a/Documents/GuidesYa"))
+            Some(PathBuf::from("/Users/a/Documents/GuideRecorder"))
         );
         assert_eq!(library_root(None, None), None);
     }
@@ -960,7 +960,7 @@ pub(crate) mod tests {
             ErrorKind::NotOpen
         );
 
-        json["schemaVersion"] = (guidesya_core::SCHEMA_VERSION + 1).into();
+        json["schemaVersion"] = (guiderecorder_core::SCHEMA_VERSION + 1).into();
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         let opened = session.open_guide(&id).unwrap();
         assert!(opened.read_only);
@@ -1148,7 +1148,8 @@ pub(crate) mod tests {
         let bytes = session.step_image(&id, &step.image.full).unwrap();
         assert_eq!(&bytes[8..12], b"WEBP");
         let stored =
-            guidesya_core::library::read_webp(&root.join(FIXTURE).join(&step.image.full)).unwrap();
+            guiderecorder_core::library::read_webp(&root.join(FIXTURE).join(&step.image.full))
+                .unwrap();
         assert_eq!(stored.dimensions(), (6, 4));
         assert_eq!(stored.into_raw(), pixels(6, 4));
 
@@ -1169,7 +1170,7 @@ pub(crate) mod tests {
         let path = root.join(FIXTURE).join("guide.json");
         let mut json: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        json["schemaVersion"] = (guidesya_core::SCHEMA_VERSION + 1).into();
+        json["schemaVersion"] = (guiderecorder_core::SCHEMA_VERSION + 1).into();
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         session.open_guide(&id).unwrap();
         let before = fs::read_dir(root.join(FIXTURE).join("steps"))
@@ -1211,7 +1212,7 @@ pub(crate) mod tests {
         let dropped = session.add_image_step(&id, &png(2, 2)).unwrap();
         guide
             .items
-            .push(guidesya_core::model::Item::Step(kept.clone()));
+            .push(guiderecorder_core::model::Item::Step(kept.clone()));
         session.save_guide(guide).unwrap();
         // A step deleted from the guide leaves its old crop behind.
         let stale = format!("steps/{}.crop.webp", Ulid::new());
@@ -1249,7 +1250,7 @@ pub(crate) mod tests {
         let step = session.add_image_step(&id, &png(2, 2)).unwrap();
         guide
             .items
-            .push(guidesya_core::model::Item::Step(step.clone()));
+            .push(guiderecorder_core::model::Item::Step(step.clone()));
         session.save_guide(guide).unwrap();
         (session, id, step)
     }
@@ -1319,7 +1320,7 @@ pub(crate) mod tests {
         let session = Session::start(&root, None).unwrap();
         let id = fixture_id(&root);
         let bundle = root.join(FIXTURE);
-        let other = root.join("Share a calendar event.guidesya/steps");
+        let other = root.join("Share a calendar event.guiderecorder/steps");
         let before: Vec<_> = fs::read_dir(&other)
             .unwrap()
             .map(|e| e.unwrap().path())

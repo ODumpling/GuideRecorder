@@ -1,7 +1,7 @@
 import { emitEvent, expect, openGuide, test } from "./fixtures";
 import type { Backend } from "./backend";
 
-const QUIT = "guidesya://quit-requested";
+const QUIT = "guiderecorder://quit-requested";
 
 /** Holds `cmd` (before the backend sees it) until `release` is called. */
 function hold(backend: Backend, cmd: string) {

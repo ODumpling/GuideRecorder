@@ -11,7 +11,7 @@ export const test = base.extend<{ backendOptions: BackendOptions; backend: Backe
   backendOptions: [{}, { option: true }],
   backend: async ({ page, backendOptions }, use) => {
     const backend = new Backend(backendOptions);
-    await page.exposeFunction("__guidesyaInvoke", (cmd: string, args: unknown) => backend.invoke(cmd, args));
+    await page.exposeFunction("__guiderecorderInvoke", (cmd: string, args: unknown) => backend.invoke(cmd, args));
     await page.goto("/e2e/index.html");
     await use(backend);
   },
@@ -33,7 +33,7 @@ export async function saved(page: Page) {
 
 /** Emits an app event (e.g. `recording://status`) as the Rust side would. */
 export async function emitEvent(page: Page, event: string, payload: unknown) {
-  await page.evaluate(([e, p]) => window.__guidesyaEmit(e as string, p), [event, payload] as const);
+  await page.evaluate(([e, p]) => window.__guiderecorderEmit(e as string, p), [event, payload] as const);
 }
 
 /**

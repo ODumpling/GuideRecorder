@@ -2260,12 +2260,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "guidesya-app"
+name = "guiderecorder-app"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "guidesya-capture",
- "guidesya-core",
+ "guiderecorder-capture",
+ "guiderecorder-core",
  "image",
  "serde",
  "serde_json",
@@ -2278,12 +2278,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "guidesya-capture"
+name = "guiderecorder-capture"
 version = "0.1.0"
 dependencies = [
  "block2",
  "dispatch2",
- "guidesya-core",
+ "guiderecorder-core",
  "objc2",
  "objc2-app-kit",
  "objc2-application-services",
@@ -2297,18 +2297,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "guidesya-cli"
+name = "guiderecorder-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "guidesya-core",
+ "guiderecorder-core",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
-name = "guidesya-core"
+name = "guiderecorder-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -2333,12 +2333,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "guidesya-mcp"
+name = "guiderecorder-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
- "guidesya-core",
+ "guiderecorder-core",
  "rmcp",
  "schemars 1.2.3",
  "serde",

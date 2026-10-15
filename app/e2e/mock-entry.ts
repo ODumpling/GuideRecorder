@@ -1,5 +1,5 @@
 // Test-only entry point: mocks Tauri's IPC, then starts the app. Every
-// command goes to the Playwright test through `window.__guidesyaInvoke`
+// command goes to the Playwright test through `window.__guiderecorderInvoke`
 // (an exposed binding), where `backend.ts` serves the fixture guides.
 
 import { emit } from "@tauri-apps/api/event";
@@ -11,13 +11,13 @@ type Reply = ({ ok: unknown } | { error: { kind: string; message: string } }) & 
 
 declare global {
   interface Window {
-    __guidesyaInvoke(cmd: string, args: unknown): Promise<Reply>;
+    __guiderecorderInvoke(cmd: string, args: unknown): Promise<Reply>;
     /** Emits an app event, as the Rust side would (tests call it via `emitEvent`). */
-    __guidesyaEmit(event: string, payload: unknown): Promise<void>;
+    __guiderecorderEmit(event: string, payload: unknown): Promise<void>;
   }
 }
 
-window.__guidesyaEmit = (event, payload) => emit(event, payload);
+window.__guiderecorderEmit = (event, payload) => emit(event, payload);
 
 // `?page=toolbar` loads the floating recording toolbar (toolbar.html), and
 // `?page=region` the region overlay (region.html), instead of the app.
@@ -30,7 +30,7 @@ mockIPC(
     // Raw-body commands (add_image_step) pass bytes; they don't survive the
     // binding's JSON, and no test uses them.
     const payload = args instanceof Uint8Array || args instanceof ArrayBuffer ? null : (args ?? null);
-    const reply = await window.__guidesyaInvoke(cmd, payload);
+    const reply = await window.__guiderecorderInvoke(cmd, payload);
     // Events the command emitted arrive before its result, as from Tauri.
     for (const e of reply.events ?? []) await emit(e.event, e.payload);
     if (reply.after?.length) {

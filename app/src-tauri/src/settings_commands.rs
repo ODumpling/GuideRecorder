@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use guidesya_capture::permissions::{self, Permission, PermissionStatus};
-use guidesya_core::ai::keychain::{self, ApiKey};
-use guidesya_core::index::Index;
+use guiderecorder_capture::permissions::{self, Permission, PermissionStatus};
+use guiderecorder_core::ai::keychain::{self, ApiKey};
+use guiderecorder_core::index::Index;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt as _;
@@ -32,8 +32,8 @@ impl LibraryTarget {
     }
 }
 
-/// The library folder at startup: `$GUIDESYA_LIBRARY`, else the one in
-/// settings, else `<documents>/GuidesYa`.
+/// The library folder at startup: `$GUIDERECORDER_LIBRARY`, else the one in
+/// settings, else `<documents>/GuideRecorder`.
 pub fn startup_library(
     env: Option<std::ffi::OsString>,
     configured: Option<PathBuf>,
@@ -49,7 +49,7 @@ pub fn startup_library(
 /// Opens the library at startup. A folder chosen in Settings that is gone
 /// (an unplugged disk, a moved folder) is reported as missing rather than
 /// created again, so first-run setup can ask for it. The default folder and
-/// `$GUIDESYA_LIBRARY` are created as needed.
+/// `$GUIDERECORDER_LIBRARY` are created as needed.
 pub fn open_startup_library(
     root: Option<&Path>,
     configured: bool,
@@ -99,7 +99,7 @@ pub struct LibraryInfo {
     /// Why it could not be opened; `None` once open (or still starting).
     pub error: Option<String>,
     pub starting: bool,
-    /// `$GUIDESYA_LIBRARY` decides the folder at startup.
+    /// `$GUIDERECORDER_LIBRARY` decides the folder at startup.
     pub from_env: bool,
     /// The folder used when none is set.
     pub default_path: Option<PathBuf>,
@@ -230,7 +230,7 @@ pub fn switch_to(
         Err(e) => {
             if let Err(revert) = store.modify(|s| s.general.library = previous) {
                 eprintln!(
-                    "guidesya: settings: cannot restore the library choice: {}",
+                    "guiderecorder: settings: cannot restore the library choice: {}",
                     revert.message
                 );
             }
@@ -283,7 +283,7 @@ pub fn apply_launch_at_login(
         Err(e) => {
             if let Err(revert) = store.modify(|s| s.general.launch_at_login = previous) {
                 eprintln!(
-                    "guidesya: settings: cannot restore launch at login: {}",
+                    "guiderecorder: settings: cannot restore launch at login: {}",
                     revert.message
                 );
             }
@@ -303,7 +303,7 @@ pub async fn launch_at_login<R: Runtime>(app: AppHandle<R>) -> Result<bool> {
     .await
 }
 
-fn key_error(e: guidesya_core::ai::AiError) -> AppError {
+fn key_error(e: guiderecorder_core::ai::AiError) -> AppError {
     AppError::new(ErrorKind::Io, e.to_string())
 }
 
@@ -420,16 +420,16 @@ pub async fn open_permission_settings(permission: Permission) -> Result<()> {
 pub struct McpSetup {
     pub command: String,
     pub mcp_path: PathBuf,
-    /// Whether `guidesya-mcp` is next to the app's executable.
+    /// Whether `guiderecorder-mcp` is next to the app's executable.
     pub found: bool,
     pub library: Option<PathBuf>,
 }
 
-/// The `guidesya-mcp` binary next to `exe`.
+/// The `guiderecorder-mcp` binary next to `exe`.
 pub fn mcp_binary(exe: &Path) -> PathBuf {
     exe.parent()
         .unwrap_or_else(|| Path::new("/"))
-        .join("guidesya-mcp")
+        .join("guiderecorder-mcp")
 }
 
 /// The command that registers the MCP server with Claude Code for the
@@ -444,7 +444,7 @@ pub fn mcp_setup(target: State<'_, Arc<LibraryTarget>>) -> Result<McpSetup> {
         &mcp_path,
         library
             .as_deref()
-            .unwrap_or(Path::new("~/Documents/GuidesYa")),
+            .unwrap_or(Path::new("~/Documents/GuideRecorder")),
     );
     Ok(McpSetup {
         command,
@@ -472,7 +472,7 @@ mod tests {
         );
         assert_eq!(
             startup_library(None, None, docs),
-            Some(PathBuf::from("/Users/a/Documents/GuidesYa"))
+            Some(PathBuf::from("/Users/a/Documents/GuideRecorder"))
         );
     }
 
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::NotFound);
         assert!(err.message.contains("missing"));
         assert!(!gone.exists(), "not created");
-        // The default folder (or $GUIDESYA_LIBRARY) is created as needed.
+        // The default folder (or $GUIDERECORDER_LIBRARY) is created as needed.
         open_startup_library(Some(&gone), false, None).unwrap();
         assert!(gone.is_dir());
         // A configured folder that exists opens.
@@ -637,9 +637,9 @@ mod tests {
     fn mcp_binary_sits_next_to_the_app() {
         assert_eq!(
             mcp_binary(Path::new(
-                "/Applications/GuidesYa.app/Contents/MacOS/GuidesYa"
+                "/Applications/GuideRecorder.app/Contents/MacOS/GuideRecorder"
             )),
-            Path::new("/Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp")
+            Path::new("/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp")
         );
     }
 }

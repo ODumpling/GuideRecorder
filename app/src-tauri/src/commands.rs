@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use guidesya_core::model::{Guide, Step, StepImage};
+use guiderecorder_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
@@ -73,7 +73,7 @@ pub async fn step_image(
 }
 
 /// Header naming the guide for [`add_image_step`], whose body is the PNG.
-pub const GUIDE_ID_HEADER: &str = "guidesya-guide-id";
+pub const GUIDE_ID_HEADER: &str = "guiderecorder-guide-id";
 
 /// Stores an image as a new manual step's screenshot and returns the step
 /// (not yet part of the guide; the editor inserts it). The body is a PNG
@@ -311,7 +311,7 @@ pub async fn verify_crop(
 
 /// Emitted on a user quit (Cmd+Q, Dock Quit, logout, last window closed);
 /// see `QuitGate`.
-pub const QUIT_REQUESTED_EVENT: &str = "guidesya://quit-requested";
+pub const QUIT_REQUESTED_EVENT: &str = "guiderecorder://quit-requested";
 
 /// How long the frontend has to answer [`QUIT_REQUESTED_EVENT`] before
 /// the app quits anyway (e.g. a hung or unloaded webview).
@@ -429,7 +429,7 @@ impl QuitGate {
         std::thread::spawn(move || {
             std::thread::sleep(QUIT_ACK_TIMEOUT);
             if !gate.acked.load(Ordering::SeqCst) {
-                eprintln!("guidesya: no answer to the quit request, quitting");
+                eprintln!("guiderecorder: no answer to the quit request, quitting");
                 gate.quit(&app);
             }
         });
@@ -464,7 +464,7 @@ impl QuitGate {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn deadline(&self, host: &impl QuitHost, id: u64) {
         if self.pending.take_if(id) {
-            eprintln!("guidesya: the quit did not finish in time; staying open");
+            eprintln!("guiderecorder: the quit did not finish in time; staying open");
             host.reply(false);
         }
     }

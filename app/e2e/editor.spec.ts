@@ -148,12 +148,12 @@ test("splits a step, and both halves keep the blur", async ({ page, backend }) =
   await expect(screenshot(page).locator(`filter[id="redact-${blurs(second)[0].id}-blur"]`)).toHaveCount(1);
 });
 
-test.describe("a guide from a newer GuidesYa", () => {
+test.describe("a guide from a newer GuideRecorder", () => {
   test.use({ backendOptions: { schemaVersions: { [API_KEY]: 2 } } });
 
   test("opens read-only with a banner", async ({ page, backend }) => {
     await openGuide(page, "Rotate an API key");
-    await expect(page.getByText("This guide was made with a newer version of GuidesYa. It is read-only.")).toBeVisible();
+    await expect(page.getByText("This guide was made with a newer version of GuideRecorder. It is read-only.")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Guide title" })).toBeDisabled();
     await expect(page.getByRole("textbox", { name: "Step title" })).toHaveAttribute("contenteditable", "false");
     await expect(page.getByRole("toolbar", { name: "Annotation tools" })).toHaveCount(0);

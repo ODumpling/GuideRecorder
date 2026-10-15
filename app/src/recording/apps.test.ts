@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
 import { isBundleId, MAX_EXCLUDED_APPS } from "@/settings/validate";
-import source from "../../../crates/guidesya-capture/src/macos/session.rs?raw";
+import source from "../../../crates/guiderecorder-capture/src/macos/session.rs?raw";
 
 describe("excluded apps", () => {
   it("lists the capture crate's defaults, in order", () => {

@@ -62,13 +62,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::{DateTime, Local, SecondsFormat, Utc};
-use guidesya_capture::macos::frames::CaptureTarget;
-use guidesya_capture::macos::session::{
+use guiderecorder_capture::macos::frames::CaptureTarget;
+use guiderecorder_capture::macos::session::{
     CaptureLostSink, ExclusionSink, Hotkey, LiveSnapshot, RecordingSession, SessionConfig,
     SessionError, SnapshotSink,
 };
-use guidesya_core::events::Modifiers;
-use guidesya_core::model::Point;
+use guiderecorder_core::events::Modifiers;
+use guiderecorder_core::model::Point;
 use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -270,7 +270,9 @@ impl Recorder {
             Ok(slot) => slot,
             Err(TryLockError::Poisoned(e)) => e.into_inner(),
             Err(TryLockError::WouldBlock) => {
-                eprintln!("guidesya: a recording command is running at quit, not waiting for it");
+                eprintln!(
+                    "guiderecorder: a recording command is running at quit, not waiting for it"
+                );
                 return false;
             }
         };
@@ -291,7 +293,7 @@ impl Recorder {
 pub fn discard_on_quit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(recorder) = app.try_state::<Arc<Recorder>>() {
         if recorder.discard() {
-            eprintln!("guidesya: discarded the recording still running at quit");
+            eprintln!("guiderecorder: discarded the recording still running at quit");
         }
     }
 }
@@ -320,7 +322,7 @@ fn emit_status<R: Runtime>(
 /// status (read again, so a status sent late never wins).
 fn emit<R: Runtime>(app: &AppHandle<R>, status: &StampedStatus) {
     if let Err(e) = app.emit(STATUS_EVENT, status) {
-        eprintln!("guidesya: cannot emit {STATUS_EVENT}: {e}");
+        eprintln!("guiderecorder: cannot emit {STATUS_EVENT}: {e}");
     }
     crate::tray::refresh(app);
     crate::toolbar::sync(app);
@@ -564,7 +566,9 @@ fn manual_hotkey(value: &str) -> Option<Hotkey> {
     match parse_hotkey(value) {
         Some(hotkey) => Some(hotkey),
         None => {
-            eprintln!("guidesya: manual-step hotkey {value:?} is not supported, using the default");
+            eprintln!(
+                "guiderecorder: manual-step hotkey {value:?} is not supported, using the default"
+            );
             Some(Hotkey::MANUAL_STEP)
         }
     }
@@ -640,7 +644,7 @@ fn start<R: Runtime>(
     let emitter = app.clone();
     cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
         if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
-            eprintln!("guidesya: cannot emit {SNAPSHOT_EVENT}: {e}");
+            eprintln!("guiderecorder: cannot emit {SNAPSHOT_EVENT}: {e}");
         }
     }));
     cfg.on_excluded = Some(exclusion_sink(app, recorder));
@@ -841,7 +845,7 @@ fn stop<R: Runtime>(
     emit_status(app, recorder, RecordingStatus::Idle);
     let saved = saved?;
     if let Err(e) = app.emit(SAVED_EVENT, &saved) {
-        eprintln!("guidesya: cannot emit {SAVED_EVENT}: {e}");
+        eprintln!("guiderecorder: cannot emit {SAVED_EVENT}: {e}");
     }
     Ok(saved)
 }
@@ -1033,10 +1037,10 @@ pub fn control<R: Runtime>(app: &AppHandle<R>, control: Control) {
         let result = run_control(&app, &recorder, control);
         recorder.controlling.store(false, Ordering::SeqCst);
         if let Err(e) = result {
-            eprintln!("guidesya: {control:?} failed: {}", e.message);
+            eprintln!("guiderecorder: {control:?} failed: {}", e.message);
             app.dialog()
                 .message(e.message)
-                .title("GuidesYa")
+                .title("GuideRecorder")
                 .kind(MessageDialogKind::Error)
                 .show(|_| {});
         }
@@ -1078,7 +1082,7 @@ fn run_action<R: Runtime>(
                     }
                     crate::tray::show_main(app);
                     if let Err(e) = app.emit(PICK_AREA_EVENT, ()) {
-                        eprintln!("guidesya: cannot emit {PICK_AREA_EVENT}: {e}");
+                        eprintln!("guiderecorder: cannot emit {PICK_AREA_EVENT}: {e}");
                     }
                     Ok(())
                 }
@@ -1250,7 +1254,7 @@ mod tests {
         let window = CaptureTarget::Window { window_id: 42 };
         let region = CaptureTarget::Region {
             display_id: Some(1),
-            rect: guidesya_core::model::Rect {
+            rect: guiderecorder_core::model::Rect {
                 x: 10.0,
                 y: 20.0,
                 width: 300.0,

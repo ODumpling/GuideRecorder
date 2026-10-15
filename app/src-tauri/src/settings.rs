@@ -1,5 +1,5 @@
 //! App settings (design #439 "Settings"): a JSON file in Application
-//! Support (`dev.guidesya.app/settings.json`), written atomically, with a
+//! Support (`dev.dufflebear.guiderecorder/settings.json`), written atomically, with a
 //! schema version.
 //!
 //! The API key is not here: it lives in the Keychain (core's
@@ -15,9 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use guidesya_core::ai::claude::{DEFAULT_GUIDE_MODEL, DEFAULT_STEP_MODEL};
-use guidesya_core::library::{write_atomic, Durability};
-use guidesya_core::model::Audience;
+use guiderecorder_core::ai::claude::{DEFAULT_GUIDE_MODEL, DEFAULT_STEP_MODEL};
+use guiderecorder_core::library::{write_atomic, Durability};
+use guiderecorder_core::model::Audience;
 use serde::{Deserialize, Serialize};
 
 use crate::editor::{AppError, ErrorKind, Result};
@@ -32,13 +32,13 @@ pub const SETTINGS_FILE: &str = "settings.json";
 /// Largest settings file read; a real one is a few kB.
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
-/// `~/Library/Application Support/dev.guidesya.app/settings.json` (macOS;
+/// `~/Library/Application Support/dev.dufflebear.guiderecorder/settings.json` (macOS;
 /// the index lives next to it). `None` without a home folder.
 pub fn default_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     Some(
         PathBuf::from(home)
-            .join("Library/Application Support/dev.guidesya.app")
+            .join("Library/Application Support/dev.dufflebear.guiderecorder")
             .join(SETTINGS_FILE),
     )
 }
@@ -68,8 +68,8 @@ impl Default for Settings {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct General {
-    /// The library folder; `None` is `~/Documents/GuidesYa`.
-    /// `$GUIDESYA_LIBRARY` overrides it.
+    /// The library folder; `None` is `~/Documents/GuideRecorder`.
+    /// `$GUIDERECORDER_LIBRARY` overrides it.
     pub library: Option<PathBuf>,
     /// Desired state; the login item itself is the truth (see the
     /// `set_launch_at_login` command).
@@ -145,7 +145,7 @@ impl Default for Recording {
 pub fn default_excluded_apps() -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
-        guidesya_capture::macos::session::default_excluded_bundle_ids()
+        guiderecorder_capture::macos::session::default_excluded_bundle_ids()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -359,7 +359,7 @@ impl Settings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadState {
-    /// A newer GuidesYa wrote them: shown, not saved over.
+    /// A newer GuideRecorder wrote them: shown, not saved over.
     pub read_only: bool,
     /// Why the file could not be used (it was set aside), if so.
     pub error: Option<String>,
@@ -391,7 +391,7 @@ impl SettingsStore {
             None => (Settings::default(), LoadState::default()),
         };
         if let Some(error) = &state.error {
-            eprintln!("guidesya: settings: {error}");
+            eprintln!("guiderecorder: settings: {error}");
         }
         Self {
             path,
@@ -419,7 +419,7 @@ impl SettingsStore {
         if state.1.read_only {
             return Err(AppError::new(
                 ErrorKind::ReadOnly,
-                "these settings were saved by a newer GuidesYa and can't be changed here",
+                "these settings were saved by a newer GuideRecorder and can't be changed here",
             ));
         }
         settings.version = SETTINGS_VERSION;
@@ -437,7 +437,7 @@ impl SettingsStore {
         if state.1.read_only {
             return Err(AppError::new(
                 ErrorKind::ReadOnly,
-                "these settings were saved by a newer GuidesYa and can't be changed here",
+                "these settings were saved by a newer GuideRecorder and can't be changed here",
             ));
         }
         let mut settings = state.0.clone();
@@ -507,12 +507,12 @@ fn read(path: &Path) -> (Settings, LoadState) {
                 },
             )
         }
-        // A newer GuidesYa's settings this one can't decode (a new enum
+        // A newer GuideRecorder's settings this one can't decode (a new enum
         // value, a changed type): leave the file alone.
         Err(e) if read_only => keep_read_only(
             Settings::default(),
             format!(
-                "{} was saved by a newer GuidesYa (settings version {version}) and can't be read here ({e}); \
+                "{} was saved by a newer GuideRecorder (settings version {version}) and can't be read here ({e}); \
                  showing the defaults, and changes can't be saved",
                 path.display()
             ),
@@ -607,11 +607,11 @@ pub fn shell_quote(s: &str) -> String {
     }
 }
 
-/// The `claude mcp add` command that registers the GuidesYa MCP server for
+/// The `claude mcp add` command that registers the GuideRecorder MCP server for
 /// the library at `library`.
 pub fn mcp_add_command(mcp: &Path, library: &Path) -> String {
     format!(
-        "claude mcp add guidesya -- {} --library {}",
+        "claude mcp add guiderecorder -- {} --library {}",
         shell_quote(&mcp.to_string_lossy()),
         shell_quote_home(&library.to_string_lossy())
     )
@@ -636,7 +636,7 @@ mod tests {
     fn scratch() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/guidesya-app-tests")
+            .join("../../target/guiderecorder-app-tests")
             .join(format!(
                 "settings-{}-{}",
                 std::process::id(),
@@ -824,7 +824,7 @@ mod tests {
         let view = store.view();
         assert!(view.read_only);
         assert_eq!(view.settings, Settings::default());
-        assert!(view.load_error.unwrap().contains("newer GuidesYa"));
+        assert!(view.load_error.unwrap().contains("newer GuideRecorder"));
         assert_eq!(
             store
                 .update(store.get(), &ChosenPaths::default())
@@ -880,8 +880,8 @@ mod tests {
     #[test]
     fn mcp_command_keeps_the_home_tilde() {
         assert_eq!(
-            mcp_add_command(Path::new("/a/mcp"), Path::new("~/Documents/GuidesYa")),
-            "claude mcp add guidesya -- /a/mcp --library ~/Documents/GuidesYa"
+            mcp_add_command(Path::new("/a/mcp"), Path::new("~/Documents/GuideRecorder")),
+            "claude mcp add guiderecorder -- /a/mcp --library ~/Documents/GuideRecorder"
         );
         assert_eq!(shell_quote_home("~/My Guides"), "~/'My Guides'");
         assert_eq!(shell_quote_home("~user/x"), "'~user/x'");
@@ -892,14 +892,14 @@ mod tests {
     fn mcp_command_quotes_paths() {
         assert_eq!(
             mcp_add_command(
-                Path::new("/Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp"),
-                Path::new("/Users/me/Documents/GuidesYa")
+                Path::new("/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp"),
+                Path::new("/Users/me/Documents/GuideRecorder")
             ),
-            "claude mcp add guidesya -- /Applications/GuidesYa.app/Contents/MacOS/guidesya-mcp --library /Users/me/Documents/GuidesYa"
+            "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder"
         );
         assert_eq!(
             mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's")),
-            r"claude mcp add guidesya -- '/a b/mcp' --library '/it'\''s'"
+            r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it'\''s'"
         );
     }
 }

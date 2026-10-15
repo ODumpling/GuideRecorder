@@ -1,6 +1,6 @@
 /**
  * The suggested excluded apps, with readable names. Mirrors
- * `DEFAULT_EXCLUDED_BUNDLE_IDS` in crates/guidesya-capture/src/macos/session.rs
+ * `DEFAULT_EXCLUDED_BUNDLE_IDS` in crates/guiderecorder-capture/src/macos/session.rs
  * (the settings default; apps.test.ts checks they match).
  */
 export const DEFAULT_EXCLUDED_APPS: readonly { id: string; name: string }[] = [

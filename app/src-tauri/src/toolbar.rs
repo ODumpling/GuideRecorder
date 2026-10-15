@@ -7,7 +7,7 @@
 //! (`exclude_own_windows`, which leaves out the whole app) keeps it out of
 //! every frame.
 //!
-//! Known limitation: clicking the toolbar still activates GuidesYa, taking
+//! Known limitation: clicking the toolbar still activates GuideRecorder, taking
 //! the active app away from the one being recorded until the user clicks
 //! back. `focusable(false)` only stops the toolbar becoming the key or main
 //! window (tao's `TaoWindow` answers `canBecomeKeyWindow` with NO); it is
@@ -53,7 +53,7 @@ pub fn top_centre(x: i32, y: i32, width: u32, scale: f64) -> (f64, f64) {
 pub fn sync<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     if let Err(e) = app.run_on_main_thread(move || apply(&handle)) {
-        eprintln!("guidesya: cannot update the toolbar: {e}");
+        eprintln!("guiderecorder: cannot update the toolbar: {e}");
     }
 }
 
@@ -65,12 +65,12 @@ fn apply<R: Runtime>(app: &AppHandle<R>) {
     match (wanted(&recorder.status().status), existing) {
         (Some(true), None) => {
             if let Err(e) = open(app) {
-                eprintln!("guidesya: cannot open the toolbar: {e}");
+                eprintln!("guiderecorder: cannot open the toolbar: {e}");
             }
         }
         (Some(false), Some(window)) => {
             if let Err(e) = window.destroy() {
-                eprintln!("guidesya: cannot close the toolbar: {e}");
+                eprintln!("guiderecorder: cannot close the toolbar: {e}");
             }
         }
         _ => {}
@@ -79,7 +79,7 @@ fn apply<R: Runtime>(app: &AppHandle<R>) {
 
 fn open<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let mut builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(URL.into()))
-        .title("GuidesYa Recording")
+        .title("GuideRecorder Recording")
         .inner_size(WIDTH, HEIGHT)
         .decorations(false)
         .transparent(true)

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main GuidesYa window, the recording toolbar and the region picker",
+  "description": "Capabilities for the main GuideRecorder window, the recording toolbar and the region picker",
   "windows": ["main", "toolbar", "region"],
   "permissions": ["core:default"]
 }

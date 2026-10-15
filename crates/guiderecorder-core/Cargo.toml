@@ -1,0 +1,30 @@
+[package]
+name = "guiderecorder-core"
+description = "GuideRecorder guide format, library, index, step detection, export and AI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+ulid = { version = "1", features = ["serde"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
+keyring = "4.2.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+resvg = "0.48.1"
+minijinja = "3.0.0"
+docx-rs = "0.4.22"
+typst = "0.15.1"
+typst-pdf = "0.15.1"
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+
+[dev-dependencies]
+lopdf = "0.45.0"

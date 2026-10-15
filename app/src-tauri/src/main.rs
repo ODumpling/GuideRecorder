@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    guidesya_app_lib::run()
+    guiderecorder_app_lib::run()
 }

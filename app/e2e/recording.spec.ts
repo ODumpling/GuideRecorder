@@ -119,7 +119,7 @@ test("quitting while recording saves the recording first", async ({ page, backen
   await page.getByRole("button", { name: "Record" }).click();
   await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
 
-  await emitEvent(page, "guidesya://quit-requested", null);
+  await emitEvent(page, "guiderecorder://quit-requested", null);
   await expect.poll(() => backend.calls.map((c) => c.cmd).filter((c) => c.endsWith("_recording") || c.startsWith("quit"))).toEqual([
     "start_recording",
     "quit_ack",

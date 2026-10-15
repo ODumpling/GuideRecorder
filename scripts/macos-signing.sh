@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local code-signing identity for GuidesYa on macOS.
+# Local code-signing identity for GuideRecorder on macOS.
 #
 # macOS keys TCC grants (Screen Recording, Accessibility) to a binary's
 # designated requirement. Ad-hoc signatures change on every rebuild, so the
@@ -15,8 +15,8 @@
 
 set -euo pipefail
 
-IDENTITY="${GUIDESYA_SIGNING_IDENTITY:-GuidesYa Local Dev}"
-BUNDLE_ID="dev.guidesya.app"
+IDENTITY="${GUIDERECORDER_SIGNING_IDENTITY:-GuideRecorder Local Dev}"
+BUNDLE_ID="dev.dufflebear.guiderecorder"
 KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 WORK_DIR=""
 # Apple's LibreSSL writes PKCS#12 files that `security import` accepts;
@@ -130,7 +130,7 @@ CNF
 
 # Sign one path; returns non-zero on failure. A .app keeps its bundle's
 # identifier. Bare Mach-O binaries get an explicit one so the designated
-# requirement (identifier + certificate) is stable: guidesya-app matches the
+# requirement (identifier + certificate) is stable: guiderecorder-app matches the
 # bundled app, everything else (CLI, MCP, test binaries) gets its own.
 sign_path() {
   local path="$1"
@@ -151,10 +151,10 @@ sign_path() {
 binary_identifier() {
   local name
   name="$(basename "$1")"
-  if [[ "$name" == "guidesya-app" ]]; then
+  if [[ "$name" == "guiderecorder-app" ]]; then
     printf '%s\n' "$BUNDLE_ID"
   else
-    printf 'dev.guidesya.%s\n' "$name"
+    printf 'dev.dufflebear.guiderecorder.%s\n' "$name"
   fi
 }
 

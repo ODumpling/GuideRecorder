@@ -1,5 +1,5 @@
 // ULIDs for items created in the editor (sections, notes, split steps), in
-// the format guidesya_core's `Ulid` parses: 26 Crockford base32 characters,
+// the format guiderecorder_core's `Ulid` parses: 26 Crockford base32 characters,
 // a 48-bit millisecond time and 80 random bits.
 
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
