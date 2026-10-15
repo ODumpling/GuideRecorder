@@ -40,6 +40,11 @@ pub struct Guide {
     pub recording: Option<RecordingInfo>,
     #[serde(default)]
     pub items: Vec<Item>,
+    /// Provenance of the guide-level fields (`title`, `intro`,
+    /// `prerequisites`, `summary`, `tags`). The editor sets `edited` when the
+    /// user changes any of them; the AI guide pass then leaves them alone.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ai_state: AiState,
 }
 
 impl Guide {
@@ -60,6 +65,7 @@ impl Guide {
             updated_at: now,
             recording: None,
             items: Vec::new(),
+            ai_state: AiState::default(),
         }
     }
 
@@ -237,6 +243,29 @@ pub struct AiState {
     /// Prompt file version, e.g. `step.v1`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_version: Option<String>,
+    /// Short message from the last failed AI pass; cleared when a later
+    /// pass succeeds. The text and `status` are left as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Blur regions the AI suggests for the step's screenshot. Suggestions
+    /// only (Q9): never applied as annotations without the user. Replaced by
+    /// each successful per-step pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redaction_suggestions: Vec<RedactionSuggestion>,
+}
+
+/// A suggested blur region.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactionSuggestion {
+    /// In full-screenshot pixels.
+    pub rect: Rect,
+    /// Why it looks sensitive, e.g. `email address`.
+    pub reason: String,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,6 +467,67 @@ mod tests {
         assert_eq!(step.image.show, ImageShow::Crop);
         assert_eq!(step.ai_state, AiState::default());
         assert!(step.annotations.is_empty());
+    }
+
+    #[test]
+    fn old_guide_json_is_unchanged_by_new_ai_fields() {
+        // Written before `ai_state.error`, `ai_state.redactionSuggestions`
+        // and `Guide.aiState` existed.
+        let text = include_str!("../testdata/guide.json");
+        let guide: Guide = serde_json::from_str(text).unwrap();
+        assert_eq!(guide.ai_state, AiState::default());
+        for step in guide.steps() {
+            assert_eq!(step.ai_state.error, None);
+            assert!(step.ai_state.redaction_suggestions.is_empty());
+        }
+        let out = serde_json::to_value(&guide).unwrap();
+        assert_eq!(out, serde_json::from_str::<Value>(text).unwrap());
+        assert!(out.get("aiState").is_none());
+        let step_states: Vec<&Value> = out["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.get("aiState"))
+            .collect();
+        assert_eq!(step_states.len(), 3);
+        for state in step_states {
+            assert!(state.get("error").is_none());
+            assert!(state.get("redactionSuggestions").is_none());
+        }
+    }
+
+    #[test]
+    fn new_ai_fields_round_trip() {
+        let mut guide = Guide::new("Untitled", "en");
+        guide.ai_state = AiState {
+            status: AiStatus::Edited,
+            model: None,
+            prompt_version: Some("guide.v1".into()),
+            error: Some("network error: reset".into()),
+            redaction_suggestions: vec![RedactionSuggestion {
+                rect: Rect {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 3.0,
+                    height: 4.0,
+                },
+                reason: "email address".into(),
+            }],
+        };
+        let json = serde_json::to_value(&guide).unwrap();
+        assert_eq!(
+            json["aiState"],
+            json!({
+                "status": "edited",
+                "promptVersion": "guide.v1",
+                "error": "network error: reset",
+                "redactionSuggestions": [{
+                    "rect": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 },
+                    "reason": "email address"
+                }]
+            })
+        );
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
     }
 
     #[test]

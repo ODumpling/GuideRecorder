@@ -640,6 +640,7 @@ fn ai(status: AiStatus, prompt: &str) -> AiState {
         status,
         model: Some(STEP_MODEL.to_owned()),
         prompt_version: Some(prompt.to_owned()),
+        ..AiState::default()
     }
 }
 
@@ -800,8 +801,7 @@ fn calendar() -> Fixture {
     step.keystrokes = Some("⌘S".to_owned());
     step.ai_state = AiState {
         status: AiStatus::Generating,
-        model: None,
-        prompt_version: None,
+        ..AiState::default()
     };
 
     b.note(

@@ -643,7 +643,7 @@ pub fn parse_step_output(input: &StepInput, parsed: Parsed) -> Result<StepOutput
                 r["height"].as_f64()?,
             )?;
             Some(RedactionSuggestion {
-                bbox,
+                rect: bbox,
                 reason: r["reason"].as_str().unwrap_or_default().trim().to_owned(),
             })
         })
@@ -1050,11 +1050,11 @@ mod tests {
             out.redaction_suggestions,
             [
                 RedactionSuggestion {
-                    bbox: rect(1100.0, 550.0, 100.0, 25.0),
+                    rect: rect(1100.0, 550.0, 100.0, 25.0),
                     reason: "email address".into(),
                 },
                 RedactionSuggestion {
-                    bbox: rect(2400.0, 1500.0, 160.0, 100.0),
+                    rect: rect(2400.0, 1500.0, 160.0, 100.0),
                     reason: "name".into(),
                 },
             ]

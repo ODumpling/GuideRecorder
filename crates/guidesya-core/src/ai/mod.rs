@@ -10,6 +10,7 @@
 //! - [`concurrency::for_each_bounded`] runs per-step calls in parallel with a
 //!   limit; [`retry`] holds the backoff policy.
 //! - [`mock::MockProvider`] is a deterministic provider for tests downstream.
+//! - [`pipeline::run`] runs both passes over a guide and applies the results.
 //!
 //! Outputs only carry generated text; callers decide what to apply. Steps
 //! whose [`AiStatus`](crate::model::AiStatus) is `edited` must never be
@@ -21,6 +22,7 @@ use std::pin::Pin;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+pub use crate::model::RedactionSuggestion;
 use crate::model::{Audience, ElementInfo, Rect, StepKind};
 
 mod base64;
@@ -28,12 +30,14 @@ pub mod claude;
 pub mod concurrency;
 pub mod keychain;
 pub mod mock;
+pub mod pipeline;
 pub mod prompts;
 pub mod retry;
 
 pub use claude::{ClaudeConfig, ClaudeProvider, Effort, ModelSettings};
 pub use keychain::ApiKey;
 pub use mock::MockProvider;
+pub use pipeline::{CancelToken, ImageSource, PipelineEvent, PipelineOptions, PipelineSummary};
 
 /// Boxed future returned by [`AiProvider`] methods, so the trait stays
 /// usable as `dyn AiProvider`.
@@ -167,15 +171,6 @@ pub struct StepOutput {
     /// Suggestions only; never applied automatically.
     pub redaction_suggestions: Vec<RedactionSuggestion>,
     pub meta: GenerationMeta,
-}
-
-/// A suggested blur region.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RedactionSuggestion {
-    /// In full-screenshot pixels.
-    pub bbox: Rect,
-    pub reason: String,
 }
 
 /// One step as seen by the guide-level pass.
