@@ -38,6 +38,8 @@ export interface EditorApi {
   stepImage(guideId: string, path: string): Promise<ArrayBuffer>;
   /** Exits the app (after the editor has saved). */
   quit(): Promise<void>;
+  /** The quit stays open: a held Dock Quit or logout is cancelled now. */
+  cancelQuit(): Promise<void>;
 }
 
 export const tauriApi: EditorApi = {
@@ -47,6 +49,7 @@ export const tauriApi: EditorApi = {
   closeGuide: (id) => invoke("close_guide", { id }),
   stepImage: async (guideId, path) => toArrayBuffer(await invoke("step_image", { guideId, path })),
   quit: () => invoke("quit_app"),
+  cancelQuit: () => invoke("quit_cancel"),
 };
 
 /**

@@ -555,6 +555,7 @@ export class Backend {
         return null;
       case "quit_ack":
       case "quit_app":
+      case "quit_cancel":
         return null;
       default:
         return fail("invalid", `the e2e backend has no command ${cmd}`);

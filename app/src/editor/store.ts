@@ -65,6 +65,11 @@ export interface EditorState {
    * quit waits and runs once it is done; repeated requests share one quit.
    */
   requestQuit(): Promise<boolean>;
+  /**
+   * A quit stays open (the user chose to stay, or a step failed): tells
+   * the backend, so a Dock Quit or logout waiting on it is cancelled now.
+   */
+  stayOpen(): void;
   resolveLeave(choice: LeaveChoice): Promise<boolean>;
   select(id: string | null): void;
   notify(message: string | null): void;
@@ -321,11 +326,16 @@ export function createEditorStore({
 
       requestQuit: () => quit(),
 
+      stayOpen() {
+        api.cancelQuit().catch((error: unknown) => console.error("cancelling the quit failed:", error));
+      },
+
       async resolveLeave(choice) {
         const intent = get().leave;
         if (!intent) return false;
         if (choice === "cancel") {
           set({ leave: null });
+          if (intent.kind === "quit") get().stayOpen();
           return false;
         }
         const discard = choice === "discard";
@@ -432,13 +442,19 @@ export function createQuitFlow(editor: EditorStore, steps: QuitSteps): () => Pro
 
   async function attempt() {
     await idle();
-    if (!(await steps.prepare())) return;
+    if (!(await steps.prepare())) {
+      editor.getState().stayOpen();
+      return;
+    }
     await editor.getState().requestQuit();
   }
 
   return () => {
     current ??= attempt()
-      .catch((error: unknown) => editor.getState().notify(`Could not quit: ${errorMessage(error)}`))
+      .catch((error: unknown) => {
+        editor.getState().notify(`Could not quit: ${errorMessage(error)}`);
+        editor.getState().stayOpen();
+      })
       .finally(() => {
         current = null;
       });

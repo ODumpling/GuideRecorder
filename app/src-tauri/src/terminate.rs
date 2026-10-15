@@ -10,9 +10,18 @@
 //! [`reply`] tells AppKit whether to go on. A logout or shutdown waits for
 //! that reply instead of being cancelled.
 //!
+//! While AppKit waits for that reply, a further Apple Event quit (Dock →
+//! Quit or AppleScript `quit` again, a logout) is held by AppKit itself and
+//! answered with the one reply. A further `terminate:` message, though,
+//! makes AppKit terminate at once, without asking the delegate and whatever
+//! the reply later says, so the save would be lost. [`install`] therefore
+//! also overrides `terminate:` on tao's `NSApplication` subclass to ignore
+//! it while a reply is owed ([`AppKitWait`]).
+//!
 //! `AppHandle::exit` stops the event loop with NSApp `stop:`, not
 //! `terminate:`, so it never comes back here.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// What a quit request is waiting on: `id` of the `terminate:` that AppKit
@@ -54,6 +63,37 @@ impl PendingReply {
     }
 }
 
+/// Whether AppKit is waiting for `replyToApplicationShouldTerminate:`, as
+/// seen from the main thread: set when the delegate answers
+/// `NSTerminateLater`, cleared just before the reply is sent. It follows
+/// AppKit, not [`PendingReply`]: that is taken off the main thread before
+/// the reply gets there, and a `terminate:` in between would still end
+/// AppKit's wait.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Default)]
+pub struct AppKitWait(AtomicBool);
+
+impl AppKitWait {
+    /// The delegate answered `reply`.
+    pub fn answered(&self, reply: TerminateReply) {
+        if reply == TerminateReply::Later {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The reply is about to be sent. Cleared first: AppKit sends
+    /// `terminate:` again itself when the reply is YES, and that one must
+    /// go through.
+    pub fn replying(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a `terminate:` message must be ignored.
+    pub fn holds(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// `NSApplicationTerminateReply` (an `NSUInteger`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
@@ -73,11 +113,14 @@ mod macos {
 
     use tauri::{AppHandle, Manager, Runtime};
 
-    use super::TerminateReply;
+    use super::{AppKitWait, TerminateReply};
     use crate::commands::QuitGate;
 
     /// tao's app delegate class (see tao's `app_delegate.rs`).
     const TAO_DELEGATE_CLASS: &CStr = c"TaoAppDelegateParent";
+    /// tao's `NSApplication` subclass (see tao's `app.rs`); it only
+    /// overrides `sendEvent:`.
+    const TAO_APP_CLASS: &CStr = c"TaoApp";
 
     /// Objective-C `BOOL`: `bool` on Apple Silicon, `signed char` on Intel.
     #[cfg(target_arch = "aarch64")]
@@ -96,6 +139,7 @@ mod macos {
             imp: *const c_void,
             types: *const c_char,
         ) -> ObjcBool;
+        fn class_getMethodImplementation(class: *mut c_void, sel: *const c_void) -> *const c_void;
         fn sel_registerName(name: *const c_char) -> *const c_void;
         fn objc_msgSend();
     }
@@ -103,6 +147,12 @@ mod macos {
     /// Runs `QuitGate::on_terminate` for the app; set once by [`install`].
     type Handler = Box<dyn Fn() -> TerminateReply + Send + Sync>;
     static HANDLER: OnceLock<Handler> = OnceLock::new();
+
+    /// `-[NSApplication terminate:]`: (self, _cmd, sender) → void.
+    type TerminateImp = unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void);
+    /// NSApplication's own `terminate:`, which [`terminate`] calls on.
+    static SUPER_TERMINATE: OnceLock<TerminateImp> = OnceLock::new();
+    static WAIT: AppKitWait = AppKitWait(std::sync::atomic::AtomicBool::new(false));
 
     /// `NSApp`. Main thread only.
     ///
@@ -169,6 +219,65 @@ mod macos {
                 sel_registerName(c"setDelegate:".as_ptr()),
                 delegate,
             );
+            guard_terminate();
+        }
+    }
+
+    /// Overrides `terminate:` on tao's `NSApplication` subclass with
+    /// [`terminate`]. Leaves it, and says so, if NSApp is not tao's or the
+    /// subclass already has its own `terminate:`. NSApp's own class may be
+    /// a key-value-observing subclass of tao's, so the method goes on
+    /// tao's class, which that one inherits from.
+    ///
+    /// SAFETY (caller): main thread. `-isKindOfClass:` takes a class and
+    /// returns a `BOOL`. `-[NSApplication terminate:]` has the C signature
+    /// (self, _cmd, sender) → void, which "v@:@" encodes and
+    /// [`TerminateImp`] matches. The class is not NSApplication itself, so
+    /// adding the method overrides it for this subclass only, and the
+    /// implementation looked up before it is NSApplication's.
+    unsafe fn guard_terminate() {
+        let class = objc_getClass(TAO_APP_CLASS.as_ptr());
+        let is_kind: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void) -> ObjcBool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        if class.is_null()
+            || is_kind(
+                ns_app(),
+                sel_registerName(c"isKindOfClass:".as_ptr()),
+                class,
+            ) == ObjcBool::default()
+        {
+            eprintln!("guidesya: unknown NSApplication class; a second quit may skip the save");
+            return;
+        }
+        let sel = sel_registerName(c"terminate:".as_ptr());
+        let inherited = class_getMethodImplementation(class, sel);
+        if inherited.is_null() {
+            return;
+        }
+        let inherited: TerminateImp = std::mem::transmute(inherited);
+        if SUPER_TERMINATE.set(inherited).is_err() {
+            return;
+        }
+        let added = class_addMethod(class, sel, terminate as *const c_void, c"v@:@".as_ptr());
+        if added == ObjcBool::default() {
+            eprintln!(
+                "guidesya: NSApp already overrides terminate:; a second quit may skip the save"
+            );
+        }
+    }
+
+    /// `-terminate:` on NSApp; AppKit and menu items send it on the main
+    /// thread. Ignored while AppKit waits for the editor to save, where
+    /// AppKit would terminate at once; otherwise NSApplication's.
+    extern "C" fn terminate(this: *mut c_void, cmd: *const c_void, sender: *mut c_void) {
+        if WAIT.holds() {
+            eprintln!("guidesya: a quit is already waiting for the save; ignoring terminate:");
+            return;
+        }
+        if let Some(inherited) = SUPER_TERMINATE.get() {
+            // SAFETY: the main thread, with the arguments AppKit gave us,
+            // into the implementation this override replaced.
+            unsafe { inherited(this, cmd, sender) }
         }
     }
 
@@ -185,6 +294,7 @@ mod macos {
                 .map_or(TerminateReply::Now, |handler| handler())
         }))
         .unwrap_or(TerminateReply::Now);
+        WAIT.answered(reply);
         reply as usize
     }
 
@@ -194,6 +304,7 @@ mod macos {
     /// reply could not be sent to the main thread.
     pub fn reply<R: Runtime>(app: &AppHandle<R>, quit: bool) -> bool {
         app.run_on_main_thread(move || {
+            WAIT.replying();
             // SAFETY: on the main thread (`run_on_main_thread`).
             // `-replyToApplicationShouldTerminate:(BOOL)` returns nothing.
             unsafe {
@@ -251,6 +362,23 @@ mod tests {
         assert!(!pending.take_if(first), "the first deadline is stale");
         assert!(pending.take_if(second));
         assert!(!pending.take(), "answered by the deadline");
+    }
+
+    #[test]
+    fn terminate_is_ignored_only_while_appkit_waits() {
+        let wait = AppKitWait::default();
+        assert!(!wait.holds(), "a first terminate: goes through");
+        wait.answered(TerminateReply::Now);
+        assert!(!wait.holds(), "nothing to wait for");
+        wait.answered(TerminateReply::Later);
+        assert!(wait.holds(), "a second terminate: is ignored");
+        wait.answered(TerminateReply::Later);
+        assert!(wait.holds(), "a joined terminate keeps the wait");
+        wait.replying();
+        assert!(
+            !wait.holds(),
+            "AppKit's own terminate: after YES goes through"
+        );
     }
 
     #[test]

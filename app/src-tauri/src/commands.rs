@@ -320,7 +320,8 @@ const QUIT_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a `terminate:` (Dock Quit, logout) is held for the frontend to
 /// save and quit. After that the app stays open and a logout is cancelled,
 /// e.g. while the leave dialog waits for the user; a later `quit_app`
-/// still quits.
+/// still quits. A user who chooses to stay answers it at once
+/// (`quit_cancel`).
 #[cfg(target_os = "macos")]
 const QUIT_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -467,6 +468,15 @@ impl QuitGate {
         }
     }
 
+    /// The user chose to stay: a held `terminate:` is cancelled now (a
+    /// logout too) rather than at the deadline. Nothing else to undo: a
+    /// later quit asks the frontend again.
+    fn cancel(&self, host: &impl QuitHost) {
+        if self.pending.take() {
+            host.reply(false);
+        }
+    }
+
     /// Quits now: lets a held `terminate:` go on, or exits. A recording
     /// still running is discarded first.
     fn quit(&self, host: &impl QuitHost) {
@@ -491,6 +501,13 @@ pub fn quit_ack(gate: State<'_, Arc<QuitGate>>) {
 #[tauri::command]
 pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
     gate.quit(&app);
+}
+
+/// The frontend's quit stays open (the user chose to stay, or a recording
+/// could not be stopped): a held Dock Quit or logout is cancelled now.
+#[tauri::command]
+pub fn quit_cancel<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
+    gate.cancel(&app);
 }
 
 #[cfg(test)]
@@ -609,6 +626,37 @@ mod tests {
         assert_eq!(host.calls(), ["discard", "reply true"], "one reply");
         gate.deadline(&host, first.unwrap());
         assert!(host.calls().is_empty());
+    }
+
+    #[test]
+    fn staying_cancels_the_held_terminate_at_once() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        let (_, held) = gate.terminate(&host);
+        host.calls();
+        gate.cancel(&host);
+        assert_eq!(host.calls(), ["reply false"]);
+        gate.deadline(&host, held.unwrap());
+        gate.cancel(&host);
+        assert!(host.calls().is_empty(), "answered once");
+        // The next Dock Quit asks the frontend again.
+        let (reply, held) = gate.terminate(&host);
+        assert_eq!(reply, TerminateReply::Later);
+        assert!(held.is_some());
+        assert_eq!(host.calls(), ["request_save"]);
+    }
+
+    #[test]
+    fn staying_without_a_held_terminate_does_nothing() {
+        let gate = QuitGate::default();
+        let host = FakeHost::new(true);
+        // Cmd+Q or the window's close button: nothing held.
+        assert!(gate.request(&host, None));
+        host.calls();
+        gate.cancel(&host);
+        assert!(host.calls().is_empty());
+        gate.quit(&host);
+        assert_eq!(host.calls(), ["discard", "exit"], "and still quits later");
     }
 
     #[test]

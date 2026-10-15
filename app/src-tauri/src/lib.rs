@@ -192,6 +192,7 @@ pub fn run() {
             picker::finish_region_pick,
             commands::quit_ack,
             commands::quit_app,
+            commands::quit_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building GuidesYa")

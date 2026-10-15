@@ -42,6 +42,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     closeGuide: vi.fn(async () => []),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
+    cancelQuit: vi.fn(async () => {}),
   };
   return {
     api,
@@ -341,6 +342,23 @@ describe("leaving a guide", () => {
     restore();
     expect(await s().resolveLeave("retry")).toBe(true);
     expect(api.quit).toHaveBeenCalledTimes(1);
+    expect(api.cancelQuit).not.toHaveBeenCalled();
+  });
+
+  it("staying in the leave dialog of a quit tells the backend at once", async () => {
+    const { s, api } = await failing();
+    expect(await s().requestQuit()).toBe(false);
+    expect(api.cancelQuit).not.toHaveBeenCalled();
+    expect(await s().resolveLeave("cancel")).toBe(false);
+    expect(api.cancelQuit).toHaveBeenCalledTimes(1);
+    expect(api.quit).not.toHaveBeenCalled();
+  });
+
+  it("staying when closing a guide is not a cancelled quit", async () => {
+    const { s, api } = await failing();
+    expect(await s().closeGuide()).toBe(false);
+    expect(await s().resolveLeave("cancel")).toBe(false);
+    expect(api.cancelQuit).not.toHaveBeenCalled();
   });
 
   it("refuses edits while saving before a close", async () => {
@@ -551,8 +569,10 @@ describe("quitting", () => {
     const quit = createQuitFlow(store, recording.fake);
     await quit();
     expect(api.quit).not.toHaveBeenCalled();
+    expect(api.cancelQuit).toHaveBeenCalledTimes(1);
     await quit();
     expect(api.quit).toHaveBeenCalledTimes(1);
+    expect(api.cancelQuit).toHaveBeenCalledTimes(1);
   });
 
   it("the quit flow shows an error that escapes it and is not stuck", async () => {
@@ -562,6 +582,7 @@ describe("quitting", () => {
     const quit = createQuitFlow(store, recording.fake);
     await quit();
     expect(s().notice).toBe("Could not quit: stop failed");
+    expect(api.cancelQuit).toHaveBeenCalledTimes(1);
     await quit();
     expect(api.quit).toHaveBeenCalledTimes(1);
   });
