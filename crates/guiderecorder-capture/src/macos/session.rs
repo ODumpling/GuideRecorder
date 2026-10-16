@@ -6,7 +6,9 @@
 //! ```text
 //!                                         ┌─▶ element thread (AX: element_at for clicks)
 //! event tap ──TargetedEvent──▶ router ────┼─▶ focus thread   (AX: focused element per key)
-//!                                         └─▶ encoder thread (snapshot frames → WebP)
+//!                                         ├─▶ after thread   (after frames) ──┐
+//!                                         └─▶ encoder thread ◀────────────────┘
+//!                                             (snapshot and after frames → WebP)
 //! ```
 //!
 //! - The **tap thread** (see `event_tap`) only translates events.
@@ -19,6 +21,8 @@
 //!   to the encoder; the router keeps only their timestamps and geometry.
 //! - The **element thread** fills `MouseDown.element` from
 //!   [`ax::element_at`] and drops presses on excluded apps.
+//! - The **after thread** picks each step's after frame, once the step
+//!   has settled (see `# After frames`), and sends it to the encoder.
 //! - The **focus thread** fills `KeyDown.secure` and emits
 //!   [`CaptureEvent::FocusChanged`]. It is separate so a slow `element_at`
 //!   never delays a key's focus lookup.
@@ -198,9 +202,58 @@
 //! one within 2 × [`StepConfig::typing_idle_ms`] ([`match_snapshot`]), or
 //! gets no image and counts as skipped.
 //!
+//! # After frames
+//!
+//! Each event that took a snapshot also gets an "after" frame, showing
+//! the result of its step (`steps/<id>.after.webp`, [`StepImage::after`]).
+//! The router tells the after thread (an unbounded channel, never
+//! waited on) about every step-starting event, with its snapshot's
+//! stream and frame or without one (`AfterMsg`), and every key or
+//! release that continues the step (the rest of a typing run, a click's
+//! or drag's release). [`RecordingSession::pause`] tells it when a pause
+//! begins. The after thread handles the steps in order. It waits, on the
+//! event clock, until [`AFTER_SETTLE_MS`] after the step's last key or
+//! release (a press counts as settling only once released, or after
+//! [`AFTER_HOLD_MAX_MS`]), then takes the first frame from then on,
+//! waiting up to [`AFTER_WAIT_MS`] more for one
+//! ([`FrameReader::frame_after`]). If the step went on during that wait
+//! (another key, a release), it settles again from the new end. If the
+//! next step starts, or a pause begins, first, it takes the last frame
+//! before then instead, so the frame never shows the next action or the
+//! paused screen. Its waits overlap
+//! (they are measured from the events), so it falls behind only by the
+//! encoder, and stopping a session waits at most about one second for
+//! the last step.
+//!
+//! An event gets no after frame ([`SessionMetrics::after_skips`]) when:
+//!
+//! - no frame is newer than its snapshot (the screen did not change, or
+//!   the next step came first): never a copy of the snapshot;
+//! - the frame is excluded ([`FrontmostLog::frame_excluded`], both
+//!   margins), checked by the after thread, again by the encoder and at
+//!   stop with the final log, as for snapshots;
+//! - its stream was stopped by the system before the frame was chosen
+//!   (live, from [`FrameReader::stopped_at`], and at stop from the
+//!   [`LossCutoff`]s, see [`after_usable_after_loss`]);
+//! - the frame was captured while paused (checked again at stop against
+//!   the pause spans, see `select_afters`);
+//! - the encoder queue was full (it never waits for the encoder; the
+//!   frames it sends count in [`SessionMetrics::encoder_max_backlog`]).
+//!
+//! After frames are encoded like snapshots into the session folder, but
+//! not reported through [`SessionConfig::on_snapshot`] (a snapshot that
+//! later takes the same frame is). At stop, after frames whose snapshot
+//! was removed (dropped or excluded event, pause) go with it, and frame
+//! files no snapshot or after frame uses are removed. At save, a step uses
+//! only the after frame of its own snapshot's event, and only if it is
+//! newer than that snapshot and older than the next step ([`step_after`]);
+//! a step borrowing a neighbour's snapshot gets none.
+//!
 //! # Known gaps
 //!
-//! - No "after" frame yet.
+//! - An after frame shows the screen [`AFTER_SETTLE_MS`] after the step:
+//!   a slower app (a page load) may not have drawn its result yet, and
+//!   one taken just before a quick next step may be mid-animation.
 //! - The click that brings another app to the front from an excluded one
 //!   is dropped with it. Without a main run loop (a CLI that never runs
 //!   it) only the reads at start and resume update the frontmost app, and
@@ -234,7 +287,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -283,6 +336,16 @@ pub const STALE_SESSION_MS: u64 = 6 * 60 * 60 * 1000;
 /// Frames waiting for the encoder at most; a snapshot that finds the queue
 /// full is dropped (see [`SessionMetrics::snapshots_dropped_queue_full`]).
 pub const ENCODER_QUEUE: usize = 4;
+/// How long after a step's action (its last key or release) its "after"
+/// frame is taken: long enough for most UI to respond and redraw. See
+/// `# After frames`.
+pub const AFTER_SETTLE_MS: u64 = 500;
+/// How much longer than [`AFTER_SETTLE_MS`] the after thread waits for a
+/// frame, before falling back to the latest one (the screen is static).
+pub const AFTER_WAIT_MS: u64 = 500;
+/// How long a press (a drag) may be held before its step settles anyway,
+/// without a release.
+pub const AFTER_HOLD_MAX_MS: u64 = 10_000;
 /// A frame captured this soon after an excluded app stopped being
 /// frontmost may still show it (redraw and capture lag); it is never
 /// snapshotted. See `# Excluded apps`.
@@ -602,6 +665,10 @@ pub struct RecordingSession {
     router: Option<JoinHandle<RouterOut>>,
     element: Option<JoinHandle<ElementOut>>,
     focus: Option<JoinHandle<FocusOut>>,
+    after: Option<JoinHandle<AfterOut>>,
+    /// Tells the after thread when a pause begins; dropped at stop with
+    /// the router's input.
+    after_tx: Option<Sender<AfterMsg>>,
     encoder: Option<JoinHandle<EncoderOut>>,
     session_dir: Option<PathBuf>,
     started: Instant,
@@ -685,6 +752,8 @@ impl RecordingSession {
             router: None,
             element: None,
             focus: None,
+            after: None,
+            after_tx: None,
             encoder: None,
             session_dir: None,
             started: Instant::now(),
@@ -763,7 +832,7 @@ impl RecordingSession {
         first.map_or(Ok(()), |e| Err(e.into()))
     }
 
-    /// Starts the encoder, element, focus and router threads. `make_focus`
+    /// Starts the encoder, after, element, focus and router threads. `make_focus`
     /// runs on the focus thread (AX references stay there).
     fn spawn_threads<S: FocusSource + 'static>(
         &mut self,
@@ -779,6 +848,7 @@ impl RecordingSession {
         let (element_tx, element_rx) = mpsc::channel::<TimedEvent>();
         let (focus_tx, focus_rx) = mpsc::channel::<FocusMsg>();
         let (encode_tx, encode_rx) = mpsc::sync_channel::<EncodeJob>(ENCODER_QUEUE);
+        let (after_tx, after_rx) = mpsc::channel::<AfterMsg>();
         let backlog = Arc::new(AtomicUsize::new(0));
 
         let mut encoder = Encoder::new(
@@ -790,6 +860,16 @@ impl RecordingSession {
         self.encoder = Some(spawn("guiderecorder-session-encode", move || {
             encoder.run(encode_rx);
             encoder.finish()
+        })?);
+        let mut after = AfterWorker::new(
+            encode_tx.clone(),
+            Arc::clone(&backlog),
+            Arc::clone(&self.front),
+            event_tap::now,
+        );
+        self.after = Some(spawn("guiderecorder-session-after", move || {
+            after.run(after_rx);
+            after.finish()
         })?);
         let mut element = ElementWorker::new(cfg);
         self.element = Some(spawn("guiderecorder-session-ax-element", move || {
@@ -810,6 +890,7 @@ impl RecordingSession {
                 element: element_tx,
                 focus: focus_tx,
                 encode: encode_tx,
+                after: after_tx.clone(),
                 backlog,
             },
             Arc::clone(&self.pause),
@@ -820,6 +901,7 @@ impl RecordingSession {
             router.finish()
         })?);
         self.tap_tx = Some(tap_tx);
+        self.after_tx = Some(after_tx);
         Ok(())
     }
 
@@ -938,6 +1020,11 @@ impl RecordingSession {
         let at = event_tap::now();
         self.paused_at = Some(at);
         lock(&self.pause).paused_at = Some(at);
+        // Frames still arrive until the streams stop: a step from before
+        // the pause takes none from after it began.
+        if let Some(tx) = &self.after_tx {
+            let _ = tx.send(AfterMsg::Pause(at));
+        }
         self.stop_frames()
     }
 
@@ -1020,6 +1107,7 @@ impl RecordingSession {
         let router = join(self.router.take())?;
         let element = join(self.element.take())?;
         let focus = join(self.focus.take())?;
+        let after = join(self.after.take())?;
         let encoder = join(self.encoder.take())?;
         let mut frames_error = self.frames.iter().find_map(|f| f.reader().last_error());
         // The snapshots are already taken; a failed stop is only reported.
@@ -1103,8 +1191,27 @@ impl RecordingSession {
                 }
             }
         }
-        // Frames no snapshot uses any more (e.g. of excluded apps).
-        let used: HashSet<FrameKey> = snapshots.values().map(SnapshotRef::frame_key).collect();
+        // After frames, by the same rules, of the snapshots kept.
+        let loss_cutoffs = self.loss.cutoffs();
+        let mut after_skips = after.skips;
+        let afters = select_afters(
+            after.afters,
+            &AfterRules {
+                snapshots: &snapshots,
+                front: &front,
+                cutoffs: &loss_cutoffs,
+                pauses: &self.pauses,
+                written: &encoder.written,
+            },
+            &mut after_skips,
+        );
+        // Frames no snapshot or after frame uses any more (e.g. of excluded
+        // apps).
+        let used: HashSet<FrameKey> = snapshots
+            .values()
+            .chain(afters.values())
+            .map(SnapshotRef::frame_key)
+            .collect();
         for (frame, path) in &encoder.written {
             if !used.contains(frame) {
                 let _ = fs::remove_file(path);
@@ -1141,7 +1248,7 @@ impl RecordingSession {
             encode_errors: encoder.errors,
             encode_total: encoder.total,
             encode_max: encoder.max,
-            encoder_max_backlog: router.max_backlog,
+            encoder_max_backlog: router.max_backlog.max(after.max_backlog),
             snapshots_dropped_queue_full: router.dropped_queue_full,
             settle_masked: focus.settle_masked,
             retro_scrubbed: focus.retro_scrubbed,
@@ -1149,17 +1256,20 @@ impl RecordingSession {
             frames_error,
             dropped_paused,
             paused: self.pauses.iter().map(|p| p.duration(stopped_at)).sum(),
+            after_frames: afters.len(),
+            after_skips,
         };
         Ok(Recording {
             events,
             snapshots,
+            afters,
             drafts,
             metrics,
             displays: std::mem::take(&mut self.displays),
             crop_size: self.crop_size,
             fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
             pauses: std::mem::take(&mut self.pauses),
-            loss_cutoffs: self.loss.cutoffs(),
+            loss_cutoffs,
             session_dir,
         })
     }
@@ -1171,6 +1281,7 @@ impl RecordingSession {
             tap.stop();
         }
         self.tap_tx = None;
+        self.after_tx = None;
     }
 }
 
@@ -1180,6 +1291,7 @@ impl Drop for RecordingSession {
         let _ = join(self.router.take());
         let _ = join(self.element.take());
         let _ = join(self.focus.take());
+        let _ = join(self.after.take());
         let _ = join(self.encoder.take());
         let _ = self.stop_frames();
         self.observer = None;
@@ -1472,6 +1584,9 @@ pub struct Recording {
     pub events: Vec<TimedEvent>,
     /// Snapshots keyed by the ts of the event that took them.
     pub snapshots: BTreeMap<Timestamp, SnapshotRef>,
+    /// After frames, keyed by the ts of the event whose snapshot they
+    /// follow (see `# After frames`).
+    pub afters: BTreeMap<Timestamp, SnapshotRef>,
     pub drafts: Vec<DraftStep>,
     pub metrics: SessionMetrics,
     /// The captured displays, for [`RecordingInfo`]; none for a window
@@ -1511,8 +1626,9 @@ impl Recording {
     /// Writes a new bundle titled `title`. Each draft step gets its snapshot
     /// ([`match_snapshot`]) as its own full image (`steps/<id>.webp`, a copy
     /// of the encoded snapshot), a crop around the point when it is on the
-    /// frame (with [`StepImage::crop_rect`]), and its points in frame
-    /// pixels. If any write fails, the bundle is removed.
+    /// frame (with [`StepImage::crop_rect`]), its after frame
+    /// (`steps/<id>.after.webp`, see [`step_after`]), and its points in
+    /// frame pixels. If any write fails, the bundle is removed.
     pub fn save_guide(&self, library: &Library, title: &str) -> Result<SavedGuide, SessionError> {
         let mut guide = Guide::new(title, "en");
         guide.recording = Some(self.recording_info());
@@ -1539,7 +1655,7 @@ impl Recording {
         let mut skipped = 0;
         // The last decoded frame (RGBA), for crops.
         let mut decoded: Option<(FrameKey, u32, Vec<u8>)> = None;
-        for draft in &self.drafts {
+        for (i, draft) in self.drafts.iter().enumerate() {
             // Never a frame of a stream from before it was lost, for a step
             // after: it may show a window that has closed since.
             let usable = |ts: Timestamp, snap: &SnapshotRef| {
@@ -1557,6 +1673,16 @@ impl Recording {
             let full = library::step_image_path(id, StepImageVariant::Full);
             let dest = handle.resolve(&full)?;
             fs::copy(&snap.path, &dest).map_err(io_err(&dest))?;
+            let next_at = self.drafts.get(i + 1).map(|d| d.at);
+            let after = match step_after(&self.afters, draft.at, snap, next_at) {
+                Some(after) => {
+                    let rel = library::step_image_path(id, StepImageVariant::After);
+                    let dest = handle.resolve(&rel)?;
+                    fs::copy(&after.path, &dest).map_err(io_err(&dest))?;
+                    Some(rel)
+                }
+                None => None,
+            };
             let (point, end_point) = step_points(&snap.geometry, draft);
             let (crop, crop_rect_px) = match point {
                 Some(center) => {
@@ -1585,7 +1711,7 @@ impl Recording {
                 },
                 crop,
                 crop_rect: crop_rect_px,
-                after: None,
+                after,
             };
             let mut step = draft.clone().into_step(id, image);
             step.point = point;
@@ -1714,6 +1840,10 @@ pub struct SessionMetrics {
     pub dropped_paused: usize,
     /// Time spent paused, within `wall`.
     pub paused: Duration,
+    /// After frames kept (see `# After frames`).
+    pub after_frames: usize,
+    /// Snapshots that got no after frame, by reason.
+    pub after_skips: AfterSkips,
 }
 
 impl SessionMetrics {
@@ -1793,17 +1923,22 @@ struct Outputs {
     focus: Sender<FocusMsg>,
     /// Frames to encode.
     encode: SyncSender<EncodeJob>,
+    /// Steps' starts, boundaries and extensions, for their after frames.
+    after: Sender<AfterMsg>,
     backlog: Arc<AtomicUsize>,
 }
 
-/// A snapshot frame for the encoder, with the event that took it (for
-/// [`LiveSnapshot`]).
+/// A snapshot or after frame for the encoder, with the event that took it
+/// (for [`LiveSnapshot`]).
 struct EncodeJob {
     source: usize,
     frame: Frame,
     ts: Timestamp,
     /// The event's point in frame pixels, if on the frame.
     point: Option<Point>,
+    /// Reported through [`SessionConfig::on_snapshot`]: snapshots only, not
+    /// after frames.
+    live: bool,
 }
 
 /// A snapshot before its frame is encoded.
@@ -1978,7 +2113,27 @@ impl Router {
             self.note_app(event.ts, target_pid, app);
         }
         if self.runs.should_snapshot(&event, target_pid) {
-            self.snapshot(event.ts, event_point(&event.event));
+            let msg = match self.snapshot(event.ts, event_point(&event.event)) {
+                Some((source, reader, before)) => AfterMsg::Step {
+                    ts: event.ts,
+                    source,
+                    reader,
+                    before,
+                    held: matches!(event.event, CaptureEvent::MouseDown { .. }),
+                },
+                None => AfterMsg::Boundary(event.ts),
+            };
+            let _ = self.out.after.send(msg);
+        } else {
+            match event.event {
+                CaptureEvent::KeyDown { .. } => {
+                    let _ = self.out.after.send(AfterMsg::Extend(event.ts));
+                }
+                CaptureEvent::MouseUp { .. } => {
+                    let _ = self.out.after.send(AfterMsg::Release(event.ts));
+                }
+                _ => {}
+            }
         }
         match event.event {
             CaptureEvent::MouseDown { .. } | CaptureEvent::MouseDragged { .. } => {
@@ -2044,22 +2199,31 @@ impl Router {
 
     /// Takes the pre-event frame from the source under `point`, or under
     /// the pointer as last seen for an event without one (a key), or
-    /// under the mouse now if no mouse event has been seen yet.
-    fn snapshot(&mut self, ts: Timestamp, point: Option<Point>) {
+    /// under the mouse now if no mouse event has been seen yet. Returns the
+    /// source, its reader and the frame, if the snapshot was taken.
+    fn snapshot(
+        &mut self,
+        ts: Timestamp,
+        point: Option<Point>,
+    ) -> Option<(usize, FrameReader, FrameKey)> {
         let picked = {
             let sources = lock(&self.sources);
             let under = point
                 .or(self.pointer)
                 .or_else(|| sources.len().gt(&1).then(frames::mouse_location).flatten());
-            pick_source(&sources, under).map(|i| (i, sources[i].reader.frame_before(ts)))
+            pick_source(&sources, under).map(|i| {
+                let reader = sources[i].reader.clone();
+                let frame = reader.frame_before(ts);
+                (i, reader, frame)
+            })
         };
-        let Some((source, Some(frame))) = picked else {
+        let Some((source, reader, Some(frame))) = picked else {
             self.missing_frames += 1;
-            return;
+            return None;
         };
         if self.front.frame_excluded(frame.ts) {
             self.excluded_frames += 1;
-            return;
+            return None;
         }
         let meta = SnapshotMeta {
             frame: FrameKey {
@@ -2080,6 +2244,7 @@ impl Router {
                 frame,
                 ts,
                 point,
+                live: true,
             };
             // The encoder now owns the only extra reference to the frame.
             // Never wait for it: a full queue drops this snapshot, and the
@@ -2092,16 +2257,17 @@ impl Router {
                 Err(TrySendError::Full(_)) => {
                     self.out.backlog.fetch_sub(1, Ordering::SeqCst);
                     self.dropped_queue_full += 1;
-                    return;
+                    return None;
                 }
                 Err(TrySendError::Disconnected(_)) => {
                     self.out.backlog.fetch_sub(1, Ordering::SeqCst);
-                    return;
+                    return None;
                 }
             }
         }
         self.latency_ns.insert(ts, latency);
-        self.snapshots.entry(ts).or_insert(meta);
+        let key = self.snapshots.entry(ts).or_insert(meta).frame;
+        Some((source, reader, key))
     }
 
     fn finish(self) -> RouterOut {
@@ -2745,6 +2911,8 @@ struct Encoder {
     sink: Option<SnapshotSink>,
     front: Arc<Frontmost>,
     written: HashMap<FrameKey, PathBuf>,
+    /// Frames reported to `sink`, each once.
+    reported: HashSet<FrameKey>,
     errors: usize,
     total: Duration,
     max: Duration,
@@ -2770,6 +2938,7 @@ impl Encoder {
             sink,
             front,
             written: HashMap::new(),
+            reported: HashSet::new(),
             errors: 0,
             total: Duration::ZERO,
             max: Duration::ZERO,
@@ -2783,39 +2952,51 @@ impl Encoder {
         }
     }
 
-    /// Writes the frame (once per [`FrameKey`]), drops its pixels and
-    /// reports it to the sink. Checks the frame against the excluded apps
-    /// again first: the router may have taken it just before it heard of
-    /// an excluded app's activation. Such a frame is neither written nor
-    /// reported (and its snapshot is removed at stop).
+    /// Writes the frame (once per [`FrameKey`]), drops its pixels and,
+    /// for a snapshot (`live`), reports it to the sink, once per frame.
+    /// Checks the frame against the excluded apps again first: the router
+    /// or the after thread may have taken it just before it heard of an
+    /// excluded app's activation. Such a frame is neither written nor
+    /// reported (and its snapshot or after frame is removed at stop).
     fn encode(&mut self, job: EncodeJob) {
         let EncodeJob {
             source,
             frame,
             ts,
             point,
+            live,
         } = job;
         let key = FrameKey {
             source,
             ts: frame.ts,
         };
-        if self.written.contains_key(&key) || self.front.frame_excluded(frame.ts) {
+        if self.front.frame_excluded(frame.ts) {
             return;
         }
-        let start = Instant::now();
-        let path = self.dir.join(format!("{}.webp", key.file_stem()));
-        let pixels = PixelBuffer::bgra(frame.width, frame.height, &frame.pixels);
-        let written = library::write_webp(&path, &pixels).is_ok();
-        let took = start.elapsed();
-        self.total += took;
-        self.max = self.max.max(took);
         let (width, height) = (frame.width, frame.height);
+        let path = match self.written.get(&key) {
+            Some(path) => path.clone(),
+            None => {
+                let start = Instant::now();
+                let path = self.dir.join(format!("{}.webp", key.file_stem()));
+                let pixels = PixelBuffer::bgra(frame.width, frame.height, &frame.pixels);
+                let written = library::write_webp(&path, &pixels).is_ok();
+                let took = start.elapsed();
+                self.total += took;
+                self.max = self.max.max(took);
+                if !written {
+                    self.errors += 1;
+                    return;
+                }
+                self.written.insert(key, path.clone());
+                path
+            }
+        };
         drop(frame);
-        if !written {
-            self.errors += 1;
+        // An after frame written first is reported when a snapshot takes it.
+        if !live || !self.reported.insert(key) {
             return;
         }
-        self.written.insert(key, path.clone());
         if let Some(sink) = &self.sink {
             sink.report(&LiveSnapshot {
                 ts,
@@ -2836,6 +3017,391 @@ impl Encoder {
             max: self.max,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// After frames
+
+/// What the router (and, for a pause, the session) tells the after
+/// thread. The router's messages come in event order.
+enum AfterMsg {
+    /// A step-starting event whose snapshot (`before`, from `source`) was
+    /// taken: it gets an after frame. `held` for a press: the step goes on
+    /// until its release.
+    Step {
+        ts: Timestamp,
+        source: usize,
+        reader: FrameReader,
+        before: FrameKey,
+        held: bool,
+    },
+    /// A step-starting event without a snapshot: the step before it ends
+    /// here, but this one gets no after frame.
+    Boundary(Timestamp),
+    /// A key that continues the current step (the next key of a typing
+    /// run, a Tab): its action ends later.
+    Extend(Timestamp),
+    /// A mouse release: ends the current step's press.
+    Release(Timestamp),
+    /// The session paused at this ts (sent by the session, so possibly
+    /// ahead of router messages from before it): no step before it takes
+    /// a frame from after it.
+    Pause(Timestamp),
+}
+
+/// An after frame before it is encoded.
+#[derive(Debug, Clone, Copy)]
+struct AfterMeta {
+    frame: FrameKey,
+    geometry: FrameGeometry,
+    width: u32,
+    height: u32,
+    /// When the after thread chose the frame (event clock): a stream lost
+    /// between the event and this time may have lost the result.
+    decided_at: Timestamp,
+}
+
+/// Why an event got no after frame (see `# After frames`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AfterSkips {
+    /// No frame newer than the snapshot: the screen did not change.
+    pub unchanged: usize,
+    /// The frame was captured in or near an excluded span.
+    pub excluded: usize,
+    /// The stream was lost before the frame was chosen.
+    pub lost: usize,
+    /// The frame was captured while paused.
+    pub paused: usize,
+    /// The encoder queue was full.
+    pub queue_full: usize,
+}
+
+/// The step being settled by the after thread.
+#[derive(Debug, Clone, Copy)]
+struct Settling {
+    ts: Timestamp,
+    /// Its last key or release.
+    end: Timestamp,
+    /// The next step's start, once known.
+    horizon: Option<Timestamp>,
+    /// A press not released yet.
+    held: bool,
+}
+
+struct AfterWorker {
+    encode: SyncSender<EncodeJob>,
+    backlog: Arc<AtomicUsize>,
+    front: Arc<Frontmost>,
+    /// The event clock (`event_tap::now`).
+    now: fn() -> Timestamp,
+    /// Messages read ahead while settling a step, not handled yet.
+    pending: VecDeque<AfterMsg>,
+    /// When each pause began, in order.
+    pauses: Vec<Timestamp>,
+    afters: BTreeMap<Timestamp, AfterMeta>,
+    skips: AfterSkips,
+    /// Most frames waiting for the encoder at once, seen here.
+    max_backlog: usize,
+}
+
+struct AfterOut {
+    afters: BTreeMap<Timestamp, AfterMeta>,
+    skips: AfterSkips,
+    max_backlog: usize,
+}
+
+impl AfterWorker {
+    fn new(
+        encode: SyncSender<EncodeJob>,
+        backlog: Arc<AtomicUsize>,
+        front: Arc<Frontmost>,
+        now: fn() -> Timestamp,
+    ) -> Self {
+        Self {
+            encode,
+            backlog,
+            front,
+            now,
+            pending: VecDeque::new(),
+            pauses: Vec::new(),
+            afters: BTreeMap::new(),
+            skips: AfterSkips::default(),
+            max_backlog: 0,
+        }
+    }
+
+    /// Handles steps one at a time, in order; ends once the router and the
+    /// session have hung up and every step is handled.
+    fn run(&mut self, rx: Receiver<AfterMsg>) {
+        loop {
+            let msg = match self.pending.pop_front() {
+                Some(msg) => msg,
+                None => match rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                },
+            };
+            match msg {
+                AfterMsg::Step {
+                    ts,
+                    source,
+                    reader,
+                    before,
+                    held,
+                } => self.step(&rx, ts, source, &reader, before, held),
+                AfterMsg::Pause(at) => self.pauses.push(at),
+                _ => {}
+            }
+        }
+    }
+
+    /// Reads `msg` into the step being settled: a key moves its `end`, a
+    /// release also ends its press, the next step start sets the horizon.
+    /// Anything from the horizon on is kept for later.
+    fn absorb(&mut self, msg: AfterMsg, s: &mut Settling) {
+        match msg {
+            AfterMsg::Pause(at) => self.pauses.push(at),
+            AfterMsg::Extend(at) if s.horizon.is_none() => s.end = s.end.max(at),
+            AfterMsg::Release(at) if s.horizon.is_none() => {
+                s.end = s.end.max(at);
+                s.held = false;
+            }
+            AfterMsg::Boundary(at) | AfterMsg::Step { ts: at, .. } if s.horizon.is_none() => {
+                s.horizon = Some(at);
+                self.pending.push_back(msg);
+            }
+            msg => self.pending.push_back(msg),
+        }
+    }
+
+    /// Reads every message already queued.
+    fn drain(&mut self, rx: &Receiver<AfterMsg>, s: &mut Settling) {
+        while let Ok(msg) = rx.try_recv() {
+            self.absorb(msg, s);
+        }
+    }
+
+    /// Where the step must take its frame before: the next step or the
+    /// first pause after it began, whichever comes first.
+    fn limit(&self, s: &Settling) -> Option<Timestamp> {
+        let pause = self.pauses.iter().copied().find(|at| *at > s.ts);
+        match (s.horizon, pause) {
+            (Some(h), Some(p)) => Some(h.min(p)),
+            (h, p) => h.or(p),
+        }
+    }
+
+    /// Waits, on the event clock, until the step has settled
+    /// ([`AFTER_SETTLE_MS`] after its last key or release, its press
+    /// released or held [`AFTER_HOLD_MAX_MS`]) or has a limit.
+    fn settle(&mut self, rx: &Receiver<AfterMsg>, s: &mut Settling) {
+        const MS: u64 = 1_000_000;
+        while self.limit(s).is_none() {
+            let due = if s.held {
+                s.ts.0.saturating_add(AFTER_HOLD_MAX_MS * MS)
+            } else {
+                s.end.0.saturating_add(AFTER_SETTLE_MS * MS)
+            };
+            let now = (self.now)().0;
+            if now >= due {
+                if s.held {
+                    // Held too long: settle from now on.
+                    s.held = false;
+                    s.end = s.end.max(Timestamp(due));
+                    continue;
+                }
+                break;
+            }
+            let left = Duration::from_nanos(due - now);
+            match rx.recv_timeout(left) {
+                Ok(msg) => self.absorb(msg, s),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) if s.held => {
+                    // The session is stopping: no release will come.
+                    s.held = false;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    // Frames keep coming until every thread is joined.
+                    thread::sleep(left);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Takes the after frame of the step started at `ts`: the first frame
+    /// [`AFTER_SETTLE_MS`] after its last key or release, or, when the next
+    /// step or a pause comes before then, the last frame before it.
+    fn step(
+        &mut self,
+        rx: &Receiver<AfterMsg>,
+        ts: Timestamp,
+        source: usize,
+        reader: &FrameReader,
+        before: FrameKey,
+        held: bool,
+    ) {
+        const MS: u64 = 1_000_000;
+        let mut s = Settling {
+            ts,
+            end: ts,
+            horizon: None,
+            held,
+        };
+        for msg in std::mem::take(&mut self.pending) {
+            self.absorb(msg, &mut s);
+        }
+        // What already arrived, in case this thread is behind.
+        self.drain(rx, &mut s);
+        let frame = loop {
+            self.settle(rx, &mut s);
+            if let Some(limit) = self.limit(&s) {
+                break reader.frame_before(limit);
+            }
+            let end = s.end;
+            let deadline = end.0.saturating_add((AFTER_SETTLE_MS + AFTER_WAIT_MS) * MS);
+            let wait = Duration::from_nanos(deadline.saturating_sub((self.now)().0));
+            let frame = reader.frame_after(end, AFTER_SETTLE_MS, wait);
+            // Keys, a release, the next step or a pause may have come in
+            // while waiting.
+            self.drain(rx, &mut s);
+            if let Some(limit) = self.limit(&s) {
+                match frame {
+                    Some(f) if f.ts < limit && s.end == end => break Some(f),
+                    _ => break reader.frame_before(limit),
+                }
+            }
+            let settled_by = Timestamp(s.end.0.saturating_add(AFTER_SETTLE_MS * MS));
+            match frame {
+                // The step went on: settle again from its new end.
+                _ if s.end != end && frame.as_ref().is_none_or(|f| f.ts < settled_by) => {}
+                frame => break frame,
+            }
+        };
+        let decided_at = (self.now)();
+        // A system stop since the event: the frame may predate a change.
+        if reader.stopped_at().is_some() {
+            self.skips.lost += 1;
+            return;
+        }
+        let Some(frame) = frame.filter(|f| f.ts >= ts && f.ts > before.ts) else {
+            self.skips.unchanged += 1;
+            return;
+        };
+        if self.front.frame_excluded(frame.ts) {
+            self.skips.excluded += 1;
+            return;
+        }
+        let meta = AfterMeta {
+            frame: FrameKey {
+                source,
+                ts: frame.ts,
+            },
+            geometry: frame.geometry,
+            width: frame.width,
+            height: frame.height,
+            decided_at,
+        };
+        let waiting = self.backlog.fetch_add(1, Ordering::SeqCst) + 1;
+        let job = EncodeJob {
+            source,
+            frame,
+            ts,
+            point: None,
+            live: false,
+        };
+        // Never wait for the encoder: snapshots come first.
+        match self.encode.try_send(job) {
+            Ok(()) => {
+                self.max_backlog = self.max_backlog.max(waiting);
+                self.afters.insert(ts, meta);
+            }
+            Err(e) => {
+                self.backlog.fetch_sub(1, Ordering::SeqCst);
+                if matches!(e, TrySendError::Full(_)) {
+                    self.skips.queue_full += 1;
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> AfterOut {
+        // `self.encode` is dropped here; the encoder ends once the router's
+        // sender is gone too.
+        AfterOut {
+            afters: self.afters,
+            skips: self.skips,
+            max_backlog: self.max_backlog,
+        }
+    }
+}
+
+/// What a kept after frame must agree with at stop.
+struct AfterRules<'a> {
+    /// The snapshots kept: an after frame goes with its event's.
+    snapshots: &'a BTreeMap<Timestamp, SnapshotRef>,
+    front: &'a FrontmostLog,
+    cutoffs: &'a [LossCutoff],
+    pauses: &'a [PauseSpan],
+    /// The encoded frames.
+    written: &'a HashMap<FrameKey, PathBuf>,
+}
+
+/// The after frames kept at stop, by the snapshot rules: of a kept
+/// snapshot, not excluded (final log), not from a stream lost before the
+/// frame was chosen, not captured while paused, and encoded. Counts the
+/// rejects in `skips`.
+fn select_afters(
+    afters: BTreeMap<Timestamp, AfterMeta>,
+    rules: &AfterRules<'_>,
+    skips: &mut AfterSkips,
+) -> BTreeMap<Timestamp, SnapshotRef> {
+    let mut kept = BTreeMap::new();
+    for (ts, meta) in afters {
+        if !rules.snapshots.contains_key(&ts) {
+            continue;
+        }
+        if rules.front.frame_excluded(meta.frame.ts) {
+            skips.excluded += 1;
+            continue;
+        }
+        if !after_usable_after_loss(rules.cutoffs, ts, meta.decided_at, meta.frame.source) {
+            skips.lost += 1;
+            continue;
+        }
+        if in_pause(rules.pauses, meta.frame.ts) {
+            skips.paused += 1;
+            continue;
+        }
+        if let Some(path) = rules.written.get(&meta.frame) {
+            kept.insert(
+                ts,
+                SnapshotRef {
+                    frame_ts: meta.frame.ts,
+                    source: meta.frame.source,
+                    path: path.clone(),
+                    geometry: meta.geometry,
+                    width: meta.width,
+                    height: meta.height,
+                },
+            );
+        }
+    }
+    kept
+}
+
+/// Whether an after frame chosen at `decided_at` for an event at `ts`
+/// from `source` may be used: not if that stream was lost in between (the
+/// window may have closed without a frame to show it).
+pub fn after_usable_after_loss(
+    cutoffs: &[LossCutoff],
+    ts: Timestamp,
+    decided_at: Timestamp,
+    source: usize,
+) -> bool {
+    !cutoffs
+        .iter()
+        .any(|c| c.source == source && c.at >= ts && c.at <= decided_at)
 }
 
 // ---------------------------------------------------------------------------
@@ -3509,6 +4075,22 @@ pub fn usable_after_loss(
     !cutoffs
         .iter()
         .any(|c| c.source == source && snap_ts < c.at && at >= c.at)
+}
+
+/// The after frame for a step at `at` that shows `snap`: the one its own
+/// event took, if newer than `snap` from the same stream, and older than
+/// the next step (`next_at`). `None` for a static screen.
+pub fn step_after<'a>(
+    afters: &'a BTreeMap<Timestamp, SnapshotRef>,
+    at: Timestamp,
+    snap: &SnapshotRef,
+    next_at: Option<Timestamp>,
+) -> Option<&'a SnapshotRef> {
+    afters.get(&at).filter(|after| {
+        after.source == snap.source
+            && after.frame_ts > snap.frame_ts
+            && next_at.is_none_or(|next| after.frame_ts < next)
+    })
 }
 
 /// A draft step's point and end point in frame pixels; `None` if off the
@@ -4344,6 +4926,7 @@ mod tests {
                 frame: f.clone(),
                 ts: Timestamp((10 + i) * MS),
                 point: Some(Point { x: 8.0, y: 5.0 }),
+                live: true,
             })
             .unwrap();
         }
@@ -4404,6 +4987,7 @@ mod tests {
         Recording {
             events,
             snapshots,
+            afters: BTreeMap::new(),
             drafts,
             metrics: SessionMetrics::default(),
             displays: Vec::new(),
@@ -5025,6 +5609,7 @@ mod tests {
         let (element, _er) = mpsc::channel();
         let (focus, _fr) = mpsc::channel();
         let (encode, encode_rx) = mpsc::sync_channel(1);
+        let (after, _ar) = mpsc::channel();
         let mut router = Router::new(
             &SessionConfig::default(),
             single_source(reader.clone()),
@@ -5032,6 +5617,7 @@ mod tests {
                 element,
                 focus,
                 encode,
+                after,
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             SharedPause::default(),
@@ -5113,6 +5699,7 @@ mod tests {
         let (element, _er) = mpsc::channel();
         let (focus, _fr) = mpsc::channel();
         let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let (after, _ar) = mpsc::channel();
         let mut router = Router::new(
             &SessionConfig::default(),
             sources(vec![
@@ -5123,6 +5710,7 @@ mod tests {
                 element,
                 focus,
                 encode,
+                after,
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             SharedPause::default(),
@@ -5188,6 +5776,7 @@ mod tests {
         let (element, element_rx) = mpsc::channel();
         let (focus, focus_rx) = mpsc::channel();
         let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let (after, _ar) = mpsc::channel();
         let mut router = Router::new(
             &SessionConfig::default(),
             single_source(reader.clone()),
@@ -5195,6 +5784,7 @@ mod tests {
                 element,
                 focus,
                 encode,
+                after,
                 backlog: Arc::new(AtomicUsize::new(0)),
             },
             Arc::clone(&pause),
@@ -6343,5 +6933,654 @@ mod tests {
             CaptureTarget::Display { display_id: None },
             "x (code -3821)"
         ));
+    }
+
+    // -- After frames ------------------------------------------------------
+
+    /// An event clock long past every test event: the after thread never
+    /// waits.
+    fn far_future() -> Timestamp {
+        Timestamp(u64::MAX / 2)
+    }
+
+    fn px_frame(ts: Timestamp) -> Frame {
+        frame(ts.0, 4, 4, geometry(4.0, 4.0, 4, 4))
+    }
+
+    fn after_step(ts: Timestamp, reader: &FrameReader, before: Timestamp) -> AfterMsg {
+        AfterMsg::Step {
+            ts,
+            source: 0,
+            reader: reader.clone(),
+            before: FrameKey {
+                source: 0,
+                ts: before,
+            },
+            held: false,
+        }
+    }
+
+    /// Runs an after thread over `msgs`; returns its output and the frames
+    /// it sent to the encoder.
+    fn run_after(front: Arc<Frontmost>, msgs: Vec<AfterMsg>) -> (AfterOut, Vec<EncodeJob>) {
+        let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let mut worker = AfterWorker::new(encode, Arc::new(AtomicUsize::new(0)), front, far_future);
+        let (tx, rx) = mpsc::channel();
+        for msg in msgs {
+            tx.send(msg).unwrap();
+        }
+        drop(tx);
+        worker.run(rx);
+        let out = worker.finish();
+        (out, encode_rx.try_iter().collect())
+    }
+
+    #[test]
+    fn after_frame_is_the_first_after_the_settle_delay() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 100, 520, 600] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let ts = Timestamp(10 * MS);
+        let (out, jobs) = run_after(
+            no_exclusions(),
+            vec![after_step(ts, &reader, Timestamp(5 * MS))],
+        );
+        assert_eq!(out.afters[&ts].frame.ts, Timestamp(520 * MS));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].frame.ts, Timestamp(520 * MS));
+        assert_eq!(jobs[0].ts, ts);
+        assert!(!jobs[0].live, "after frames are not reported live");
+        assert_eq!(out.skips, AfterSkips::default());
+    }
+
+    #[test]
+    fn after_frame_waits_for_the_end_of_the_step() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 520, 850] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let ts = Timestamp(10 * MS);
+        // The typing run goes on until 300 ms.
+        let (out, _) = run_after(
+            no_exclusions(),
+            vec![
+                after_step(ts, &reader, Timestamp(5 * MS)),
+                AfterMsg::Extend(Timestamp(150 * MS)),
+                AfterMsg::Extend(Timestamp(300 * MS)),
+            ],
+        );
+        assert_eq!(out.afters[&ts].frame.ts, Timestamp(850 * MS));
+    }
+
+    #[test]
+    fn after_frame_stops_before_the_next_step() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 100, 250, 520] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let (a, b, c) = (Timestamp(10 * MS), Timestamp(200 * MS), Timestamp(300 * MS));
+        // `b` starts a step without a snapshot, `c` one with.
+        let (out, _) = run_after(
+            no_exclusions(),
+            vec![
+                after_step(a, &reader, Timestamp(5 * MS)),
+                AfterMsg::Boundary(b),
+                after_step(c, &reader, Timestamp(250 * MS)),
+            ],
+        );
+        // The last frame before `b`; `c` gets the first after its delay.
+        assert_eq!(out.afters[&a].frame.ts, Timestamp(100 * MS));
+        assert_eq!(out.afters[&c].frame.ts, Timestamp(520 * MS));
+    }
+
+    #[test]
+    fn static_screen_has_no_after_frame() {
+        let reader = FrameReader::detached(8);
+        reader.push(px_frame(Timestamp(5 * MS)));
+        let (a, b) = (Timestamp(10 * MS), Timestamp(50 * MS));
+        let (out, jobs) = run_after(
+            no_exclusions(),
+            vec![
+                after_step(a, &reader, Timestamp(5 * MS)),
+                // Next step before any new frame.
+                AfterMsg::Boundary(b),
+            ],
+        );
+        assert!(out.afters.is_empty());
+        assert!(jobs.is_empty());
+        assert_eq!(out.skips.unchanged, 1);
+        // Also with no next step: the latest frame is the snapshot's.
+        let (out, _) = run_after(
+            no_exclusions(),
+            vec![after_step(a, &reader, Timestamp(5 * MS))],
+        );
+        assert!(out.afters.is_empty());
+        assert_eq!(out.skips.unchanged, 1);
+    }
+
+    #[test]
+    fn excluded_or_lost_after_frames_are_skipped() {
+        let reader = FrameReader::detached(8);
+        reader.push(px_frame(Timestamp(5 * MS)));
+        reader.push(px_frame(Timestamp(600 * MS)));
+        let ts = Timestamp(10 * MS);
+        let (cfg, _, _) = excluding_cfg();
+        let front = Arc::new(Frontmost::new(&cfg));
+        front.activated(Timestamp(550 * MS), Some(ONE_PASSWORD));
+        let (out, jobs) = run_after(front, vec![after_step(ts, &reader, Timestamp(5 * MS))]);
+        assert!(out.afters.is_empty());
+        assert!(jobs.is_empty());
+        assert_eq!(out.skips.excluded, 1);
+
+        reader.system_stopped_at(reader.generation(), "x".into(), Timestamp(300 * MS));
+        let (out, jobs) = run_after(
+            no_exclusions(),
+            vec![after_step(ts, &reader, Timestamp(5 * MS))],
+        );
+        assert!(out.afters.is_empty());
+        assert!(jobs.is_empty());
+        assert_eq!(out.skips.lost, 1);
+    }
+
+    #[test]
+    fn after_loss_rules() {
+        let cut = [LossCutoff {
+            source: 1,
+            at: Timestamp(100),
+        }];
+        // Lost between the event and the choice.
+        assert!(!after_usable_after_loss(
+            &cut,
+            Timestamp(50),
+            Timestamp(150),
+            1
+        ));
+        // Another stream, or lost after the choice or before the event.
+        assert!(after_usable_after_loss(
+            &cut,
+            Timestamp(50),
+            Timestamp(150),
+            0
+        ));
+        assert!(after_usable_after_loss(
+            &cut,
+            Timestamp(50),
+            Timestamp(90),
+            1
+        ));
+        assert!(after_usable_after_loss(
+            &cut,
+            Timestamp(120),
+            Timestamp(150),
+            1
+        ));
+    }
+
+    #[test]
+    fn step_after_needs_a_newer_frame_before_the_next_step() {
+        let snap = |source: usize, ms: u64| SnapshotRef {
+            frame_ts: Timestamp(ms * MS),
+            source,
+            path: PathBuf::new(),
+            geometry: geometry(4.0, 4.0, 4, 4),
+            width: 4,
+            height: 4,
+        };
+        let at = Timestamp(10 * MS);
+        let afters: BTreeMap<_, _> = [(at, snap(0, 520))].into_iter().collect();
+        let before = snap(0, 5);
+        assert!(step_after(&afters, at, &before, None).is_some());
+        assert!(step_after(&afters, at, &before, Some(Timestamp(600 * MS))).is_some());
+        // The next step came first: the frame would show its result.
+        assert!(step_after(&afters, at, &before, Some(Timestamp(400 * MS))).is_none());
+        // The same frame as the snapshot, or an older one.
+        assert!(step_after(&afters, at, &snap(0, 520), None).is_none());
+        assert!(step_after(&afters, at, &snap(0, 600), None).is_none());
+        // Another stream's.
+        assert!(step_after(&afters, at, &snap(1, 5), None).is_none());
+        // Only the step's own event's.
+        assert!(step_after(&afters, Timestamp(11 * MS), &before, None).is_none());
+    }
+
+    #[test]
+    fn encoder_reports_a_frame_once_a_snapshot_takes_it() {
+        let scratch = ScratchDir::new();
+        let seen: Seen<LiveSnapshot> = Arc::default();
+        let sink = Arc::clone(&seen);
+        let mut enc = Encoder::new(
+            scratch.0.clone(),
+            Arc::new(AtomicUsize::new(0)),
+            Some(SnapshotSink::new(move |s| lock(&sink).push(s.clone()))),
+            no_exclusions(),
+        );
+        let f = px_frame(Timestamp(5 * MS));
+        let job = |ms: u64, live: bool| EncodeJob {
+            source: 0,
+            frame: f.clone(),
+            ts: Timestamp(ms * MS),
+            point: None,
+            live,
+        };
+        let (tx, rx) = mpsc::channel();
+        // Written as an after frame first: not reported.
+        tx.send(job(1, false)).unwrap();
+        tx.send(job(10, true)).unwrap();
+        tx.send(job(11, true)).unwrap();
+        drop(tx);
+        enc.run(rx);
+        let out = enc.finish();
+        assert_eq!(out.written.len(), 1);
+        let seen = lock(&seen);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].ts, Timestamp(10 * MS));
+    }
+
+    /// The after files in a saved bundle's `steps`.
+    fn after_files(saved: &SavedGuide) -> Vec<String> {
+        let steps = saved.handle.path.join("steps");
+        webp_files(&steps)
+            .into_iter()
+            .filter(|n| n.ends_with(".after.webp"))
+            .collect()
+    }
+
+    #[test]
+    fn session_writes_and_references_after_frames() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (session, tx) = headless_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        // The screen changes after the shortcut, then holds.
+        let changed = Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS);
+        reader.push(px_frame(changed));
+        tx.send(shortcut_at(a)).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.after_frames, 1);
+        assert_eq!(rec.afters[&a].frame_ts, changed);
+        assert_eq!(rec.metrics.snapshots, 1);
+        assert_eq!(
+            webp_files(rec.session_dir()),
+            [
+                format!("{}.webp", FrameKey { source: 0, ts: t0 }.file_stem()),
+                format!(
+                    "{}.webp",
+                    FrameKey {
+                        source: 0,
+                        ts: changed
+                    }
+                    .file_stem()
+                ),
+            ]
+        );
+
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "After").unwrap();
+        let loaded = lib.load(&saved.handle.path).unwrap();
+        let steps: Vec<_> = loaded.guide.steps().cloned().collect();
+        assert_eq!(steps.len(), 1);
+        let after = steps[0].image.after.as_deref().unwrap();
+        assert_eq!(
+            after,
+            library::step_image_path(steps[0].id, StepImageVariant::After)
+        );
+        let img = saved.handle.read_image(after).unwrap();
+        assert_eq!(img.dimensions(), (4, 4));
+        assert_eq!(after_files(&saved).len(), 1);
+    }
+
+    #[test]
+    fn session_static_screen_saves_no_after_frame() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (session, tx) = headless_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        tx.send(shortcut_at(Timestamp(t0.0 + MS))).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_skips.unchanged, 1);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Static").unwrap();
+        let steps: Vec<_> = saved.guide.steps().collect();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].image.after, None);
+        assert!(after_files(&saved).is_empty());
+    }
+
+    #[test]
+    fn session_takes_no_after_frame_in_an_excluded_span() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, snaps, _) = excluding_cfg();
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        tx.send(shortcut_at(a)).unwrap();
+        // 1Password comes to the front before the step settles.
+        let enter = Timestamp(a.0 + 300 * MS);
+        session.front.activated(enter, Some(ONE_PASSWORD));
+        let shown = Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS);
+        reader.push(px_frame(shown));
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_skips.excluded, 1);
+        assert_eq!(
+            webp_files(rec.session_dir()),
+            [format!(
+                "{}.webp",
+                FrameKey { source: 0, ts: t0 }.file_stem()
+            )]
+        );
+        assert_eq!(lock(&snaps).len(), 1);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Excluded").unwrap();
+        assert_eq!(saved.guide.steps().next().unwrap().image.after, None);
+        assert!(after_files(&saved).is_empty());
+    }
+
+    #[test]
+    fn after_frame_found_excluded_at_stop_is_pruned() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, snaps, _) = excluding_cfg();
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        let shown = Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS);
+        reader.push(px_frame(shown));
+        tx.send(shortcut_at(a)).unwrap();
+        // The after frame is written before anyone knows it shows 1Password.
+        let file = rec_file(&session, shown);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !file.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the after frame was never written"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Then the late notice, within the head margin of that frame.
+        session
+            .front
+            .activated(Timestamp(shown.0 + 5 * MS), Some(ONE_PASSWORD));
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_frames, 0);
+        assert_eq!(rec.metrics.after_skips.excluded, 1);
+        assert!(!file.exists(), "pruned at stop");
+        assert_eq!(rec.snapshots.len(), 1);
+        // Never reported live.
+        assert_eq!(lock(&snaps).len(), 1);
+    }
+
+    fn rec_file(session: &RecordingSession, ts: Timestamp) -> PathBuf {
+        session
+            .session_dir()
+            .unwrap()
+            .join(format!("{}.webp", FrameKey { source: 0, ts }.file_stem()))
+    }
+
+    #[test]
+    fn only_the_steps_own_after_frame_is_used() {
+        let scratch = ScratchDir::new();
+        let f1 = px_frame(Timestamp(5 * MS));
+        let f2 = px_frame(Timestamp(600 * MS));
+        let mut rec = recording(&scratch, click(10, 1.0, 1.0).to_vec(), &[(10, &f1)]);
+        let path = rec.session_dir().join("after.webp");
+        library::write_webp(&path, &PixelBuffer::bgra(4, 4, &f2.pixels)).unwrap();
+        let after = || SnapshotRef {
+            frame_ts: f2.ts,
+            source: 0,
+            path: path.clone(),
+            geometry: f2.geometry,
+            width: 4,
+            height: 4,
+        };
+        // An after frame whose event no step starts at is never used.
+        rec.afters.insert(Timestamp(11 * MS), after());
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Unused").unwrap();
+        assert_eq!(saved.guide.steps().next().unwrap().image.after, None);
+        assert!(after_files(&saved).is_empty());
+        // The step's own one is.
+        rec.afters.insert(Timestamp(10 * MS), after());
+        let saved = rec.save_guide(&lib, "Used").unwrap();
+        assert!(saved.guide.steps().next().unwrap().image.after.is_some());
+        assert_eq!(after_files(&saved).len(), 1);
+    }
+
+    #[test]
+    fn lost_stream_gives_no_after_frame() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (cfg, _) = loss_cfg();
+        let (mut session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        scripted_gone(&mut session, true);
+        session.watch_streams([(reader.clone(), WINDOW)].into_iter());
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        reader.push(px_frame(Timestamp(a.0 + 50 * MS)));
+        tx.send(shortcut_at(a)).unwrap();
+        // The window closes before the step settles.
+        let stop = Timestamp(a.0 + 100 * MS);
+        reader.system_stopped_at(reader.generation(), "x (code -3815)".into(), stop);
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.snapshots.len(), 1);
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_skips.lost, 1);
+        assert_eq!(webp_files(rec.session_dir()).len(), 1);
+    }
+
+    #[test]
+    fn failed_after_copy_removes_the_bundle() {
+        let scratch = ScratchDir::new();
+        let f1 = px_frame(Timestamp(5 * MS));
+        let mut rec = recording(&scratch, click(10, 1.0, 1.0).to_vec(), &[(10, &f1)]);
+        rec.afters.insert(
+            Timestamp(10 * MS),
+            SnapshotRef {
+                frame_ts: Timestamp(600 * MS),
+                source: 0,
+                path: rec.session_dir().join("missing.webp"),
+                geometry: f1.geometry,
+                width: 4,
+                height: 4,
+            },
+        );
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        assert!(rec.save_guide(&lib, "Broken").is_err());
+        assert!(lib.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_pause_limits_the_steps_before_it() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 100, 170, 520] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let (a, b) = (Timestamp(10 * MS), Timestamp(150 * MS));
+        // The session's pause notice overtakes the router's last step.
+        let (out, _) = run_after(
+            no_exclusions(),
+            vec![
+                after_step(a, &reader, Timestamp(5 * MS)),
+                AfterMsg::Pause(Timestamp(200 * MS)),
+                after_step(b, &reader, Timestamp(100 * MS)),
+            ],
+        );
+        assert_eq!(out.afters[&a].frame.ts, Timestamp(100 * MS));
+        // Not the frame at 520 ms, captured while paused.
+        assert_eq!(out.afters[&b].frame.ts, Timestamp(170 * MS));
+    }
+
+    #[test]
+    fn session_pause_keeps_paused_frames_out_of_after_frames() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (mut session, tx) = headless_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        tx.send(shortcut_at(a)).unwrap();
+        // Pause after the shortcut (event clock).
+        sleep_until(Timestamp(a.0 + MS));
+        session.pause().unwrap();
+        assert!(session.paused_at.unwrap() > a);
+        // A frame the stream delivered after the pause began, late enough
+        // to be the step's after frame otherwise.
+        reader.push(px_frame(Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS)));
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.snapshots.len(), 1);
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_skips.unchanged, 1);
+        assert_eq!(webp_files(rec.session_dir()).len(), 1);
+    }
+
+    #[test]
+    fn stop_rejects_after_frames_captured_while_paused() {
+        let f = px_frame(Timestamp(5 * MS));
+        let snap = |ts: u64| SnapshotRef {
+            frame_ts: Timestamp(ts * MS),
+            source: 0,
+            path: PathBuf::from(format!("{ts}.webp")),
+            geometry: f.geometry,
+            width: 4,
+            height: 4,
+        };
+        let meta = |frame_ms: u64| AfterMeta {
+            frame: FrameKey {
+                source: 0,
+                ts: Timestamp(frame_ms * MS),
+            },
+            geometry: f.geometry,
+            width: 4,
+            height: 4,
+            decided_at: Timestamp(frame_ms * MS),
+        };
+        let (a, b) = (Timestamp(10 * MS), Timestamp(1_000 * MS));
+        let snapshots: BTreeMap<_, _> = [(a, snap(5)), (b, snap(995))].into_iter().collect();
+        let written: HashMap<FrameKey, PathBuf> = [300, 1_600]
+            .into_iter()
+            .map(|ms| (meta(ms).frame, PathBuf::from(format!("{ms}.webp"))))
+            .collect();
+        let pauses = [PauseSpan {
+            paused_at: Timestamp(200 * MS),
+            resumed_at: Some(Timestamp(900 * MS)),
+        }];
+        let mut skips = AfterSkips::default();
+        let kept = select_afters(
+            [(a, meta(300)), (b, meta(1_600))].into_iter().collect(),
+            &AfterRules {
+                snapshots: &snapshots,
+                front: &FrontmostLog::default(),
+                cutoffs: &[],
+                pauses: &pauses,
+                written: &written,
+            },
+            &mut skips,
+        );
+        assert_eq!(kept.keys().copied().collect::<Vec<_>>(), [b]);
+        assert_eq!(skips.paused, 1);
+    }
+
+    /// An after thread on the real event clock, fed through the returned
+    /// sender.
+    fn live_after() -> (Sender<AfterMsg>, JoinHandle<AfterOut>, Receiver<EncodeJob>) {
+        let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
+        let mut worker = AfterWorker::new(
+            encode,
+            Arc::new(AtomicUsize::new(0)),
+            no_exclusions(),
+            event_tap::now,
+        );
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            worker.run(rx);
+            worker.finish()
+        });
+        (tx, handle, encode_rx)
+    }
+
+    fn sleep_until(ts: Timestamp) {
+        while event_tap::now() < ts {
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn typing_that_resumes_while_waiting_settles_again() {
+        let reader = FrameReader::detached(8);
+        let t0 = event_tap::now();
+        let at = |ms: u64| Timestamp(t0.0 + ms * MS);
+        reader.push(px_frame(Timestamp(t0.0 - MS)));
+        let (tx, handle, _jobs) = live_after();
+        tx.send(after_step(t0, &reader, Timestamp(t0.0 - MS)))
+            .unwrap();
+        // The thread is waiting for a frame from 500 ms on when typing
+        // goes on.
+        sleep_until(at(600));
+        tx.send(AfterMsg::Extend(at(600))).unwrap();
+        // A frame mid-typing wakes it, then the one after the new end.
+        reader.push(px_frame(at(650)));
+        reader.push(px_frame(at(1_150)));
+        drop(tx);
+        let out = handle.join().unwrap();
+        assert_eq!(out.afters[&t0].frame.ts, at(1_150));
+    }
+
+    #[test]
+    fn a_held_press_settles_after_its_release() {
+        let reader = FrameReader::detached(8);
+        let t0 = event_tap::now();
+        let at = |ms: u64| Timestamp(t0.0 + ms * MS);
+        reader.push(px_frame(Timestamp(t0.0 - MS)));
+        // Mid-drag.
+        reader.push(px_frame(at(600)));
+        let (tx, handle, _jobs) = live_after();
+        tx.send(AfterMsg::Step {
+            ts: t0,
+            source: 0,
+            reader: reader.clone(),
+            before: FrameKey {
+                source: 0,
+                ts: Timestamp(t0.0 - MS),
+            },
+            held: true,
+        })
+        .unwrap();
+        sleep_until(at(900));
+        tx.send(AfterMsg::Release(at(900))).unwrap();
+        reader.push(px_frame(at(1_450)));
+        drop(tx);
+        let out = handle.join().unwrap();
+        assert_eq!(out.afters[&t0].frame.ts, at(1_450));
+        assert_eq!(out.max_backlog, 1);
+    }
+
+    #[test]
+    fn after_frames_count_in_the_encoder_backlog_peak() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let (session, tx) = headless_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        reader.push(px_frame(Timestamp(t0.0 + (AFTER_SETTLE_MS + 20) * MS)));
+        tx.send(shortcut_at(Timestamp(t0.0 + MS))).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.after_frames, 1);
+        assert!(rec.metrics.encoder_max_backlog >= 1);
     }
 }
