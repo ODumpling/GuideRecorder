@@ -247,6 +247,23 @@ export class Backend {
     return this.bundle(guideId).files.has(path);
   }
 
+  /** Changes a step of a guide as loaded, before the app opens it. */
+  editStep(guideId: string, stepId: string, edit: (step: Step) => void) {
+    const item = this.bundle(guideId).guide.items.find((i) => i.id === stepId);
+    if (item?.type !== "step") throw new Error(`no step ${stepId}`);
+    edit(item);
+  }
+
+  /** Removes a file from a guide's bundle (e.g. to make an image unreadable). */
+  removeFile(guideId: string, path: string) {
+    this.bundle(guideId).files.delete(path);
+  }
+
+  /** Replaces a file of a guide's bundle (e.g. with bytes that aren't an image). */
+  setFile(guideId: string, path: string, bytes: Buffer) {
+    this.bundle(guideId).files.set(path, bytes);
+  }
+
   private bundle(id: string): Bundle {
     return this.bundles.get(id) ?? fail("notFound", `no guide ${id}`);
   }

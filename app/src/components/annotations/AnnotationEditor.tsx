@@ -35,14 +35,16 @@ import {
   type Tool,
   type View,
 } from "@/annotations/geometry";
+import { afterFrame } from "@/components/annotations/afterFrame";
 import { CropMask, Shape, type Backdrop } from "@/components/annotations/Shapes";
 import { StyleBar } from "@/components/annotations/StyleBar";
+import { BeforeAfterSwitch, type Frame } from "@/components/BeforeAfterSwitch";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { setImageShow, type Command } from "@/editor/commands";
 import { editorStore } from "@/editor/editor";
 import { verifyCrop } from "@/lib/ipc";
-import type { Annotation, Guide, Point, RedactionSuggestion, Step, StepImage } from "@/lib/types";
+import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { cn } from "@/lib/utils";
 
@@ -80,22 +82,36 @@ type Drag =
   | { mode: "create"; tool: Tool; id: string; start: Point }
   | { mode: "move"; original: Annotation; part: DragPart; start: Point };
 
-/** The size of a full screenshot, once loaded (the crop's size comes from `cropRect`). */
-function useNaturalSize(url: string | null): { width: number; height: number } | null {
-  const [size, setSize] = useState<{ url: string; width: number; height: number } | null>(null);
+type Size = { width: number; height: number };
+
+/**
+ * The size of an image, once decoded; `failed` when it can't be decoded
+ * (a damaged or unsupported file).
+ */
+function useImageSize(url: string | null): { size: Size | null; failed: boolean } {
+  const [result, setResult] = useState<{ url: string; size: Size | null } | null>(null);
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
     const image = new Image();
     image.onload = () => {
-      if (!cancelled) setSize({ url, width: image.naturalWidth, height: image.naturalHeight });
+      if (!cancelled) setResult({ url, size: { width: image.naturalWidth, height: image.naturalHeight } });
+    };
+    image.onerror = () => {
+      if (!cancelled) setResult({ url, size: null });
     };
     image.src = url;
     return () => {
       cancelled = true;
     };
   }, [url]);
-  return size && size.url === url ? size : null;
+  const current = result && result.url === url ? result : null;
+  return { size: current?.size ?? null, failed: !!current && !current.size };
+}
+
+/** The size of a full screenshot, once loaded (the crop's size comes from `cropRect`). */
+function useNaturalSize(url: string | null): Size | null {
+  return useImageSize(url).size;
 }
 
 /** Identifies what `verify_crop` checked: the image paths and `cropRect`. */
@@ -131,6 +147,74 @@ function useCropCheck(guideId: string, image: StepImage): boolean | null {
   return key && result?.key === key ? result.ok : null;
 }
 
+function ImageStatus({ error }: { error: string | null }) {
+  return (
+    <div className="flex min-h-48 items-center justify-center rounded-lg border border-border bg-muted">
+      <span className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+        {error ? (
+          <>
+            <ImageOff className="size-4" /> {error}
+          </>
+        ) : (
+          "Loading image…"
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The step's after frame, without annotations, in the Before view's
+ * framing (see {@link afterFrame}). `crop`: the part of the full
+ * screenshot the Before view shows (null: all of it, undefined: not known yet).
+ */
+function AfterImage({ guideId, image, crop }: { guideId: string; image: StepImage; crop: Rect | null | undefined }) {
+  if (crop === undefined) return <ImageStatus error={null} />;
+  if (crop) return <CroppedAfterImage guideId={guideId} image={image} crop={crop} />;
+  return <AfterFrameImage guideId={guideId} path={image.after!} crop={null} full={null} />;
+}
+
+/** The after frame cropped like the full screenshot, whose size it checks first. */
+function CroppedAfterImage({ guideId, image, crop }: { guideId: string; image: StepImage; crop: Rect }) {
+  const full = useStepImage(guideId, image.full);
+  const fullSize = useImageSize(full.url);
+  // A full screenshot that can't be read or decoded: the whole frame.
+  if (full.error || fullSize.failed) return <AfterFrameImage guideId={guideId} path={image.after!} crop={null} full={null} />;
+  return <AfterFrameImage guideId={guideId} path={image.after!} crop={crop} full={fullSize.size} />;
+}
+
+function AfterFrameImage({
+  guideId,
+  path,
+  crop,
+  full,
+}: {
+  guideId: string;
+  path: string;
+  crop: Rect | null;
+  full: Size | null;
+}) {
+  const { url, error } = useStepImage(guideId, path);
+  const { size, failed } = useImageSize(url);
+  const view = afterFrame(crop, size, full);
+  if (!url || !size || !view) {
+    return <ImageStatus error={error ?? (failed ? "The after screenshot can't be shown: the image is damaged." : null)} />;
+  }
+  return (
+    <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
+      <svg
+        role="img"
+        aria-label="Step screenshot after the action"
+        viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
+        className="block max-h-[60vh] w-full select-none"
+        style={{ aspectRatio: `${view.width} / ${view.height}` }}
+      >
+        <image href={url} x={0} y={0} width={size.width} height={size.height} preserveAspectRatio="none" />
+      </svg>
+    </div>
+  );
+}
+
 function Layer({
   guideId,
   step,
@@ -140,10 +224,13 @@ function Layer({
   selectedId,
   select,
   focusedSuggestion,
+  frame,
 }: {
   guideId: string;
   step: Step;
   readOnly: boolean;
+  /** "after": the after frame instead, without annotations. */
+  frame: Frame;
   tool: Tool | "select";
   onToolDone(): void;
   selectedId: string | null;
@@ -187,7 +274,8 @@ function Layer({
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [view?.x, view?.y, view?.width, view?.height]);
+    // The SVG is replaced on returning from the After view.
+  }, [frame, view?.x, view?.y, view?.width, view?.height]);
 
   const toImage = (e: { clientX: number; clientY: number }): Point =>
     clientToImage({ x: e.clientX, y: e.clientY }, svg.current!.getBoundingClientRect(), view!);
@@ -299,21 +387,14 @@ function Layer({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedId, readOnly, step, select, cancel, view]);
 
-  if (!url || !view) {
-    return (
-      <div className="flex min-h-48 items-center justify-center rounded-lg border border-border bg-muted">
-        <span className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-          {error ? (
-            <>
-              <ImageOff className="size-4" /> {error}
-            </>
-          ) : (
-            "Loading image…"
-          )}
-        </span>
-      </div>
-    );
+  if (frame === "after") {
+    // The Before view's crop once it is known to fit; a crop image that
+    // can't be read gives the whole frame.
+    const crop = shown.rect ? (view ?? (error ? null : undefined)) : null;
+    return <AfterImage guideId={guideId} image={step.image} crop={crop} />;
   }
+
+  if (!url || !view) return <ImageStatus error={error} />;
 
   // The draft replaces its annotation while dragging, or is added on top.
   const annotations = draft
@@ -602,12 +683,27 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
   const selected = step.annotations.find((a) => a.id === selectedId) ?? null;
   const select = useCallback((id: string | null) => setSelectedId(id), []);
   const [focusedSuggestion, setFocusedSuggestion] = useState<number | null>(null);
+  // View-only, never part of the guide; a new step starts at Before (the
+  // editor is keyed by step).
+  const [chosenFrame, setFrame] = useState<Frame>("before");
+  const frame: Frame = step.image.after ? chosenFrame : "before";
+  const after = frame === "after";
+  const chooseFrame = (next: Frame) => {
+    setFrame(next);
+    if (next === "after") {
+      setTool("select");
+      setSelectedId(null);
+      setFocusedSuggestion(null);
+    }
+  };
+  const frameSwitch = step.image.after && <BeforeAfterSwitch value={frame} onChange={chooseFrame} />;
 
   return (
     <div className="flex flex-col gap-2">
+      {readOnly && frameSwitch && <div className="flex items-center justify-end gap-1">{frameSwitch}</div>}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-1" role="toolbar" aria-label="Annotation tools">
-          {TOOLS.map(({ tool: value, label, icon: Icon }) => (
+          {!after && TOOLS.map(({ tool: value, label, icon: Icon }) => (
             <Button
               key={value}
               variant="ghost"
@@ -624,7 +720,9 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
               <Icon />
             </Button>
           ))}
-          <div className="ml-auto flex items-center gap-1" role="group" aria-label="Image">
+          <div className="ml-auto flex items-center gap-2">
+          {frameSwitch}
+          <div className="flex items-center gap-1" role="group" aria-label="Image">
             {(["crop", "full"] as const).map((show) => (
               <Button
                 key={show}
@@ -638,8 +736,10 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
               </Button>
             ))}
           </div>
+          </div>
         </div>
       )}
+      {after && <p className="text-xs text-muted-foreground">Annotations apply to the Before screenshot.</p>}
       <Layer
         guideId={guideId}
         step={step}
@@ -649,9 +749,10 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
         selectedId={selected?.id ?? null}
         select={select}
         focusedSuggestion={focusedSuggestion}
+        frame={frame}
       />
-      <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />
-      {selected && !readOnly && (
+      {!after && <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />}
+      {!after && selected && !readOnly && (
         <StyleBar stepId={step.id} annotation={selected} run={run} onDeleted={() => setSelectedId(null)} />
       )}
     </div>
