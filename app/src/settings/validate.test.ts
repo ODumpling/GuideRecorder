@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatHotkey, hotkeyFromEvent, inRange, isBundleId, isHotkey, isLanguage, isModelId, TYPING_IDLE_MS } from "@/settings/validate";
+import { bundleIdError, formatHotkey, hotkeyFromEvent, inRange, isBundleId, isHotkey, isLanguage, isModelId, TYPING_IDLE_MS } from "@/settings/validate";
 
 const key = (code: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) => ({
   code,
@@ -25,6 +25,21 @@ describe("settings checks (mirroring settings.rs)", () => {
     expect(isBundleId("Safari") || isBundleId("com.x/y")).toBe(false);
     expect(inRange(1500, TYPING_IDLE_MS)).toBe(true);
     expect(inRange(50, TYPING_IDLE_MS) || inRange(1500.5, TYPING_IDLE_MS)).toBe(false);
+  });
+
+  it("excluded apps need a full bundle id", () => {
+    for (const ok of ["com.1password.1password", "2BUA8C4S2C.com.agilebits.onepassword7-helper", "com.apple.Safari"]) {
+      expect(isBundleId(ok)).toBe(true);
+      expect(bundleIdError(ok)).toBeNull();
+    }
+    // Too broad: these would exclude every app under them.
+    for (const broad of ["com.apple", "com", "com.", ".com.apple", "com..apple", "com.apple."]) {
+      expect(isBundleId(broad)).toBe(false);
+    }
+    expect(bundleIdError("com.apple")).toMatch(/^com\.apple is too broad/);
+    expect(bundleIdError("com..apple")).toMatch(/too broad/);
+    expect(bundleIdError("Safari")).toMatch(/^Use a bundle id/);
+    expect(bundleIdError("")).toBeNull();
   });
 
   it("records shortcuts by physical key", () => {

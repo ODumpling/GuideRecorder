@@ -246,13 +246,39 @@ pub fn is_language(value: &str) -> bool {
             }))
 }
 
-/// A bundle id such as `com.1password.1password`.
+/// A full bundle id such as `com.1password.1password`: at least three
+/// non-empty dot-separated parts. Exclusion also matches `<id>.` as a
+/// prefix (for helpers), so a shorter entry like `com.apple` would leave
+/// out every Apple app.
 pub fn is_bundle_id(value: &str) -> bool {
+    has_bundle_id_chars(value)
+        && value.split('.').count() >= 3
+        && value.split('.').all(|part| !part.is_empty())
+}
+
+/// Made of bundle-id characters and dotted, but not a full bundle id
+/// (`com.apple`, `com..x`): it would exclude far more than one app.
+fn is_broad_bundle_id(value: &str) -> bool {
+    has_bundle_id_chars(value) && value.contains('.') && !is_bundle_id(value)
+}
+
+fn has_bundle_id_chars(value: &str) -> bool {
     (1..=255).contains(&value.len())
-        && value.contains('.')
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+}
+
+/// Why `app` can't be an excluded app.
+fn bundle_id_error(app: &str) -> String {
+    if is_broad_bundle_id(app) {
+        format!(
+            "{app:?} is too broad: it would exclude every app whose id starts with it; \
+             use a full bundle id such as com.1password.1password"
+        )
+    } else {
+        format!("{app:?} is not an app bundle id")
+    }
 }
 
 /// `#rgb` or `#rrggbb`.
@@ -304,7 +330,7 @@ impl Settings {
             )));
         }
         if let Some(app) = r.excluded_apps.iter().find(|a| !is_bundle_id(a)) {
-            return Err(invalid(format!("{app:?} is not an app bundle id")));
+            return Err(invalid(bundle_id_error(app)));
         }
         for model in [&self.ai.step_model, &self.ai.guide_model] {
             if !is_model_id(model) {
@@ -487,23 +513,30 @@ fn read(path: &Path) -> (Settings, LoadState) {
         .and_then(|v| v.as_u64())
         .unwrap_or(u64::from(SETTINGS_VERSION));
     let read_only = version > u64::from(SETTINGS_VERSION);
-    match serde_json::from_value::<Settings>(value) {
-        Ok(settings) if read_only || settings.validate().is_ok() => (
+    let decoded = serde_json::from_value::<Settings>(value).map(|mut settings| {
+        let dropped = drop_invalid_excluded_apps(&mut settings);
+        (settings, dropped)
+    });
+    match decoded {
+        Ok((settings, dropped)) if read_only || settings.validate().is_ok() => (
             settings,
             LoadState {
                 read_only,
-                error: None,
+                error: dropped.map(|e| format!("{}: {e}", path.display())),
             },
         ),
-        Ok(settings) => {
+        Ok((settings, dropped)) => {
             // Keep what is valid: fall back field group by field group.
-            let error = settings.validate().err().map(|e| e.message);
+            let error = settings
+                .validate()
+                .err()
+                .map(|e| format!("{}; using the default there", e.message));
+            let error = [dropped, error].into_iter().flatten().collect::<Vec<_>>();
             (
                 sanitize(settings),
                 LoadState {
                     read_only: false,
-                    error: error
-                        .map(|e| format!("{}: {e}; using the default there", path.display())),
+                    error: Some(format!("{}: {}", path.display(), error.join("; "))),
                 },
             )
         }
@@ -519,6 +552,21 @@ fn read(path: &Path) -> (Settings, LoadState) {
         ),
         Err(e) => set_aside(path, format!("{}: {e}", path.display())),
     }
+}
+
+/// Drops the excluded apps that are not full bundle ids (such as a broad
+/// `com.apple` from a hand-edited file), so one bad entry neither resets
+/// the rest of the recording settings nor excludes a whole vendor's apps.
+/// Also applied to read-only settings, in memory only. Returns why, if any
+/// were dropped; the next save writes the list without them.
+fn drop_invalid_excluded_apps(settings: &mut Settings) -> Option<String> {
+    let (kept, dropped): (Vec<String>, Vec<String>) =
+        std::mem::take(&mut settings.recording.excluded_apps)
+            .into_iter()
+            .partition(|app| is_bundle_id(app));
+    settings.recording.excluded_apps = kept;
+    let reasons: Vec<String> = dropped.iter().map(|app| bundle_id_error(app)).collect();
+    (!reasons.is_empty()).then(|| format!("ignored excluded apps: {}", reasons.join("; ")))
 }
 
 /// Settings that are shown but never saved, with why.
@@ -721,8 +769,26 @@ mod tests {
         assert!(!is_model_id("") && !is_model_id("a b"));
         assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));
         assert!(!is_language("en_US") && !is_language("-en"));
-        assert!(is_bundle_id("com.1password.1password"));
+        for ok in [
+            "com.1password.1password",
+            "2BUA8C4S2C.com.agilebits.onepassword7-helper",
+            "com.apple.Safari",
+        ] {
+            assert!(is_bundle_id(ok), "{ok}");
+        }
         assert!(!is_bundle_id("Safari") && !is_bundle_id("com.x/y"));
+        // Too broad: these would exclude every app under them.
+        for broad in [
+            "com.apple",
+            "com",
+            "com.",
+            ".com.apple",
+            "com..apple",
+            "com.apple.",
+        ] {
+            assert!(!is_bundle_id(broad), "{broad}");
+        }
+        assert!(is_broad_bundle_id("com.apple") && !is_broad_bundle_id("Safari"));
         assert!(is_accent("#abc") && is_accent("#A1B2C3"));
         assert!(!is_accent("abc") && !is_accent("#abcd") && !is_accent("red"));
 
@@ -735,6 +801,10 @@ mod tests {
         let mut s = Settings::default();
         s.recording.excluded_apps = vec!["com.apple.Safari".into(), "nope".into()];
         assert!(s.validate().unwrap_err().message.contains("nope"));
+        let mut s = Settings::default();
+        s.recording.excluded_apps = vec!["com.apple".into()];
+        let message = s.validate().unwrap_err().message;
+        assert!(message.contains("\"com.apple\" is too broad"), "{message}");
         let mut s = Settings::default();
         s.export.accent = Some("blue".into());
         assert!(s.validate().is_err());
@@ -846,6 +916,58 @@ mod tests {
         assert_eq!(store.get().recording.typing_idle_ms, 1500);
         assert_eq!(store.get().ai.language, "it");
         assert!(store.view().load_error.is_some());
+    }
+
+    #[test]
+    fn broad_excluded_apps_are_dropped_on_load() {
+        let dir = scratch();
+        let path = dir.join("settings.json");
+        // Hand-edited: a broad entry next to valid ones and a custom shortcut.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"hotkeys":{"pause":"Ctrl+Alt+K"},
+                "excludedApps":["com.1password.1password","com.apple","com.apple.Safari"]}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let view = store.view();
+        // Only the broad entry goes; the rest of Recording is kept.
+        assert_eq!(
+            view.settings.recording.excluded_apps,
+            ["com.1password.1password", "com.apple.Safari"]
+        );
+        assert_eq!(view.settings.recording.hotkeys.pause, "Ctrl+Alt+K");
+        assert!(!view.read_only);
+        let error = view.load_error.unwrap();
+        assert!(error.contains("\"com.apple\" is too broad"), "{error}");
+        // Saving writes the list without it.
+        store.update(store.get(), &ChosenPaths::default()).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("\"com.apple\""));
+
+        // Alongside another invalid value: both are reported, and only that
+        // value's group falls back.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"excludedApps":["com.apple"]},"ai":{"language":"en_US"}}"#,
+        )
+        .unwrap();
+        let view = SettingsStore::load(Some(path.clone())).view();
+        assert!(view.settings.recording.excluded_apps.is_empty());
+        assert_eq!(view.settings.ai.language, "");
+        let error = view.load_error.unwrap();
+        assert!(
+            error.contains("too broad") && error.contains("en_US"),
+            "{error}"
+        );
+
+        // A newer, read-only file is left alone on disk but not applied.
+        let newer = br#"{"version":2,"recording":{"excludedApps":["com.apple"]}}"#;
+        fs::write(&path, newer).unwrap();
+        let view = SettingsStore::load(Some(path.clone())).view();
+        assert!(view.read_only);
+        assert!(view.settings.recording.excluded_apps.is_empty());
+        assert!(view.load_error.unwrap().contains("too broad"));
+        assert_eq!(fs::read(&path).unwrap(), newer);
     }
 
     #[test]

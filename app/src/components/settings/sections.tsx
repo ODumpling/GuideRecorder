@@ -12,6 +12,7 @@ import type { CaptureArea, LibraryInfo, McpSetup, Permission, PermissionStatus, 
 import { useSettings, settingsStore } from "@/settings/settings";
 import {
   AFTER_FRAME_DELAY_MS,
+  bundleIdError,
   inRange,
   isBundleId,
   isHotkey,
@@ -162,6 +163,7 @@ export function RecordingSection() {
   // Adds back the suggested apps that were removed; keeps the user's own.
   const missingDefaults = DEFAULT_EXCLUDED_IDS.filter((id) => !r.excludedApps.includes(id));
   const full = r.excludedApps.length >= MAX_EXCLUDED_APPS;
+  const appError = bundleIdError(app.trim());
 
   return (
     <Section title="Recording" intro="The next recording uses these. With Window or Region as the capture area, you pick the window or draw the region each time you record. The record and pause shortcuts and after frames are not supported yet.">
@@ -253,7 +255,8 @@ export function RecordingSection() {
             placeholder="com.example.app"
             value={app}
             disabled={readOnly}
-            aria-invalid={app !== "" && !isBundleId(app.trim())}
+            aria-invalid={appError !== null}
+            aria-describedby={appError ? "excluded-app-error" : undefined}
             onChange={(e) => setApp(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addApp()}
           />
@@ -261,6 +264,11 @@ export function RecordingSection() {
             Add
           </Button>
         </div>
+        {appError && (
+          <p id="excluded-app-error" className="text-xs text-[var(--status-danger)]">
+            {appError}
+          </p>
+        )}
         {missingDefaults.length > 0 && (
           <div className="flex items-center gap-2">
             <Button

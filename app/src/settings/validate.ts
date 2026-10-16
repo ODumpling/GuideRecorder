@@ -31,8 +31,27 @@ export function isLanguage(value: string): boolean {
   return value === "" || (value.length <= 35 && value.split("-").every((p) => /^[A-Za-z0-9]{1,8}$/.test(p)));
 }
 
+function hasBundleIdChars(value: string): boolean {
+  return value.length >= 1 && value.length <= 255 && /^[A-Za-z0-9\-._]+$/.test(value);
+}
+
+/**
+ * A full bundle id such as `com.1password.1password`: at least three
+ * non-empty dot-separated parts. Exclusion also matches `<id>.` as a prefix,
+ * so `com.apple` would leave out every Apple app.
+ */
 export function isBundleId(value: string): boolean {
-  return value.length >= 1 && value.length <= 255 && value.includes(".") && /^[A-Za-z0-9\-._]+$/.test(value);
+  const parts = value.split(".");
+  return hasBundleIdChars(value) && parts.length >= 3 && parts.every((p) => p !== "");
+}
+
+/** Why `value` can't be added as an excluded app, or null if it can (or is empty). */
+export function bundleIdError(value: string): string | null {
+  if (value === "" || isBundleId(value)) return null;
+  if (hasBundleIdChars(value) && value.includes(".")) {
+    return `${value} is too broad: it would exclude every app whose id starts with it. Use a full bundle id, such as com.1password.1password.`;
+  }
+  return "Use a bundle id, such as com.1password.1password.";
 }
 
 export function inRange(value: number, range: { min: number; max: number }): boolean {

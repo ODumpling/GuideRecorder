@@ -24,6 +24,19 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await pause.press("Enter");
   await expect.poll(() => backend.settings.recording.typingIdleMs).toBe(2000);
 
+  // Excluded apps: a vendor prefix is refused with a reason; a full id is added.
+  const appId = dialog.getByLabel("App bundle id");
+  await appId.fill("com.apple");
+  await expect(appId).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByText(/com\.apple is too broad/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
+  await appId.press("Enter");
+  expect(backend.settings.recording.excludedApps).not.toContain("com.apple");
+  await appId.fill("com.apple.Safari");
+  await expect(dialog.getByText(/too broad/)).toBeHidden();
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect.poll(() => backend.settings.recording.excludedApps).toContain("com.apple.Safari");
+
   // AI: the key goes to the Keychain and is never shown back.
   await dialog.getByRole("button", { name: "AI", exact: true }).click();
   await dialog.getByLabel("API key").fill("sk-ant-test");
