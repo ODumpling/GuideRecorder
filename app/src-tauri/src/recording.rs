@@ -54,8 +54,9 @@
 //! record: it shows the main window and sends [`PICK_AREA_EVENT`], and the
 //! main window picks the area and starts with it.
 //!
-//! Not in this slice: after-frames per step (the capture crate has no
-//! support yet).
+//! Each step also gets an after-frame (`recording.afterFrames`), taken
+//! `recording.afterFrameDelayMs` after its action; see the capture
+//! session's `# After frames`.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,8 +65,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use guiderecorder_capture::macos::frames::CaptureTarget;
 use guiderecorder_capture::macos::session::{
-    CaptureLostSink, ExclusionSink, Hotkey, LiveSnapshot, RecordingSession, SessionConfig,
-    SessionError, SnapshotSink,
+    AfterFrames, CaptureLostSink, ExclusionSink, Hotkey, LiveSnapshot, RecordingSession,
+    SessionConfig, SessionError, SnapshotSink,
 };
 use guiderecorder_core::events::Modifiers;
 use guiderecorder_core::model::Point;
@@ -587,6 +588,9 @@ fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (Sessio
     cfg.frames.exclude_own_windows = true;
     cfg.excluded_bundle_ids = recording.excluded_apps.clone();
     cfg.steps.typing_idle_ms = u64::from(recording.typing_idle_ms);
+    cfg.after_frames = recording.after_frames.then(|| AfterFrames {
+        settle_ms: u64::from(recording.after_frame_delay_ms),
+    });
     cfg.manual_hotkey = manual_hotkey(&recording.hotkeys.manual_step);
     // Handled by the app (start/stop, pause): never steps.
     cfg.control_hotkeys = crate::hotkeys::capture_hotkeys();
@@ -1238,6 +1242,14 @@ mod tests {
         assert_eq!(cfg.control_hotkeys, crate::hotkeys::capture_hotkeys());
         assert_eq!(cfg.control_hotkeys.len(), 2);
         assert_eq!(cfg.work_dir, None);
+        assert_eq!(cfg.after_frames, Some(AfterFrames { settle_ms: 400 }));
+
+        settings.recording.after_frame_delay_ms = 1_500;
+        let (cfg, _) = session_config(&settings, None);
+        assert_eq!(cfg.after_frames, Some(AfterFrames { settle_ms: 1_500 }));
+        settings.recording.after_frames = false;
+        let (cfg, _) = session_config(&settings, None);
+        assert_eq!(cfg.after_frames, None);
 
         settings.recording.capture_area = CaptureArea::Window;
         let (cfg, fallback) = session_config(&settings, None);

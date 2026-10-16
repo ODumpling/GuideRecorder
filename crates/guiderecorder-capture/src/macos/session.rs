@@ -205,15 +205,17 @@
 //! # After frames
 //!
 //! Each event that took a snapshot also gets an "after" frame, showing
-//! the result of its step (`steps/<id>.after.webp`, [`StepImage::after`]).
+//! the result of its step (`steps/<id>.after.webp`, [`StepImage::after`]),
+//! unless [`SessionConfig::after_frames`] is `None`.
 //! The router tells the after thread (an unbounded channel, never
 //! waited on) about every step-starting event, with its snapshot's
 //! stream and frame or without one (`AfterMsg`), and every key or
 //! release that continues the step (the rest of a typing run, a click's
 //! or drag's release). [`RecordingSession::pause`] tells it when a pause
 //! begins. The after thread handles the steps in order. It waits, on the
-//! event clock, until [`AFTER_SETTLE_MS`] after the step's last key or
-//! release (a press counts as settling only once released, or after
+//! event clock, until the settle delay ([`AfterFrames::settle_ms`],
+//! default [`AFTER_SETTLE_MS`]) after the step's last key or release
+//! (a press counts as settling only once released, or after
 //! [`AFTER_HOLD_MAX_MS`]), then takes the first frame from then on,
 //! waiting up to [`AFTER_WAIT_MS`] more for one
 //! ([`FrameReader::frame_after`]). If the step went on during that wait
@@ -222,8 +224,9 @@
 //! before then instead, so the frame never shows the next action or the
 //! paused screen. Its waits overlap
 //! (they are measured from the events), so it falls behind only by the
-//! encoder, and stopping a session waits at most about one second for
-//! the last step.
+//! encoder, and stopping a session waits at most about the settle delay
+//! plus [`AFTER_WAIT_MS`] for the last step (a press still held counts
+//! as released at stop).
 //!
 //! An event gets no after frame ([`SessionMetrics::after_skips`]) when:
 //!
@@ -251,7 +254,7 @@
 //!
 //! # Known gaps
 //!
-//! - An after frame shows the screen [`AFTER_SETTLE_MS`] after the step:
+//! - An after frame shows the screen the settle delay after the step:
 //!   a slower app (a page load) may not have drawn its result yet, and
 //!   one taken just before a quick next step may be mid-animation.
 //! - The click that brings another app to the front from an excluded one
@@ -337,10 +340,10 @@ pub const STALE_SESSION_MS: u64 = 6 * 60 * 60 * 1000;
 /// full is dropped (see [`SessionMetrics::snapshots_dropped_queue_full`]).
 pub const ENCODER_QUEUE: usize = 4;
 /// How long after a step's action (its last key or release) its "after"
-/// frame is taken: long enough for most UI to respond and redraw. See
-/// `# After frames`.
+/// frame is taken by default ([`AfterFrames::settle_ms`]): long enough
+/// for most UI to respond and redraw. See `# After frames`.
 pub const AFTER_SETTLE_MS: u64 = 500;
-/// How much longer than [`AFTER_SETTLE_MS`] the after thread waits for a
+/// How much longer than the settle delay the after thread waits for a
 /// frame, before falling back to the latest one (the screen is static).
 pub const AFTER_WAIT_MS: u64 = 500;
 /// How long a press (a drag) may be held before its step settles anyway,
@@ -475,6 +478,11 @@ pub struct SessionConfig {
     /// snapshotted. Empty by default.
     pub control_hotkeys: Vec<Hotkey>,
     pub steps: StepConfig,
+    /// After frames (see `# After frames`); `None` takes none: the after
+    /// thread only drains its messages, no `.after.webp` is written, every
+    /// [`StepImage::after`] is `None` and the after metrics stay 0. The
+    /// default takes them, [`AFTER_SETTLE_MS`] after each step.
+    pub after_frames: Option<AfterFrames>,
     /// Click crop in frame pixels.
     pub crop_size: (u32, u32),
     /// Where the hidden session folder with encoded snapshots goes. `None`
@@ -501,6 +509,22 @@ pub struct SessionConfig {
     /// nothing; the state can also be polled with
     /// [`RecordingSession::capture_lost`].
     pub on_capture_lost: Option<CaptureLostSink>,
+}
+
+/// How after frames are taken ([`SessionConfig::after_frames`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AfterFrames {
+    /// How long after a step's action (its last key or release) its after
+    /// frame is taken. Default [`AFTER_SETTLE_MS`].
+    pub settle_ms: u64,
+}
+
+impl Default for AfterFrames {
+    fn default() -> Self {
+        Self {
+            settle_ms: AFTER_SETTLE_MS,
+        }
+    }
 }
 
 /// The callback behind [`SessionConfig::on_capture_lost`].
@@ -601,6 +625,7 @@ impl Default for SessionConfig {
             manual_hotkey: Some(Hotkey::MANUAL_STEP),
             control_hotkeys: Vec::new(),
             steps: StepConfig::default(),
+            after_frames: Some(AfterFrames::default()),
             crop_size: DEFAULT_CROP_SIZE,
             work_dir: None,
             on_snapshot: None,
@@ -866,6 +891,7 @@ impl RecordingSession {
             Arc::clone(&backlog),
             Arc::clone(&self.front),
             event_tap::now,
+            cfg.after_frames,
         );
         self.after = Some(spawn("guiderecorder-session-after", move || {
             after.run(after_rx);
@@ -3094,6 +3120,8 @@ struct AfterWorker {
     front: Arc<Frontmost>,
     /// The event clock (`event_tap::now`).
     now: fn() -> Timestamp,
+    /// [`SessionConfig::after_frames`]: `None` takes no frames.
+    cfg: Option<AfterFrames>,
     /// Messages read ahead while settling a step, not handled yet.
     pending: VecDeque<AfterMsg>,
     /// When each pause began, in order.
@@ -3116,12 +3144,14 @@ impl AfterWorker {
         backlog: Arc<AtomicUsize>,
         front: Arc<Frontmost>,
         now: fn() -> Timestamp,
+        cfg: Option<AfterFrames>,
     ) -> Self {
         Self {
             encode,
             backlog,
             front,
             now,
+            cfg,
             pending: VecDeque::new(),
             pauses: Vec::new(),
             afters: BTreeMap::new(),
@@ -3131,8 +3161,13 @@ impl AfterWorker {
     }
 
     /// Handles steps one at a time, in order; ends once the router and the
-    /// session have hung up and every step is handled.
+    /// session have hung up and every step is handled. With after frames
+    /// off, only drains the messages.
     fn run(&mut self, rx: Receiver<AfterMsg>) {
+        if self.cfg.is_none() {
+            rx.iter().for_each(drop);
+            return;
+        }
         loop {
             let msg = match self.pending.pop_front() {
                 Some(msg) => msg,
@@ -3191,8 +3226,14 @@ impl AfterWorker {
         }
     }
 
+    /// The settle delay in ns ([`AfterFrames::settle_ms`]).
+    fn settle_ns(&self) -> u64 {
+        let ms = self.cfg.map_or(AFTER_SETTLE_MS, |c| c.settle_ms);
+        ms.saturating_mul(1_000_000)
+    }
+
     /// Waits, on the event clock, until the step has settled
-    /// ([`AFTER_SETTLE_MS`] after its last key or release, its press
+    /// (the settle delay after its last key or release, its press
     /// released or held [`AFTER_HOLD_MAX_MS`]) or has a limit.
     fn settle(&mut self, rx: &Receiver<AfterMsg>, s: &mut Settling) {
         const MS: u64 = 1_000_000;
@@ -3200,7 +3241,7 @@ impl AfterWorker {
             let due = if s.held {
                 s.ts.0.saturating_add(AFTER_HOLD_MAX_MS * MS)
             } else {
-                s.end.0.saturating_add(AFTER_SETTLE_MS * MS)
+                s.end.0.saturating_add(self.settle_ns())
             };
             let now = (self.now)().0;
             if now >= due {
@@ -3230,7 +3271,7 @@ impl AfterWorker {
     }
 
     /// Takes the after frame of the step started at `ts`: the first frame
-    /// [`AFTER_SETTLE_MS`] after its last key or release, or, when the next
+    /// the settle delay after its last key or release, or, when the next
     /// step or a pause comes before then, the last frame before it.
     fn step(
         &mut self,
@@ -3242,6 +3283,8 @@ impl AfterWorker {
         held: bool,
     ) {
         const MS: u64 = 1_000_000;
+        let settle_ns = self.settle_ns();
+        let settle_ms = settle_ns / MS;
         let mut s = Settling {
             ts,
             end: ts,
@@ -3259,9 +3302,9 @@ impl AfterWorker {
                 break reader.frame_before(limit);
             }
             let end = s.end;
-            let deadline = end.0.saturating_add((AFTER_SETTLE_MS + AFTER_WAIT_MS) * MS);
+            let deadline = end.0.saturating_add(settle_ns + AFTER_WAIT_MS * MS);
             let wait = Duration::from_nanos(deadline.saturating_sub((self.now)().0));
-            let frame = reader.frame_after(end, AFTER_SETTLE_MS, wait);
+            let frame = reader.frame_after(end, settle_ms, wait);
             // Keys, a release, the next step or a pause may have come in
             // while waiting.
             self.drain(rx, &mut s);
@@ -3271,7 +3314,7 @@ impl AfterWorker {
                     _ => break reader.frame_before(limit),
                 }
             }
-            let settled_by = Timestamp(s.end.0.saturating_add(AFTER_SETTLE_MS * MS));
+            let settled_by = Timestamp(s.end.0.saturating_add(settle_ns));
             match frame {
                 // The step went on: settle again from its new end.
                 _ if s.end != end && frame.as_ref().is_none_or(|f| f.ts < settled_by) => {}
@@ -6963,8 +7006,22 @@ mod tests {
     /// Runs an after thread over `msgs`; returns its output and the frames
     /// it sent to the encoder.
     fn run_after(front: Arc<Frontmost>, msgs: Vec<AfterMsg>) -> (AfterOut, Vec<EncodeJob>) {
+        run_after_with(front, Some(AfterFrames::default()), msgs)
+    }
+
+    fn run_after_with(
+        front: Arc<Frontmost>,
+        cfg: Option<AfterFrames>,
+        msgs: Vec<AfterMsg>,
+    ) -> (AfterOut, Vec<EncodeJob>) {
         let (encode, encode_rx) = mpsc::sync_channel(ENCODER_QUEUE);
-        let mut worker = AfterWorker::new(encode, Arc::new(AtomicUsize::new(0)), front, far_future);
+        let mut worker = AfterWorker::new(
+            encode,
+            Arc::new(AtomicUsize::new(0)),
+            front,
+            far_future,
+            cfg,
+        );
         let (tx, rx) = mpsc::channel();
         for msg in msgs {
             tx.send(msg).unwrap();
@@ -7504,6 +7561,7 @@ mod tests {
             Arc::new(AtomicUsize::new(0)),
             no_exclusions(),
             event_tap::now,
+            Some(AfterFrames::default()),
         );
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -7573,14 +7631,132 @@ mod tests {
     fn after_frames_count_in_the_encoder_backlog_peak() {
         let scratch = ScratchDir::new();
         let reader = FrameReader::detached(8);
-        let (session, tx) = headless_session(&scratch, reader.clone());
+        // The encoder waits for the sink, so the snapshot is still waiting
+        // when the after frame is queued: 2 at once, where the router alone
+        // only ever saw 1.
+        let cfg = SessionConfig {
+            on_snapshot: Some(SnapshotSink::new(|_| {
+                thread::sleep(Duration::from_millis(AFTER_SETTLE_MS + 500));
+            })),
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
         let t0 = event_tap::now();
         reader.push(px_frame(t0));
         reader.push(px_frame(Timestamp(t0.0 + (AFTER_SETTLE_MS + 20) * MS)));
         tx.send(shortcut_at(Timestamp(t0.0 + MS))).unwrap();
         drop(tx);
         let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.snapshots, 1);
         assert_eq!(rec.metrics.after_frames, 1);
-        assert!(rec.metrics.encoder_max_backlog >= 1);
+        assert_eq!(rec.metrics.encoder_max_backlog, 2);
+    }
+
+    #[test]
+    fn after_frames_off_takes_none() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 520] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let ts = Timestamp(10 * MS);
+        let (out, jobs) = run_after_with(
+            no_exclusions(),
+            None,
+            vec![after_step(ts, &reader, Timestamp(5 * MS))],
+        );
+        assert!(out.afters.is_empty());
+        assert!(jobs.is_empty());
+        assert_eq!(out.skips, AfterSkips::default());
+        assert_eq!(out.max_backlog, 0);
+
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let cfg = SessionConfig {
+            after_frames: None,
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        reader.push(px_frame(Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS)));
+        tx.send(shortcut_at(a)).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.snapshots, 1);
+        assert!(rec.afters.is_empty());
+        assert_eq!(rec.metrics.after_frames, 0);
+        assert_eq!(rec.metrics.after_skips, AfterSkips::default());
+        assert_eq!(webp_files(rec.session_dir()).len(), 1);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "No after").unwrap();
+        let steps: Vec<_> = saved.guide.steps().collect();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].image.after, None);
+        assert!(after_files(&saved).is_empty());
+    }
+
+    #[test]
+    fn a_custom_settle_delay_is_honoured() {
+        let reader = FrameReader::detached(8);
+        for ms in [5, 100, 120, 520] {
+            reader.push(px_frame(Timestamp(ms * MS)));
+        }
+        let ts = Timestamp(10 * MS);
+        let (out, _) = run_after_with(
+            no_exclusions(),
+            Some(AfterFrames { settle_ms: 100 }),
+            vec![after_step(ts, &reader, Timestamp(5 * MS))],
+        );
+        // The first frame from 110 ms on, not the default's 520 ms.
+        assert_eq!(out.afters[&ts].frame.ts, Timestamp(120 * MS));
+
+        // Through a session: the config reaches its after thread.
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(8);
+        let cfg = SessionConfig {
+            after_frames: Some(AfterFrames { settle_ms: 50 }),
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(px_frame(t0));
+        let a = Timestamp(t0.0 + MS);
+        let early = Timestamp(a.0 + 70 * MS);
+        reader.push(px_frame(early));
+        reader.push(px_frame(Timestamp(a.0 + (AFTER_SETTLE_MS + 20) * MS)));
+        tx.send(shortcut_at(a)).unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.afters[&a].frame_ts, early);
+    }
+
+    #[test]
+    fn hanging_up_on_a_held_press_does_not_wait_for_the_hold_limit() {
+        // Only the after thread, on the real event clock: a stop or drop
+        // hangs up while a press is still held.
+        let reader = FrameReader::detached(8);
+        let t0 = event_tap::now();
+        reader.push(px_frame(Timestamp(t0.0 - MS)));
+        reader.push(px_frame(Timestamp(t0.0 + MS)));
+        let (tx, handle, _jobs) = live_after();
+        tx.send(AfterMsg::Step {
+            ts: t0,
+            source: 0,
+            reader: reader.clone(),
+            before: FrameKey {
+                source: 0,
+                ts: Timestamp(t0.0 - MS),
+            },
+            held: true,
+        })
+        .unwrap();
+        let start = Instant::now();
+        drop(tx);
+        let out = handle.join().unwrap();
+        // About the settle delay plus the frame wait; the hold limit is 10 s.
+        let bound = Duration::from_millis(AFTER_HOLD_MAX_MS / 2);
+        assert!(start.elapsed() < bound, "took {:?}", start.elapsed());
+        assert_eq!(out.afters[&t0].frame.ts, Timestamp(t0.0 + MS));
     }
 }
