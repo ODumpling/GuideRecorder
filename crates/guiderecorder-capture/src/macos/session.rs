@@ -298,7 +298,8 @@ pub const EXCLUDED_FRAME_HEAD_MS: u64 = 250;
 /// and a refresh did not list it yet (no window yet). About 16 s in all.
 pub const FILTER_RETRY_MS: &[u64] = &[250, 500, 1000, 2000, 4000, 8000];
 /// The suggested exclusion list (the app's settings default):
-/// 1Password 8, 7 and 6 (with the 7 and 6 mini helpers, whose team-id
+/// 1Password 8, 7 and 6 (6 from the App Store and from AgileBits' own
+/// store, whose ids differ; with the 7 and 6 mini helpers, whose team-id
 /// prefixed ids no `<id>.` rule reaches), Bitwarden, Keychain Access,
 /// Passwords (macOS 15+) and Messages. [`SessionConfig::default`] excludes nothing; the caller
 /// passes the list it wants in [`SessionConfig::excluded_bundle_ids`].
@@ -306,8 +307,10 @@ pub const DEFAULT_EXCLUDED_BUNDLE_IDS: &[&str] = &[
     "com.1password.1password",
     "com.agilebits.onepassword7",
     "com.agilebits.onepassword-osx",
+    "com.agilebits.onepassword4",
     "2BUA8C4S2C.com.agilebits.onepassword7-helper",
     "2BUA8C4S2C.com.agilebits.onepassword-osx-helper",
+    "2BUA8C4S2C.com.agilebits.onepassword4-helper",
     "com.bitwarden.desktop",
     "com.apple.keychainaccess",
     "com.apple.Passwords",
@@ -5562,6 +5565,9 @@ mod tests {
         for id in [
             ONE_PASSWORD,
             "com.agilebits.onepassword7",
+            "com.agilebits.onepassword-osx",
+            "com.agilebits.onepassword4",
+            "2BUA8C4S2C.com.agilebits.onepassword4-helper",
             "com.bitwarden.desktop",
             "com.apple.keychainaccess",
             "com.apple.MobileSMS",
