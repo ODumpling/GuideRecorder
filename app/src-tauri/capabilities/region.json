@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "region",
+  "description": "The region picker overlay: only reports the picked region",
+  "windows": [
+    "region"
+  ],
+  "permissions": [
+    "allow-finish-region-pick"
+  ]
+}
