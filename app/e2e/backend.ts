@@ -121,6 +121,16 @@ export class Backend {
   readonly revealed: string[] = [];
   /** `verify_crop`'s answer for a crop that has a `cropRect`. */
   cropVerifies = true;
+  /**
+   * `verify_crop` also fails a crop whose bytes aren't a WebP image, as
+   * the Rust side does (it decodes the crop). Off by default: the check
+   * then accepts damaged bytes.
+   */
+  cropCheckRejectsDamaged = false;
+  /** Milliseconds to hold a command's reply, by command (to order replies). */
+  delayMs: Partial<Record<string, number>> = {};
+  /** `step_image` reads held until released, by image path (see `holdImage`). */
+  private heldImages = new Map<string, { released: Promise<void>; release(): void }>();
 
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
@@ -264,6 +274,18 @@ export class Backend {
     this.bundle(guideId).files.set(path, bytes);
   }
 
+  /** Holds every `step_image` read of `path` until `releaseImage`. */
+  holdImage(path: string) {
+    let release = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    this.heldImages.set(path, { released, release });
+  }
+
+  releaseImage(path: string) {
+    this.heldImages.get(path)?.release();
+    this.heldImages.delete(path);
+  }
+
   private bundle(id: string): Bundle {
     return this.bundles.get(id) ?? fail("notFound", `no guide ${id}`);
   }
@@ -278,6 +300,10 @@ export class Backend {
     args: unknown,
   ): Promise<({ ok: unknown } | { error: AppError }) & { events: EmittedEvent[]; after?: EmittedEvent[] }> {
     this.calls.push({ cmd, args });
+    const delay = this.delayMs[cmd];
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const held = cmd === "step_image" ? this.heldImages.get(String((args as { path?: unknown })?.path)) : undefined;
+    if (held) await held.released;
     try {
       const ok = this.run(cmd, (args ?? {}) as Record<string, unknown>);
       return { ok, events: this.takeEvents(), after: this.after.splice(0) };
@@ -588,7 +614,9 @@ export class Backend {
       case "verify_crop": {
         const bundle = this.bundle(String(args.guideId));
         const image = args.image as StepImage;
-        return !!image.crop && !!image.cropRect && bundle.files.has(image.crop) && this.cropVerifies;
+        const bytes = image.crop ? bundle.files.get(image.crop) : undefined;
+        const webp = !!bytes && bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP";
+        return !!bytes && !!image.cropRect && this.cropVerifies && (webp || !this.cropCheckRejectsDamaged);
       }
       case "choose_export_folder":
         return this.dialog.folder;

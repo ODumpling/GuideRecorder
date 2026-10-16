@@ -12,14 +12,17 @@ const button = (page: Page, name: "Before" | "After") => frameSwitch(page).getBy
 const note = (page: Page) => page.getByText("Annotations apply to the Before screenshot.");
 const toolbar = (page: Page) => page.getByRole("toolbar", { name: "Annotation tools" });
 const DAMAGED = "The screenshot can't be shown: the image is damaged.";
+const CROP_DAMAGED =
+  "This step's click crop can't be shown: the image is damaged. The full screenshot is shown for editing.";
+const CROP_MISMATCH = "This step's click crop doesn't match its recorded position";
 
-/** Clicks a point of the 64×40 Before screenshot, in its pixels. */
-async function clickImage(page: Page, x: number, y: number) {
+/** Clicks a point of the Before screenshot (64×40, or the shown `view` of it), in its pixels. */
+async function clickImage(page: Page, x: number, y: number, view = { x: 0, y: 0, width: 64, height: 40 }) {
   const box = (await before(page).boundingBox())!;
-  const scale = Math.min(box.width / 64, box.height / 40);
-  const left = box.x + (box.width - 64 * scale) / 2;
-  const top = box.y + (box.height - 40 * scale) / 2;
-  await page.mouse.click(left + x * scale, top + y * scale);
+  const scale = Math.min(box.width / view.width, box.height / view.height);
+  const left = box.x + (box.width - view.width * scale) / 2;
+  const top = box.y + (box.height - view.height * scale) / 2;
+  await page.mouse.click(left + (x - view.x) * scale, top + (y - view.y) * scale);
 }
 
 test("shows a step's after frame without annotations", async ({ page, backend }) => {
@@ -155,36 +158,112 @@ test("an undecodable after frame shows an error, not endless loading", async ({ 
 
 test.describe("an undecodable Before screenshot", () => {
   test("shows an error, not endless loading, and can't be edited", async ({ page, backend }) => {
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const cropRect = { x: 16, y: 10, width: 32, height: 20 };
+    let full = "";
+    let count = 0;
     backend.editStep(CALENDAR, WITH_AFTER, (s) => {
-      backend.setFile(CALENDAR, s.image.full, Buffer.from("not a webp"));
+      s.image.cropRect = cropRect;
+      full = s.image.full;
+      count = s.annotations.length;
     });
     await openGuide(page, "Share a calendar event");
+    await expect(before(page)).toHaveAttribute("viewBox", "16 10 32 20");
+    // Select the box (12,6 16×10) where the crop shows it, while the image is healthy.
+    await clickImage(page, 22, 13, cropRect);
+    await expect(before(page).locator('rect[fill="white"]').first()).toBeVisible();
+
+    // The full screenshot is damaged, and slow to arrive.
+    backend.setFile(CALENDAR, full, Buffer.from("not a webp"));
+    backend.delayMs.step_image = 1500;
+    await page.getByRole("button", { name: "Full", exact: true }).click();
+    await expect(page.getByText("Loading image…")).toBeVisible();
+    // Still selected, with no image for the key to apply to.
+    await page.locator("body").focus();
+    await page.keyboard.press("Delete");
     await expect(page.getByText(DAMAGED)).toBeVisible();
     await expect(page.getByText("Loading image…")).toHaveCount(0);
     await expect(before(page)).toHaveCount(0);
-    await page.locator("body").focus();
     await page.keyboard.press("Delete");
+    backend.delayMs.step_image = 0;
     // The after frame is its own image.
     await button(page, "After").click();
     await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
     await button(page, "Before").click();
     await expect(page.getByText(DAMAGED)).toBeVisible();
-    expect(backend.saves).toHaveLength(0);
-    await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+    // Only the switch to Full is saved; the annotation stays.
+    await expect.poll(() => backend.saves.length).toBeGreaterThan(0);
+    const saved = backend.lastSave(CALENDAR).items.find((i) => i.id === WITH_AFTER);
+    expect(saved?.type === "step" && saved.image.show).toBe("full");
+    expect(saved?.type === "step" && saved.annotations.length).toBe(count);
   });
 
-  test("a damaged click crop falls back to the full screenshot", async ({ page, backend }) => {
+  test("a damaged click crop falls back to the full screenshot when the crop check rejects it first", async ({
+    page,
+    backend,
+  }) => {
+    let crop = "";
+    backend.editStep(CALENDAR, WITH_AFTER, (s) => {
+      s.image.cropRect = { x: 16, y: 10, width: 32, height: 20 };
+      crop = s.image.crop!;
+      backend.setFile(CALENDAR, crop, Buffer.from("not a webp"));
+    });
+    backend.cropCheckRejectsDamaged = true;
+    // The crop's bytes arrive only on release: the check answers first, and
+    // the crop's separate decode stays pending meanwhile.
+    backend.holdImage(crop);
+    await openGuide(page, "Share a calendar event");
+    await expect(before(page)).toHaveAttribute("viewBox", "0 0 64 40");
+    await expect.poll(() => backend.calls.filter((c) => c.cmd === "verify_crop").length).toBeGreaterThan(0);
+    await expect
+      .poll(() => backend.calls.filter((c) => (c.args as { path?: string }).path === crop).length)
+      .toBeGreaterThan(1);
+    // No note until the decode answers.
+    await page.waitForTimeout(300);
+    await expect(page.getByText(CROP_MISMATCH)).toHaveCount(0);
+    await expect(page.getByText(CROP_DAMAGED)).toHaveCount(0);
+
+    backend.releaseImage(crop);
+    await expect(page.getByText(CROP_DAMAGED)).toBeVisible();
+    await expect(page.getByText(CROP_MISMATCH)).toHaveCount(0);
+    await button(page, "After").click();
+    await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
+  });
+
+  test("a damaged click crop falls back to the full screenshot when its decode fails first", async ({
+    page,
+    backend,
+  }) => {
     backend.editStep(CALENDAR, WITH_AFTER, (s) => {
       s.image.cropRect = { x: 16, y: 10, width: 32, height: 20 };
       backend.setFile(CALENDAR, s.image.crop!, Buffer.from("not a webp"));
     });
+    backend.cropCheckRejectsDamaged = true;
+    // The decode fails before the check answers.
+    backend.delayMs.verify_crop = 1000;
     await openGuide(page, "Share a calendar event");
     await expect(before(page)).toHaveAttribute("viewBox", "0 0 64 40");
-    await expect(
-      page.getByText("This step's click crop can't be shown: the image is damaged. The full screenshot is shown for editing."),
-    ).toBeVisible();
+    await expect(page.getByText(CROP_DAMAGED)).toBeVisible();
+    await expect(page.getByText(CROP_MISMATCH)).toHaveCount(0);
+    // Still so once the check has answered.
+    await expect.poll(() => backend.calls.filter((c) => c.cmd === "verify_crop").length).toBeGreaterThan(0);
+    await page.waitForTimeout(1200);
+    await expect(page.getByText(CROP_DAMAGED)).toBeVisible();
+    await expect(page.getByText(CROP_MISMATCH)).toHaveCount(0);
     await button(page, "After").click();
     await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
+  });
+
+  test("a click crop that decodes but fails the crop check reads as a mismatch", async ({ page, backend }) => {
+    backend.editStep(CALENDAR, WITH_AFTER, (s) => {
+      s.image.cropRect = { x: 16, y: 10, width: 32, height: 20 };
+    });
+    backend.cropCheckRejectsDamaged = true;
+    backend.cropVerifies = false;
+    await openGuide(page, "Share a calendar event");
+    await expect(before(page)).toHaveAttribute("viewBox", "0 0 64 40");
+    await expect(page.getByText(CROP_MISMATCH)).toBeVisible();
+    await expect(page.getByText(CROP_DAMAGED)).toHaveCount(0);
   });
 });
 

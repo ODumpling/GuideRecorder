@@ -43,7 +43,7 @@ import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { setImageShow, type Command } from "@/editor/commands";
 import { editorStore } from "@/editor/editor";
-import { verifyCrop } from "@/lib/ipc";
+import { tauriApi, verifyCrop } from "@/lib/ipc";
 import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { cn } from "@/lib/utils";
@@ -107,6 +107,38 @@ function useImageSize(url: string | null): { size: Size | null; failed: boolean 
   }, [url]);
   const current = result && result.url === url ? result : null;
   return { size: current?.size ?? null, failed: !!current && !current.size };
+}
+
+/**
+ * Whether the step image at `path` can't be decoded: `true` when its bytes
+ * aren't an image, `false` when it decodes or can't be read, `null` while
+ * pending or with no `path`.
+ */
+function useUndecodable(guideId: string, path: string | null): boolean | null {
+  const [result, setResult] = useState<{ key: string; undecodable: boolean } | null>(null);
+  const key = path && `${guideId}|${path}`;
+  useEffect(() => {
+    if (!key || !path) return;
+    let cancelled = false;
+    let url: string | null = null;
+    const done = (undecodable: boolean) => !cancelled && setResult({ key, undecodable });
+    tauriApi.stepImage(guideId, path).then(
+      (bytes) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(new Blob([bytes], { type: "image/webp" }));
+        const image = new Image();
+        image.onload = () => done(false);
+        image.onerror = () => done(true);
+        image.src = url;
+      },
+      () => done(false),
+    );
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [guideId, path, key]);
+  return key && result?.key === key ? result.undecodable : null;
 }
 
 /** Identifies what `verify_crop` checked: the image paths and `cropRect`. */
@@ -253,6 +285,12 @@ function Layer({
   }, [cropMismatch, cropDamaged, cropKey]);
   // The full screenshot can't be decoded: nothing to edit on.
   const damaged = !shown.rect && failed;
+  // When the Rust check sets the crop aside before its decode here fails,
+  // the crop is decoded on its own, so a damaged crop reads as damaged
+  // whichever check finishes first.
+  const undecodable = useUndecodable(guideId, verified === false && !rejectedHere ? (step.image.crop ?? null) : null);
+  const cropNote: "damaged" | "mismatch" | null =
+    rejectedHere?.damaged || undecodable ? "damaged" : rejectedHere || undecodable === false ? "mismatch" : null;
   useEffect(() => {
     if (damaged) select(null);
   }, [damaged, select]);
@@ -415,11 +453,11 @@ function Layer({
 
   return (
     <div className="flex flex-col gap-2">
-      {shown.cropUnknown && (
+      {(shown.cropUnknown === "missing" || (shown.cropUnknown === "mismatch" && cropNote)) && (
         <p className="text-xs text-muted-foreground">
           {shown.cropUnknown === "missing"
             ? "This step doesn't record where its click crop sits, so the full screenshot is shown for editing."
-            : rejectedHere?.damaged
+            : cropNote === "damaged"
               ? "This step's click crop can't be shown: the image is damaged. The full screenshot is shown for editing."
               : "This step's click crop doesn't match its recorded position, so the full screenshot is shown for editing. The export ignores the recorded position too."}
         </p>
