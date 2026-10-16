@@ -57,6 +57,7 @@ const COMMANDS: &[&str] = &[
     "recording_snapshot",
     "add_manual_step",
     "list_capture_windows",
+    "list_capture_displays",
     "pick_region",
     "finish_region_pick",
     "ai_generate",

@@ -166,7 +166,7 @@ export default function App() {
         void invoke("quit_ack");
         void quit();
       }),
-      // The tray or the record hotkey, with Window or Region as the capture area.
+      // The tray or the record hotkey, with One display, Window or Region as the capture area.
       listen(RECORDING_PICK_AREA_EVENT, () => void startFlow.getState().begin()),
     ];
     return () => {

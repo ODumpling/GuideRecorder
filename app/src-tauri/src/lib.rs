@@ -192,6 +192,7 @@ pub fn run() {
             recording::recording_snapshot,
             recording::add_manual_step,
             picker::list_capture_windows,
+            picker::list_capture_displays,
             picker::pick_region,
             picker::finish_region_pick,
             ai::ai_generate,

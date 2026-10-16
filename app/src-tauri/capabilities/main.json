@@ -47,6 +47,7 @@
     "allow-recording-snapshot",
     "allow-add-manual-step",
     "allow-list-capture-windows",
+    "allow-list-capture-displays",
     "allow-pick-region",
     "allow-finish-region-pick",
     "allow-ai-generate",

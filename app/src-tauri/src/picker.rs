@@ -1,6 +1,7 @@
-//! Choosing what a recording captures: the windows the user can pick
-//! (`list_capture_windows`), the region overlay (`pick_region`, answered by
-//! the overlay page through `finish_region_pick`), and the one mapping from
+//! Choosing what a recording captures: the windows and displays the user
+//! can pick (`list_capture_windows`, `list_capture_displays`), the region
+//! overlay (`pick_region`, answered by the overlay page through
+//! `finish_region_pick`), and the one mapping from
 //! the webview's [`CaptureTargetArg`] to a capture [`CaptureTarget`]
 //! ([`capture_target`]), used by `start_recording`.
 //!
@@ -41,6 +42,7 @@ pub const MIN_REGION_SIDE: f64 = 40.0;
 
 pub const WINDOW_GONE: &str = "That window is no longer open.";
 pub const WINDOW_NOT_PICKABLE: &str = "That window can't be recorded.";
+pub const DISPLAY_GONE: &str = "That display is no longer connected.";
 
 /// A window the user can record (from `list_capture_windows`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -68,8 +70,19 @@ impl CaptureWindow {
     }
 }
 
+/// A display the user can record (from `list_capture_displays`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureDisplay {
+    pub display_id: u32,
+    pub main: bool,
+    /// Global points.
+    pub bounds: Rect,
+}
+
 /// What `start_recording` is asked to capture. Serialized as
-/// `{"kind": "display"}`, `{"kind": "window", "windowId": …}` or
+/// `{"kind": "display"}` (every display), `{"kind": "display",
+/// "displayId": …}`, `{"kind": "window", "windowId": …}` or
 /// `{"kind": "region", "displayId": …, "rect": {x, y, width, height}}`
 /// (`rect` in global points).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -79,7 +92,10 @@ impl CaptureWindow {
     rename_all_fields = "camelCase"
 )]
 pub enum CaptureTargetArg {
-    Display,
+    Display {
+        #[serde(default)]
+        display_id: Option<u32>,
+    },
     Window {
         window_id: u32,
     },
@@ -94,15 +110,15 @@ pub enum CaptureTargetArg {
 /// [`check_window`]); a region must be finite
 /// and at least [`MIN_REGION_SIDE`] on both sides, else `invalid`. A
 /// region without a display gets the one under its centre (`display_at`),
-/// else the main display. A display target is every display, as a
-/// recording from the stored settings is.
+/// else the main display. A display target without a display is every
+/// display, as a recording from the stored settings is.
 pub fn capture_target(
     arg: CaptureTargetArg,
     check_window: impl FnOnce(u32) -> Result<()>,
     display_at: impl FnOnce(Point) -> Option<u32>,
 ) -> Result<CaptureTarget> {
     match arg {
-        CaptureTargetArg::Display => Ok(CaptureTarget::Display { display_id: None }),
+        CaptureTargetArg::Display { display_id } => Ok(CaptureTarget::Display { display_id }),
         CaptureTargetArg::Window { window_id } => {
             check_window(window_id)?;
             Ok(CaptureTarget::Window { window_id })
@@ -152,10 +168,28 @@ pub fn check_window(
     Ok(())
 }
 
+/// Whether display `id` is among the active displays (`listed`):
+/// `invalid` [`DISPLAY_GONE`] when not.
+pub fn check_display(id: u32, listed: &[DisplayInfo]) -> Result<()> {
+    if listed.iter().any(|d| d.id == id) {
+        Ok(())
+    } else {
+        Err(AppError::new(ErrorKind::Invalid, DISPLAY_GONE))
+    }
+}
+
 /// [`capture_target`] against the system: the window is checked against
 /// one ScreenCaptureKit listing ([`check_window`], with the excluded apps
-/// `excluded`), the display is found by its bounds. Blocking.
+/// `excluded`), a chosen display against the active ones
+/// ([`check_display`]), a region's display is found by its bounds.
+/// Blocking.
 pub fn resolve_target(arg: CaptureTargetArg, excluded: &[String]) -> Result<CaptureTarget> {
+    if let CaptureTargetArg::Display {
+        display_id: Some(id),
+    } = arg
+    {
+        check_display(id, &DisplayInfo::all())?;
+    }
     capture_target(
         arg,
         |id| match frames::list_windows() {
@@ -195,6 +229,37 @@ pub async fn list_capture_windows(
             .into_iter()
             .map(CaptureWindow::of)
             .collect())
+    })
+    .await
+}
+
+/// The active displays, the main one first, then left to right.
+pub fn capture_displays(displays: Vec<DisplayInfo>, main: Option<u32>) -> Vec<CaptureDisplay> {
+    let mut listed: Vec<CaptureDisplay> = displays
+        .into_iter()
+        .map(|d| CaptureDisplay {
+            display_id: d.id,
+            main: Some(d.id) == main,
+            bounds: d.bounds,
+        })
+        .collect();
+    listed.sort_by(|a, b| {
+        b.main
+            .cmp(&a.main)
+            .then(a.bounds.x.total_cmp(&b.bounds.x))
+            .then(a.bounds.y.total_cmp(&b.bounds.y))
+    });
+    listed
+}
+
+/// The displays the user can record ([`capture_displays`]).
+#[tauri::command]
+pub async fn list_capture_displays() -> Result<Vec<CaptureDisplay>> {
+    blocking(|| {
+        Ok(capture_displays(
+            DisplayInfo::all(),
+            DisplayInfo::main().map(|d| d.id),
+        ))
     })
     .await
 }
@@ -545,7 +610,16 @@ mod tests {
 
     #[test]
     fn target_args_deserialize_from_the_contract_shapes() {
-        assert_eq!(arg(json!({"kind": "display"})), CaptureTargetArg::Display);
+        assert_eq!(
+            arg(json!({"kind": "display"})),
+            CaptureTargetArg::Display { display_id: None }
+        );
+        assert_eq!(
+            arg(json!({"kind": "display", "displayId": 4})),
+            CaptureTargetArg::Display {
+                display_id: Some(4)
+            }
+        );
         assert_eq!(
             arg(json!({"kind": "window", "windowId": 42})),
             CaptureTargetArg::Window { window_id: 42 }
@@ -590,8 +664,26 @@ mod tests {
     fn targets_map_and_validate() {
         let never = |_: Point| -> Option<u32> { panic!("no display lookup") };
         assert_eq!(
-            capture_target(CaptureTargetArg::Display, |_| unreachable!(), never).unwrap(),
+            capture_target(
+                CaptureTargetArg::Display { display_id: None },
+                |_| unreachable!(),
+                never
+            )
+            .unwrap(),
             CaptureTarget::Display { display_id: None }
+        );
+        assert_eq!(
+            capture_target(
+                CaptureTargetArg::Display {
+                    display_id: Some(4)
+                },
+                |_| unreachable!(),
+                never
+            )
+            .unwrap(),
+            CaptureTarget::Display {
+                display_id: Some(4)
+            }
         );
         assert_eq!(
             capture_target(
@@ -654,6 +746,34 @@ mod tests {
             let e = capture_target(region(Some(1), bad), |_| unreachable!(), never).unwrap_err();
             assert_eq!(e.kind, ErrorKind::Invalid, "{bad:?}");
         }
+    }
+
+    fn display(id: u32, x: f64) -> DisplayInfo {
+        DisplayInfo {
+            id,
+            bounds: rect(x, 0.0, 1920.0, 1080.0),
+            scale: 2.0,
+        }
+    }
+
+    #[test]
+    fn displays_list_main_first_then_left_to_right() {
+        let listed = capture_displays(
+            vec![display(3, 1920.0), display(1, 0.0), display(2, -1920.0)],
+            Some(1),
+        );
+        let ids: Vec<(u32, bool)> = listed.iter().map(|d| (d.display_id, d.main)).collect();
+        assert_eq!(ids, [(1, true), (2, false), (3, false)]);
+        assert_eq!(listed[1].bounds, rect(-1920.0, 0.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn a_chosen_display_must_still_be_connected() {
+        let listed = [display(1, 0.0), display(2, 1920.0)];
+        assert!(check_display(2, &listed).is_ok());
+        let e = check_display(5, &listed).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Invalid);
+        assert_eq!(e.message, DISPLAY_GONE);
     }
 
     #[test]

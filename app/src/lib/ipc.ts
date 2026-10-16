@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AiRewriteResult,
   AppError,
+  CaptureDisplay,
   CaptureTargetArg,
   CaptureWindow,
   ExportBranding,
@@ -210,12 +211,15 @@ export const tauriRecordingApi: RecordingApi = {
 export interface PickerApi {
   /** Windows that can be recorded, frontmost first. */
   listCaptureWindows(): Promise<CaptureWindow[]>;
+  /** Active displays, the main one first, then left to right. */
+  listCaptureDisplays(): Promise<CaptureDisplay[]>;
   /** Shows the region overlay and waits for it; null if cancelled. */
   pickRegion(): Promise<RegionPick | null>;
 }
 
 export const tauriPickerApi: PickerApi = {
   listCaptureWindows: () => invoke("list_capture_windows"),
+  listCaptureDisplays: () => invoke("list_capture_displays"),
   pickRegion: () => invoke("pick_region"),
 };
 
@@ -246,7 +250,7 @@ export const RECORDING_SAVED_EVENT = "recording://saved";
 export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";
 /**
  * Emitted (no payload) when the tray or the record hotkey starts a
- * recording while the capture area is Window or Region: the main window
+ * recording while the capture area is One display, Window or Region: the main window
  * asks what to record, then starts.
  */
 export const RECORDING_PICK_AREA_EVENT = "recording://pick-area";

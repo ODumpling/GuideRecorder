@@ -195,7 +195,15 @@ export interface ExportResult {
   notes: string[];
 }
 
-export type CaptureArea = "display" | "window" | "region";
+/** `display`: every display; `oneDisplay`: one, picked at each recording. */
+export type CaptureArea = "display" | "oneDisplay" | "window" | "region";
+
+/** A display recording can capture (`list_capture_displays`); bounds in global points. */
+export interface CaptureDisplay {
+  displayId: number;
+  main: boolean;
+  bounds: Rect;
+}
 
 /** A window recording can capture (`list_capture_windows`); size in points. */
 export interface CaptureWindow {
@@ -215,11 +223,12 @@ export interface Rect {
 }
 
 /**
- * What `start_recording` captures, when the user picked it. Region `rect`
- * is in global display points.
+ * What `start_recording` captures, when the user picked it. A display
+ * without `displayId` is every display. Region `rect` is in global display
+ * points.
  */
 export type CaptureTargetArg =
-  | { kind: "display" }
+  | { kind: "display"; displayId?: number }
   | { kind: "window"; windowId: number }
   | { kind: "region"; displayId: number | null; rect: Rect };
 

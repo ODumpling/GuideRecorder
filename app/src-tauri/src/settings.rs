@@ -83,8 +83,11 @@ pub struct General {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureArea {
+    /// Every display.
     #[default]
     Display,
+    /// One display, picked at each recording.
+    OneDisplay,
     Window,
     Region,
 }

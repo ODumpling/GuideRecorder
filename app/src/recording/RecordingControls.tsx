@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";
+import { DisplayPicker } from "@/picker/DisplayPicker";
 import { WindowPicker } from "@/picker/WindowPicker";
 import { recordingStore, startFlow, useRecording } from "@/recording/recording";
 import { captureLostLabel, captureLostMessage, elapsedMs, formatElapsed } from "@/recording/store";
@@ -61,12 +62,14 @@ function CancelButton({ disabled }: { disabled: boolean }) {
 
 /**
  * The toolbar's Record button, or the live recording's controls; and the
- * window picker a Record asks with when the capture area is Window.
+ * display and window pickers a Record asks with when the capture area is
+ * One display or Application.
  */
 export function RecordingControls() {
   return (
     <>
       <Controls />
+      <DisplayPicker flow={startFlow} recording={recordingStore} />
       <WindowPicker flow={startFlow} recording={recordingStore} />
     </>
   );

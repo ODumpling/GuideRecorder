@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PickerApi, RecordingApi } from "@/lib/ipc";
-import type { CaptureArea, CaptureWindow, RecordingStatus, StampedStatus } from "@/lib/types";
+import type { CaptureArea, CaptureDisplay, CaptureWindow, RecordingStatus, StampedStatus } from "@/lib/types";
 import { createStartFlow, startChoice } from "@/recording/startFlow";
 import { createRecordingStore } from "@/recording/store";
 
@@ -16,6 +16,10 @@ const recording: RecordingStatus = {
 const WINDOWS: CaptureWindow[] = [
   { windowId: 7, appName: "Safari", bundleId: "com.apple.Safari", title: "Apple", width: 1200, height: 800 },
   { windowId: 9, appName: "Notes", bundleId: "com.apple.Notes", title: null, width: 600, height: 500 },
+];
+const DISPLAYS: CaptureDisplay[] = [
+  { displayId: 1, main: true, bounds: { x: 0, y: 0, width: 1512, height: 982 } },
+  { displayId: 4, main: false, bounds: { x: 1512, y: 0, width: 1920, height: 1080 } },
 ];
 const REGION = { displayId: 1, rect: { x: 100, y: 50, width: 400, height: 300 } };
 
@@ -34,6 +38,7 @@ function setup(area: CaptureArea | null, overrides: { recording?: Partial<Record
   };
   const picker: PickerApi = {
     listCaptureWindows: vi.fn(async () => WINDOWS),
+    listCaptureDisplays: vi.fn(async () => DISPLAYS),
     pickRegion: vi.fn(async () => REGION),
     ...overrides.picker,
   };
@@ -45,6 +50,7 @@ function setup(area: CaptureArea | null, overrides: { recording?: Partial<Record
 describe("startChoice", () => {
   it("follows the capture area, the display when unknown", () => {
     expect(startChoice("display")).toBe("display");
+    expect(startChoice("oneDisplay")).toBe("oneDisplay");
     expect(startChoice("window")).toBe("window");
     expect(startChoice("region")).toBe("region");
     expect(startChoice(null)).toBe("display");
@@ -131,6 +137,58 @@ describe("start flow", () => {
     });
     await flow.getState().begin();
     expect(flow.getState().windowPicker).toEqual({ windows: [], loadError: "no windows for you", startError: null });
+  });
+
+  it("one display: opens the picker with the displays, then starts on the chosen one", async () => {
+    const { api, flow } = setup("oneDisplay");
+    await flow.getState().begin();
+    expect(api.start).not.toHaveBeenCalled();
+    expect(flow.getState().displayPicker).toEqual({ displays: DISPLAYS, startError: null });
+
+    expect(await flow.getState().chooseDisplay(4)).toBe(true);
+    expect(api.start).toHaveBeenCalledWith(null, { kind: "display", displayId: 4 });
+    expect(flow.getState().displayPicker).toBeNull();
+  });
+
+  it("one display: All displays starts on every display", async () => {
+    const { api, flow } = setup("oneDisplay");
+    await flow.getState().begin();
+    expect(await flow.getState().chooseDisplay(null)).toBe(true);
+    expect(api.start).toHaveBeenCalledWith(null, { kind: "display" });
+  });
+
+  it("one display: with a single display, starts on it at once", async () => {
+    const { api, flow } = setup("oneDisplay", { picker: { listCaptureDisplays: vi.fn(async () => [DISPLAYS[0]]) } });
+    await flow.getState().begin();
+    expect(flow.getState().displayPicker).toBeNull();
+    expect(api.start).toHaveBeenCalledWith(null, { kind: "display", displayId: 1 });
+  });
+
+  it("one display: a failed listing records every display", async () => {
+    const { api, flow } = setup("oneDisplay", {
+      picker: { listCaptureDisplays: vi.fn(async () => Promise.reject({ kind: "io", message: "no" })) },
+    });
+    await flow.getState().begin();
+    expect(api.start).toHaveBeenCalledWith(null);
+  });
+
+  it("one display: a disconnected display is shown in the picker and the list reloads", async () => {
+    const { picker, store, flow } = setup("oneDisplay", {
+      recording: { start: vi.fn(async () => Promise.reject({ kind: "invalid", message: "That display is no longer connected." })) },
+    });
+    await flow.getState().begin();
+    expect(await flow.getState().chooseDisplay(4)).toBe(false);
+    expect(flow.getState().displayPicker).toEqual({ displays: DISPLAYS, startError: "That display is no longer connected." });
+    expect(picker.listCaptureDisplays).toHaveBeenCalledTimes(2);
+    expect(store.getState().error).toBeNull();
+  });
+
+  it("one display: cancelling starts nothing", async () => {
+    const { api, flow } = setup("oneDisplay");
+    await flow.getState().begin();
+    flow.getState().closeDisplayPicker();
+    expect(flow.getState().displayPicker).toBeNull();
+    expect(api.start).not.toHaveBeenCalled();
   });
 
   it("region: starts on the drawn region", async () => {

@@ -49,8 +49,9 @@
 //!
 //! `start_recording` takes an optional capture target (see
 //! [`crate::picker`]). Without one the area comes from the settings, where
-//! Window and Region fall back to every display (`captureAreaFallback`).
-//! A start from the tray or ⌃⌥R with Window or Region stored does not
+//! One display, Window and Region fall back to every display
+//! (`captureAreaFallback`). A start from the tray or ⌃⌥R with one of them
+//! stored does not
 //! record: it shows the main window and sends [`PICK_AREA_EVENT`], and the
 //! main window picks the area and starts with it.
 //!
@@ -118,7 +119,7 @@ pub enum RecordingStatus {
         /// The title given to `start_recording`, if any.
         title: Option<String>,
         /// Started without a target while the stored capture area is
-        /// Window or Region, so every display is being captured.
+        /// One display, Window or Region, so every display is being captured.
         capture_area_fallback: bool,
         /// Milliseconds spent in finished pauses.
         paused_ms: u64,
@@ -577,7 +578,7 @@ fn manual_hotkey(value: &str) -> Option<Hotkey> {
 
 /// The session config for the stored settings capturing `target`, and
 /// whether the capture area fell back to the displays (no target given
-/// while the stored area is Window or Region).
+/// while the stored area is One display, Window or Region).
 fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (SessionConfig, bool) {
     let recording = &settings.recording;
     let fallback = target.is_none() && !matches!(recording.capture_area, CaptureArea::Display);
@@ -1019,16 +1020,16 @@ impl StartFrom {
     pub fn of(area: CaptureArea) -> Self {
         match area {
             CaptureArea::Display => Self::Record,
-            CaptureArea::Window | CaptureArea::Region => Self::PickArea,
+            CaptureArea::OneDisplay | CaptureArea::Window | CaptureArea::Region => Self::PickArea,
         }
     }
 }
 
 /// Runs `control` on the blocking pool through the same code as the
 /// commands, so statuses (and `recording://saved`) are sent as usual. A
-/// start uses the stored settings and no title; with Window or Region
-/// stored it records nothing and asks the main window to pick the area
-/// (see [`StartFrom`]). A stop shows the main
+/// start uses the stored settings and no title; with One display, Window
+/// or Region stored it records nothing and asks the main window to pick
+/// the area (see [`StartFrom`]). A stop shows the main
 /// window, whose editor opens the saved guide. Errors are shown in a
 /// dialog. Ignored while another control is still running.
 pub fn control<R: Runtime>(app: &AppHandle<R>, control: Control) {
@@ -1274,13 +1275,17 @@ mod tests {
             },
         };
         let display = CaptureTarget::Display { display_id: None };
+        let one_display = CaptureTarget::Display {
+            display_id: Some(3),
+        };
         for area in [
             CaptureArea::Display,
+            CaptureArea::OneDisplay,
             CaptureArea::Window,
             CaptureArea::Region,
         ] {
             settings.recording.capture_area = area;
-            for target in [window, region, display] {
+            for target in [window, region, display, one_display] {
                 let (cfg, fallback) = session_config(&settings, Some(target));
                 assert!(!fallback, "{area:?} {target:?}");
                 assert_eq!(cfg.frames.target, target);
@@ -1289,11 +1294,14 @@ mod tests {
         }
         settings.recording.capture_area = CaptureArea::Region;
         assert!(session_config(&settings, None).1);
+        settings.recording.capture_area = CaptureArea::OneDisplay;
+        assert!(session_config(&settings, None).1);
     }
 
     #[test]
     fn tray_and_hotkey_starts_pick_the_area_for_window_and_region() {
         assert_eq!(StartFrom::of(CaptureArea::Display), StartFrom::Record);
+        assert_eq!(StartFrom::of(CaptureArea::OneDisplay), StartFrom::PickArea);
         assert_eq!(StartFrom::of(CaptureArea::Window), StartFrom::PickArea);
         assert_eq!(StartFrom::of(CaptureArea::Region), StartFrom::PickArea);
         // Only a start resolves to it: a toggle while recording stops.
