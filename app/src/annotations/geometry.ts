@@ -27,9 +27,16 @@ export interface ImageView {
   cropUnknown: false | "missing" | "mismatch";
 }
 
+type Size = { width: number; height: number };
+
+/** Whether two image sizes match, give or take 1 px each way (the exporter's tolerance). */
+export function sizesMatch(a: Size, b: Size): boolean {
+  return Math.abs(a.width - b.width) <= 1 && Math.abs(a.height - b.height) <= 1;
+}
+
 /** Whether the crop image's size fits its `cropRect` (±1 px, like the exporter). */
-export function cropFits(cropRect: Rect, size: { width: number; height: number }): boolean {
-  return Math.abs(size.width - cropRect.width) <= 1 && Math.abs(size.height - cropRect.height) <= 1;
+export function cropFits(cropRect: Rect, size: Size): boolean {
+  return sizesMatch(size, cropRect);
 }
 
 /**

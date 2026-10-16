@@ -109,11 +109,6 @@ function useImageSize(url: string | null): { size: Size | null; failed: boolean 
   return { size: current?.size ?? null, failed: !!current && !current.size };
 }
 
-/** The size of a full screenshot, once loaded (the crop's size comes from `cropRect`). */
-function useNaturalSize(url: string | null): Size | null {
-  return useImageSize(url).size;
-}
-
 /** Identifies what `verify_crop` checked: the image paths and `cropRect`. */
 function cropCheckKey(image: StepImage): string | null {
   if (image.show !== "crop" || !image.crop || !image.cropRect) return null;
@@ -241,18 +236,26 @@ function Layer({
   // A crop is shown only once the Rust side has checked its `cropRect`
   // the way the exporter does (size, and pixels against the full
   // screenshot); otherwise it is set aside for the full screenshot. Keyed
-  // by the image paths and rect, so a changed crop is checked afresh.
+  // by the image paths and rect, so a changed crop is checked afresh. A
+  // crop image that can't be decoded is set aside the same way.
   const verified = useCropCheck(guideId, step.image);
-  const [rejectedCrop, setRejectedCrop] = useState<string | null>(null);
+  const [rejectedCrop, setRejectedCrop] = useState<{ key: string | null; damaged: boolean } | null>(null);
   const cropKey = cropCheckKey(step.image);
-  const rejected = (rejectedCrop !== null && rejectedCrop === cropKey) || verified === false;
+  const rejectedHere = rejectedCrop !== null && rejectedCrop.key === cropKey ? rejectedCrop : null;
+  const rejected = !!rejectedHere || verified === false;
   const shown = imageView(step.image, rejected);
   const { url, error } = useStepImage(guideId, shown.path);
-  const natural = useNaturalSize(url);
+  const { size: natural, failed } = useImageSize(url);
   const cropMismatch = !!shown.rect && !!natural && !cropFits(shown.rect, natural);
+  const cropDamaged = !!shown.rect && failed;
   useEffect(() => {
-    if (cropMismatch) setRejectedCrop(cropKey);
-  }, [cropMismatch, cropKey]);
+    if (cropMismatch || cropDamaged) setRejectedCrop({ key: cropKey, damaged: cropDamaged });
+  }, [cropMismatch, cropDamaged, cropKey]);
+  // The full screenshot can't be decoded: nothing to edit on.
+  const damaged = !shown.rect && failed;
+  useEffect(() => {
+    if (damaged) select(null);
+  }, [damaged, select]);
   // Nothing is drawn until the crop is known to fit.
   const view: View | null = shown.rect
     ? natural && !cropMismatch && verified === true
@@ -360,7 +363,8 @@ function Layer({
         select(null);
         return;
       }
-      if (readOnly) return;
+      // No edits without the image they apply to (the After view shows another).
+      if (readOnly || !view || frame === "after") return;
       const annotation = step.annotations.find((a) => a.id === selectedId);
       if (!annotation) return;
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -379,13 +383,12 @@ function Layer({
       e.preventDefault();
       const by = e.shiftKey ? 10 : 1;
       const delta = { x: direction.x * by, y: direction.y * by };
-      if (!view) return;
       const moved = dragAnnotation(annotation, { kind: "body" }, { x: 0, y: 0 }, delta, view);
       run((guide) => updateAnnotation(guide, step.id, moved, "nudge"));
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedId, readOnly, step, select, cancel, view]);
+  }, [selectedId, readOnly, step, select, cancel, view, frame]);
 
   if (frame === "after") {
     // The Before view's crop once it is known to fit; a crop image that
@@ -394,7 +397,9 @@ function Layer({
     return <AfterImage guideId={guideId} image={step.image} crop={crop} />;
   }
 
-  if (!url || !view) return <ImageStatus error={error} />;
+  if (!url || !view) {
+    return <ImageStatus error={error ?? (damaged ? "The screenshot can't be shown: the image is damaged." : null)} />;
+  }
 
   // The draft replaces its annotation while dragging, or is added on top.
   const annotations = draft
@@ -414,7 +419,9 @@ function Layer({
         <p className="text-xs text-muted-foreground">
           {shown.cropUnknown === "missing"
             ? "This step doesn't record where its click crop sits, so the full screenshot is shown for editing."
-            : "This step's click crop doesn't match its recorded position, so the full screenshot is shown for editing. The export ignores the recorded position too."}
+            : rejectedHere?.damaged
+              ? "This step's click crop can't be shown: the image is damaged. The full screenshot is shown for editing."
+              : "This step's click crop doesn't match its recorded position, so the full screenshot is shown for editing. The export ignores the recorded position too."}
         </p>
       )}
     <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
@@ -700,7 +707,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
 
   return (
     <div className="flex flex-col gap-2">
-      {readOnly && frameSwitch && <div className="flex items-center justify-end gap-1">{frameSwitch}</div>}
+      {frameSwitch && <div className="flex items-center justify-end">{frameSwitch}</div>}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-1" role="toolbar" aria-label="Annotation tools">
           {!after && TOOLS.map(({ tool: value, label, icon: Icon }) => (
@@ -720,9 +727,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
               <Icon />
             </Button>
           ))}
-          <div className="ml-auto flex items-center gap-2">
-          {frameSwitch}
-          <div className="flex items-center gap-1" role="group" aria-label="Image">
+          <div className="ml-auto flex items-center gap-1" role="group" aria-label="Image">
             {(["crop", "full"] as const).map((show) => (
               <Button
                 key={show}
@@ -735,7 +740,6 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
                 {show === "crop" ? "Click crop" : "Full"}
               </Button>
             ))}
-          </div>
           </div>
         </div>
       )}

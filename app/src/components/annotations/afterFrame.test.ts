@@ -21,6 +21,12 @@ describe("afterFrame", () => {
 
   it("falls back to the whole after frame when the sizes differ", () => {
     expect(afterFrame(crop, size, { width: 128, height: 80 })).toEqual({ x: 0, y: 0, width: 64, height: 40 });
-    expect(afterFrame(crop, size, { width: 64, height: 41 })).toEqual({ x: 0, y: 0, width: 64, height: 40 });
+    expect(afterFrame(crop, size, { width: 64, height: 42 })).toEqual({ x: 0, y: 0, width: 64, height: 40 });
+    expect(afterFrame(crop, size, { width: 66, height: 40 })).toEqual({ x: 0, y: 0, width: 64, height: 40 });
+  });
+
+  it("allows 1 px either way, like the crop check", () => {
+    expect(afterFrame(crop, size, { width: 65, height: 39 })).toEqual(crop);
+    expect(afterFrame(crop, size, { width: 63, height: 41 })).toEqual(crop);
   });
 });

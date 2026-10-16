@@ -17,6 +17,7 @@ import {
   maskOutside,
   MIN_SIZE,
   resizeRect,
+  sizesMatch,
   strokeWidth,
 } from "@/annotations/geometry";
 import type { Annotation, StepImage } from "@/lib/types";
@@ -49,6 +50,8 @@ describe("image view", () => {
     expect(cropFits(crop.cropRect!, { width: 320, height: 200 })).toBe(true);
     expect(cropFits(crop.cropRect!, { width: 321, height: 199 })).toBe(true);
     expect(cropFits(crop.cropRect!, { width: 322, height: 200 })).toBe(false);
+    expect(sizesMatch({ width: 64, height: 40 }, { width: 63, height: 41 })).toBe(true);
+    expect(sizesMatch({ width: 64, height: 40 }, { width: 64, height: 38 })).toBe(false);
     // A crop that doesn't fit is set aside for the full screenshot.
     expect(imageView(crop, true)).toEqual({ path: "steps/A.webp", rect: null, cropUnknown: "mismatch" });
   });

@@ -10,6 +10,17 @@ const after = (page: Page) => page.getByRole("img", { name: "Step screenshot aft
 const frameSwitch = (page: Page) => page.getByRole("group", { name: "Screenshot" });
 const button = (page: Page, name: "Before" | "After") => frameSwitch(page).getByRole("button", { name, exact: true });
 const note = (page: Page) => page.getByText("Annotations apply to the Before screenshot.");
+const toolbar = (page: Page) => page.getByRole("toolbar", { name: "Annotation tools" });
+const DAMAGED = "The screenshot can't be shown: the image is damaged.";
+
+/** Clicks a point of the 64×40 Before screenshot, in its pixels. */
+async function clickImage(page: Page, x: number, y: number) {
+  const box = (await before(page).boundingBox())!;
+  const scale = Math.min(box.width / 64, box.height / 40);
+  const left = box.x + (box.width - 64 * scale) / 2;
+  const top = box.y + (box.height - 40 * scale) / 2;
+  await page.mouse.click(left + x * scale, top + y * scale);
+}
 
 test("shows a step's after frame without annotations", async ({ page, backend }) => {
   await openGuide(page, "Share a calendar event");
@@ -43,6 +54,38 @@ test("shows a step's after frame without annotations", async ({ page, backend })
   await expect(note(page)).toHaveCount(0);
 
   // View-only: nothing saved, nothing to undo.
+  expect(backend.saves).toHaveLength(0);
+  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+test("the switch has its own row, outside the annotation tools", async ({ page, backend: _ }) => {
+  await openGuide(page, "Share a calendar event");
+  await expect(frameSwitch(page)).toBeVisible();
+  await expect(toolbar(page)).toBeVisible();
+  await expect(toolbar(page).getByRole("group", { name: "Screenshot" })).toHaveCount(0);
+  await button(page, "After").click();
+  // Click crop / Full stay: they frame both views.
+  await expect(toolbar(page).getByRole("button", { name: "Full", exact: true })).toBeVisible();
+  await expect(toolbar(page).getByRole("button", { name: "Arrow", exact: true })).toHaveCount(0);
+});
+
+test("Delete and arrow keys in After leave the Before annotation alone", async ({ page, backend }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await openGuide(page, "Share a calendar event");
+  await expect(before(page).locator("image")).toHaveAttribute("href", /^blob:/);
+  const shapes = await before(page).innerHTML();
+  // Select the box (12,6 16×10) by its middle.
+  await clickImage(page, 20, 11);
+  await expect(before(page).locator('rect[fill="white"]').first()).toBeVisible();
+
+  await button(page, "After").click();
+  await expect(after(page)).toBeVisible();
+  await page.locator("body").focus();
+  for (const key of ["Delete", "Backspace", "ArrowRight", "Shift+ArrowDown"]) await page.keyboard.press(key);
+
+  await button(page, "Before").click();
+  await expect(before(page).locator("image")).toHaveAttribute("href", /^blob:/);
+  expect(await before(page).innerHTML()).toBe(shapes);
   expect(backend.saves).toHaveLength(0);
   await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
 });
@@ -110,6 +153,41 @@ test("an undecodable after frame shows an error, not endless loading", async ({ 
   await expect(page.getByText("Loading image…")).toHaveCount(0);
 });
 
+test.describe("an undecodable Before screenshot", () => {
+  test("shows an error, not endless loading, and can't be edited", async ({ page, backend }) => {
+    backend.editStep(CALENDAR, WITH_AFTER, (s) => {
+      backend.setFile(CALENDAR, s.image.full, Buffer.from("not a webp"));
+    });
+    await openGuide(page, "Share a calendar event");
+    await expect(page.getByText(DAMAGED)).toBeVisible();
+    await expect(page.getByText("Loading image…")).toHaveCount(0);
+    await expect(before(page)).toHaveCount(0);
+    await page.locator("body").focus();
+    await page.keyboard.press("Delete");
+    // The after frame is its own image.
+    await button(page, "After").click();
+    await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
+    await button(page, "Before").click();
+    await expect(page.getByText(DAMAGED)).toBeVisible();
+    expect(backend.saves).toHaveLength(0);
+    await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  test("a damaged click crop falls back to the full screenshot", async ({ page, backend }) => {
+    backend.editStep(CALENDAR, WITH_AFTER, (s) => {
+      s.image.cropRect = { x: 16, y: 10, width: 32, height: 20 };
+      backend.setFile(CALENDAR, s.image.crop!, Buffer.from("not a webp"));
+    });
+    await openGuide(page, "Share a calendar event");
+    await expect(before(page)).toHaveAttribute("viewBox", "0 0 64 40");
+    await expect(
+      page.getByText("This step's click crop can't be shown: the image is damaged. The full screenshot is shown for editing."),
+    ).toBeVisible();
+    await button(page, "After").click();
+    await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
+  });
+});
+
 test("handles keep their size on screen after a round trip through After and a resize", async ({ page, backend: _ }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await openGuide(page, "Share a calendar event");
@@ -120,11 +198,7 @@ test("handles keep their size on screen after a round trip through After and a r
 
   await page.setViewportSize({ width: 1400, height: 450 });
   // Select the box (12,6 16×10 in the 64×40 screenshot) by its middle.
-  const box = (await before(page).boundingBox())!;
-  const scale = Math.min(box.width / 64, box.height / 40);
-  const left = box.x + (box.width - 64 * scale) / 2;
-  const top = box.y + (box.height - 40 * scale) / 2;
-  await page.mouse.click(left + 20 * scale, top + 11 * scale);
+  await clickImage(page, 20, 11);
   const handle = before(page).locator('rect[fill="white"]').first();
   await expect(handle).toBeVisible();
   // 9 px, plus its 1.5 px stroke.
@@ -139,6 +213,18 @@ test.describe("a read-only guide", () => {
     await page.locator('[data-outline-item="01M4WZCE2000000000000002R8"]').click();
     await button(page, "After").click();
     await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
-    await expect(page.getByRole("toolbar", { name: "Annotation tools" })).toHaveCount(0);
+    await expect(toolbar(page)).toHaveCount(0);
+  });
+
+  test("shows an undecodable screenshot's error", async ({ page, backend }) => {
+    const step = "01M4WZCE2000000000000002R8";
+    backend.editStep(API_KEY, step, (s) => {
+      backend.setFile(API_KEY, s.image.show === "crop" && s.image.crop ? s.image.crop : s.image.full, Buffer.from("x"));
+      backend.setFile(API_KEY, s.image.full, Buffer.from("x"));
+    });
+    await openGuide(page, "Rotate an API key");
+    await page.locator(`[data-outline-item="${step}"]`).click();
+    await expect(page.getByText(DAMAGED)).toBeVisible();
+    await expect(page.getByText("Loading image…")).toHaveCount(0);
   });
 });
