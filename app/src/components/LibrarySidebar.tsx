@@ -1,10 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { BookOpen, Lock, Search } from "lucide-react";
+import { Menu } from "@tauri-apps/api/menu";
 import { Input } from "@/components/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
+import type { GuideListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const SEARCH_DELAY_MS = 200;
+
+/** The native context menu of a guide in the list. */
+async function showGuideMenu(event: MouseEvent, guide: GuideListItem) {
+  event.preventDefault();
+  try {
+    const menu = await Menu.new({
+      items: [
+        {
+          id: "delete-guide",
+          text: "Delete Guide…",
+          enabled: !editorStore.getState().busy,
+          action: () => void editorStore.getState().deleteGuide(guide),
+        },
+      ],
+    });
+    await menu.popup();
+  } catch (error) {
+    console.error("guide menu failed:", error);
+  }
+}
 
 export function LibrarySidebar() {
   const guides = useEditor((s) => s.guides);
@@ -41,6 +63,7 @@ export function LibrarySidebar() {
               type="button"
               disabled={opening}
               onClick={() => void editorStore.getState().openGuide(guide.id)}
+              onContextMenu={(e) => void showGuideMenu(e, guide)}
               className={cn(
                 "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-sidebar-accent",
                 guide.duplicateOf && "opacity-60",

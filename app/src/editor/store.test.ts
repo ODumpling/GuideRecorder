@@ -48,6 +48,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
       saved.push(g);
     }),
     closeGuide: vi.fn(async () => []),
+    deleteGuide: vi.fn(async () => true),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
     cancelQuit: vi.fn(async () => {}),
@@ -88,6 +89,40 @@ describe("library", () => {
     await store.getState().setQuery("none");
     expect(api.listGuides).toHaveBeenLastCalledWith("none");
     expect(store.getState().guides).toEqual([]);
+  });
+});
+
+describe("deleting", () => {
+  it("deletes the open guide without saving it, and closes it", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    s().dispatch(renameGuide(s().doc!.guide, "Renamed"));
+    expect(await s().deleteGuide(s().guides[0])).toBe(true);
+    expect(api.deleteGuide).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", "Guide");
+    expect(s().doc).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.saveGuide).not.toHaveBeenCalled();
+  });
+
+  it("cancelled keeps the guide open and its changes saving", async () => {
+    const { api, s, saved } = await opened();
+    await s().loadGuides();
+    api.deleteGuide = vi.fn(async () => false);
+    s().dispatch(renameGuide(s().doc!.guide, "Renamed"));
+    expect(await s().deleteGuide(s().guides[0])).toBe(false);
+    expect(s().doc?.guide.title).toBe("Renamed");
+    expect(s().busy).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(saved.at(-1)?.title).toBe("Renamed");
+  });
+
+  it("reports failures", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    api.deleteGuide = vi.fn(async () => Promise.reject({ kind: "io", message: "disk full" }));
+    expect(await s().deleteGuide(s().guides[0])).toBe(false);
+    expect(s().notice).toBe("Could not delete the guide: disk full");
+    expect(s().doc).not.toBeNull();
   });
 });
 

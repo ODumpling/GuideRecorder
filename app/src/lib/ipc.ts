@@ -37,6 +37,11 @@ export interface EditorApi {
    * no longer uses. Returns their paths.
    */
   closeGuide(id: string): Promise<string[]>;
+  /**
+   * Asks (natively) to delete the guide at `path`, then deletes it and its
+   * images. False if the user cancelled.
+   */
+  deleteGuide(id: string, path: string, title: string): Promise<boolean>;
   /** WebP bytes of an image in the guide's bundle, by bundle-relative path. */
   stepImage(guideId: string, path: string): Promise<ArrayBuffer>;
   /** Exits the app (after the editor has saved). */
@@ -50,6 +55,7 @@ export const tauriApi: EditorApi = {
   openGuide: (id) => invoke("open_guide", { id }),
   saveGuide: (guide) => invoke("save_guide", { guide }),
   closeGuide: (id) => invoke("close_guide", { id }),
+  deleteGuide: (id, path, title) => invoke("delete_guide", { id, path, title }),
   stepImage: async (guideId, path) => toArrayBuffer(await invoke("step_image", { guideId, path })),
   quit: () => invoke("quit_app"),
   cancelQuit: () => invoke("quit_cancel"),

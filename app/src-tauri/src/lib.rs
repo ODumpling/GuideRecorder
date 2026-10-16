@@ -158,6 +158,7 @@ pub fn run() {
             commands::open_guide,
             commands::save_guide,
             commands::close_guide,
+            commands::delete_guide,
             commands::step_image,
             commands::add_image_step,
             commands::copy_step_images,

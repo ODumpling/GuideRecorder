@@ -9,7 +9,9 @@ use std::time::Duration;
 use guiderecorder_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
-use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
+use tauri_plugin_dialog::{
+    DialogExt, FileDialogBuilder, FilePath, MessageDialogButtons, MessageDialogKind,
+};
 
 use crate::blocking::blocking;
 use crate::editor::{
@@ -58,6 +60,37 @@ pub async fn save_guide(cell: State<'_, Arc<SessionCell>>, guide: Guide) -> Resu
 #[tauri::command]
 pub async fn close_guide(cell: State<'_, Arc<SessionCell>>, id: String) -> Result<Vec<String>> {
     with_session(cell, move |s| s.close_guide(&id)).await
+}
+
+/// Asks to delete the guide at `path` (named `title` in the prompt), then
+/// deletes it and its contents. False if the user cancelled.
+#[tauri::command]
+pub async fn delete_guide<R: Runtime>(
+    window: WebviewWindow<R>,
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    title: String,
+) -> Result<bool> {
+    let confirmed = blocking(move || {
+        Ok(window
+            .dialog()
+            .message("The guide and all its screenshots are deleted. This can't be undone.")
+            .title(format!("Delete “{title}”?"))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Delete".into(),
+                "Cancel".into(),
+            ))
+            .parent(&window)
+            .blocking_show())
+    })
+    .await?;
+    if !confirmed {
+        return Ok(false);
+    }
+    with_session(cell, move |s| s.delete_guide(&id, &path)).await?;
+    Ok(true)
 }
 
 /// Raw WebP bytes (an `ArrayBuffer` in JS) of an image in an opened

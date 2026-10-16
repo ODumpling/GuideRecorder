@@ -39,6 +39,7 @@ async function setup({
     })),
     saveGuide: vi.fn(async (g: Guide) => void saved.push(g)),
     closeGuide: vi.fn(async () => []),
+    deleteGuide: vi.fn(async () => true),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
     cancelQuit: vi.fn(async () => {}),

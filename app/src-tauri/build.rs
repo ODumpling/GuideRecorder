@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "open_guide",
     "save_guide",
     "close_guide",
+    "delete_guide",
     "step_image",
     "add_image_step",
     "copy_step_images",

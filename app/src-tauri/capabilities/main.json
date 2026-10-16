@@ -13,6 +13,7 @@
     "allow-open-guide",
     "allow-save-guide",
     "allow-close-guide",
+    "allow-delete-guide",
     "allow-step-image",
     "allow-add-image-step",
     "allow-copy-step-images",

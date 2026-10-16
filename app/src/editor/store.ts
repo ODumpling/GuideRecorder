@@ -61,6 +61,11 @@ export interface EditorState {
   openGuide(id: string): Promise<boolean>;
   closeGuide(): Promise<boolean>;
   /**
+   * Deletes a listed guide after a native confirmation. The open guide's
+   * unsaved changes go with it. Returns false if cancelled or failed.
+   */
+  deleteGuide(item: GuideListItem): Promise<boolean>;
+  /**
    * Saves, then quits the app (`api.quit`). While the editor is busy the
    * quit waits and runs once it is done; repeated requests share one quit.
    */
@@ -312,11 +317,16 @@ export function createEditorStore({
         }
         return true;
       } finally {
-        set({ busy: false });
-        const run = queuedQuit;
-        queuedQuit = null;
-        run?.();
+        idle();
       }
+    }
+
+    /** Ends a busy spell and runs a quit that waited for it. */
+    function idle() {
+      set({ busy: false });
+      const run = queuedQuit;
+      queuedQuit = null;
+      run?.();
     }
 
     /** Runs one quit at a time, after whatever is keeping the editor busy. */
@@ -381,6 +391,33 @@ export function createEditorStore({
       },
 
       closeGuide: () => leaveTo({ kind: "close" }),
+
+      async deleteGuide(item) {
+        if (get().busy) return false;
+        const isOpen = () => get().doc?.guide.id === item.id && get().doc?.path === item.path;
+        set({ busy: true });
+        try {
+          if (isOpen()) {
+            // No save may land in the bundle once it is gone.
+            autosave.cancel();
+            if (saving) await saving;
+          }
+          let deleted: boolean;
+          try {
+            deleted = await api.deleteGuide(item.id, item.path, item.title || "Untitled");
+          } catch (error) {
+            get().notify(`Could not delete the guide: ${errorMessage(error)}`);
+            return false;
+          }
+          if (!deleted) return false;
+          if (isOpen()) set({ doc: null, selectedId: null, ...cleanHistory });
+          await get().loadGuides();
+          return true;
+        } finally {
+          if (!isSaved()) autosave.schedule();
+          idle();
+        }
+      },
 
       requestQuit: () => quit(),
 

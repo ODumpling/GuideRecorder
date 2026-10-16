@@ -489,6 +489,30 @@ impl Session {
         }
         sweep_step_images(&entry.handle)
     }
+
+    /// Deletes a guide's bundle at `path` (a listing row's, so a duplicate
+    /// deletes only that copy) with its step images, and drops it from the
+    /// index. Forgets the guide if it was opened from that bundle.
+    pub fn delete_guide(&self, guide_id: &str, path: &Path) -> Result<()> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        self.library.delete(&GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        })?;
+        let mut open = self.open.lock().unwrap();
+        if open.get(&id).is_some_and(|entry| entry.handle.path == path) {
+            open.remove(&id);
+        }
+        drop(open);
+        if let Some(index) = self.index.lock().unwrap().as_mut() {
+            if let Err(e) = index.remove(path) {
+                eprintln!("guiderecorder: index remove failed: {e}");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Step image paths the editor may name: WebP files under `steps/` or
@@ -943,6 +967,35 @@ pub(crate) mod tests {
         let hits = session.list_guides(Some("renamed".into())).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_forgets_open_guide_and_updates_index() {
+        let root = library();
+        let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
+        let id = fixture_id(&root);
+        let path = session
+            .list_guides(None)
+            .unwrap()
+            .into_iter()
+            .find(|g| g.id == id)
+            .unwrap()
+            .path;
+
+        session.open_guide(&id).unwrap();
+        session.delete_guide(&id, &path).unwrap();
+        assert!(!path.exists());
+        assert!(!session.has_open_guides());
+        let listed = session.list_guides(None).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|g| g.id != id));
+
+        // Another guide's id at that path is refused.
+        let other = &listed[0];
+        let err = session.delete_guide(&id, &other.path).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Conflict);
+        assert!(other.path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
