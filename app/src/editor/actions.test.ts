@@ -4,18 +4,20 @@ import {
   deleteSelected,
   insertImages,
   insertNote,
+  insertPages,
   insertSection,
   mergeSelected,
   splitSelected,
 } from "@/editor/actions";
 import { createEditorStore } from "@/editor/store";
-import { guide } from "@/editor/test-fixtures";
+import { guide, step } from "@/editor/test-fixtures";
 import type { EditorApi } from "@/lib/ipc";
 import type { Step, StepImage } from "@/lib/types";
 
 const images = vi.hoisted(() => ({ insertImageSteps: vi.fn() }));
 vi.mock("@/editor/images", async (importOriginal) => ({ ...(await importOriginal<object>()), ...images }));
 const ipc = vi.hoisted(() => ({
+  addAnnotatedPages: vi.fn(async (_guide: string): Promise<Step[]> => []),
   copyStepImages: vi.fn(async (_guide: string, image: StepImage, id: string): Promise<StepImage> => ({
     ...image,
     full: `steps/${id}.webp`,
@@ -120,5 +122,41 @@ describe("actions", () => {
     images.insertImageSteps.mockResolvedValueOnce([]);
     await insertImages(s, [new Blob(["y"])]);
     expect(s.getState().notice).toBeNull();
+  });
+
+  it("add pages below the selection as one undo step", async () => {
+    const s = await store();
+    s.getState().select("B");
+    // As from Rust: a bare step, without its `type` tag.
+    const page = (id: string) => {
+      const { type: _type, ...rest } = { ...step(id), kind: "manual" as const, image: { full: `steps/${id}.webp`, show: "full" as const } };
+      return rest as unknown as Step;
+    };
+    ipc.addAnnotatedPages.mockResolvedValueOnce([page("P1"), page("P2")]);
+    expect(await insertPages(s)).toBe(2);
+    expect(ipc.addAnnotatedPages).toHaveBeenLastCalledWith("G1");
+    expect(ids(s)).toEqual(["S1", "A", "B", "P1", "P2", "N1", "C"]);
+    expect(s.getState().doc!.guide.items[3]).toMatchObject({ type: "step", id: "P1", kind: "manual" });
+    expect(s.getState().selectedId).toBe("P1");
+    expect(s.getState().undoStack.at(-1)?.command.label).toBe("Add 2 pages");
+    s.getState().undo();
+    expect(ids(s)).toEqual(guide().items.map((item) => item.id));
+    expect(s.getState().selectedId).toBe("B");
+
+    // Cancelled: nothing.
+    ipc.addAnnotatedPages.mockResolvedValueOnce([]);
+    expect(await insertPages(s)).toBe(0);
+    expect(s.getState().undoStack).toHaveLength(0);
+  });
+
+  it("report failed pages as a notice", async () => {
+    const s = await store();
+    ipc.addAnnotatedPages.mockRejectedValueOnce({ kind: "invalid", message: "not a PDF" });
+    expect(await insertPages(s)).toBe(0);
+    expect(s.getState().notice).toBe("Could not add the pages: not a PDF");
+    const readOnly = await store(true);
+    ipc.addAnnotatedPages.mockClear();
+    expect(await insertPages(readOnly)).toBe(0);
+    expect(ipc.addAnnotatedPages).not.toHaveBeenCalled();
   });
 });

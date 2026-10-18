@@ -1583,8 +1583,12 @@ mod tests {
         names
     }
 
+    /// The (version 1) test guide, as a current-version guide.
     fn sample_guide() -> Guide {
-        serde_json::from_str(include_str!("../testdata/guide.json")).unwrap()
+        let mut guide: Guide =
+            serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        guide.schema_version = SCHEMA_VERSION;
+        guide
     }
 
     #[test]

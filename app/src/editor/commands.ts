@@ -224,6 +224,26 @@ export function insertItemBefore(guide: Guide, item: Item, beforeId: string | nu
   return insertItemAt(guide, item, index, beforeId);
 }
 
+/**
+ * Inserts `items`, in order, after the item `afterId` (or at the end when
+ * it is null) as one undo step; the first is selected.
+ */
+export function insertItemsAfter(guide: Guide, items: Item[], afterId: string | null, label: string): Command {
+  if (items.length === 0) throw new PatchError("nothing to insert");
+  const index = afterId === null ? guide.items.length : indexOf(guide, afterId) + 1;
+  const ids = new Set(guide.items.map((item) => item.id));
+  for (const item of items) {
+    if (ids.has(item.id)) throw new PatchError(`item ${item.id} exists`);
+    ids.add(item.id);
+  }
+  return {
+    label,
+    forward: items.map((item, i) => ({ op: "insertItem", index: index + i, item })),
+    inverse: [...items].reverse().map((item) => ({ op: "removeItem", id: item.id })),
+    select: { forward: items[0].id, inverse: afterId },
+  };
+}
+
 function insertItemAt(guide: Guide, item: Item, index: number, previousSelection: string | null): Command {
   if (guide.items.some((other) => other.id === item.id)) throw new PatchError(`item ${item.id} exists`);
   return {

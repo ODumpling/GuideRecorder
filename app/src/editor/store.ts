@@ -34,6 +34,8 @@ export interface EditorState {
   doc: OpenDoc | null;
   opening: boolean;
   openError: string | null;
+  /** A new annotation guide is being made (its file dialog is open). */
+  creating: boolean;
   /** The selected outline item (a step, section or note id). */
   selectedId: string | null;
   /** Saving before a close, open or quit; edits are refused meanwhile. */
@@ -65,6 +67,11 @@ export interface EditorState {
    * unsaved changes go with it. Returns false if cancelled or failed.
    */
   deleteGuide(item: GuideListItem): Promise<boolean>;
+  /**
+   * Makes an annotation guide from images or a PDF the user picks, then
+   * lists and opens it. False if cancelled or failed (in `openError`).
+   */
+  createAnnotatedGuide(): Promise<boolean>;
   /**
    * Saves, then quits the app (`api.quit`). While the editor is busy the
    * quit waits and runs once it is done; repeated requests share one quit.
@@ -359,6 +366,7 @@ export function createEditorStore({
       doc: null,
       opening: false,
       openError: null,
+      creating: false,
       selectedId: null,
       busy: false,
       leave: null,
@@ -417,6 +425,23 @@ export function createEditorStore({
           if (!isSaved()) autosave.schedule();
           idle();
         }
+      },
+
+      async createAnnotatedGuide() {
+        if (get().busy || get().opening || get().creating) return false;
+        set({ creating: true, openError: null });
+        let id: string | null;
+        try {
+          id = await api.newAnnotatedGuide();
+        } catch (error) {
+          set({ openError: `Could not make the annotation guide: ${errorMessage(error)}` });
+          return false;
+        } finally {
+          set({ creating: false });
+        }
+        if (!id) return false;
+        await get().loadGuides();
+        return get().openGuide(id);
       },
 
       requestQuit: () => quit(),

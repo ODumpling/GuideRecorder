@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Pointer
 import {
   Crop,
   Droplets,
+  Eye,
   Grid3x3,
   Highlighter,
   ImageOff,
@@ -9,6 +10,7 @@ import {
   MessageSquareText,
   MousePointer2,
   MoveUpRight,
+  SquareDashedMousePointer,
   Square,
 } from "lucide-react";
 import {
@@ -28,7 +30,9 @@ import {
   createAnnotation,
   dragAnnotation,
   handlePoint,
+  hotspotNumbers,
   imagePixelsPerScreenPixel,
+  imageToClient,
   imageView,
   RECT_HANDLES,
   type DragPart,
@@ -36,13 +40,15 @@ import {
   type View,
 } from "@/annotations/geometry";
 import { afterFrame } from "@/components/annotations/afterFrame";
+import { HotspotPopover, POPOVER_WIDTH, type PopoverAnchor } from "@/components/annotations/HotspotPopover";
+import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
 import { CropMask, Shape, type Backdrop } from "@/components/annotations/Shapes";
 import { StyleBar } from "@/components/annotations/StyleBar";
 import { BeforeAfterSwitch, type Frame } from "@/components/BeforeAfterSwitch";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { setImageShow, type Command } from "@/editor/commands";
-import { editorStore } from "@/editor/editor";
+import { editorStore, useAnnotated } from "@/editor/editor";
 import { tauriApi, verifyCrop } from "@/lib/ipc";
 import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
@@ -54,6 +60,7 @@ const TOOLS: { tool: Tool | "select"; label: string; icon: typeof Square }[] = [
   { tool: "box", label: "Box", icon: Square },
   { tool: "highlight", label: "Highlight", icon: Highlighter },
   { tool: "callout", label: "Callout", icon: MessageSquareText },
+  { tool: "hotspot", label: "Hotspot", icon: SquareDashedMousePointer },
   { tool: "blur", label: "Blur", icon: Droplets },
   { tool: "pixelate", label: "Pixelate", icon: Grid3x3 },
   { tool: "crop", label: "Crop", icon: Crop },
@@ -246,6 +253,8 @@ function Layer({
   guideId,
   step,
   readOnly,
+  annotated,
+  preview,
   tool,
   onToolDone,
   selectedId,
@@ -256,6 +265,13 @@ function Layer({
   guideId: string;
   step: Step;
   readOnly: boolean;
+  /** A page of an annotation guide. */
+  annotated: boolean;
+  /**
+   * The step as the reader of the export sees it: no editing; pointing at
+   * a hotspot shows its title and description, a click keeps them shown.
+   */
+  preview: boolean;
   /** "after": the after frame instead, without annotations. */
   frame: Frame;
   tool: Tool | "select";
@@ -302,8 +318,13 @@ function Layer({
     : natural && { x: 0, y: 0, width: natural.width, height: natural.height };
 
   const svg = useRef<SVGSVGElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [draft, setDraft] = useState<Annotation | null>(null);
+  // The hotspot with the pointer, and in preview the one clicked open.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   // Image pixels per screen pixel, to keep handles a constant size on screen.
   const [unit, setUnit] = useState(1);
 
@@ -337,6 +358,10 @@ function Layer({
 
   const onBackgroundDown = (e: ReactPointerEvent) => {
     if (e.button !== 0 || !view) return;
+    if (preview) {
+      setPinned(null);
+      return;
+    }
     takeFocus();
     if (readOnly || tool === "select") {
       select(null);
@@ -348,9 +373,14 @@ function Layer({
     setDraft(createAnnotation(tool, id, p, p, view));
   };
 
+  /** Whether a press on `annotation` picks it: any with Select, a hotspot with the hotspot tool too. */
+  const picks = (annotation: Annotation) =>
+    !preview && (tool === "select" || (tool === "hotspot" && annotation.type === "hotspot"));
+
   const onShapeDown = (e: ReactPointerEvent, annotation: Annotation, part: DragPart) => {
-    if (e.button !== 0 || tool !== "select") return;
+    if (e.button !== 0 || !picks(annotation)) return;
     takeFocus();
+    if (tool !== "select") onToolDone();
     select(annotation.id);
     if (readOnly) {
       e.stopPropagation();
@@ -390,6 +420,50 @@ function Layer({
     drag.current = null;
     setDraft(null);
   }, []);
+
+  // The hotspot whose title and description show: the one clicked open in
+  // preview, else the one pointed at (unless selected: the panel below
+  // shows it), never while drawing or dragging.
+  const cardId = preview ? (pinned ?? hovered) : draft || hovered === selectedId ? null : hovered;
+  const card = step.annotations.find((a) => a.id === cardId && a.type === "hotspot") ?? null;
+  const cardRect = card && bounds(card);
+  // Placed below the hotspot, or above it in the lower half, within the box.
+  useLayoutEffect(() => {
+    const element = svg.current;
+    const outer = box.current;
+    if (!cardRect || !element || !outer || !view) {
+      setAnchor(null);
+      return;
+    }
+    const screen = element.getBoundingClientRect();
+    const area = outer.getBoundingClientRect();
+    const topLeft = imageToClient(cardRect, screen, view);
+    const bottomRight = imageToClient(
+      { x: cardRect.x + cardRect.width, y: cardRect.y + cardRect.height },
+      screen,
+      view,
+    );
+    const below = cardRect.y + cardRect.height / 2 < view.y + view.height / 2;
+    setAnchor({
+      left: Math.max(0, Math.min(topLeft.x - area.left, area.width - POPOVER_WIDTH)),
+      ...(below ? { top: bottomRight.y - area.top + 6 } : { bottom: area.bottom - topLeft.y + 6 }),
+    });
+    // The rect's fields, and `unit` for a resized layer.
+  }, [cardRect?.x, cardRect?.y, cardRect?.width, cardRect?.height, unit, view?.x, view?.y, view?.width, view?.height]);
+
+  // Leaving preview closes the popover, so it doesn't come back with it.
+  useEffect(() => {
+    if (!preview) setPinned(null);
+  }, [preview]);
+
+  useEffect(() => {
+    if (!pinned) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPinned(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pinned]);
 
   // Keyboard: Delete removes, arrows nudge (Shift: 10 px), Escape deselects.
   useEffect(() => {
@@ -450,6 +524,9 @@ function Layer({
   const selected = annotations.find((a) => a.id === selectedId) ?? null;
   const handle = 9 * unit;
   const hitWidth = 12 * unit;
+  const numbers = hotspotNumbers(step.annotations);
+  // A new hotspot is numbered after the others while drawn.
+  const numberOf = (a: Annotation) => numbers.get(a.id) ?? numbers.size + 1;
 
   return (
     <div className="flex flex-col gap-2">
@@ -462,31 +539,66 @@ function Layer({
               : "This step's click crop doesn't match its recorded position, so the full screenshot is shown for editing. The export ignores the recorded position too."}
         </p>
       )}
+    <div ref={box} className="relative">
     <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
       <svg
         ref={svg}
         role="img"
-        aria-label="Step screenshot with annotations"
+        aria-label={preview ? "Page preview" : annotated ? "Page with annotations" : "Step screenshot with annotations"}
         viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
         className="block max-h-[60vh] w-full touch-none select-none"
-        style={{ aspectRatio: `${view.width} / ${view.height}`, cursor: tool === "select" ? "default" : "crosshair" }}
+        style={{
+          aspectRatio: `${view.width} / ${view.height}`,
+          cursor: preview || tool === "select" ? "default" : "crosshair",
+        }}
         onPointerDown={onBackgroundDown}
         onPointerMove={onMove}
         onPointerUp={finish}
         onPointerCancel={cancel}
       >
         <image href={url} x={view.x} y={view.y} width={view.width} height={view.height} preserveAspectRatio="none" />
-        {/* The exporter's order: redactions last, over everything. */}
+        {/* The exporter's order: redactions last, over everything but hotspots. */}
         {drawOrder(annotations).map((annotation) => (
-          <Shape key={annotation.id} annotation={annotation} backdrop={backdrop} />
+          <Shape key={annotation.id} annotation={annotation} backdrop={backdrop} number={numberOf(annotation)} unit={unit} />
         ))}
         {crop?.type === "crop" && <CropMask view={view} rect={crop.geometry} />}
-        <Suggestions suggestions={step.aiState.redactionSuggestions ?? []} unit={unit} focused={focusedSuggestion} />
+        {!preview && !annotated && (
+          <Suggestions suggestions={step.aiState.redactionSuggestions ?? []} unit={unit} focused={focusedSuggestion} />
+        )}
 
         {/* Hit targets, in drawing order so the topmost shape wins. */}
-        <g pointerEvents={tool === "select" ? "auto" : "none"}>
+        <g>
           {hitOrder(annotations).map((annotation) => {
+            if (preview) {
+              // Only hotspots answer the reader.
+              if (annotation.type !== "hotspot") return null;
+              const r = annotation.geometry;
+              return (
+                <rect
+                  key={annotation.id}
+                  data-hotspot-target={annotation.id}
+                  x={r.x}
+                  y={r.y}
+                  width={r.width}
+                  height={r.height}
+                  fill="transparent"
+                  style={{ cursor: "pointer" }}
+                  onPointerEnter={() => setHovered(annotation.id)}
+                  onPointerLeave={() => setHovered(null)}
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    setPinned((id) => (id === annotation.id ? null : annotation.id));
+                  }}
+                />
+              );
+            }
             const down = (e: ReactPointerEvent) => onShapeDown(e, annotation, { kind: "body" });
+            const active = picks(annotation);
+            const hover =
+              annotation.type === "hotspot"
+                ? { onPointerEnter: () => setHovered(annotation.id), onPointerLeave: () => setHovered(null) }
+                : {};
             if (annotation.type === "arrow") {
               const { from, to } = annotation.geometry;
               return (
@@ -498,6 +610,7 @@ function Layer({
                   y2={to.y}
                   stroke="transparent"
                   strokeWidth={Math.max(hitWidth, (annotation.style?.strokeWidth ?? 4) + 4 * unit)}
+                  pointerEvents={active ? undefined : "none"}
                   style={{ cursor: "move" }}
                   onPointerDown={down}
                 />
@@ -509,6 +622,7 @@ function Layer({
             return (
               <rect
                 key={annotation.id}
+                data-hotspot-target={annotation.type === "hotspot" ? annotation.id : undefined}
                 x={r.x}
                 y={r.y}
                 width={r.width}
@@ -516,9 +630,10 @@ function Layer({
                 fill={edgeOnly ? "none" : "transparent"}
                 stroke="transparent"
                 strokeWidth={hitWidth}
-                pointerEvents={edgeOnly ? "stroke" : "all"}
+                pointerEvents={!active ? "none" : edgeOnly ? "stroke" : "all"}
                 style={{ cursor: "move" }}
                 onPointerDown={down}
+                {...hover}
               />
             );
           })}
@@ -549,6 +664,10 @@ function Layer({
           </g>
         )}
       </svg>
+    </div>
+      {card?.type === "hotspot" && anchor && (
+        <HotspotPopover hotspot={card.geometry} number={numberOf(card)} style={card.style} anchor={anchor} />
+      )}
     </div>
     </div>
   );
@@ -720,64 +839,109 @@ function Handles({
 
 /**
  * The step image with its annotation layer: tools above it, the selected
- * annotation's style below. All edits are undoable commands.
+ * annotation's style below. All edits are undoable commands. On a page of
+ * an annotation guide the hotspot tool is ready, and walkthrough-only
+ * controls (Before/After, click crop, blur suggestions) are left out.
  */
 export default function AnnotationEditor({ guideId, step, readOnly }: { guideId: string; step: Step; readOnly: boolean }) {
-  const [tool, setTool] = useState<Tool | "select">("select");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const annotated = useAnnotated();
+  const [tool, setTool] = useState<Tool | "select">(annotated ? "hotspot" : "select");
+  const [preview, setPreview] = useState(false);
+  const selectedId = useSelectedAnnotation(step.id);
   const selected = step.annotations.find((a) => a.id === selectedId) ?? null;
-  const select = useCallback((id: string | null) => setSelectedId(id), []);
+  const select = useCallback((id: string | null) => annotationSelection.getState().select(step.id, id), [step.id]);
+  // A selection made elsewhere (the inspector's hotspot list) is for editing.
+  useEffect(() => {
+    if (!selectedId) return;
+    setTool("select");
+    setPreview(false);
+  }, [selectedId]);
+  // Fresh selection per step (the editor is keyed by step).
+  useEffect(
+    () => () => {
+      if (annotationSelection.getState().stepId === step.id) annotationSelection.getState().select(step.id, null);
+    },
+    [step.id],
+  );
   const [focusedSuggestion, setFocusedSuggestion] = useState<number | null>(null);
   // View-only, never part of the guide; a new step starts at Before (the
   // editor is keyed by step).
   const [chosenFrame, setFrame] = useState<Frame>("before");
-  const frame: Frame = step.image.after ? chosenFrame : "before";
+  const frame: Frame = step.image.after && !annotated ? chosenFrame : "before";
   const after = frame === "after";
+  const canPreview = annotated || step.annotations.some((a) => a.type === "hotspot");
+  const previewing = preview && canPreview;
   const chooseFrame = (next: Frame) => {
     setFrame(next);
     if (next === "after") {
       setTool("select");
-      setSelectedId(null);
+      select(null);
       setFocusedSuggestion(null);
     }
   };
-  const frameSwitch = step.image.after && <BeforeAfterSwitch value={frame} onChange={chooseFrame} />;
+  const togglePreview = () => {
+    setPreview(!previewing);
+    select(null);
+  };
+  const frameSwitch = step.image.after && !annotated && <BeforeAfterSwitch value={frame} onChange={chooseFrame} />;
+  const editing = !readOnly && !after && !previewing;
 
   return (
     <div className="flex flex-col gap-2">
       {frameSwitch && <div className="flex items-center justify-end">{frameSwitch}</div>}
-      {!readOnly && (
+      {(!readOnly || canPreview) && (
         <div className="flex flex-wrap items-center gap-1" role="toolbar" aria-label="Annotation tools">
-          {!after && TOOLS.map(({ tool: value, label, icon: Icon }) => (
-            <Button
-              key={value}
-              variant="ghost"
-              size="icon"
-              aria-label={label}
-              title={label}
-              aria-pressed={tool === value}
-              className={cn(tool === value && "bg-accent text-accent-foreground")}
-              onClick={() => {
-                setTool(value);
-                if (value !== "select") setSelectedId(null);
-              }}
-            >
-              <Icon />
-            </Button>
-          ))}
-          <div className="ml-auto flex items-center gap-1" role="group" aria-label="Image">
-            {(["crop", "full"] as const).map((show) => (
+          {editing &&
+            TOOLS.map(({ tool: value, label, icon: Icon }) => (
               <Button
-                key={show}
-                size="sm"
-                variant={step.image.show === show ? "default" : "outline"}
-                disabled={show === "crop" && !step.image.crop}
-                onClick={() => run((guide) => setImageShow(guide, step.id, show))}
+                key={value}
+                variant="ghost"
+                size="icon"
+                aria-label={label}
+                title={label}
+                aria-pressed={tool === value}
+                className={cn(tool === value && "bg-accent text-accent-foreground")}
+                onClick={() => {
+                  setTool(value);
+                  if (value !== "select") select(null);
+                }}
               >
-                {show === "crop" ? <Crop /> : <Maximize2 />}
-                {show === "crop" ? "Click crop" : "Full"}
+                <Icon />
               </Button>
             ))}
+          {previewing && (
+            <span className="text-xs text-muted-foreground">
+              As the reader sees it: point at a hotspot, or click it to keep it open.
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            {canPreview && (
+              <Button
+                size="sm"
+                variant={previewing ? "default" : "outline"}
+                aria-pressed={previewing}
+                title="Show the page as the reader of the export sees it"
+                onClick={togglePreview}
+              >
+                <Eye /> Preview
+              </Button>
+            )}
+            {!readOnly && !annotated && (
+              <div className="flex items-center gap-1" role="group" aria-label="Image">
+                {(["crop", "full"] as const).map((show) => (
+                  <Button
+                    key={show}
+                    size="sm"
+                    variant={step.image.show === show ? "default" : "outline"}
+                    disabled={show === "crop" && !step.image.crop}
+                    onClick={() => run((guide) => setImageShow(guide, step.id, show))}
+                  >
+                    {show === "crop" ? <Crop /> : <Maximize2 />}
+                    {show === "crop" ? "Click crop" : "Full"}
+                  </Button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -786,16 +950,25 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
         guideId={guideId}
         step={step}
         readOnly={readOnly}
+        annotated={annotated}
+        preview={previewing}
         tool={readOnly ? "select" : tool}
         onToolDone={() => setTool("select")}
-        selectedId={selected?.id ?? null}
+        selectedId={previewing ? null : (selected?.id ?? null)}
         select={select}
         focusedSuggestion={focusedSuggestion}
         frame={frame}
       />
-      {!after && <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />}
-      {!after && selected && !readOnly && (
-        <StyleBar stepId={step.id} annotation={selected} run={run} onDeleted={() => setSelectedId(null)} />
+      {!after && !annotated && <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />}
+      {editing && selected && (
+        <StyleBar
+          key={selected.id}
+          stepId={step.id}
+          annotation={selected}
+          number={hotspotNumbers(step.annotations).get(selected.id)}
+          run={run}
+          onDeleted={() => select(null)}
+        />
       )}
     </div>
   );

@@ -9,11 +9,36 @@
 //! # Escaping
 //!
 //! The template is rendered with HTML auto-escaping on, so every plain
-//! value (title, summary, section titles, labels, alt text) is escaped.
+//! value (title, summary, section titles, labels, alt text, hotspot titles)
+//! is escaped.
 //! The guide's Markdown [`ast`](super::ast) is rendered to HTML here, with
 //! every `Text`, `Code`, URL and title escaped, and passed to the template
 //! as a safe string. The only other safe strings are the stylesheet, the
-//! data URIs (base64 this module produced) and nothing else.
+//! data URIs (base64 this module produced), hotspot descriptions (escaped
+//! here, line by line, joined with `<br>`) and hotspot `style` attributes
+//! (percentages formatted here, and a colour the renderer validated as a
+//! hex colour or CSS colour name).
+//!
+//! # Hotspots
+//!
+//! Step images are rendered without hotspot markers
+//! ([`ImageOptions::hotspot_markers`] is forced off). Instead each hotspot
+//! in view is an absolutely positioned element over the image, placed in
+//! percentages of it ([`RenderedImage::hotspots`](super::RenderedImage)),
+//! with an outline (dashed while untitled, as in the editor) and a number
+//! badge inside its top-left corner, drawn by CSS in the editor's hotspot
+//! blue unless the annotation has its own colour. Its popover (title and
+//! description) shows on `:hover` and on `:focus` / `:focus-within`; the
+//! element has `tabindex="0"`, so a click or tap focuses it (Safari focuses
+//! such elements on click, though not `<button>`s), and so does the
+//! keyboard. All of it is CSS, so the page still needs no script. The
+//! popover opens below the hotspot, or above it when the hotspot's centre
+//! is in the lower half of the image, and is aligned to the hotspot's left
+//! edge, centred on it, or aligned to its right edge by which third of the
+//! image the centre is in, so it stays on the page; these classes are
+//! chosen here. A numbered legend under the image lists every hotspot
+//! (including any outside the view) for print, touch and screen readers;
+//! popovers are hidden in print.
 //!
 //! # Branding
 //!
@@ -30,9 +55,11 @@ use minijinja::{context, AutoEscape, Environment, Value};
 use super::ast::{plain_text, Block, Inline};
 use super::md::{prepare_out_dir, ExportError, Labels, Result};
 pub use super::md::{Branding, CheckedBranding};
-use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem};
+use super::{
+    render_step_image, ExportReport, ImageOptions, PlacedHotspot, RenderGuide, RenderItem,
+};
 use crate::library::{write_atomic, Durability, GuideHandle};
-use crate::model::NoteKind;
+use crate::model::{NoteKind, Rect};
 
 /// File name of the HTML document inside the output folder.
 pub const GUIDE_FILE: &str = "guide.html";
@@ -49,7 +76,8 @@ const STYLE: &str = include_str!("templates/style.css");
 pub struct HtmlOptions {
     /// How step images are rendered. The default caps the width at 1600 px
     /// (about 2× the content column), which keeps Retina sharpness and the
-    /// file size reasonable.
+    /// file size reasonable. `hotspot_markers` is ignored: the page draws
+    /// its own, see the module docs.
     pub image: ImageOptions,
     /// Write into a non-empty `out_dir`, replacing `guide.html`.
     pub overwrite: bool,
@@ -102,6 +130,11 @@ pub fn render_string(
         .labels
         .clone()
         .unwrap_or_else(|| Labels::for_language(&guide.language));
+    let step_label = labels.step_kind(guide.kind).to_owned();
+    let image_opts = ImageOptions {
+        hotspot_markers: false,
+        ..opts.image.clone()
+    };
     let mut report = ExportReport::default();
     let mut items = Vec::with_capacity(guide.items.len());
     for item in &guide.items {
@@ -117,14 +150,19 @@ pub fn render_string(
                 body => Value::from_safe_string(blocks_html(&note.body)),
             },
             RenderItem::Step(step) => {
-                let image = render_step_image(handle, &step.step, &opts.image);
+                let image = render_step_image(handle, &step.step, &image_opts);
                 report.add_warnings(step.step.id, image.warnings.iter().cloned());
                 let title = inlines_html(&step.title);
                 let title = if title.is_empty() {
-                    escape(&labels.step)
+                    escape(&step_label)
                 } else {
                     title
                 };
+                let hotspots: Vec<Value> = image
+                    .hotspots
+                    .iter()
+                    .map(|h| hotspot_context(step.number, h))
+                    .collect();
                 context! {
                     kind => "step",
                     number => step.number,
@@ -136,6 +174,7 @@ pub fn render_string(
                         height => image.height,
                         alt => plain_text(&step.title).replace('\n', " "),
                     },
+                    hotspots => hotspots,
                 }
             }
         });
@@ -159,7 +198,7 @@ pub fn render_string(
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,
-            step => labels.step,
+            step => step_label,
         },
         intro => Value::from_safe_string(blocks_html(&guide.intro)),
         prerequisites => Value::from_safe_string(blocks_html(&guide.prerequisites)),
@@ -177,6 +216,95 @@ pub fn render_string(
     // minijinja drops the template's final newline.
     html.push('\n');
     Ok((html, report))
+}
+
+/// Template values of one hotspot of step `step`. `style` (position and
+/// colour) and `class` (popover side) are unset for a hotspot outside the
+/// view, which then only shows in the legend.
+fn hotspot_context(step: u32, hotspot: &PlacedHotspot) -> Value {
+    let title = hotspot.title.trim();
+    let label = if title.is_empty() {
+        hotspot.number.to_string()
+    } else {
+        format!("{}. {title}", hotspot.number)
+    };
+    let description = hotspot
+        .description
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(escape)
+        .collect::<Vec<_>>()
+        .join("<br>");
+    let color = hotspot
+        .color
+        .as_deref()
+        .map(|c| format!("--hs:{c}"))
+        .unwrap_or_default();
+    let (style, class) = match hotspot.rect {
+        Some(r) => {
+            let mut style = format!(
+                "left:{};top:{};width:{};height:{}",
+                percent(r.x),
+                percent(r.y),
+                percent(r.width),
+                percent(r.height)
+            );
+            if !color.is_empty() {
+                style.push(';');
+                style.push_str(&color);
+            }
+            let mut class = popover_class(r).to_owned();
+            if title.is_empty() {
+                class.push_str(" hotspot-untitled");
+            }
+            (Some(style), Some(class))
+        }
+        None => (None, None),
+    };
+    context! {
+        id => format!("hotspot-{step}-{}", hotspot.number),
+        number => hotspot.number,
+        title => title,
+        label => label,
+        description => Value::from_safe_string(description),
+        style => style.map(Value::from_safe_string),
+        class => class,
+        legend_style => (!color.is_empty()).then(|| Value::from_safe_string(color)),
+    }
+}
+
+/// Where a hotspot's popover opens, from its centre: below it, or above it
+/// in the lower half of the image; from its left edge, centred on it, or
+/// towards the left from its right edge, by thirds of the width.
+fn popover_class(r: Rect) -> &'static str {
+    let (cx, cy) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
+    let horizontal = if cx < 1.0 / 3.0 {
+        0
+    } else if cx <= 2.0 / 3.0 {
+        1
+    } else {
+        2
+    };
+    let above = cy > 0.5;
+    [
+        [
+            "hotspot-below hotspot-start",
+            "hotspot-below hotspot-center",
+            "hotspot-below hotspot-end",
+        ],
+        [
+            "hotspot-above hotspot-start",
+            "hotspot-above hotspot-center",
+            "hotspot-above hotspot-end",
+        ],
+    ][usize::from(above)][horizontal]
+}
+
+/// A fraction as a CSS percentage, rounded to 1/1000 %, e.g. `12.5%`.
+fn percent(fraction: f64) -> String {
+    let value = (fraction.clamp(0.0, 1.0) * 100_000.0).round() / 1000.0;
+    format!("{value}%")
 }
 
 /// The default stylesheet plus the accent override, if any. The accent is
@@ -390,6 +518,107 @@ mod tests {
     fn language_tags() {
         assert_eq!(language_tag("de-DE"), "de-DE");
         assert_eq!(language_tag("en\" onload=\"x"), "");
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn popovers_open_away_from_the_edges() {
+        // By the centre: thirds across, halves down.
+        assert_eq!(
+            popover_class(rect(0.05, 0.1, 0.2, 0.2)),
+            "hotspot-below hotspot-start"
+        );
+        assert_eq!(
+            popover_class(rect(0.4, 0.1, 0.2, 0.2)),
+            "hotspot-below hotspot-center"
+        );
+        assert_eq!(
+            popover_class(rect(0.8, 0.2, 0.2, 0.2)),
+            "hotspot-below hotspot-end"
+        );
+        assert_eq!(
+            popover_class(rect(0.0, 0.6, 0.2, 0.2)),
+            "hotspot-above hotspot-start"
+        );
+        assert_eq!(
+            popover_class(rect(0.7, 0.45, 0.25, 0.5)),
+            "hotspot-above hotspot-end"
+        );
+        // A hotspot over the whole image opens below, centred.
+        assert_eq!(
+            popover_class(rect(0.0, 0.0, 1.0, 1.0)),
+            "hotspot-below hotspot-center"
+        );
+    }
+
+    #[test]
+    fn percentages_are_compact() {
+        assert_eq!(percent(0.0), "0%");
+        assert_eq!(percent(0.125), "12.5%");
+        assert_eq!(percent(1.0 / 3.0), "33.333%");
+        assert_eq!(percent(1.5), "100%");
+    }
+
+    #[test]
+    fn hotspot_text_is_escaped_and_placed() {
+        let hotspot = PlacedHotspot {
+            number: 2,
+            id: ulid::Ulid::nil(),
+            title: " <b>\"Fjord\" & co</b> ".into(),
+            description: "Line <1>\n\n  Line 'two' & more\n".into(),
+            rect: Some(rect(0.5, 0.25, 0.25, 0.125)),
+            color: Some("#16a34a".into()),
+        };
+        let value = hotspot_context(3, &hotspot);
+        let get = |key: &str| value.get_attr(key).unwrap();
+        assert_eq!(get("id").as_str(), Some("hotspot-3-2"));
+        // Plain values are escaped by the template; the description is
+        // escaped here.
+        assert_eq!(get("title").as_str(), Some("<b>\"Fjord\" & co</b>"));
+        assert_eq!(get("label").as_str(), Some("2. <b>\"Fjord\" & co</b>"));
+        assert_eq!(
+            get("description").to_string(),
+            "Line &lt;1&gt;<br>Line &#39;two&#39; &amp; more"
+        );
+        assert!(get("description").is_safe());
+        assert_eq!(
+            get("style").to_string(),
+            "left:50%;top:25%;width:25%;height:12.5%;--hs:#16a34a"
+        );
+        assert_eq!(get("class").as_str(), Some("hotspot-below hotspot-center"));
+        assert_eq!(get("legend_style").to_string(), "--hs:#16a34a");
+
+        // Out of view: only in the legend; no colour, no style.
+        let hidden = PlacedHotspot {
+            rect: None,
+            color: None,
+            title: String::new(),
+            ..hotspot
+        };
+        let value = hotspot_context(3, &hidden);
+        assert!(value.get_attr("style").unwrap().is_none());
+        assert!(value.get_attr("class").unwrap().is_none());
+        let untitled = PlacedHotspot {
+            rect: Some(rect(0.0, 0.0, 0.1, 0.1)),
+            ..hidden.clone()
+        };
+        assert_eq!(
+            hotspot_context(3, &untitled)
+                .get_attr("class")
+                .unwrap()
+                .as_str(),
+            Some("hotspot-below hotspot-start hotspot-untitled")
+        );
+        assert!(value.get_attr("legend_style").unwrap().is_none());
+        assert_eq!(value.get_attr("label").unwrap().as_str(), Some("2"));
     }
 
     #[test]

@@ -134,6 +134,10 @@ const ALLOWED_ATTRS: &[&str] = &[
     "id",
     "role",
     "aria-label",
+    "aria-describedby",
+    "aria-hidden",
+    "tabindex",
+    "style",
     "src",
     "width",
     "height",
@@ -157,6 +161,9 @@ fn assert_safe(html: &str) {
             );
             if key == "src" {
                 assert!(value.starts_with("data:image/"), "src {value:?}");
+            }
+            if key == "style" {
+                assert_safe_style(value);
             }
             if key == "href" {
                 let lower = value.to_ascii_lowercase();
@@ -189,6 +196,26 @@ fn assert_safe(html: &str) {
     assert!(!lower.contains("url("), "css url()");
     assert!(!lower.contains("@import"));
     assert!(!lower.contains("<script"));
+}
+
+/// Inline styles hold only hotspot positions (`left:12.5%`) and a colour
+/// (`--hs:#16a34a`, `--hs:red`).
+fn assert_safe_style(style: &str) {
+    for declaration in style.split(';') {
+        let (property, value) = declaration.split_once(':').expect(style);
+        let ok = match property {
+            "left" | "top" | "width" | "height" => value
+                .strip_suffix('%')
+                .is_some_and(|n| n.parse::<f64>().is_ok_and(|n| (0.0..=100.0).contains(&n))),
+            "--hs" => value
+                .strip_prefix('#')
+                .map_or(value.bytes().all(|b| b.is_ascii_alphabetic()), |hex| {
+                    hex.bytes().all(|b| b.is_ascii_hexdigit())
+                }),
+            _ => false,
+        };
+        assert!(ok, "style {style:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +266,121 @@ fn export_writes_one_self_contained_file() {
     html::export(&render_guide, handle, out.path(), &opts).unwrap();
 }
 
+#[test]
+fn hotspots_overlay_an_unmarked_image() {
+    let fixtures = fixtures();
+    let (handle, guide) = fixtures
+        .guides
+        .iter()
+        .find(|(_, g)| g.kind == GuideKind::Annotated)
+        .expect("an annotation guide fixture");
+    let (html, report) = render(guide, handle, &HtmlOptions::default());
+    assert_safe(&html);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert!(!html.to_ascii_lowercase().contains("<script"));
+
+    // One focusable overlay per hotspot, with its popover side.
+    let hotspots: Vec<TagInfo> = tags(&html)
+        .into_iter()
+        .filter(|t| {
+            t.attrs
+                .iter()
+                .any(|(k, v)| k == "class" && v.starts_with("hotspot hotspot-"))
+        })
+        .collect();
+    let attr = |tag: &TagInfo, key: &str| {
+        tag.attrs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let summary: Vec<(String, String)> = hotspots
+        .iter()
+        .map(|t| (attr(t, "aria-label"), attr(t, "class")))
+        .collect();
+    let expected = [
+        ("1. Reception", "hotspot hotspot-below hotspot-start"),
+        (
+            "2. Kitchen &amp; café",
+            "hotspot hotspot-below hotspot-center",
+        ),
+        (
+            "3. Meeting room &quot;Fjord&quot;",
+            "hotspot hotspot-below hotspot-end",
+        ),
+        ("4. Quiet zone", "hotspot hotspot-above hotspot-start"),
+        ("1. Stairwell B", "hotspot hotspot-above hotspot-end"),
+        ("2. Stairwell A", "hotspot hotspot-above hotspot-start"),
+    ]
+    .map(|(a, b)| (a.to_owned(), b.to_owned()));
+    assert_eq!(summary, expected);
+    for tag in &hotspots {
+        assert_eq!(attr(tag, "tabindex"), "0");
+        assert_eq!(attr(tag, "role"), "button");
+        let described = attr(tag, "aria-describedby");
+        assert!(html.contains(&format!("id=\"{described}\"")), "{described}");
+    }
+    // Reception sits at (24, 24) 140×92 on a 480×300 page.
+    assert_eq!(
+        attr(&hotspots[0], "style"),
+        "left:5%;top:8%;width:29.167%;height:30.667%"
+    );
+    assert!(attr(&hotspots[4], "style").ends_with(";--hs:#16a34a"));
+
+    // Text is escaped, line breaks become <br>, and the legend repeats it.
+    assert!(html.contains(
+        "<span class=\"hotspot-text\" id=\"hotspot-1-1-text\">Sign in here when you arrive.<br>\
+         Visitor badges are in the top drawer.</span>"
+    ));
+    assert!(html.contains("press &lt;Input&gt; on the remote"));
+    assert_eq!(html.matches("<ol class=\"hotspot-legend\">").count(), 2);
+    assert!(html.contains("<li id=\"hotspot-1-3\"><span class=\"hotspot-number\">3</span>"));
+    // Pages, not steps.
+    assert!(html.contains("aria-label=\"Page 1\""));
+
+    // The embedded image has no markers baked in.
+    let render_guide = RenderGuide::new(guide, handle);
+    let page = render_guide.steps().next().unwrap();
+    let unmarked = render_guide.step_image(
+        page,
+        &guiderecorder_core::export::ImageOptions {
+            hotspot_markers: false,
+            ..HtmlOptions::default().image
+        },
+    );
+    let marked = render_guide.step_image(page, &HtmlOptions::default().image);
+    assert_ne!(unmarked.png, marked.png);
+    let first_src = html
+        .split("src=\"data:image/png;base64,")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    assert_eq!(first_src, base64(&unmarked.png));
+}
+
+/// Standard base64 with padding, to compare embedded images.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Synthetic guides
 
@@ -277,6 +419,24 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
         )
         .unwrap();
 
+    let hotspots: Vec<Annotation> = HOSTILE
+        .iter()
+        .enumerate()
+        .map(|(i, text)| Annotation {
+            id: Ulid::new(),
+            shape: Shape::Hotspot(HotspotGeometry {
+                rect: Rect {
+                    x: i as f64 * 2.0,
+                    y: 1.0,
+                    width: 3.0,
+                    height: 5.0,
+                },
+                title: (*text).into(),
+                description: format!("{text}\n{text}"),
+            }),
+            style: AnnotationStyle::default(),
+        })
+        .collect();
     let mut items = Vec::new();
     for (i, text) in HOSTILE.iter().enumerate() {
         items.push(Item::Section(Section {
@@ -304,7 +464,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
                 after: None,
                 show: ImageShow::Full,
             },
-            annotations: Vec::new(),
+            annotations: if i == 0 { hotspots.clone() } else { Vec::new() },
             ai_state: AiState::default(),
         }));
         items.push(Item::Note(Note {
@@ -342,6 +502,15 @@ fn hostile_text_is_escaped() {
         assert!(href.starts_with("https://example.com/"), "{href}");
     }
     assert!(html.starts_with("<!doctype html>\n<html lang=\"\">"));
+    // Hostile hotspot text is escaped. (Hostile colours never get past the
+    // renderer's check; see `PlacedHotspot::color`.)
+    assert_eq!(
+        html.matches("class=\"hotspot hotspot-").count(),
+        HOSTILE.len()
+    );
+    assert!(!html.contains(";--hs:"));
+    assert!(html.contains("aria-label=\"1. &lt;script&gt;alert(1)&lt;"));
+    assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;<br>&lt;script&gt;"));
 }
 
 #[test]

@@ -13,6 +13,16 @@ Hinweis
 Nicht **überfüllen**.
 === Kurzanleitung Drucker :: items[1].body
 Mehr dazu im [Handbuch](handbuch.pdf) und unter [https://example.com/drucker](https://example.com/drucker).
+=== Office floor plan :: intro
+Hover over or tap a numbered area to see what is there.
+=== Office floor plan :: items[0].title
+Third floor
+=== Office floor plan :: items[0].description
+The lifts open onto the corridor in the middle.
+=== Office floor plan :: items[1].body
+Need a desk for the day? Ask at **Reception**.
+=== Office floor plan :: items[2].title
+Fire exits
 === Rotate an API key :: intro
 Rotate keys every *90 days*, or right away if one leaks.
 === Rotate an API key :: prerequisites

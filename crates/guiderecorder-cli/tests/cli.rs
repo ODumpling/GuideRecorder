@@ -12,6 +12,8 @@ use tempfile::TempDir;
 const ROTATE: &str = "Rotate an API key.guiderecorder";
 const CALENDAR: &str = "Share a calendar event.guiderecorder";
 const DRUCKER: &str = "Kurzanleitung Drucker.guiderecorder";
+/// The annotation guide: pages with hotspots.
+const FLOOR_PLAN: &str = "Office floor plan.guiderecorder";
 
 /// A temp copy of the fixture library, with an index path beside it (never
 /// the app's real index).
@@ -200,7 +202,7 @@ fn library_comes_from_the_environment() {
         .unwrap();
     assert_success(&out);
     let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(value["guides"].as_array().unwrap().len(), 3);
+    assert_eq!(value["guides"].as_array().unwrap().len(), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +217,7 @@ fn list_json_shape() {
         titles(&value["guides"]),
         [
             "Kurzanleitung Drucker",
+            "Office floor plan",
             "Rotate an API key",
             "Share a calendar event"
         ]
@@ -342,7 +345,7 @@ fn reindex_builds_then_syncs_and_readers_use_it() {
         .map(|v| v.as_str().unwrap())
         .collect();
     added.sort();
-    assert_eq!(added, [DRUCKER, ROTATE, CALENDAR]);
+    assert_eq!(added, [DRUCKER, FLOOR_PLAN, ROTATE, CALENDAR]);
     assert!(fx.index().is_file());
     assert_eq!(fx.snapshot(), before, "reindex writes only the index");
 
@@ -373,7 +376,7 @@ fn reindex_builds_then_syncs_and_readers_use_it() {
 
     let value = fx.json(&["reindex", "--full", "--json"]);
     assert_eq!(value["rebuilt"], true);
-    assert_eq!(value["added"].as_array().unwrap().len(), 2);
+    assert_eq!(value["added"].as_array().unwrap().len(), 3);
 }
 
 #[test]
@@ -383,7 +386,7 @@ fn reindex_human_output() {
     assert_success(&out);
     let text = stdout(&out);
     assert!(text.starts_with("Index rebuilt: "), "{text}");
-    assert!(text.contains("added: 3"), "{text}");
+    assert!(text.contains("added: 4"), "{text}");
 }
 
 #[test]
@@ -401,7 +404,7 @@ fn reindex_refuses_a_foreign_file() {
 #[test]
 fn validate_fixtures_ok() {
     let fx = Fixture::new();
-    let bundles = [ROTATE, CALENDAR, DRUCKER].map(|b| fx.bundle(b));
+    let bundles = [ROTATE, CALENDAR, DRUCKER, FLOOR_PLAN].map(|b| fx.bundle(b));
     let mut cmd = guiderecorder();
     cmd.arg("validate").args(&bundles).arg("--json");
     let out = cmd.output().unwrap();
@@ -409,7 +412,7 @@ fn validate_fixtures_ok() {
     let value: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["ok"], true);
     let reports = value["bundles"].as_array().unwrap();
-    assert_eq!(reports.len(), 3);
+    assert_eq!(reports.len(), 4);
     for report in reports {
         let keys = keys(report);
         assert_eq!(
@@ -435,13 +438,17 @@ fn validate_fixtures_ok() {
         assert_eq!(report["readOnly"], false);
     }
     assert_eq!(reports[0]["title"], "Rotate an API key");
+    // The annotation guide's pages and hotspots render cleanly.
+    assert_eq!(reports[3]["title"], "Office floor plan");
+    assert_eq!(reports[3]["stepCount"], 2);
+    assert_eq!(reports[3]["warnings"], serde_json::json!([]));
 
     let out = fx.run(&["validate", fx.bundle(ROTATE).to_str().unwrap()]);
     assert_success(&out);
     let text = stdout(&out);
     assert!(text.contains(": ok"), "{text}");
     assert!(
-        text.contains("Rotate an API key: schema 1, writable"),
+        text.contains("Rotate an API key: schema 2, writable"),
         "{text}"
     );
 }
@@ -1122,6 +1129,6 @@ fn reindex_refuses_another_format_without_full() {
 
     let value = fx.json(&["reindex", "--full", "--json"]);
     assert_eq!(value["rebuilt"], true);
-    assert_eq!(value["added"].as_array().unwrap().len(), 3);
+    assert_eq!(value["added"].as_array().unwrap().len(), 4);
     assert_eq!(fx.json(&["list", "--json"])["source"], "index");
 }

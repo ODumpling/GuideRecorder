@@ -49,6 +49,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     }),
     closeGuide: vi.fn(async () => []),
     deleteGuide: vi.fn(async () => true),
+    newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
     cancelQuit: vi.fn(async () => {}),
@@ -89,6 +90,37 @@ describe("library", () => {
     await store.getState().setQuery("none");
     expect(api.listGuides).toHaveBeenLastCalledWith("none");
     expect(store.getState().guides).toEqual([]);
+  });
+});
+
+describe("new annotation guides", () => {
+  it("are listed and opened once made", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    expect(await store.getState().createAnnotatedGuide()).toBe(true);
+    expect(api.newAnnotatedGuide).toHaveBeenCalledOnce();
+    expect(api.listGuides).toHaveBeenCalled();
+    expect(store.getState().doc?.guide.id).toBe("G2");
+    expect(store.getState().creating).toBe(false);
+  });
+
+  it("cancelled: nothing opens", async () => {
+    const { api } = fakeApi();
+    api.newAnnotatedGuide = vi.fn(async () => null);
+    const store = createEditorStore({ api });
+    expect(await store.getState().createAnnotatedGuide()).toBe(false);
+    expect(api.openGuide).not.toHaveBeenCalled();
+    expect(store.getState().openError).toBeNull();
+  });
+
+  it("reports failures like open errors", async () => {
+    const { api } = fakeApi();
+    api.newAnnotatedGuide = vi.fn(async () => Promise.reject({ kind: "invalid", message: "not a PDF" }));
+    const store = createEditorStore({ api });
+    expect(await store.getState().createAnnotatedGuide()).toBe(false);
+    expect(store.getState().openError).toBe("Could not make the annotation guide: not a PDF");
+    expect(store.getState().creating).toBe(false);
+    expect(store.getState().doc).toBeNull();
   });
 });
 

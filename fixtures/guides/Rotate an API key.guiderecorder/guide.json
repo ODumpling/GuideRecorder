@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "01M4WZCE2000000000000002R0",
   "title": "Rotate an API key",
   "summary": "Replace a leaked or expiring API key without downtime.",

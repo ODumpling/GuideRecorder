@@ -33,7 +33,8 @@ import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 type AiGenerateArgs = { stepIds?: string[]; guidePass?: boolean; force?: boolean };
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
-const SCHEMA_VERSION = 1;
+/** Core's `SCHEMA_VERSION`: a guide saved with a newer one opens read-only. */
+export const SCHEMA_VERSION = 2;
 
 export interface AppError {
   kind: string;
@@ -177,6 +178,16 @@ export class Backend {
   recordingSkipped = 0;
   /** Guides made by `stop_recording`, in order. */
   readonly recordings: RecordingSaved[] = [];
+  /**
+   * How many pages the next images-or-PDF dialog (`new_annotated_guide`,
+   * `add_annotated_pages`) picks; null: the user cancels it.
+   */
+  pagesDialog: number | null = 2;
+  /** What the next images-or-PDF command fails with, if anything. */
+  pagesError: AppError | null = null;
+  /** Annotation guides `new_annotated_guide` made, by id, in order. */
+  readonly annotatedGuides: string[] = [];
+  private pages = 0;
   /** Screenshots `recording_snapshot` serves (any fixture image), by id. */
   readonly snapshots = new Map<string, RecordingSnapshot>();
   /** How many manual steps `add_manual_step` added. */
@@ -544,6 +555,36 @@ export class Backend {
     return saved;
   }
 
+  /**
+   * Pages as Rust stores them from the dialog's images or PDF: a manual
+   * step each, showing its full image (the first fixture step's), in
+   * `bundle`'s files. Bare steps, without the item `type` tag.
+   */
+  private pickPages(bundle: Bundle): Step[] | null {
+    if (this.pagesError) fail(this.pagesError.kind, this.pagesError.message);
+    if (this.pagesDialog === null) return null;
+    const image = [...this.bundles.values()]
+      .flatMap((b) => [...b.files.entries()])
+      .find(([path]) => /^steps\/[^.]+\.webp$/.test(path));
+    if (!image) return fail("notFound", "the fixtures have no step image");
+    return Array.from({ length: this.pagesDialog }, () => {
+      const n = ++this.pages;
+      const id = `01M4X${"0".repeat(16)}PG${String(n).padStart(3, "0")}`;
+      const full = `steps/${id}.webp`;
+      bundle.files.set(full, image[1]);
+      const page = {
+        id,
+        title: `Page ${n}`,
+        description: "",
+        kind: "manual",
+        image: { full, show: "full" },
+        annotations: [],
+        aiState: { status: "template" },
+      };
+      return page as unknown as Step;
+    });
+  }
+
   private run(cmd: string, args: Record<string, unknown>): unknown {
     switch (cmd) {
       case "list_guides": {
@@ -582,6 +623,42 @@ export class Backend {
         bundle.guide = structuredClone(guide);
         this.saves.push(structuredClone(guide));
         return null;
+      }
+      case "new_annotated_guide": {
+        const n = this.annotatedGuides.length + 1;
+        const id = `01M4X${"0".repeat(17)}ANN${n}`;
+        const bundle: Bundle = {
+          path: `/Users/me/Documents/GuideRecorder/Floor plan ${n}.guiderecorder`,
+          files: new Map(),
+          guide: {
+            schemaVersion: SCHEMA_VERSION,
+            id,
+            title: `Floor plan ${n}`,
+            summary: "",
+            tags: [],
+            intro: "",
+            prerequisites: "",
+            audience: "beginner",
+            kind: "annotated",
+            language: "en",
+            createdAt: "2026-10-18T10:00:00Z",
+            updatedAt: "2026-10-18T10:00:00Z",
+            items: [],
+          },
+        };
+        const pages = this.pickPages(bundle);
+        if (!pages) return null;
+        bundle.guide.items = pages.map((page): Step => ({ ...page, type: "step" }));
+        this.bundles.set(id, bundle);
+        this.annotatedGuides.push(id);
+        return id;
+      }
+      case "add_annotated_pages": {
+        const guideId = String(args.guideId);
+        if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
+        const bundle = this.bundle(guideId);
+        if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
+        return this.pickPages(bundle) ?? [];
       }
       case "close_guide":
         this.bundle(String(args.id));

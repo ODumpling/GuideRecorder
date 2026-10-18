@@ -20,6 +20,7 @@ keyring = "4.2.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 resvg = "0.48.1"
+svgtypes = "0.16.1"
 minijinja = "3.0.0"
 docx-rs = "0.4.22"
 typst = "0.15.1"

@@ -6,12 +6,14 @@ use tauri::menu::Menu;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
 
 mod ai;
+mod annotated;
 mod blocking;
 mod commands;
 mod editor;
 mod export;
 mod hotkeys;
 mod navigation;
+mod pdf;
 mod picker;
 mod recording;
 mod settings;
@@ -161,6 +163,8 @@ pub fn run() {
             commands::delete_guide,
             commands::step_image,
             commands::add_image_step,
+            commands::new_annotated_guide,
+            commands::add_annotated_pages,
             commands::copy_step_images,
             commands::read_image_file,
             commands::choose_export_folder,

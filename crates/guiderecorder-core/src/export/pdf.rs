@@ -16,7 +16,10 @@
 //!   headings; steps are level 2 headings "1. ", "2. ", ... (so both show up
 //!   as PDF bookmarks), followed by the step image and the description, in
 //!   the same order as the other writers. A step with an empty title is
-//!   headed "N. Step N".
+//!   headed "N. Step N" ("N. Page N" in an annotation guide).
+//! - Step images show their hotspots as numbered markers; a numbered legend
+//!   (bold title, then the description with its line breaks kept) follows
+//!   the image, before the description.
 //! - A step's heading and image are one unbreakable block that sticks to the
 //!   description, so the heading, image and the start of the description
 //!   always share a page; the description itself flows on across pages,
@@ -83,6 +86,7 @@ use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World, WorldExt};
 use typst_pdf::Timestamp;
 
+use super::annotate::DEFAULT_HOTSPOT_COLOR;
 use super::ast::{plain_text, Block, Inline};
 use super::docx::Paper;
 use super::md::Labels;
@@ -360,6 +364,26 @@ fn guide_data(
                 } else {
                     cx.inlines(&step.title)
                 };
+                let color_of = |number: u32| {
+                    let placed = image.hotspots.iter().find(|h| h.number == number);
+                    placed.and_then(|h| h.color.as_deref())
+                };
+                let hotspots: Vec<Value> = step
+                    .hotspots()
+                    .map(|(number, hotspot)| {
+                        json!({
+                            "number": number,
+                            "color": hotspot_color(color_of(number)),
+                            "title": clean(hotspot.title.trim()),
+                            "lines": hotspot
+                                .description
+                                .lines()
+                                .map(|line| clean(line.trim()))
+                                .filter(|line| !line.is_empty())
+                                .collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
                 json!({
                     "kind": "step",
                     "number": step.number,
@@ -371,6 +395,7 @@ fn guide_data(
                         "height": image.height.max(1),
                         "alt": clean(&plain_text(&step.title)),
                     },
+                    "hotspots": hotspots,
                 })
             }
         })
@@ -410,7 +435,7 @@ fn guide_data(
         "max_image_height": (text_height * MAX_IMAGE_HEIGHT_RATIO).round(),
         "labels": {
             "prerequisites": clean(&labels.prerequisites),
-            "step": clean(&labels.step),
+            "step": clean(labels.step_kind(guide.kind)),
         },
         "intro": intro,
         "prerequisites": prerequisites,
@@ -686,6 +711,20 @@ impl World for GuideWorld {
     }
 }
 
+/// The legend badge colour of a hotspot as `#rrggbb` (which Typst's `rgb`
+/// takes): its own colour, hex or CSS name, parsed as the image marker's
+/// is, so the two match (alpha dropped); else, or if transparent, the
+/// default hotspot colour.
+fn hotspot_color(color: Option<&str>) -> String {
+    let parsed = color
+        .and_then(|c| c.trim().parse::<svgtypes::Color>().ok())
+        .filter(|c| c.alpha > 0);
+    match parsed {
+        Some(c) => format!("#{:02x}{:02x}{:02x}", c.red, c.green, c.blue),
+        None => DEFAULT_HOTSPOT_COLOR.to_ascii_lowercase(),
+    }
+}
+
 /// Text of a laid-out page: runs on the same baseline are joined (with a
 /// space where there is a visible gap, e.g. after a list marker), a new
 /// baseline starts a new line.
@@ -739,6 +778,20 @@ fn collect_text(frame: &Frame, origin: Point, out: &mut Vec<TextRun>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hotspot_legend_colors_match_the_markers() {
+        use super::hotspot_color;
+        let default = super::DEFAULT_HOTSPOT_COLOR.to_ascii_lowercase();
+        assert_eq!(hotspot_color(Some("#16A34A")), "#16a34a");
+        assert_eq!(hotspot_color(Some("#abc")), "#aabbcc");
+        assert_eq!(hotspot_color(Some(" Red ")), "#ff0000");
+        assert_eq!(hotspot_color(Some("teal")), "#008080");
+        assert_eq!(hotspot_color(Some("#ff000080")), "#ff0000");
+        assert_eq!(hotspot_color(Some("transparent")), default);
+        assert_eq!(hotspot_color(Some("not a colour")), default);
+        assert_eq!(hotspot_color(None), default);
+    }
+
     use super::*;
 
     /// Compiles `main` in a sealed world; the error or warning messages.

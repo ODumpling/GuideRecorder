@@ -91,6 +91,35 @@
   ]
 }
 
+// The numbered legend of a step's hotspots: (number, color, title, lines);
+// title and lines are plain text, color a checked hex colour. The image
+// shows the same numbers in the same colours.
+#let legend(hotspots) = {
+  if hotspots.len() > 0 {
+    block(above: 0.9em, below: 1.1em, grid(
+      columns: (auto, 1fr),
+      column-gutter: 7pt,
+      row-gutter: 7pt,
+      ..hotspots.map(h => (
+        box(
+          fill: rgb(h.color),
+          radius: 50%,
+          width: 1.45em,
+          height: 1.45em,
+          align(center + horizon, text(fill: white, size: 0.85em, weight: "bold", str(h.number))),
+        ),
+        block(above: 0pt, {
+          if h.title != "" { strong(h.title) }
+          for (i, line) in h.lines.enumerate() {
+            if i > 0 or h.title != "" { linebreak() }
+            line
+          }
+        }),
+      )).flatten(),
+    ))
+  }
+}
+
 // The step's heading and image never split, and stick to the description
 // (Typst moves them to the next page with its first lines when it doesn't
 // start on this one). The description flows freely, however long it is.
@@ -114,6 +143,7 @@
       ))
     })
   ]
+  legend(s.hotspots)
   blocks(s.description)
 }
 

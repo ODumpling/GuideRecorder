@@ -440,7 +440,7 @@ fn get_step(config: &Config, args: &GetStepArgs) -> ToolResult<CallToolResult> {
         markdown::escape_line(&render.title),
         render.id,
         step.number,
-        markdown::step(step).trim_end()
+        markdown::step(step, render.kind).trim_end()
     );
     let show = match args.image {
         ImageChoice::Crop => Some(ImageShow::Crop),

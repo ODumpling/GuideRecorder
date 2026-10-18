@@ -7,7 +7,11 @@
 //! - Sections are `Heading1`; steps are `Heading2` headings numbered
 //!   "1. ", "2. ", ... followed by the step image and the description, in
 //!   the same order as the Markdown and HTML writers. A step with an empty
-//!   title is headed "N. Step N", as in Markdown.
+//!   title is headed "N. Step N" ("N. Page N" in an annotation guide), as
+//!   in Markdown.
+//! - A step with hotspots has a legend right under its image: one
+//!   paragraph per hotspot, "N. " and the bold title, then the description
+//!   with its line breaks kept. The image shows the numbered markers.
 //! - Notes are shaded paragraphs with a coloured left border, starting with
 //!   a bold label ("Tip:", "Warning:", "Note:").
 //! - Fixed words (prerequisites heading, note labels, "Step") come from
@@ -67,7 +71,7 @@ use super::raster::{render_step_image, ImageOptions};
 use super::render::{RenderGuide, RenderItem, RenderNote, RenderStep};
 use super::report::ExportReport;
 use crate::library::GuideHandle;
-use crate::model::NoteKind;
+use crate::model::{GuideKind, NoteKind};
 use chrono::{DateTime, Utc};
 use docx_rs::{
     AbstractNumbering, AlignmentType, BorderType, BreakType, Docx, Hyperlink, HyperlinkData,
@@ -316,6 +320,8 @@ struct Writer<'a> {
     handle: &'a GuideHandle,
     opts: &'a DocxOptions,
     labels: Labels,
+    /// The guide's kind, for the "Step" or "Page" fallback title.
+    kind: GuideKind,
     /// Branding accent as `RRGGBB`.
     accent: Option<String>,
     report: &'a mut ExportReport,
@@ -369,6 +375,7 @@ impl<'a> Writer<'a> {
             handle,
             opts,
             labels,
+            kind: GuideKind::default(),
             accent,
             report,
             docx,
@@ -382,6 +389,7 @@ impl<'a> Writer<'a> {
     }
 
     fn document(mut self, guide: &RenderGuide, logo: Option<&Logo>) -> Docx {
+        self.kind = guide.kind;
         if let Some(logo) = logo {
             self.logo(logo);
         }
@@ -438,7 +446,7 @@ impl<'a> Writer<'a> {
         let mut pieces = vec![Piece::run(text_run(&format!("{}. ", step.number)))];
         if plain_text(&step.title).trim().is_empty() {
             // Same fallback as the Markdown writer: "2. Step 2".
-            let title = format!("{} {}", self.labels.step, step.number);
+            let title = format!("{} {}", self.labels.step_kind(self.kind), step.number);
             pieces.push(Piece::run(text_run(&title)));
         } else {
             self.inlines(&step.title, Format::default(), &mut pieces);
@@ -447,7 +455,41 @@ impl<'a> Writer<'a> {
         let heading = add_pieces(heading, pieces);
         self.push(heading);
         self.image(step);
+        self.hotspot_legend(step);
         self.blocks(&step.description, Context::default());
+    }
+
+    /// One paragraph per hotspot: "N. " and the bold title, then the
+    /// description lines after line breaks. Hanging-indented like a list.
+    fn hotspot_legend(&mut self, step: &RenderStep) {
+        for (number, hotspot) in step.hotspots() {
+            let mut p = self
+                .paragraph()
+                .indent(
+                    Some(LIST_INDENT),
+                    Some(SpecialIndentType::Hanging(LIST_HANGING)),
+                    None,
+                    None,
+                )
+                .add_run(text_run(&format!("{number}.")).add_tab());
+            let title = hotspot.title.trim();
+            let mut first = true;
+            if !title.is_empty() {
+                p = p.add_run(text_run(title).bold());
+                first = false;
+            }
+            for line in hotspot.description.lines().map(str::trim) {
+                if line.is_empty() {
+                    continue;
+                }
+                if !first {
+                    p = p.add_run(Run::new().add_break(BreakType::TextWrapping));
+                }
+                p = p.add_run(text_run(line));
+                first = false;
+            }
+            self.push(p);
+        }
     }
 
     fn image(&mut self, step: &RenderStep) {

@@ -14,6 +14,16 @@ step 1: "Papierfach " strong["2"] " öffnen"
 note Note
   p "Mehr dazu im " link("handbuch.pdf" "")["Handbuch"] " und unter " link("https://example.com/drucker" "")["https://example.com/drucker"] "."
 
+# Office floor plan
+intro
+  p "Hover over or tap a numbered area to see what is there."
+prerequisites
+step 1: "Third floor"
+  p "The lifts open onto the corridor in the middle."
+note Tip
+  p "Need a desk for the day? Ask at " strong["Reception"] "."
+step 2: "Fire exits"
+
 # Rotate an API key
 intro
   p "Rotate keys every " em["90 days"] ", or right away if one leaks."

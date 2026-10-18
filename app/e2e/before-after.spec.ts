@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { API_KEY, CALENDAR, expect, openGuide, test } from "./fixtures";
+import { API_KEY, CALENDAR, expect, openGuide, SCHEMA_VERSION, test } from "./fixtures";
 
 /** Calendar steps: the first has an after frame, the second doesn't. */
 const WITH_AFTER = "01M4WT7MM000000000000002G4";
@@ -285,7 +285,7 @@ test("handles keep their size on screen after a round trip through After and a r
 });
 
 test.describe("a read-only guide", () => {
-  test.use({ backendOptions: { schemaVersions: { [API_KEY]: 2 } } });
+  test.use({ backendOptions: { schemaVersions: { [API_KEY]: SCHEMA_VERSION + 1 } } });
 
   test("still has the switch", async ({ page, backend: _ }) => {
     await openGuide(page, "Rotate an API key");

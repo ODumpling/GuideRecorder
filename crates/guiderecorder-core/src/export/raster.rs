@@ -23,11 +23,22 @@
 //! A crop annotation cuts the view down to its rectangle (intersected with
 //! the view); if a step has several, the last wins.
 //!
+//! # Hotspots
+//!
+//! Hotspots are numbered 1, 2, 3, ... in annotation order among the step's
+//! hotspots. By default ([`ImageOptions::hotspot_markers`]) each is drawn as
+//! an outlined rectangle with a numbered badge, for formats that can only
+//! show pixels and print a numbered legend next to them. Either way,
+//! [`RenderedImage::hotspots`] says where each one landed, as fractions of
+//! the output image, so a format that can (HTML) overlays its own
+//! interactive markers on an image rendered without them.
+//!
 //! # Order
 //!
-//! Annotations are drawn first and blur/pixelate is burned in last, so
-//! nothing inside a redacted region survives, including annotation text
-//! drawn over it.
+//! Annotations are drawn first and blur/pixelate is burned in after them,
+//! so nothing inside a redacted region survives, including annotation text
+//! drawn over it. Hotspot markers come last, over the blur, as the editor
+//! shows them: they hold only an outline and a number.
 //!
 //! # Failure
 //!
@@ -40,10 +51,10 @@ use image::imageops::{self, FilterType};
 use image::RgbaImage;
 use resvg::tiny_skia::{IntSize, Pixmap};
 
-use super::annotate;
+use super::annotate::{self, Layer};
 use super::blur::{self, Region};
 use crate::library::GuideHandle;
-use crate::model::{BlurMode, ImageShow, Point, Rect, Shape, Step};
+use crate::model::{Annotation, BlurMode, ImageShow, Point, Rect, Shape, Step};
 
 /// How to render a step image.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +66,10 @@ pub struct ImageOptions {
     pub max_width: Option<u32>,
     /// Size of the placeholder for a missing image, before `max_width`.
     pub placeholder_size: (u32, u32),
+    /// Draw hotspots into the pixels as numbered markers (on by default).
+    /// Off for a writer that overlays its own markers using
+    /// [`RenderedImage::hotspots`].
+    pub hotspot_markers: bool,
 }
 
 impl Default for ImageOptions {
@@ -63,6 +78,7 @@ impl Default for ImageOptions {
             show: None,
             max_width: None,
             placeholder_size: (800, 450),
+            hotspot_markers: true,
         }
     }
 }
@@ -74,6 +90,31 @@ pub struct RenderedImage {
     pub width: u32,
     pub height: u32,
     pub warnings: Vec<RenderWarning>,
+    /// Every hotspot of the step, in number order, whether or not it is in
+    /// view (a placeholder has them all, unplaced).
+    pub hotspots: Vec<PlacedHotspot>,
+}
+
+/// A hotspot of a rendered step image.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedHotspot {
+    /// 1-based, in annotation order among the step's hotspots.
+    pub number: u32,
+    /// The annotation's id.
+    pub id: ulid::Ulid,
+    /// Plain text.
+    pub title: String,
+    /// Plain text; may hold line breaks.
+    pub description: String,
+    /// Where it sits on the output image (after crop and scaling), as
+    /// fractions (0 to 1) of its width and height, clamped to it. `None`
+    /// if it lies entirely outside the view, its geometry is unusable, or
+    /// the image is a placeholder.
+    pub rect: Option<Rect>,
+    /// The annotation's colour, if it is a valid hex colour or CSS colour
+    /// name (see [`RenderWarning::InvalidColor`]), trimmed; safe to place in
+    /// CSS as is.
+    pub color: Option<String>,
 }
 
 impl RenderedImage {
@@ -143,9 +184,12 @@ impl fmt::Display for RenderWarning {
 pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions) -> RenderedImage {
     let mut warnings = Vec::new();
     let Some((source, origin)) = load_view(handle, step, opts, &mut warnings) else {
-        return placeholder(opts, warnings);
+        let hotspots = place_hotspots(&step.annotations, None);
+        return placeholder(opts, warnings, hotspots);
     };
     let (source, origin) = apply_crop(source, origin, step, &mut warnings);
+    // Fractions of the view, which scaling keeps.
+    let hotspots = place_hotspots(&step.annotations, Some((origin, source.dimensions())));
 
     // One pixmap from here on; the source buffer is reused, not copied.
     let mut pixmap = into_pixmap(source);
@@ -153,10 +197,21 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
         &step.annotations,
         origin,
         &mut pixmap.as_mut(),
+        Layer::Shapes,
         &mut warnings,
     );
     // Redaction comes before any scaling.
     burn_in_redactions(&mut pixmap, origin, step);
+    // Markers show only numbers and outlines, and stay readable over a blur.
+    if opts.hotspot_markers {
+        annotate::draw(
+            &step.annotations,
+            origin,
+            &mut pixmap.as_mut(),
+            Layer::Hotspots,
+            &mut warnings,
+        );
+    }
 
     if let Some(max) = opts
         .max_width
@@ -166,7 +221,61 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
         let rgba = from_pixmap(pixmap);
         pixmap = into_pixmap(imageops::resize(&rgba, max, height, FilterType::Lanczos3));
     }
-    encode(&pixmap, warnings)
+    encode(&pixmap, warnings, hotspots)
+}
+
+/// The step's hotspots, numbered, with their rectangles as fractions of
+/// the view at `origin` with size `(w, h)` (full-screenshot pixels), clamped
+/// to it. Without a view (a placeholder), none is placed.
+fn place_hotspots(
+    annotations: &[Annotation],
+    view: Option<(Point, (u32, u32))>,
+) -> Vec<PlacedHotspot> {
+    annotations
+        .iter()
+        .filter_map(|a| match &a.shape {
+            Shape::Hotspot(geometry) => Some((a, geometry)),
+            _ => None,
+        })
+        .zip(1..)
+        .map(|((annotation, geometry), number)| PlacedHotspot {
+            number,
+            id: annotation.id,
+            title: geometry.title.clone(),
+            description: geometry.description.clone(),
+            rect: view.and_then(|(origin, size)| fraction_rect(&geometry.rect, origin, size)),
+            color: annotation
+                .style
+                .color
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| annotate::is_valid_color(c))
+                .map(str::to_owned),
+        })
+        .collect()
+}
+
+/// `rect` (full-screenshot pixels) as fractions of the view at `origin`
+/// with size `(w, h)`, clamped to it; `None` if nothing of it is in view or
+/// it is not a finite, non-empty rectangle.
+fn fraction_rect(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Rect> {
+    let finite = [rect.x, rect.y, rect.width, rect.height]
+        .iter()
+        .all(|v| v.is_finite());
+    if !finite || rect.width <= 0.0 || rect.height <= 0.0 || w == 0 || h == 0 {
+        return None;
+    }
+    let (w, h) = (f64::from(w), f64::from(h));
+    let x0 = (rect.x - origin.x).clamp(0.0, w);
+    let y0 = (rect.y - origin.y).clamp(0.0, h);
+    let x1 = (rect.x + rect.width - origin.x).clamp(0.0, w);
+    let y1 = (rect.y + rect.height - origin.y).clamp(0.0, h);
+    (x1 > x0 && y1 > y0).then(|| Rect {
+        x: x0 / w,
+        y: y0 / h,
+        width: (x1 - x0) / w,
+        height: (y1 - y0) / h,
+    })
 }
 
 /// The image to show and its origin in full-screenshot pixels.
@@ -418,7 +527,11 @@ fn from_pixmap(pixmap: Pixmap) -> RgbaImage {
     RgbaImage::from_raw(w, h, pixmap.take_demultiplied()).expect("buffer matches size")
 }
 
-fn encode(pixmap: &Pixmap, warnings: Vec<RenderWarning>) -> RenderedImage {
+fn encode(
+    pixmap: &Pixmap,
+    warnings: Vec<RenderWarning>,
+    hotspots: Vec<PlacedHotspot>,
+) -> RenderedImage {
     let png = pixmap
         .encode_png()
         .expect("encoding a valid pixmap into memory cannot fail");
@@ -427,6 +540,7 @@ fn encode(pixmap: &Pixmap, warnings: Vec<RenderWarning>) -> RenderedImage {
         width: pixmap.width(),
         height: pixmap.height(),
         warnings,
+        hotspots,
     }
 }
 
@@ -435,7 +549,11 @@ const PLACEHOLDER_FG: [u8; 4] = [0xb0, 0xb0, 0xb8, 0xff];
 
 /// A light grey image with a border and a cross, at
 /// `opts.placeholder_size` scaled to `opts.max_width`.
-fn placeholder(opts: &ImageOptions, warnings: Vec<RenderWarning>) -> RenderedImage {
+fn placeholder(
+    opts: &ImageOptions,
+    warnings: Vec<RenderWarning>,
+    hotspots: Vec<PlacedHotspot>,
+) -> RenderedImage {
     let (mut w, mut h) = opts.placeholder_size;
     (w, h) = (w.clamp(1, 4096), h.clamp(1, 4096));
     if let Some(max) = opts.max_width.filter(|&max| max > 0 && max < w) {
@@ -455,7 +573,7 @@ fn placeholder(opts: &ImageOptions, warnings: Vec<RenderWarning>) -> RenderedIma
             PLACEHOLDER_BG
         })
     });
-    encode(&into_pixmap(image), warnings)
+    encode(&into_pixmap(image), warnings, hotspots)
 }
 
 #[cfg(test)]
@@ -553,6 +671,101 @@ mod tests {
     }
 
     #[test]
+    fn hotspot_fractions_follow_the_view_and_clamp() {
+        let r = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        // A 200×100 view whose top-left is (100, 50) in the screenshot.
+        let origin = Point { x: 100.0, y: 50.0 };
+        assert_eq!(
+            fraction_rect(&r(150.0, 75.0, 50.0, 25.0), origin, (200, 100)),
+            Some(r(0.25, 0.25, 0.25, 0.25))
+        );
+        // Partly outside: clamped to the view.
+        assert_eq!(
+            fraction_rect(&r(50.0, 125.0, 100.0, 100.0), origin, (200, 100)),
+            Some(r(0.0, 0.75, 0.25, 0.25))
+        );
+        // Entirely outside, touching the edge, or unusable.
+        assert_eq!(
+            fraction_rect(&r(0.0, 0.0, 100.0, 50.0), origin, (200, 100)),
+            None
+        );
+        assert_eq!(
+            fraction_rect(&r(400.0, 60.0, 10.0, 10.0), origin, (200, 100)),
+            None
+        );
+        assert_eq!(
+            fraction_rect(&r(150.0, 75.0, 0.0, 5.0), origin, (200, 100)),
+            None
+        );
+        assert_eq!(
+            fraction_rect(&r(f64::NAN, 75.0, 5.0, 5.0), origin, (200, 100)),
+            None
+        );
+    }
+
+    #[test]
+    fn hotspots_are_numbered_among_themselves() {
+        use crate::model::{AnnotationStyle, HotspotGeometry};
+        let annotation = |shape| Annotation {
+            id: ulid::Ulid::new(),
+            shape,
+            style: AnnotationStyle::default(),
+        };
+        let hotspot = |x, title: &str| {
+            annotation(Shape::Hotspot(HotspotGeometry {
+                rect: Rect {
+                    x,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+                title: title.into(),
+                description: String::new(),
+            }))
+        };
+        let mut annotations = vec![
+            annotation(Shape::Box(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 5.0,
+                height: 5.0,
+            })),
+            hotspot(0.0, "A"),
+            hotspot(500.0, "Out of view"),
+            annotation(Shape::Blur(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 5.0,
+                height: 5.0,
+            })),
+            hotspot(20.0, "C"),
+        ];
+        annotations[4].style.color = Some(" #00ff00 ".into());
+        annotations[1].style.color = Some("url(#x)".into());
+        let placed = place_hotspots(&annotations, Some((ORIGIN, (40, 20))));
+        let summary: Vec<_> = placed
+            .iter()
+            .map(|h| (h.number, h.title.as_str(), h.rect.is_some()))
+            .collect();
+        assert_eq!(
+            summary,
+            [(1, "A", true), (2, "Out of view", false), (3, "C", true)]
+        );
+        assert_eq!(placed[2].id, annotations[4].id);
+        assert_eq!(placed[2].color.as_deref(), Some("#00ff00"));
+        assert_eq!(placed[0].color, None);
+        // A placeholder keeps the numbers but places nothing.
+        let unplaced = place_hotspots(&annotations, None);
+        assert_eq!(unplaced.len(), 3);
+        assert!(unplaced.iter().all(|h| h.rect.is_none()));
+    }
+
+    #[test]
     fn premultiply_round_trips_opaque_pixels() {
         let image = pattern(9, 7);
         assert_eq!(from_pixmap(into_pixmap(image.clone())), image);
@@ -564,7 +777,7 @@ mod tests {
             max_width: Some(400),
             ..Default::default()
         };
-        let image = placeholder(&opts, Vec::new());
+        let image = placeholder(&opts, Vec::new(), Vec::new());
         assert_eq!((image.width, image.height), (400, 225));
         assert_eq!(image.to_rgba().unwrap().dimensions(), (400, 225));
     }

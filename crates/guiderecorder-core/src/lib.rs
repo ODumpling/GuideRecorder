@@ -15,6 +15,6 @@ pub mod steps;
 pub use ulid::Ulid;
 
 /// Current `guide.json` schema version. Bumped together with a migration.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 const _: () = assert!(SCHEMA_VERSION >= 1);

@@ -1,0 +1,22 @@
+Normal | [image 9525x9525]
+Title | Office floor plan
+Subtitle | Find your way around the third floor.
+Normal | Hover over or tap a numbered area to see what is there.
+Heading2 | 1. Third floor
+Normal | [image 4572000x2857500]
+Normal | 1.**Reception**↵Sign in here when you arrive.↵Visitor badges are in the top drawer.
+Normal | 2.**Kitchen & café**↵Coffee, tea and fruit. Please load the dishwasher before you leave.
+Normal | 3.**Meeting room "Fjord"**↵Seats 8. Book it on the panel by the door; to present, press <Input> on the remote.
+Normal | 4.**Quiet zone**↵No calls or meetings.
+Normal | The lifts open onto the corridor in the middle.
+Normal shd=E8F5E9 | **Tip: **Need a desk for the day? Ask at **Reception**.
+Heading2 | 2. Fire exits
+Normal | [image 4572000x2857500]
+Normal | 1.**Stairwell B**↵Use the stairs in a fire, never the lifts.
+Normal | 2.**Stairwell A**↵Leads to the assembly point in the car park.
+=== styles ===
+Subtitle color=595959
+Heading1 color=AA1122
+Heading2 color=AA1122
+=== note borders ===
+2E7D32

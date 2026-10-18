@@ -20,10 +20,20 @@
 //!
 //! ![Click Save](images/01-click-save.png)
 //!
+//! 1) **Save**\
+//!    Saves the file
+//!
 //! Description
 //!
 //! > **Tip:** note body
 //! ```
+//!
+//! Step images have their hotspots drawn in as numbered markers, and the
+//! numbered legend under the image gives each hotspot's title (bold) and
+//! description, line breaks kept. The legend uses `1)` markers so a
+//! description that starts with a `1.` list can't continue it. In an
+//! annotation guide ([`GuideKind::Annotated`]) an untitled step is headed
+//! "Page" instead of "Step".
 //!
 //! With a branding logo ([`CheckedBranding`]), it is written as
 //! `images/logo.png` (the checked, re-encoded PNG) and shown right under
@@ -50,9 +60,9 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
 use super::ast::{plain_text, Block, Inline};
-use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem};
+use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderStep};
 use crate::library::{write_atomic, Durability, GuideHandle, LibraryError};
-use crate::model::NoteKind;
+use crate::model::{GuideKind, NoteKind};
 
 /// File name of the Markdown document inside the output folder.
 pub const GUIDE_FILE: &str = "guide.md";
@@ -97,6 +107,9 @@ pub type Result<T, E = ExportError> = std::result::Result<T, E>;
 pub struct Labels {
     pub prerequisites: String,
     pub step: String,
+    /// What a step of an annotation guide ([`GuideKind::Annotated`]) is
+    /// called.
+    pub page: String,
     pub tip: String,
     pub warning: String,
     pub note: String,
@@ -111,16 +124,33 @@ impl Labels {
             .next()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let [prerequisites, step, tip, warning, note] = match primary.as_str() {
-            "de" => ["Voraussetzungen", "Schritt", "Tipp", "Warnung", "Hinweis"],
-            _ => ["Prerequisites", "Step", "Tip", "Warning", "Note"],
+        let [prerequisites, step, page, tip, warning, note] = match primary.as_str() {
+            "de" => [
+                "Voraussetzungen",
+                "Schritt",
+                "Seite",
+                "Tipp",
+                "Warnung",
+                "Hinweis",
+            ],
+            _ => ["Prerequisites", "Step", "Page", "Tip", "Warning", "Note"],
         };
         Self {
             prerequisites: prerequisites.into(),
             step: step.into(),
+            page: page.into(),
             tip: tip.into(),
             warning: warning.into(),
             note: note.into(),
+        }
+    }
+
+    /// What a step is called in a guide of `kind`: "Step", or "Page" in an
+    /// annotation guide.
+    pub fn step_kind(&self, kind: GuideKind) -> &str {
+        match kind {
+            GuideKind::Walkthrough => &self.step,
+            GuideKind::Annotated => &self.page,
         }
     }
 
@@ -426,7 +456,7 @@ pub fn render_with_logo(
             RenderItem::Step(step) => {
                 let title = inlines_single_line(&step.title);
                 let title = if title.is_empty() {
-                    escape_line(&labels.step)
+                    escape_line(labels.step_kind(guide.kind))
                 } else {
                     title
                 };
@@ -437,6 +467,9 @@ pub fn render_with_logo(
                 if let Some(name) = names.next() {
                     let alt = escape_line(&single_line(&plain_text(&step.title)));
                     push_block(&mut out, &format!("![{alt}]({IMAGES_DIR}/{name})"));
+                }
+                if let Some(legend) = hotspot_legend(step) {
+                    push_block(&mut out, &legend);
                 }
                 if !step.description.is_empty() {
                     push_block(&mut out, &blocks(&step.description));
@@ -463,6 +496,35 @@ pub fn render_with_logo(
     let mut doc = out.join("\n\n");
     doc.push('\n');
     doc
+}
+
+/// The numbered list of `step`'s hotspots, if it has any: `N) **Title**`,
+/// then the description lines as hard-broken continuation lines. Empty
+/// lines are dropped.
+fn hotspot_legend(step: &RenderStep) -> Option<String> {
+    let items: Vec<String> = step
+        .hotspots()
+        .map(|(number, hotspot)| {
+            let marker = format!("{number}) ");
+            let mut lines = Vec::new();
+            let title = escape_line(&single_line(&hotspot.title));
+            if !title.is_empty() {
+                lines.push(format!("**{title}**"));
+            }
+            lines.extend(
+                hotspot
+                    .description
+                    .lines()
+                    .map(escape_line)
+                    .filter(|line| !line.is_empty()),
+            );
+            let indent = " ".repeat(marker.len());
+            format!("{marker}{}", lines.join(&format!("\\\n{indent}")))
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    (!items.is_empty()).then(|| items.join("\n"))
 }
 
 /// `NN-<slug>.png` for every step in order. `NN` is the step number,
@@ -970,6 +1032,16 @@ mod tests {
             check(&truncated),
             Err(BrandingError::LogoUnreadable(_))
         ));
+    }
+
+    #[test]
+    fn steps_of_annotation_guides_are_pages() {
+        let en = Labels::for_language("en-GB");
+        assert_eq!(en.step_kind(GuideKind::Walkthrough), "Step");
+        assert_eq!(en.step_kind(GuideKind::Annotated), "Page");
+        let de = Labels::for_language("de");
+        assert_eq!(de.step_kind(GuideKind::Walkthrough), "Schritt");
+        assert_eq!(de.step_kind(GuideKind::Annotated), "Seite");
     }
 
     #[test]

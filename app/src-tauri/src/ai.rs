@@ -32,14 +32,16 @@ use guiderecorder_core::ai::{
     PipelineOptions, PipelineSummary, RedactionSuggestion, RewriteInput, RewriteStyle,
 };
 use guiderecorder_core::library::GuideHandle;
-use guiderecorder_core::model::{AiState, AiStatus, Guide, Item, Step};
+use guiderecorder_core::model::{AiState, AiStatus, Guide, GuideKind, Item, Step};
 use guiderecorder_core::Ulid;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::blocking::blocking;
-use crate::editor::{check_image_path, parse_id, AppError, ErrorKind, Result, SessionCell};
+use crate::editor::{
+    check_image_path, parse_id, AppError, ErrorKind, Result, Session, SessionCell,
+};
 use crate::settings::{self, SettingsStore};
 
 pub const STARTED_EVENT: &str = "ai://started";
@@ -50,6 +52,8 @@ pub const FINISHED_EVENT: &str = "ai://finished";
 pub const AI_OFF: &str = "AI is turned off in Settings.";
 pub const NO_KEY: &str = "Add an API key in Settings to write with AI.";
 pub const BUSY: &str = "Already writing this guide.";
+/// An annotated guide's pages have no clicks for the prompts to describe.
+pub const NOT_RECORDED: &str = "AI writing is for recorded guides.";
 /// `error` of `ai://guide` and `ai://finished` when a run breaks off.
 pub const RUN_FAILED: &str = "Writing stopped because of an internal error.";
 
@@ -688,6 +692,16 @@ pub async fn rewrite(
     })
 }
 
+/// The saved snapshot of an open guide for AI writing (see
+/// [`Session::saved_guide`]); annotated guides are refused.
+fn ai_guide(session: &Session, id: Ulid) -> Result<(Guide, GuideHandle)> {
+    let (guide, handle) = session.saved_guide(id)?;
+    if guide.kind == GuideKind::Annotated {
+        return Err(AppError::new(ErrorKind::Invalid, NOT_RECORDED));
+    }
+    Ok((guide, handle))
+}
+
 /// Starts writing an open guide with AI, on the guide as last saved (the
 /// editor saves first), and returns at once; results arrive as `ai://`
 /// events.
@@ -708,7 +722,7 @@ pub async fn ai_generate<R: Runtime>(
         let ai = ai.clone();
         move || {
             let key = check_ready(&ai, keychain::get_api_key)?;
-            let (guide, handle) = cell.get()?.saved_guide(id)?;
+            let (guide, handle) = ai_guide(&*cell.get()?, id)?;
             Ok((key, guide, handle))
         }
     })
@@ -752,7 +766,7 @@ pub async fn ai_rewrite_step(
         let ai = ai.clone();
         move || {
             let key = check_ready(&ai, keychain::get_api_key)?;
-            let (guide, _) = cell.get()?.saved_guide(id)?;
+            let (guide, _) = ai_guide(&*cell.get()?, id)?;
             Ok((key, guide))
         }
     })
@@ -1876,6 +1890,21 @@ mod tests {
         // The command reads the guide through `saved_guide`, as `ai_generate`.
         let err = session.saved_guide(id).err().unwrap();
         assert_eq!(err.kind, ErrorKind::NotOpen);
+    }
+
+    #[test]
+    fn annotated_guides_are_not_written_with_ai() {
+        let root = crate::editor::tests::library();
+        let session = crate::editor::Session::start(&root, None).unwrap();
+        let id = crate::editor::tests::fixture_id(&root);
+        let mut guide = session.open_guide(&id).unwrap().guide;
+        let id = parse_id(&id).unwrap();
+        assert!(ai_guide(&session, id).is_ok());
+        guide.kind = GuideKind::Annotated;
+        session.save_guide(guide).unwrap();
+        let err = ai_guide(&session, id).err().unwrap();
+        assert_eq!(err, AppError::new(ErrorKind::Invalid, NOT_RECORDED));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

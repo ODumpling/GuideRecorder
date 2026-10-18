@@ -19,7 +19,7 @@ use guiderecorder_core::library::{Library, GUIDE_FILE};
 use guiderecorder_core::model::*;
 use guiderecorder_core::Ulid;
 
-const FIXTURE_COUNT: usize = 3;
+const FIXTURE_COUNT: usize = 4;
 
 /// A temp folder holding a copy of the fixture library and an index path.
 struct Fixture {
@@ -259,6 +259,23 @@ fn search_ranks_title_before_description() {
     let scanned = search_library(&fx.library, "zebra", 10).unwrap();
     assert_eq!(scanned[0].step_index, Some(1), "{scanned:#?}");
     assert_eq!(scanned[0].snippet, hits[0].snippet);
+}
+
+#[test]
+fn hotspot_text_is_searchable() {
+    let fx = Fixture::new();
+    let index = fx.built_index();
+    // A hotspot title and a word from the second line of a description.
+    for query in ["fjord", "visitor badges"] {
+        let hits = index.search(query, 10).unwrap();
+        assert_eq!(hits.len(), 1, "{query}: {hits:#?}");
+        assert_eq!(hits[0].guide_title, "Office floor plan");
+        assert_eq!((hits[0].kind, hits[0].step_index), (HitKind::Step, Some(0)));
+        assert_eq!(hits[0].title, "Third floor");
+        let scanned = search_library(&fx.library, query, 10).unwrap();
+        assert_eq!(scanned.len(), 1, "{query}: {scanned:#?}");
+        assert_eq!(scanned[0].item_id, hits[0].item_id);
+    }
 }
 
 #[test]

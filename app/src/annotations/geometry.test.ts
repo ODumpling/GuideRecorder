@@ -12,7 +12,10 @@ import {
   createAnnotation,
   dragAnnotation,
   handlePoint,
+  hotspotNumbers,
+  hotspots,
   imagePixelsPerScreenPixel,
+  imageToClient,
   imageView,
   maskOutside,
   MIN_SIZE,
@@ -76,6 +79,14 @@ describe("pointer mapping", () => {
     expect(clientToImage({ x: 420, y: 200 }, box, view)).toEqual({ x: 720, y: 500 });
   });
 
+  it("maps image pixels back to the screen", () => {
+    const box = { left: 0, top: 0, width: 520, height: 200 };
+    expect(imageToClient({ x: 400, y: 300 }, box, view)).toEqual({ x: 100, y: 0 });
+    expect(imageToClient({ x: 720, y: 500 }, box, view)).toEqual({ x: 420, y: 200 });
+    const p = { x: 512, y: 377 };
+    expect(clientToImage(imageToClient(p, box, view), box, view)).toEqual(p);
+  });
+
   it("is the identity on an unscaled full screenshot", () => {
     const full = { x: 0, y: 0, width: 1440, height: 900 };
     const box = { left: 0, top: 0, width: 1440, height: 900 };
@@ -137,6 +148,66 @@ describe("dragging", () => {
     expect(anchored.type === "callout" && anchored.geometry.anchor).toEqual({ x: 1, y: 2 });
     const resized = dragAnnotation(callout, { kind: "rect", handle: "se" }, { x: 50, y: 50 }, { x: 0, y: 0 }, BIG);
     expect(resized.geometry).toEqual({ ...callout.geometry, width: 50, height: 50 });
+  });
+});
+
+describe("hotspots", () => {
+  const view = { x: 0, y: 0, width: 1000, height: 600 };
+  const hotspot: Annotation = {
+    id: "H",
+    type: "hotspot",
+    geometry: { x: 100, y: 100, width: 200, height: 100, title: "Kitchen", description: "Gas hob\nNorth window" },
+  };
+
+  it("are drawn as a drag spans, or default-sized around a click, without text", () => {
+    expect(createAnnotation("hotspot", "1", { x: 50, y: 60 }, { x: 250, y: 160 }, view)).toEqual({
+      id: "1",
+      type: "hotspot",
+      geometry: { x: 50, y: 60, width: 200, height: 100, title: "", description: "" },
+    });
+    expect(createAnnotation("hotspot", "1", { x: 500, y: 300 }, { x: 501, y: 300 }, view).geometry).toEqual({
+      x: 420,
+      y: 255,
+      width: 160,
+      height: 90,
+      title: "",
+      description: "",
+    });
+    // A sliver still gets the smallest size.
+    expect(createAnnotation("hotspot", "1", { x: 0, y: 0 }, { x: 10, y: 0 }, view).geometry).toMatchObject({
+      width: 10,
+      height: MIN_SIZE,
+    });
+    // Within the image.
+    expect(createAnnotation("hotspot", "1", { x: 900, y: 500 }, { x: 2000, y: 2000 }, view).geometry).toMatchObject({
+      width: 100,
+      height: 100,
+    });
+  });
+
+  it("keep their title and description when moved or resized, within the image", () => {
+    const moved = dragAnnotation(hotspot, { kind: "body" }, { x: 0, y: 0 }, { x: 5000, y: -20 }, view);
+    expect(moved.geometry).toEqual({ ...hotspot.geometry, x: 800, y: 80 });
+    const resized = dragAnnotation(hotspot, { kind: "rect", handle: "se" }, { x: 2000, y: 150 }, { x: 0, y: 0 }, view);
+    expect(resized.geometry).toEqual({ ...hotspot.geometry, width: 900, height: 50 });
+  });
+
+  it("are numbered in annotation order, among hotspots only", () => {
+    const box: Annotation = { id: "B", type: "box", geometry: { x: 0, y: 0, width: 1, height: 1 } };
+    const second: Annotation = { ...hotspot, id: "H2" };
+    const annotations = [box, hotspot, box, second].map((a, i) => ({ ...a, id: `${a.id}${i}` }));
+    expect(hotspots(annotations).map((a) => a.id)).toEqual(["H1", "H23"]);
+    expect([...hotspotNumbers(annotations)]).toEqual([
+      ["H1", 1],
+      ["H23", 2],
+    ]);
+  });
+
+  it("are drawn and picked on top of everything, redactions too", () => {
+    const blur: Annotation = { id: "b", type: "blur", geometry: { x: 0, y: 0, width: 1, height: 1 } };
+    const box: Annotation = { id: "x", type: "box", geometry: { x: 0, y: 0, width: 1, height: 1 } };
+    expect(drawOrder([hotspot, blur, box]).map((a) => a.id)).toEqual(["x", "b", "H"]);
+    expect(hitOrder([hotspot, blur, box]).map((a) => a.id)).toEqual(["x", "b", "H"]);
   });
 });
 

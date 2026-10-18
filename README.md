@@ -40,6 +40,21 @@ Anthropic API key.
    **HTML**, with your logo if you like. Blurs are applied to the actual pixels
    on export, so hidden information is really gone.
 
+## Annotation guides
+
+Not everything is a sequence of clicks. To explain a floor plan, a form, a
+dashboard or a brochure, create an **annotation guide** instead: choose
+**New annotation guide…** in the library and pick one or more images
+(PNG, JPEG, WebP) or a PDF. Each image or PDF page becomes a page of the guide.
+On each page, draw **hotspots** around the parts worth explaining and give each
+one a title and a description.
+
+In an HTML export, readers hover over a hotspot, or click or tap it, to see its
+title and description. The page needs no script, so it works anywhere a static
+file opens. PDF, Word and Markdown exports show numbered markers on the image
+with a numbered list of the hotspots underneath. Hotspots work on recorded
+steps too.
+
 ## Privacy
 
 GuideRecorder is built to be safe to leave running:

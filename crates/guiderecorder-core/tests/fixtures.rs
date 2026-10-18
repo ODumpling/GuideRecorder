@@ -11,7 +11,10 @@
 //! `fixtures_match_builders` fails until the committed bundles are
 //! regenerated. Tests never open the committed bundles as a library: they
 //! work on a temp copy ([`FixtureLibrary`]). Images are tiny solid-colour stand-ins (64×40 screenshots,
-//! 32×20 crops) to keep the repo small; geometry stays inside them.
+//! 32×20 crops) to keep the repo small; geometry stays inside them. The
+//! annotation guide's pages are small drawn floor plans instead
+//! ([`PAGE_SIZE`]), so its hotspots have something to point at in the
+//! app's sample library.
 //!
 //! Git does not keep empty folders, so a bundle checked out from the repo may
 //! lack an empty `steps/` or `assets/`; the library copes with that.
@@ -30,10 +33,13 @@ use guiderecorder_core::library::{
 use guiderecorder_core::markdown;
 use guiderecorder_core::model::*;
 use guiderecorder_core::{Ulid, SCHEMA_VERSION};
+use image::{Rgba, RgbaImage};
 use support::ImageTolerance;
 
 const FULL_SIZE: (u32, u32) = (64, 40);
 const CROP_SIZE: (u32, u32) = (32, 20);
+/// Size of an annotation guide page.
+const PAGE_SIZE: (u32, u32) = (480, 300);
 const STEP_MODEL: &str = "claude-sonnet-5-5";
 
 // ---------------------------------------------------------------------------
@@ -80,11 +86,15 @@ fn every_image_decodes() {
     let fixtures = FixtureLibrary::new();
     for bundle in fixtures.bundles() {
         let LoadedGuide { handle, guide, .. } = fixtures.library.load(&bundle).unwrap();
+        let full_size = match guide.kind {
+            GuideKind::Walkthrough => FULL_SIZE,
+            GuideKind::Annotated => PAGE_SIZE,
+        };
         for step in guide.steps() {
             let image = &step.image;
             assert_eq!(
                 handle.read_image(&image.full).unwrap().dimensions(),
-                FULL_SIZE
+                full_size
             );
             if let Some(crop) = &image.crop {
                 assert_eq!(handle.read_image(crop).unwrap().dimensions(), CROP_SIZE);
@@ -166,6 +176,11 @@ fn fixtures_cover_every_variant() {
         guides.iter().map(|g| debug(g.audience)).collect(),
         variants::audiences(),
     );
+    assert_covers(
+        "guide kinds",
+        guides.iter().map(|g| debug(g.kind)).collect(),
+        variants::guide_kinds(),
+    );
 
     for step in steps() {
         assert_eq!(step.kind == StepKind::Drag, step.end_point.is_some());
@@ -175,6 +190,23 @@ fn fixtures_cover_every_variant() {
     assert!(steps().any(|s| s.image.full.starts_with("assets/")));
     assert!(guides.iter().any(|g| g.recording.is_none()));
     assert!(guides.iter().any(|g| g.recording.is_some()));
+    // Annotation guides are made of full-image manual pages.
+    for guide in guides.iter().filter(|g| g.kind == GuideKind::Annotated) {
+        for step in guide.steps() {
+            assert_eq!(step.kind, StepKind::Manual);
+            assert_eq!(step.image.show, ImageShow::Full);
+            assert_eq!(step.image.crop, None);
+        }
+    }
+    let hotspots = || {
+        annotations().filter_map(|a| match &a.shape {
+            Shape::Hotspot(h) => Some(h),
+            _ => None,
+        })
+    };
+    assert!(hotspots().any(|h| h.description.contains('\n')));
+    assert!(hotspots()
+        .any(|h| h.title.contains(['<', '&', '"']) || h.description.contains(['<', '&', '"'])));
 }
 
 /// `markdown::normalize` over every rich-text field of every fixture.
@@ -355,6 +387,7 @@ mod variants {
     all_variants!(ai_statuses, AiStatus: Template, Generating, Ai, Edited);
     all_variants!(image_shows, ImageShow: Crop, Full);
     all_variants!(audiences, Audience: Beginner, Expert);
+    all_variants!(guide_kinds, GuideKind: Walkthrough, Annotated);
 
     pub const ITEMS: &[&str] = &["step", "section", "note"];
 
@@ -375,6 +408,7 @@ mod variants {
         "callout+anchor",
         "blur",
         "crop",
+        "hotspot",
     ];
 
     pub fn shape(shape: &Shape) -> &'static str {
@@ -386,6 +420,7 @@ mod variants {
             Shape::Callout(_) => "callout",
             Shape::Blur(_) => "blur",
             Shape::Crop(_) => "crop",
+            Shape::Hotspot(_) => "hotspot",
         }
     }
 }
@@ -413,22 +448,25 @@ fn rich_text_fields(guide: &Guide) -> Vec<(String, &str)> {
 // ---------------------------------------------------------------------------
 // Builders
 
-const FIXTURE_COUNT: usize = 3;
+const FIXTURE_COUNT: usize = 4;
 
 /// Writes every fixture bundle into the library at `root`.
 fn build_fixtures(root: &Path) {
     let library = Library::open(root).unwrap();
-    for fixture in [calendar(), api_key(), printer()] {
+    for fixture in [calendar(), api_key(), printer(), floor_plan()] {
         fixture.write(&library);
     }
     assert_eq!(bundles_in(root).len(), FIXTURE_COUNT);
 }
 
-/// A guide plus the solid colours of the images its steps reference.
+/// A guide plus the images its steps reference: solid colours, or drawn
+/// pictures.
 struct Fixture {
     guide: Guide,
     /// Bundle-relative path → (size, RGBA colour).
     images: Vec<(String, (u32, u32), [u8; 4])>,
+    /// Bundle-relative path → picture.
+    pictures: Vec<(String, RgbaImage)>,
 }
 
 impl Fixture {
@@ -437,6 +475,10 @@ impl Fixture {
         for (relative, (width, height), colour) in &self.images {
             let data = colour.repeat(*width as usize * *height as usize);
             let pixels = PixelBuffer::rgba(*width, *height, &data);
+            write_image(&handle, relative, &pixels);
+        }
+        for (relative, picture) in &self.pictures {
+            let pixels = PixelBuffer::rgba(picture.width(), picture.height(), picture.as_raw());
             write_image(&handle, relative, &pixels);
         }
     }
@@ -470,6 +512,7 @@ struct Builder {
     next_id: u128,
     items: Vec<Item>,
     images: Vec<(String, (u32, u32), [u8; 4])>,
+    pictures: Vec<(String, RgbaImage)>,
 }
 
 impl Builder {
@@ -480,6 +523,7 @@ impl Builder {
             next_id: id_base,
             items: Vec::new(),
             images: Vec::new(),
+            pictures: Vec::new(),
         }
     }
 
@@ -498,6 +542,7 @@ impl Builder {
         Fixture {
             guide,
             images: self.images,
+            pictures: self.pictures,
         }
     }
 
@@ -573,6 +618,43 @@ impl Builder {
             annotations: Vec::new(),
             ai_state: AiState::default(),
         })
+    }
+
+    /// A page of an annotation guide: a manual step showing only `picture`.
+    fn page(&mut self, title: &str, picture: RgbaImage) -> &mut Step {
+        let id = self.id();
+        let full = step_image_path(id, StepImageVariant::Full);
+        self.pictures.push((full.clone(), picture));
+        self.push_step(Step {
+            id,
+            title: title.to_owned(),
+            description: String::new(),
+            kind: StepKind::Manual,
+            point: None,
+            end_point: None,
+            element: None,
+            keystrokes: None,
+            image: StepImage {
+                full,
+                crop: None,
+                crop_rect: None,
+                after: None,
+                show: ImageShow::Full,
+            },
+            annotations: Vec::new(),
+            ai_state: AiState::default(),
+        })
+    }
+
+    fn hotspot(&mut self, area: Rect, title: &str, description: &str) -> Annotation {
+        self.annotation(
+            Shape::Hotspot(HotspotGeometry {
+                rect: area,
+                title: title.to_owned(),
+                description: description.to_owned(),
+            }),
+            AnnotationStyle::default(),
+        )
     }
 
     fn push_step(&mut self, step: Step) -> &mut Step {
@@ -972,4 +1054,114 @@ fn printer() -> Fixture {
     b.guide("Kurzanleitung Drucker", "de", |g| {
         g.intro = "Für den Drucker im **2. Stock**.".to_owned();
     })
+}
+
+/// Annotation guide: two pages of a drawn floor plan explained by
+/// hotspots, one with a multi-line description, one with text that needs
+/// escaping in every format, one with its own colour, and a tip between the
+/// pages.
+fn floor_plan() -> Fixture {
+    let mut b = Builder::new("2026-10-15T08:00:00Z", 0x0D00);
+
+    let reception = b.hotspot(
+        rect(24.0, 24.0, 140.0, 92.0),
+        "Reception",
+        "Sign in here when you arrive.\nVisitor badges are in the top drawer.",
+    );
+    let kitchen = b.hotspot(
+        rect(176.0, 24.0, 136.0, 92.0),
+        "Kitchen & café",
+        "Coffee, tea and fruit. Please load the dishwasher before you leave.",
+    );
+    let meeting = b.hotspot(
+        rect(324.0, 24.0, 132.0, 132.0),
+        "Meeting room \"Fjord\"",
+        "Seats 8. Book it on the panel by the door; to present, press <Input> on the remote.",
+    );
+    let quiet = b.hotspot(
+        rect(24.0, 176.0, 208.0, 100.0),
+        "Quiet zone",
+        "No calls or meetings.",
+    );
+    let step = b.page("Third floor", floor_plan_picture(false));
+    step.description = "The lifts open onto the corridor in the middle.".to_owned();
+    step.annotations = vec![reception, kitchen, meeting, quiet];
+
+    b.note(
+        NoteKind::Tip,
+        "Need a desk for the day? Ask at **Reception**.",
+    );
+
+    let mut stairs = b.hotspot(
+        rect(436.0, 176.0, 28.0, 56.0),
+        "Stairwell B",
+        "Use the stairs in a fire, never the lifts.",
+    );
+    stairs.style.color = Some("#16a34a".to_owned());
+    let assembly = b.hotspot(
+        rect(16.0, 236.0, 28.0, 48.0),
+        "Stairwell A",
+        "Leads to the assembly point in the car park.",
+    );
+    let step = b.page("Fire exits", floor_plan_picture(true));
+    step.annotations = vec![stairs, assembly];
+
+    b.guide("Office floor plan", "en", |g| {
+        g.kind = GuideKind::Annotated;
+        g.summary = "Find your way around the third floor.".to_owned();
+        g.tags = vec!["office".to_owned()];
+        g.intro = "Hover over or tap a numbered area to see what is there.".to_owned();
+    })
+}
+
+/// A simple floor plan, [`PAGE_SIZE`]: rooms on paper-white with dark
+/// walls, desks in the open area and, with `exits`, green fire exits.
+fn floor_plan_picture(exits: bool) -> RgbaImage {
+    const PAPER: [u8; 4] = [0xf8, 0xf7, 0xf4, 0xff];
+    const WALL: [u8; 4] = [0x3a, 0x3a, 0x3c, 0xff];
+    const DESK: [u8; 4] = [0xcb, 0xd5, 0xe1, 0xff];
+    const EXIT: [u8; 4] = [0x16, 0xa3, 0x4a, 0xff];
+    // (x, y, width, height, colour), painted in order.
+    let mut shapes: Vec<(u32, u32, u32, u32, [u8; 4])> = vec![
+        // Outer wall, then the floor inside it.
+        (8, 8, 464, 284, WALL),
+        (14, 14, 452, 272, PAPER),
+        // Rooms: wall, then tinted floor.
+        (14, 14, 158, 108, WALL),
+        (14, 14, 154, 104, [0xdb, 0xea, 0xfe, 0xff]),
+        (168, 14, 152, 108, WALL),
+        (172, 14, 144, 104, [0xfe, 0xf3, 0xc7, 0xff]),
+        (316, 14, 150, 148, WALL),
+        (320, 14, 146, 144, [0xdc, 0xfc, 0xe7, 0xff]),
+        (14, 168, 226, 118, WALL),
+        (14, 172, 222, 114, [0xed, 0xe9, 0xfe, 0xff]),
+        // Doors onto the corridor.
+        (70, 118, 36, 4, PAPER),
+        (226, 118, 36, 4, PAPER),
+        (370, 158, 36, 4, PAPER),
+        (110, 168, 36, 4, PAPER),
+        // Lifts.
+        (250, 132, 24, 28, WALL),
+        (278, 132, 24, 28, WALL),
+    ];
+    // Open-plan desks.
+    for row in 0..2 {
+        for col in 0..4 {
+            shapes.push((260 + col * 46, 186 + row * 50, 34, 22, DESK));
+        }
+    }
+    if exits {
+        shapes.push((436, 176, 28, 56, EXIT));
+        shapes.push((16, 236, 28, 48, EXIT));
+    }
+    let (w, h) = PAGE_SIZE;
+    let mut image = RgbaImage::from_pixel(w, h, Rgba(PAPER));
+    for (x, y, width, height, colour) in shapes {
+        for py in y..(y + height).min(h) {
+            for px in x..(x + width).min(w) {
+                image.put_pixel(px, py, Rgba(colour));
+            }
+        }
+    }
+    image
 }

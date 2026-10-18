@@ -10,7 +10,7 @@ use ulid::Ulid;
 use super::ast::{parse_blocks, parse_inlines, Block, Inline};
 use super::raster::{render_step_image, ImageOptions, RenderedImage};
 use crate::library::GuideHandle;
-use crate::model::{Guide, Item, NoteKind, Step};
+use crate::model::{Guide, GuideKind, HotspotGeometry, Item, NoteKind, Shape, Step};
 
 /// A guide ready for export.
 #[derive(Debug, Clone)]
@@ -23,6 +23,10 @@ pub struct RenderGuide {
     /// Plain text.
     pub summary: String,
     pub language: String,
+    /// A walkthrough, or an annotation guide whose steps are pages
+    /// explained by hotspots (writers call them "Page", see
+    /// [`Labels::step_kind`](super::md::Labels::step_kind)).
+    pub kind: GuideKind,
     pub intro: Vec<Block>,
     pub prerequisites: Vec<Block>,
     pub items: Vec<RenderItem>,
@@ -40,7 +44,7 @@ pub enum RenderItem {
 
 #[derive(Debug, Clone)]
 pub struct RenderStep {
-    /// 1-based step number; sections and notes are skipped.
+    /// 1-based step (or page) number; sections and notes are skipped.
     pub number: u32,
     pub title: Vec<Inline>,
     pub description: Vec<Block>,
@@ -60,6 +64,23 @@ pub struct RenderNote {
     pub id: Ulid,
     pub kind: NoteKind,
     pub body: Vec<Block>,
+}
+
+impl RenderStep {
+    /// The step's hotspots with their numbers (1, 2, 3, ... in annotation
+    /// order), as [`RenderedImage::hotspots`] numbers them, whether or not
+    /// they are in view. Writers list them as the image's legend.
+    pub fn hotspots(&self) -> impl Iterator<Item = (u32, &HotspotGeometry)> {
+        self.step
+            .annotations
+            .iter()
+            .filter_map(|a| match &a.shape {
+                Shape::Hotspot(hotspot) => Some(hotspot),
+                _ => None,
+            })
+            .zip(1..)
+            .map(|(hotspot, number)| (number, hotspot))
+    }
 }
 
 impl RenderGuide {
@@ -96,6 +117,7 @@ impl RenderGuide {
             title: guide.title.clone(),
             summary: guide.summary.clone(),
             language: guide.language.clone(),
+            kind: guide.kind,
             intro: parse_blocks(&guide.intro),
             prerequisites: parse_blocks(&guide.prerequisites),
             items,
@@ -173,6 +195,7 @@ mod tests {
             path: PathBuf::from("/nonexistent.guiderecorder"),
         };
         let render = RenderGuide::new(&guide, &handle);
+        assert_eq!(render.kind, GuideKind::Walkthrough);
         let numbers: Vec<u32> = render.steps().map(|s| s.number).collect();
         assert_eq!(numbers, [1, 2, 3]);
         assert_eq!(render.items.len(), 6);

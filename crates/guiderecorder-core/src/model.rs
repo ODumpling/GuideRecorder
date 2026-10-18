@@ -31,6 +31,9 @@ pub struct Guide {
     pub prerequisites: String,
     #[serde(default)]
     pub audience: Audience,
+    /// What the guide is: recorded steps, or uploaded pages with hotspots.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub kind: GuideKind,
     /// BCP 47 language tag of the guide text, e.g. `en`.
     pub language: String,
     pub created_at: DateTime<Utc>,
@@ -60,6 +63,7 @@ impl Guide {
             intro: String::new(),
             prerequisites: String::new(),
             audience: Audience::default(),
+            kind: GuideKind::default(),
             language: language.into(),
             created_at: now,
             updated_at: now,
@@ -84,6 +88,18 @@ pub enum Audience {
     #[default]
     Beginner,
     Expert,
+}
+
+/// What a guide is made of.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideKind {
+    /// Recorded (or hand-made) steps.
+    #[default]
+    Walkthrough,
+    /// Uploaded pages (images, PDF pages), each a `manual` step showing its
+    /// full image, explained by [`Shape::Hotspot`] annotations.
+    Annotated,
 }
 
 /// Environment the guide was recorded in.
@@ -328,6 +344,7 @@ pub enum Shape {
     Callout(CalloutGeometry),
     Blur(Rect),
     Crop(Rect),
+    Hotspot(HotspotGeometry),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -360,6 +377,21 @@ pub struct CalloutGeometry {
     pub anchor: Option<Point>,
     /// Plain text.
     pub text: String,
+}
+
+/// A region the reader can hover or click to see its title and
+/// description. Numbered 1, 2, 3, ... in annotation order among the step's
+/// hotspots.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HotspotGeometry {
+    #[serde(flatten)]
+    pub rect: Rect,
+    /// Plain text.
+    #[serde(default)]
+    pub title: String,
+    /// Plain text; may hold line breaks.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Visual style; unset fields use the app's defaults.
@@ -528,6 +560,41 @@ mod tests {
             })
         );
         assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+    }
+
+    #[test]
+    fn hotspots_and_kind_round_trip() {
+        let mut guide = Guide::new("Floor plan", "en");
+        assert!(serde_json::to_value(&guide).unwrap().get("kind").is_none());
+        guide.kind = GuideKind::Annotated;
+        let annotation: Annotation = serde_json::from_value(json!({
+            "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0D",
+            "type": "hotspot",
+            "geometry": {
+                "x": 10.0, "y": 20.0, "width": 30.0, "height": 40.0,
+                "title": "Kitchen", "description": "Gas hob\nNorth window"
+            }
+        }))
+        .unwrap();
+        let Shape::Hotspot(hotspot) = &annotation.shape else {
+            panic!("expected hotspot");
+        };
+        assert_eq!(hotspot.rect.width, 30.0);
+        assert_eq!(hotspot.title, "Kitchen");
+        assert_eq!(hotspot.description, "Gas hob\nNorth window");
+        let json = serde_json::to_value(&guide).unwrap();
+        assert_eq!(json["kind"], "annotated");
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+        // Title and description may be missing.
+        let bare: Annotation = serde_json::from_value(json!({
+            "id": "01J9ZQ3K8V4N6T2W5X7Y8Z9A0D",
+            "type": "hotspot",
+            "geometry": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }
+        }))
+        .unwrap();
+        assert!(
+            matches!(&bare.shape, Shape::Hotspot(h) if h.title.is_empty() && h.description.is_empty())
+        );
     }
 
     #[test]

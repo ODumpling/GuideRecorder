@@ -6,6 +6,7 @@ import {
   removeAnnotation,
   setAnnotationStyle,
   setCalloutText,
+  setHotspotText,
   updateAnnotation,
 } from "@/annotations/commands";
 import { applyPatches, coalesce, PatchError, type Command } from "@/editor/commands";
@@ -72,6 +73,34 @@ describe("annotation commands", () => {
     expect(annotationsOf(applyPatches(g, merged.forward))[0]).toMatchObject({ geometry: { text: "Hi" } });
     expect(applyPatches(applyPatches(g, merged.forward), merged.inverse)).toEqual(g);
     expect(() => setCalloutText(withAnnotations(box), "A", "B1", "x")).toThrow(PatchError);
+  });
+
+  it("hotspot title and description merge while typing, each on its own; only for hotspots", () => {
+    const hotspot: Annotation = {
+      id: "H1",
+      type: "hotspot",
+      geometry: { x: 0, y: 0, width: 50, height: 20, title: "", description: "" },
+    };
+    const g = withAnnotations(box, hotspot);
+    expect(addAnnotation(withAnnotations(box), "A", hotspot).label).toBe("Add hotspot");
+    const one = setHotspotText(g, "A", "H1", "title", "K");
+    const g1 = applyPatches(g, one.forward);
+    const two = setHotspotText(g1, "A", "H1", "title", "Kitchen");
+    expect(one.label).toBe("Edit hotspot");
+    const merged = coalesce(one, two)!;
+    expect(annotationsOf(applyPatches(g, merged.forward))[1]).toEqual({
+      ...hotspot,
+      geometry: { ...hotspot.geometry, title: "Kitchen" },
+    });
+    expect(applyPatches(applyPatches(g, merged.forward), merged.inverse)).toEqual(g);
+    // The description is another field: its own undo step.
+    const g2 = applyPatches(g1, two.forward);
+    const description = setHotspotText(g2, "A", "H1", "description", "Gas hob\nNorth window");
+    expect(coalesce(two, description)).toBeNull();
+    expect(annotationsOf(roundTrip(g2, description))[1]).toMatchObject({
+      geometry: { title: "Kitchen", description: "Gas hob\nNorth window" },
+    });
+    expect(() => setHotspotText(g, "A", "B1", "title", "x")).toThrow(PatchError);
   });
 
   it("remove", () => {

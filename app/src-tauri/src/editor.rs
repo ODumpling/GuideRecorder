@@ -16,7 +16,8 @@ use guiderecorder_core::library::{
 };
 use guiderecorder_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
 use guiderecorder_core::Ulid;
-use image::{ImageFormat, ImageReader, Limits};
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 use serde::Serialize;
 
 /// Environment variable that overrides the library folder.
@@ -136,7 +137,8 @@ pub const IMAGE_FILE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "tif", "tiff", "bmp",
 ];
 
-/// Largest image file `read_image_file` reads.
+/// Largest image file `read_image_file` reads, and largest file the pages
+/// of an annotated guide come from.
 pub const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Most pixels in a manual step's image (the editor scales larger ones
@@ -340,7 +342,7 @@ impl Session {
     }
 
     /// The bundle of an opened guide that may be written.
-    fn writable_handle(&self, id: Ulid) -> Result<GuideHandle> {
+    pub(crate) fn writable_handle(&self, id: Ulid) -> Result<GuideHandle> {
         let open = self.open.lock().unwrap();
         let entry = open
             .get(&id)
@@ -379,36 +381,10 @@ impl Session {
         // Cheap refusals first; the decode is not.
         self.writable_handle(guide_id)?;
         let image = decode_png(png)?;
-        let (width, height) = image.dimensions();
-        let rgba = image.as_raw();
         let lock = self.guide_lock(guide_id);
         let _guard = lock.lock().unwrap();
         let handle = self.writable_handle(guide_id)?;
-        let id = Ulid::new();
-        let full = handle.write_step_image(
-            id,
-            StepImageVariant::Full,
-            &PixelBuffer::rgba(width, height, rgba),
-        )?;
-        Ok(Step {
-            id,
-            title: String::new(),
-            description: String::new(),
-            kind: StepKind::Manual,
-            point: None,
-            end_point: None,
-            element: None,
-            keystrokes: None,
-            image: StepImage {
-                full,
-                crop: None,
-                crop_rect: None,
-                after: None,
-                show: ImageShow::Full,
-            },
-            annotations: Vec::new(),
-            ai_state: AiState::default(),
-        })
+        image_step(&handle, String::new(), &image)
     }
 
     /// Copies a step's image files (the paths in `image`) to the files of
@@ -530,6 +506,38 @@ pub(crate) fn check_image_path(path: &str) -> Result<()> {
     }
 }
 
+/// Stores `image` as the full image of a new manual step (shown whole,
+/// without a crop) titled `title`, and returns the step. The guide itself
+/// is not changed; the caller holds the guide's lock.
+pub(crate) fn image_step(handle: &GuideHandle, title: String, image: &RgbaImage) -> Result<Step> {
+    let id = Ulid::new();
+    let (width, height) = image.dimensions();
+    let full = handle.write_step_image(
+        id,
+        StepImageVariant::Full,
+        &PixelBuffer::rgba(width, height, image.as_raw()),
+    )?;
+    Ok(Step {
+        id,
+        title,
+        description: String::new(),
+        kind: StepKind::Manual,
+        point: None,
+        end_point: None,
+        element: None,
+        keystrokes: None,
+        image: StepImage {
+            full,
+            crop: None,
+            crop_rect: None,
+            after: None,
+            show: ImageShow::Full,
+        },
+        annotations: Vec::new(),
+        ai_state: AiState::default(),
+    })
+}
+
 /// Reads a step image file of the bundle: a checked path, a regular file
 /// (not a symlink), at most [`MAX_PNG_BYTES`].
 fn read_bundle_image(handle: &GuideHandle, relative: &str) -> Result<Vec<u8>> {
@@ -545,43 +553,83 @@ fn read_bundle_image(handle: &GuideHandle, relative: &str) -> Result<Vec<u8>> {
     std::fs::read(&path).map_err(|e| file_error(&path, e))
 }
 
-/// Decodes a step image PNG. The size in its header is checked before any
-/// pixels are decoded (at most [`MAX_WEBP_DIMENSION`] per side and
-/// [`MAX_IMAGE_PIXELS`]), and the decoder runs with matching limits.
-fn decode_png(png: &[u8]) -> Result<image::RgbaImage> {
-    let invalid = |e: image::ImageError| {
-        AppError::new(ErrorKind::Invalid, format!("not a readable PNG image: {e}"))
-    };
+/// Decodes a step image PNG (see [`decode_image`]), at most
+/// [`MAX_PNG_BYTES`].
+fn decode_png(png: &[u8]) -> Result<RgbaImage> {
     if png.len() > MAX_PNG_BYTES {
         return Err(AppError::new(
             ErrorKind::Invalid,
             format!("the image is too large ({} MB)", png.len() / 1024 / 1024),
         ));
     }
-    let reader = || ImageReader::with_format(Cursor::new(png), ImageFormat::Png);
-    let (width, height) = reader().into_dimensions().map_err(invalid)?;
-    let valid = 1..=MAX_WEBP_DIMENSION;
+    decode_image(
+        png,
+        &[ImageFormat::Png],
+        "PNG",
+        MAX_WEBP_DIMENSION,
+        MAX_IMAGE_PIXELS,
+    )
+}
+
+/// Decodes an image in one of `formats` (told by its content, named `what`
+/// in errors) as RGBA, turned upright as its EXIF orientation says. The
+/// size in its header is checked before any pixels are decoded (at most
+/// `max_side` per side and `max_pixels`), and the decoder runs with
+/// matching limits.
+pub(crate) fn decode_image(
+    bytes: &[u8],
+    formats: &[ImageFormat],
+    what: &str,
+    max_side: u32,
+    max_pixels: u64,
+) -> Result<RgbaImage> {
+    let invalid = |e: image::ImageError| {
+        AppError::new(
+            ErrorKind::Invalid,
+            format!("not a readable {what} image: {e}"),
+        )
+    };
+    let reader = || -> Result<ImageReader<Cursor<&[u8]>>> {
+        let reader = ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|e| invalid(e.into()))?;
+        match reader.format() {
+            Some(format) if !formats.contains(&format) => Err(AppError::new(
+                ErrorKind::Invalid,
+                format!("not a {what} image"),
+            )),
+            _ => Ok(reader),
+        }
+    };
+    let (width, height) = reader()?.into_dimensions().map_err(invalid)?;
+    let valid = 1..=max_side;
     if !valid.contains(&width)
         || !valid.contains(&height)
-        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+        || u64::from(width) * u64::from(height) > max_pixels
     {
         return Err(AppError::new(
             ErrorKind::Invalid,
             format!(
-                "image size {width}×{height} is not supported (at most {MAX_WEBP_DIMENSION} \
+                "image size {width}×{height} is not supported (at most {max_side} \
                  per side and {} MP)",
-                MAX_IMAGE_PIXELS / 1_000_000
+                max_pixels / 1_000_000
             ),
         ));
     }
     let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_WEBP_DIMENSION);
-    limits.max_image_height = Some(MAX_WEBP_DIMENSION);
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
     // 16-bit RGBA at the pixel limit, plus the 8-bit copy.
-    limits.max_alloc = Some(MAX_IMAGE_PIXELS * 12);
-    let mut reader = reader();
-    reader.limits(limits);
-    Ok(reader.decode().map_err(invalid)?.into_rgba8())
+    limits.max_alloc = Some(max_pixels * 12);
+    let mut reader = reader()?;
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder().map_err(invalid)?;
+    limits.reserve(decoder.total_bytes()).map_err(invalid)?;
+    // A photo's camera orientation; PNGs from the webview have none.
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut image = DynamicImage::from_decoder(decoder).map_err(invalid)?;
+    image.apply_orientation(orientation);
+    Ok(image.into_rgba8())
 }
 
 /// Deletes files in `steps/` named like step images (`<ulid>.webp`,
@@ -763,9 +811,7 @@ impl DroppedFiles {
 }
 
 /// Reads an image file, for the webview to decode: known image extensions
-/// and regular files up to [`MAX_IMAGE_FILE_BYTES`] only. The size is
-/// checked on the open file and the read is capped, so a file that grows
-/// meanwhile is refused too.
+/// only (see [`read_file`]).
 fn read_image_file(path: &Path) -> Result<Vec<u8>> {
     let extension = path
         .extension()
@@ -777,6 +823,13 @@ fn read_image_file(path: &Path) -> Result<Vec<u8>> {
             format!("{} is not an image file", path.display()),
         ));
     }
+    read_file(path)
+}
+
+/// Reads a regular file of at most [`MAX_IMAGE_FILE_BYTES`]. The size is
+/// checked on the open file and the read is capped, so a file that grows
+/// meanwhile is refused too.
+pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path).map_err(|e| file_error(path, e))?;
     let meta = file.metadata().map_err(|e| file_error(path, e))?;
     if !meta.is_file() {
@@ -902,6 +955,15 @@ pub(crate) mod tests {
         }
     }
 
+    /// How many guides the fixtures hold.
+    fn fixture_count() -> usize {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/guides");
+        fs::read_dir(fixtures)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().join("guide.json").is_file())
+            .count()
+    }
+
     pub(crate) fn fixture_id(root: &Path) -> String {
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join(FIXTURE).join("guide.json")).unwrap())
@@ -928,7 +990,7 @@ pub(crate) mod tests {
         let root = library();
         let session = Session::start(&root, None).unwrap();
         let all = session.list_guides(None).unwrap();
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), fixture_count());
 
         let index_path = root.join("index.sqlite");
         let indexed = Session::start(&root, Some(index_path.clone())).unwrap();
@@ -988,7 +1050,7 @@ pub(crate) mod tests {
         assert!(!path.exists());
         assert!(!session.has_open_guides());
         let listed = session.list_guides(None).unwrap();
-        assert_eq!(listed.len(), 2);
+        assert_eq!(listed.len(), fixture_count() - 1);
         assert!(listed.iter().all(|g| g.id != id));
 
         // Another guide's id at that path is refused.

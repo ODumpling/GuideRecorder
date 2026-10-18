@@ -15,7 +15,7 @@ import { SettingsDialog, type SettingsPage } from "@/components/settings/Setting
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@/components/ui/button";
-import { editorStore, useEditor } from "@/editor/editor";
+import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
 import { QUIT_REQUESTED_EVENT, RECORDING_PICK_AREA_EVENT, tauriSettingsApi } from "@/lib/ipc";
@@ -82,7 +82,8 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
         >
           <Redo2 />
         </Button>
-        {doc && <WriteWithAi />}
+        {/* AI doesn't write annotation guides. */}
+        {doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
         {doc && (
           <>
             <Button variant="outline" size="sm" className="ml-1" onClick={() => setExporting(true)}>
@@ -101,6 +102,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
 
 export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
+  const annotated = useAnnotated();
   const draggingImages = useImageDrop();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("general");
@@ -204,7 +206,7 @@ export default function App() {
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">
           <span className="flex items-center gap-2 text-sm font-medium">
-            <ImagePlus className="size-5" /> Drop images to add them as steps
+            <ImagePlus className="size-5" /> Drop images to add them as {annotated ? "pages" : "steps"}
           </span>
         </div>
       )}

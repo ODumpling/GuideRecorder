@@ -16,6 +16,8 @@
     "allow-delete-guide",
     "allow-step-image",
     "allow-add-image-step",
+    "allow-new-annotated-guide",
+    "allow-add-annotated-pages",
     "allow-copy-step-images",
     "allow-read-image-file",
     "allow-choose-export-folder",

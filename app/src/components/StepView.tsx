@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { canMergeSelected, deleteSelected, mergeSelected, splitSelected } from "@/editor/actions";
 import { setItemText, type TextField } from "@/editor/commands";
-import { editorStore, useEditor, useSelectedItem } from "@/editor/editor";
+import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
 import type { Item, Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
@@ -99,18 +99,21 @@ function TextEditor({
   );
 }
 
-const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note" };
-
-/** Delete, merge and split for the selected item. */
+/**
+ * Delete, merge and split for the selected item. A page of an annotation
+ * guide is only deleted: AI doesn't write pages, and merging would drop
+ * the next page's image.
+ */
 function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void; onCustom(): void }) {
   // Re-render when the guide changes, so merge availability stays current.
   const canMerge = useEditor(() => canMergeSelected(editorStore));
-  const name = item.type === "note" ? item.kind : ITEM_NAMES[item.type];
+  const annotated = useAnnotated();
+  const name = item.type === "note" ? item.kind : item.type === "step" ? stepNoun(annotated) : item.type;
   const writing = useAi((s) => s.generating.has(item.id));
   return (
     <div className="flex items-center gap-1" role="toolbar" aria-label={`${name} actions`}>
       {writing && <span className="animate-pulse text-xs text-muted-foreground">Writing…</span>}
-      {item.type === "step" && (
+      {item.type === "step" && !annotated && (
         <>
           <Suspense
             fallback={
@@ -153,6 +156,9 @@ function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void;
 export function StepView() {
   const doc = useEditor((s) => s.doc);
   const item = useSelectedItem();
+  const annotated = useAnnotated();
+  const noun = stepNoun(annotated);
+  const Noun = annotated ? "Page" : "Step";
   const description = useRef<MarkdownEditorHandle>(null);
   // The step whose custom rewrite form is open.
   const [customFor, setCustomFor] = useState<string | null>(null);
@@ -166,7 +172,7 @@ export function StepView() {
   if (!item) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        {doc.guide.items.length ? "Select a step" : "This guide has no steps"}
+        {doc.guide.items.length ? `Select a ${noun}` : `This guide has no ${noun}s`}
       </div>
     );
   }
@@ -194,8 +200,8 @@ export function StepView() {
             field="title"
             value={item.title}
             readOnly={doc.readOnly}
-            label="Step title"
-            placeholder="Step title"
+            label={`${Noun} title`}
+            placeholder={`${Noun} title`}
             singleLine
             className="font-medium"
           />
@@ -205,7 +211,7 @@ export function StepView() {
             field="description"
             value={item.description}
             readOnly={doc.readOnly}
-            label="Step description"
+            label={`${Noun} description`}
             placeholder="Add a description"
             className="text-sm"
           />

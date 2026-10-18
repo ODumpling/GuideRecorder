@@ -6,6 +6,7 @@ import {
   deleteItem,
   insertItemAfter,
   insertItemBefore,
+  insertItemsAfter,
   mergeWithNext,
   newNote,
   newSection,
@@ -142,6 +143,21 @@ describe("item operations", () => {
     expect(command.label).toBe("Insert tip");
     expect(command.select).toEqual({ forward: "T1", inverse: "B" });
     expect(() => insertItemAfter(guide(), step("A"), null)).toThrow(PatchError);
+  });
+
+  it("insert several items as one undo step", () => {
+    const pages = [step("P1"), step("P2"), step("P3")];
+    let after = roundTrip(insertItemsAfter(guide(), pages, "A", "Add 3 pages"));
+    expect(ids(after)).toEqual(["S1", "A", "P1", "P2", "P3", "B", "N1", "C"]);
+    after = roundTrip(insertItemsAfter(guide(), pages, null, "Add 3 pages"));
+    expect(ids(after).slice(-3)).toEqual(["P1", "P2", "P3"]);
+
+    const command = insertItemsAfter(guide(), pages, "B", "Add 3 pages");
+    expect(command.label).toBe("Add 3 pages");
+    expect(command.select).toEqual({ forward: "P1", inverse: "B" });
+    expect(() => insertItemsAfter(guide(), [step("P1"), step("A")], null, "x")).toThrow(PatchError);
+    expect(() => insertItemsAfter(guide(), [step("P1"), step("P1")], null, "x")).toThrow(PatchError);
+    expect(() => insertItemsAfter(guide(), [], null, "x")).toThrow(PatchError);
   });
 
   it("delete any item and restore it in place", () => {

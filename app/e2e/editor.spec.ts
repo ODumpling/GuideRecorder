@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import type { Editor } from "@tiptap/core";
 import type { Annotation, Step } from "../src/lib/types";
 import type { Backend } from "./backend";
-import { API_KEY, CALENDAR, expect, openGuide, outlineItems, saved, test } from "./fixtures";
+import { API_KEY, CALENDAR, expect, openGuide, outlineItems, saved, SCHEMA_VERSION, test } from "./fixtures";
 
 const screenshot = (page: Page) => page.getByRole("img", { name: "Step screenshot with annotations" });
 
@@ -149,7 +149,7 @@ test("splits a step, and both halves keep the blur", async ({ page, backend }) =
 });
 
 test.describe("a guide from a newer GuideRecorder", () => {
-  test.use({ backendOptions: { schemaVersions: { [API_KEY]: 2 } } });
+  test.use({ backendOptions: { schemaVersions: { [API_KEY]: SCHEMA_VERSION + 1 } } });
 
   test("opens read-only with a banner", async ({ page, backend }) => {
     await openGuide(page, "Rotate an API key");

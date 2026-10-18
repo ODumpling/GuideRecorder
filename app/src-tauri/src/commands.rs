@@ -13,10 +13,11 @@ use tauri_plugin_dialog::{
     DialogExt, FileDialogBuilder, FilePath, MessageDialogButtons, MessageDialogKind,
 };
 
+use crate::annotated::PAGE_FILE_EXTENSIONS;
 use crate::blocking::blocking;
 use crate::editor::{
-    AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session, SessionCell,
-    MAX_PNG_BYTES,
+    parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session,
+    SessionCell, MAX_PNG_BYTES,
 };
 use crate::export::{self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format};
 
@@ -130,6 +131,59 @@ pub async fn add_image_step(
         })?;
     let png = body_bytes(request.body(), MAX_PNG_BYTES)?;
     with_session(cell, move |s| s.add_image_step(&guide_id, &png)).await
+}
+
+/// Asks for images or PDFs to make pages of, in the order the dialog gives
+/// them. Empty if the user cancelled. Blocking.
+fn choose_pages<R: Runtime>(window: &WebviewWindow<R>) -> Result<Vec<PathBuf>> {
+    let Some(paths) = window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title("Choose images or a PDF")
+        .add_filter("Images or PDF", PAGE_FILE_EXTENSIONS)
+        .blocking_pick_files()
+    else {
+        return Ok(Vec::new());
+    };
+    paths.into_iter().map(dialog_path).collect()
+}
+
+/// Asks for images or PDFs and makes a new annotated guide of them, one
+/// page per image and per PDF page (see
+/// [`Session::create_annotated_guide`]); returns its id for `open_guide`.
+/// `None` if the user cancelled.
+#[tauri::command]
+pub async fn new_annotated_guide<R: Runtime>(
+    window: WebviewWindow<R>,
+    cell: State<'_, Arc<SessionCell>>,
+) -> Result<Option<String>> {
+    let paths = blocking(move || choose_pages(&window)).await?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    with_session(cell, move |s| s.create_annotated_guide(&paths).map(Some)).await
+}
+
+/// Asks for images or PDFs and writes their pages into an open guide's
+/// bundle (see [`Session::add_annotated_pages`]); returns the new steps,
+/// not yet part of the guide (the editor inserts them, as for
+/// `add_image_step`). Empty if the user cancelled.
+#[tauri::command]
+pub async fn add_annotated_pages<R: Runtime>(
+    window: WebviewWindow<R>,
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+) -> Result<Vec<Step>> {
+    // Refused before the dialog when the guide can't take pages.
+    let id = parse_id(&guide_id)?;
+    let session = Arc::clone(&cell);
+    blocking(move || session.get()?.writable_handle(id).map(drop)).await?;
+    let paths = blocking(move || choose_pages(&window)).await?;
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    with_session(cell, move |s| s.add_annotated_pages(&guide_id, &paths)).await
 }
 
 /// The bytes of a command's binary body. Over the custom IPC protocol

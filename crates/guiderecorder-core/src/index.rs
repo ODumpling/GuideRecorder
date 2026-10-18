@@ -47,8 +47,9 @@
 //! # Search
 //!
 //! `steps_fts` has one row per guide (title, summary, tags, intro and
-//! prerequisites) and one per item: step (title and description), section
-//! (title) and note (body). Item rows also hold the guide title, so a query
+//! prerequisites) and one per item: step (title, and description plus the
+//! titles and descriptions of its hotspots), section (title) and note
+//! (body). Item rows also hold the guide title, so a query
 //! can mix both. Everything is plain text ([`markdown::to_plain_text`]).
 //! Hits ([`StepHit`]) carry the item's id and [`HitKind`], and are ranked by
 //! bm25 with column weights ([`WEIGHT_ITEM_TITLE`] and so on).
@@ -77,12 +78,12 @@ use ulid::Ulid;
 
 use crate::library::{is_bundle_extension, GuideHandle, Library, LibraryError, GUIDE_FILE};
 use crate::markdown;
-use crate::model::{Guide, Item};
+use crate::model::{Guide, Item, Shape};
 
 /// Version of the index layout. Bump it whenever the tables or what goes
 /// into them change; an index at another version is rebuilt by the writer
 /// and reported stale to readers.
-pub const FORMAT_VERSION: i64 = 3;
+pub const FORMAT_VERSION: i64 = 4;
 
 /// `PRAGMA application_id` of a GuideRecorder index ("GYix"). The writer only
 /// recreates files that carry it.
@@ -1212,7 +1213,20 @@ fn rows(guide: &Guide) -> Vec<Row> {
             Item::Step(step) => {
                 steps += 1;
                 let title = markdown::to_plain_text(&step.title);
-                let body = markdown::to_plain_text(&step.description);
+                let mut body = markdown::to_plain_text(&step.description);
+                // Hotspot text is plain text already.
+                for annotation in &step.annotations {
+                    if let Shape::Hotspot(hotspot) = &annotation.shape {
+                        for text in [&hotspot.title, &hotspot.description] {
+                            if !text.trim().is_empty() {
+                                if !body.is_empty() {
+                                    body.push('\n');
+                                }
+                                body.push_str(text.trim());
+                            }
+                        }
+                    }
+                }
                 (HitKind::Step, title, body, Some(steps - 1))
             }
             Item::Section(section) => (

@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 2,
+  "id": "01M4Z96G000000000000000380",
+  "title": "Office floor plan",
+  "summary": "Find your way around the third floor.",
+  "tags": [
+    "office"
+  ],
+  "intro": "Hover over or tap a numbered area to see what is there.",
+  "prerequisites": "",
+  "audience": "beginner",
+  "kind": "annotated",
+  "language": "en",
+  "createdAt": "2026-10-15T08:00:00Z",
+  "updatedAt": "2026-10-15T08:25:00Z",
+  "items": [
+    {
+      "type": "step",
+      "id": "01M4Z96G000000000000000385",
+      "title": "Third floor",
+      "description": "The lifts open onto the corridor in the middle.",
+      "kind": "manual",
+      "image": {
+        "full": "steps/01M4Z96G000000000000000385.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01M4Z96G000000000000000381",
+          "type": "hotspot",
+          "geometry": {
+            "x": 24.0,
+            "y": 24.0,
+            "width": 140.0,
+            "height": 92.0,
+            "title": "Reception",
+            "description": "Sign in here when you arrive.\nVisitor badges are in the top drawer."
+          },
+          "style": {}
+        },
+        {
+          "id": "01M4Z96G000000000000000382",
+          "type": "hotspot",
+          "geometry": {
+            "x": 176.0,
+            "y": 24.0,
+            "width": 136.0,
+            "height": 92.0,
+            "title": "Kitchen & café",
+            "description": "Coffee, tea and fruit. Please load the dishwasher before you leave."
+          },
+          "style": {}
+        },
+        {
+          "id": "01M4Z96G000000000000000383",
+          "type": "hotspot",
+          "geometry": {
+            "x": 324.0,
+            "y": 24.0,
+            "width": 132.0,
+            "height": 132.0,
+            "title": "Meeting room \"Fjord\"",
+            "description": "Seats 8. Book it on the panel by the door; to present, press <Input> on the remote."
+          },
+          "style": {}
+        },
+        {
+          "id": "01M4Z96G000000000000000384",
+          "type": "hotspot",
+          "geometry": {
+            "x": 24.0,
+            "y": 176.0,
+            "width": 208.0,
+            "height": 100.0,
+            "title": "Quiet zone",
+            "description": "No calls or meetings."
+          },
+          "style": {}
+        }
+      ],
+      "aiState": {
+        "status": "template"
+      }
+    },
+    {
+      "type": "note",
+      "id": "01M4Z96G000000000000000386",
+      "kind": "tip",
+      "body": "Need a desk for the day? Ask at **Reception**."
+    },
+    {
+      "type": "step",
+      "id": "01M4Z96G000000000000000389",
+      "title": "Fire exits",
+      "description": "",
+      "kind": "manual",
+      "image": {
+        "full": "steps/01M4Z96G000000000000000389.webp",
+        "show": "full"
+      },
+      "annotations": [
+        {
+          "id": "01M4Z96G000000000000000387",
+          "type": "hotspot",
+          "geometry": {
+            "x": 436.0,
+            "y": 176.0,
+            "width": 28.0,
+            "height": 56.0,
+            "title": "Stairwell B",
+            "description": "Use the stairs in a fire, never the lifts."
+          },
+          "style": {
+            "color": "#16a34a"
+          }
+        },
+        {
+          "id": "01M4Z96G000000000000000388",
+          "type": "hotspot",
+          "geometry": {
+            "x": 16.0,
+            "y": 236.0,
+            "width": 28.0,
+            "height": 48.0,
+            "title": "Stairwell A",
+            "description": "Leads to the assembly point in the car park."
+          },
+          "style": {}
+        }
+      ],
+      "aiState": {
+        "status": "template"
+      }
+    }
+  ]
+}

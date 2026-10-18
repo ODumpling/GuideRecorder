@@ -1,17 +1,21 @@
 import { useRef } from "react";
 import { DropdownMenu } from "radix-ui";
-import { Heading, ImagePlus, Info, Lightbulb, Plus, TriangleAlert } from "lucide-react";
+import { FilePlus2, Heading, ImagePlus, Info, Lightbulb, Plus, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { insertImages, insertNote, insertSection } from "@/editor/actions";
-import { editorStore } from "@/editor/editor";
+import { insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
+import { editorStore, useAnnotated } from "@/editor/editor";
 import { IMAGE_EXTENSIONS } from "@/editor/images";
 
 const ITEM =
   "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground";
 
-/** Adds sections, notes and image steps around the selected item. */
+/**
+ * Adds sections, notes and image steps around the selected item; in an
+ * annotation guide, pages from images or a PDF instead of image steps.
+ */
 export default function InsertMenu({ disabled }: { disabled: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const annotated = useAnnotated();
   return (
     <>
       <DropdownMenu.Root>
@@ -26,9 +30,16 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
             sideOffset={4}
             className="z-50 min-w-48 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
           >
-            <DropdownMenu.Item className={ITEM} onSelect={() => fileInput.current?.click()}>
-              <ImagePlus /> Step from image…
-            </DropdownMenu.Item>
+            {annotated ? (
+              // The native dialog runs on the Rust side, which reads PDFs too.
+              <DropdownMenu.Item className={ITEM} onSelect={() => void insertPages(editorStore)}>
+                <FilePlus2 /> Add pages…
+              </DropdownMenu.Item>
+            ) : (
+              <DropdownMenu.Item className={ITEM} onSelect={() => fileInput.current?.click()}>
+                <ImagePlus /> Step from image…
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Separator className="my-1 h-px bg-border" />
             <DropdownMenu.Item className={ITEM} onSelect={() => insertSection(editorStore)}>
               <Heading /> Section above

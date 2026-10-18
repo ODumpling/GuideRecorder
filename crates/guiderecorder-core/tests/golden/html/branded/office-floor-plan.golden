@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; img-src data:; style-src &#x27;unsafe-inline&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="GuideRecorder">
+<title>Office floor plan</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --accent: #2563eb;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #59636e;
+  --border: #d8dee4;
+  --code-bg: #eff2f5;
+  --tip: #1a7f37;
+  --warning: #9a6700;
+  --note: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --code-bg: #262c36;
+    --tip: #3fb950;
+    --warning: #d29922;
+    --note: #4493f8;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.guide { max-width: 52rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+.guide-header { margin-bottom: 2rem; border-bottom: 3px solid var(--accent); padding-bottom: 1rem; }
+.logo { display: block; max-height: 3rem; max-width: 12rem; margin-bottom: 1rem; }
+h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+h2 { font-size: 1.4rem; line-height: 1.3; margin: 2.5rem 0 1rem; overflow-wrap: anywhere; }
+.summary { color: var(--muted); font-size: 1.125rem; margin: 0; }
+p { margin: 0 0 .75rem; }
+p:last-child { margin-bottom: 0; }
+ul, ol { margin: 0 0 .75rem; padding-left: 1.5rem; }
+li > ul, li > ol { margin-bottom: 0; }
+a { color: var(--accent); }
+code {
+  font: .9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: .1em .3em;
+  overflow-wrap: anywhere;
+}
+.intro, .prerequisites { margin-bottom: 1.5rem; }
+.step {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.step-title { display: flex; align-items: flex-start; gap: .75rem; font-size: 1.1rem; line-height: 1.4; margin: 0 0 1rem; }
+.step-number {
+  flex: none;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 .5rem;
+  border-radius: 1rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 2rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.step-text { padding-top: .2rem; overflow-wrap: anywhere; }
+.step-image { margin: 0 0 1rem; }
+.step-image:last-child { margin-bottom: 0; }
+.step-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.hotspot-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.step-image .hotspot-frame img { border: 0; border-radius: 5px; }
+.hotspot, .hotspot-legend li { --hs: #007aff; }
+.hotspot {
+  position: absolute;
+  border: 2px solid var(--hs);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .8);
+  cursor: pointer;
+}
+.hotspot-untitled { border-style: dashed; }
+.hotspot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hs);
+  opacity: .12;
+}
+.hotspot:hover::before, .hotspot:focus::before { opacity: .24; }
+.hotspot:hover, .hotspot:focus, .hotspot:focus-within { z-index: 2; }
+.hotspot:focus { outline: none; }
+.hotspot:focus-visible { outline: 3px solid var(--hs); outline-offset: 2px; }
+.hotspot-badge, .hotspot-number {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 .35rem;
+  border-radius: .75rem;
+  background: var(--hs);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  line-height: 1.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.hotspot-badge {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.hotspot-popover {
+  display: none;
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + .5rem);
+  left: -2px;
+  width: max-content;
+  max-width: min(22rem, 64vw);
+  padding: .6rem .8rem;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--hs);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .2);
+  font-size: .9rem;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: auto;
+}
+/* Keeps the popover open while the pointer crosses the gap. */
+.hotspot-popover::before { content: ""; position: absolute; left: 0; right: 0; top: -.6rem; height: .6rem; }
+.hotspot-above .hotspot-popover { top: auto; bottom: calc(100% + .5rem); }
+.hotspot-above .hotspot-popover::before { top: auto; bottom: -.6rem; }
+.hotspot-center .hotspot-popover { left: 50%; transform: translateX(-50%); }
+.hotspot-end .hotspot-popover { left: auto; right: -2px; }
+.hotspot:hover .hotspot-popover, .hotspot:focus .hotspot-popover, .hotspot:focus-within .hotspot-popover { display: block; }
+.hotspot-popover strong, .hotspot-entry strong { display: block; }
+.hotspot-legend { list-style: none; padding: 0; margin: 0 0 1rem; }
+.hotspot-legend:last-child { margin-bottom: 0; }
+.hotspot-legend li { display: flex; align-items: flex-start; gap: .6rem; margin: 0 0 .5rem; }
+.hotspot-number { flex: none; margin-top: .05rem; }
+.hotspot-entry { overflow-wrap: anywhere; }
+.note {
+  border-left: 4px solid var(--note);
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+  padding: .75rem 1rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.note-tip { border-left-color: var(--tip); }
+.note-warning { border-left-color: var(--warning); }
+.note-label { font-weight: 600; margin-bottom: .25rem; }
+.note-tip .note-label { color: var(--tip); }
+.note-warning .note-label { color: var(--warning); }
+.note-note .note-label { color: var(--note); }
+@media print {
+  :root { --bg: #fff; --card: #fff; --text: #000; --muted: #444; --border: #bbb; --code-bg: #f0f0f0; }
+  body { font-size: 11pt; }
+  .guide { max-width: none; padding: 0; }
+  .step { border-color: #bbb; }
+  a { color: inherit; }
+  h2 { break-after: avoid; page-break-after: avoid; }
+  .hotspot-popover { display: none !important; }
+  .hotspot, .hotspot-badge, .hotspot-number { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .hotspot-legend li { break-inside: avoid; page-break-inside: avoid; }
+}
+:root { --accent: #aa1122; }
+</style>
+</head>
+<body>
+<main class="guide">
+<header class="guide-header">
+<img class="logo" src="data:image/png;base64,…" alt="">
+<h1>Office floor plan</h1>
+<p class="summary">Find your way around the third floor.</p>
+</header>
+<section class="intro">
+<p>Hover over or tap a numbered area to see what is there.</p>
+</section>
+<article class="step" id="step-1">
+<h2 class="step-title"><span class="step-number" aria-label="Page 1">1</span><span class="step-text">Third floor</span></h2>
+<figure class="step-image">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="480" height="300" alt="Third floor">
+<div class="hotspot hotspot-below hotspot-start" style="left:5%;top:8%;width:29.167%;height:30.667%" tabindex="0" role="button" aria-label="1. Reception" aria-describedby="hotspot-1-1-text"><span class="hotspot-badge" aria-hidden="true">1</span><span class="hotspot-popover" role="tooltip"><strong>Reception</strong><span class="hotspot-text" id="hotspot-1-1-text">Sign in here when you arrive.<br>Visitor badges are in the top drawer.</span></span></div>
+<div class="hotspot hotspot-below hotspot-center" style="left:36.667%;top:8%;width:28.333%;height:30.667%" tabindex="0" role="button" aria-label="2. Kitchen &amp; café" aria-describedby="hotspot-1-2-text"><span class="hotspot-badge" aria-hidden="true">2</span><span class="hotspot-popover" role="tooltip"><strong>Kitchen &amp; café</strong><span class="hotspot-text" id="hotspot-1-2-text">Coffee, tea and fruit. Please load the dishwasher before you leave.</span></span></div>
+<div class="hotspot hotspot-below hotspot-end" style="left:67.5%;top:8%;width:27.5%;height:44%" tabindex="0" role="button" aria-label="3. Meeting room &quot;Fjord&quot;" aria-describedby="hotspot-1-3-text"><span class="hotspot-badge" aria-hidden="true">3</span><span class="hotspot-popover" role="tooltip"><strong>Meeting room &quot;Fjord&quot;</strong><span class="hotspot-text" id="hotspot-1-3-text">Seats 8. Book it on the panel by the door; to present, press &lt;Input&gt; on the remote.</span></span></div>
+<div class="hotspot hotspot-above hotspot-start" style="left:5%;top:58.667%;width:43.333%;height:33.333%" tabindex="0" role="button" aria-label="4. Quiet zone" aria-describedby="hotspot-1-4-text"><span class="hotspot-badge" aria-hidden="true">4</span><span class="hotspot-popover" role="tooltip"><strong>Quiet zone</strong><span class="hotspot-text" id="hotspot-1-4-text">No calls or meetings.</span></span></div>
+</div>
+</figure>
+<ol class="hotspot-legend">
+<li id="hotspot-1-1"><span class="hotspot-number">1</span><span class="hotspot-entry"><strong>Reception</strong><span class="hotspot-text">Sign in here when you arrive.<br>Visitor badges are in the top drawer.</span></span></li>
+<li id="hotspot-1-2"><span class="hotspot-number">2</span><span class="hotspot-entry"><strong>Kitchen &amp; café</strong><span class="hotspot-text">Coffee, tea and fruit. Please load the dishwasher before you leave.</span></span></li>
+<li id="hotspot-1-3"><span class="hotspot-number">3</span><span class="hotspot-entry"><strong>Meeting room &quot;Fjord&quot;</strong><span class="hotspot-text">Seats 8. Book it on the panel by the door; to present, press &lt;Input&gt; on the remote.</span></span></li>
+<li id="hotspot-1-4"><span class="hotspot-number">4</span><span class="hotspot-entry"><strong>Quiet zone</strong><span class="hotspot-text">No calls or meetings.</span></span></li>
+</ol>
+<div class="step-description">
+<p>The lifts open onto the corridor in the middle.</p>
+</div>
+</article>
+<aside class="note note-tip" role="note">
+<p class="note-label">Tip</p>
+<p>Need a desk for the day? Ask at <strong>Reception</strong>.</p>
+</aside>
+<article class="step" id="step-2">
+<h2 class="step-title"><span class="step-number" aria-label="Page 2">2</span><span class="step-text">Fire exits</span></h2>
+<figure class="step-image">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="480" height="300" alt="Fire exits">
+<div class="hotspot hotspot-above hotspot-end" style="left:90.833%;top:58.667%;width:5.833%;height:18.667%;--hs:#16a34a" tabindex="0" role="button" aria-label="1. Stairwell B" aria-describedby="hotspot-2-1-text"><span class="hotspot-badge" aria-hidden="true">1</span><span class="hotspot-popover" role="tooltip"><strong>Stairwell B</strong><span class="hotspot-text" id="hotspot-2-1-text">Use the stairs in a fire, never the lifts.</span></span></div>
+<div class="hotspot hotspot-above hotspot-start" style="left:3.333%;top:78.667%;width:5.833%;height:16%" tabindex="0" role="button" aria-label="2. Stairwell A" aria-describedby="hotspot-2-2-text"><span class="hotspot-badge" aria-hidden="true">2</span><span class="hotspot-popover" role="tooltip"><strong>Stairwell A</strong><span class="hotspot-text" id="hotspot-2-2-text">Leads to the assembly point in the car park.</span></span></div>
+</div>
+</figure>
+<ol class="hotspot-legend">
+<li id="hotspot-2-1" style="--hs:#16a34a"><span class="hotspot-number">1</span><span class="hotspot-entry"><strong>Stairwell B</strong><span class="hotspot-text">Use the stairs in a fire, never the lifts.</span></span></li>
+<li id="hotspot-2-2"><span class="hotspot-number">2</span><span class="hotspot-entry"><strong>Stairwell A</strong><span class="hotspot-text">Leads to the assembly point in the car park.</span></span></li>
+</ol>
+</article>
+</main>
+</body>
+</html>

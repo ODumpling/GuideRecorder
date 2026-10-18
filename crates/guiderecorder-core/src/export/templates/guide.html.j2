@@ -44,8 +44,26 @@
 <article class="step" id="step-{{ item.number }}">
 <h{{ step_level }} class="step-title"><span class="step-number" aria-label="{{ labels.step }} {{ item.number }}">{{ item.number }}</span><span class="step-text">{{ item.title }}</span></h{{ step_level }}>
 <figure class="step-image">
+{%- if item.hotspots %}
+<div class="hotspot-frame">
 <img src="{{ item.image.src }}" width="{{ item.image.width }}" height="{{ item.image.height }}" alt="{{ item.image.alt }}">
+{%- for h in item.hotspots %}
+{%- if h.style %}
+<div class="hotspot {{ h.class }}" style="{{ h.style }}" tabindex="0" role="button" aria-label="{{ h.label }}"{% if h.description %} aria-describedby="{{ h.id }}-text"{% endif %}><span class="hotspot-badge" aria-hidden="true">{{ h.number }}</span><span class="hotspot-popover" role="tooltip">{% if h.title %}<strong>{{ h.title }}</strong>{% endif %}{% if h.description %}<span class="hotspot-text" id="{{ h.id }}-text">{{ h.description }}</span>{% endif %}</span></div>
+{%- endif %}
+{%- endfor %}
+</div>
+{%- else %}
+<img src="{{ item.image.src }}" width="{{ item.image.width }}" height="{{ item.image.height }}" alt="{{ item.image.alt }}">
+{%- endif %}
 </figure>
+{%- if item.hotspots %}
+<ol class="hotspot-legend">
+{%- for h in item.hotspots %}
+<li id="{{ h.id }}"{% if h.legend_style %} style="{{ h.legend_style }}"{% endif %}><span class="hotspot-number">{{ h.number }}</span><span class="hotspot-entry">{% if h.title %}<strong>{{ h.title }}</strong>{% endif %}{% if h.description %}<span class="hotspot-text">{{ h.description }}</span>{% endif %}</span></li>
+{%- endfor %}
+</ol>
+{%- endif %}
 {%- if item.description %}
 <div class="step-description">
 {{ item.description }}

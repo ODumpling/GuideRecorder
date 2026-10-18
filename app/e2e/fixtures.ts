@@ -2,6 +2,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 import { Backend, type BackendOptions } from "./backend";
 
 export { expect };
+export { SCHEMA_VERSION } from "./backend";
 
 /** Fixture guide ids (fixtures/guides). */
 export const CALENDAR = "01M4WT7MM000000000000002G0";

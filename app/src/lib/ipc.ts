@@ -42,6 +42,12 @@ export interface EditorApi {
    * images. False if the user cancelled.
    */
   deleteGuide(id: string, path: string, title: string): Promise<boolean>;
+  /**
+   * Asks (natively) for images or a PDF and saves them as a new annotation
+   * guide (`kind: "annotated"`), one page per image or PDF page. Returns
+   * its id; null if the user cancelled.
+   */
+  newAnnotatedGuide(): Promise<string | null>;
   /** WebP bytes of an image in the guide's bundle, by bundle-relative path. */
   stepImage(guideId: string, path: string): Promise<ArrayBuffer>;
   /** Exits the app (after the editor has saved). */
@@ -56,6 +62,7 @@ export const tauriApi: EditorApi = {
   saveGuide: (guide) => invoke("save_guide", { guide }),
   closeGuide: (id) => invoke("close_guide", { id }),
   deleteGuide: (id, path, title) => invoke("delete_guide", { id, path, title }),
+  newAnnotatedGuide: () => invoke("new_annotated_guide"),
   stepImage: async (guideId, path) => toArrayBuffer(await invoke("step_image", { guideId, path })),
   quit: () => invoke("quit_app"),
   cancelQuit: () => invoke("quit_cancel"),
@@ -79,6 +86,16 @@ export function toArrayBuffer(response: ArrayBuffer | ArrayBufferView | number[]
  */
 export function addImageStep(guideId: string, png: Uint8Array): Promise<Step> {
   return invoke("add_image_step", png, { headers: { "guiderecorder-guide-id": guideId } });
+}
+
+/**
+ * Asks (natively) for images or a PDF and stores them as pages (manual
+ * steps showing their full image) of the open guide. The pages are
+ * returned in order, not inserted: the editor inserts them as one
+ * undoable command. `[]` if the user cancelled.
+ */
+export function addAnnotatedPages(guideId: string): Promise<Step[]> {
+  return invoke("add_annotated_pages", { guideId });
 }
 
 /** Copies a step's image files for the new step `newStepId`; returns its image. */

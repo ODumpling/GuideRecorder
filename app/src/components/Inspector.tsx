@@ -1,8 +1,12 @@
 import type { ReactNode } from "react";
+import { hotspots } from "@/annotations/geometry";
+import { HotspotBadge } from "@/components/annotations/HotspotPopover";
+import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
 import { Button } from "@/components/ui/button";
 import { setImageShow } from "@/editor/commands";
-import { editorStore, useEditor, useSelectedItem } from "@/editor/editor";
-import type { AiState, ImageShow, StepKind } from "@/lib/types";
+import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
+import type { AiState, ImageShow, Step, StepKind } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",
@@ -30,12 +34,68 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** The right pane: details of the selected step. */
+const HEADING = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
+
+/** The step's hotspots by number; a click selects one in the annotation editor. */
+function HotspotList({ step, readOnly }: { step: Step; readOnly: boolean }) {
+  const selectedId = useSelectedAnnotation(step.id);
+  const list = hotspots(step.annotations);
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className={HEADING}>Hotspots</h2>
+      {list.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {readOnly ? "No hotspots" : "Drag over the image to add a hotspot the reader can point at."}
+        </p>
+      ) : (
+        <ol className="-mx-2 flex flex-col gap-0.5" aria-label="Hotspots">
+          {list.map((hotspot, i) => {
+            const { title, description } = hotspot.geometry;
+            return (
+              <li key={hotspot.id}>
+                <button
+                  type="button"
+                  aria-current={hotspot.id === selectedId || undefined}
+                  onClick={() => annotationSelection.getState().select(step.id, hotspot.id)}
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
+                    hotspot.id === selectedId && "bg-accent text-accent-foreground",
+                  )}
+                >
+                  <HotspotBadge number={i + 1} style={hotspot.style} />
+                  <span className="flex min-w-0 flex-col">
+                    <span className={cn("truncate", !title.trim() && "text-muted-foreground italic")}>
+                      {title.trim() || "Untitled hotspot"}
+                    </span>
+                    {description.trim() && (
+                      <span className="truncate text-xs text-muted-foreground">{description.trim()}</span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/** The right pane: details of the selected step, or the hotspots of a page. */
 export function Inspector() {
   const readOnly = useEditor((s) => s.doc?.readOnly ?? true);
+  const annotated = useAnnotated();
   const item = useSelectedItem();
   if (!item || item.type !== "step") {
-    return <p className="p-4 text-sm text-muted-foreground">No step selected</p>;
+    return <p className="p-4 text-sm text-muted-foreground">No {stepNoun(annotated)} selected</p>;
+  }
+  if (annotated) {
+    // A page has no click, crop or AI text to show.
+    return (
+      <div className="flex flex-col gap-5 p-4">
+        <HotspotList step={item} readOnly={readOnly} />
+      </div>
+    );
   }
   const { element, image } = item;
   const show = (value: ImageShow) =>
@@ -44,7 +104,7 @@ export function Inspector() {
   return (
     <div className="flex flex-col gap-5 p-4">
       <section className="flex flex-col gap-2">
-        <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Image</h2>
+        <h2 className={HEADING}>Image</h2>
         <div className="flex gap-1" role="group" aria-label="Image">
           {(["crop", "full"] as const).map((value) => (
             <Button
@@ -60,7 +120,7 @@ export function Inspector() {
         </div>
       </section>
       <section className="flex flex-col gap-2">
-        <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Step</h2>
+        <h2 className={HEADING}>Step</h2>
         <dl className="flex flex-col gap-2">
           <Field label="Action">{KIND_LABELS[item.kind]}</Field>
           {item.keystrokes && (
@@ -77,9 +137,10 @@ export function Inspector() {
           <Field label="Text">{AI_LABELS[item.aiState.status]}</Field>
         </dl>
       </section>
+      {item.annotations.some((a) => a.type === "hotspot") && <HotspotList step={item} readOnly={readOnly} />}
       {element && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Element</h2>
+          <h2 className={HEADING}>Element</h2>
           <dl className="flex flex-col gap-2">
             {element.label && <Field label="Label">{element.label}</Field>}
             {element.role && <Field label="Role">{element.role}</Field>}

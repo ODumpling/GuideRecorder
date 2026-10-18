@@ -1,5 +1,5 @@
-//! Arrow, box, highlight and callout annotations as SVG, rendered with
-//! usvg + resvg onto a tiny-skia pixmap.
+//! Arrow, box, highlight, callout and hotspot annotations as SVG, rendered
+//! with usvg + resvg onto a tiny-skia pixmap.
 //!
 //! The SVG is generated here from typed geometry; every user string (callout
 //! text, colours) is escaped, and colours are checked against a strict
@@ -7,6 +7,16 @@
 //! Lato font (`assets/fonts`, SIL Open Font License 1.1), never system fonts,
 //! so output is the same on every machine. Glyphs Lato lacks (e.g. CJK)
 //! are not drawn.
+//!
+//! A hotspot is drawn as a marker like the editor draws it: its outline
+//! (dashed while it has no title) over a faint tint, and a numbered badge
+//! with a white ring inside its top-left corner (moved as needed to stay in
+//! view). Its title and description are not drawn; writers list them in a
+//! legend under the image. The badge is sized from the view's
+//! width, so it keeps its share of the image when the image is scaled down
+//! for export, but no larger than the hotspot (as in the editor). Markers
+//! are a layer of their own ([`Layer::Hotspots`]), drawn over everything
+//! else, blur included, as the editor shows them.
 
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
@@ -17,11 +27,14 @@ use ulid::Ulid;
 
 use super::raster::RenderWarning;
 use crate::model::{
-    Annotation, AnnotationStyle, ArrowGeometry, CalloutGeometry, Point, Rect, Shape,
+    Annotation, AnnotationStyle, ArrowGeometry, CalloutGeometry, HotspotGeometry, Point, Rect,
+    Shape,
 };
 
-/// Lato Regular, SIL Open Font License 1.1 (see `assets/fonts/Lato-OFL.txt`).
+/// Lato Regular and Bold, SIL Open Font License 1.1 (see
+/// `assets/fonts/Lato-OFL.txt`).
 const LATO: &[u8] = include_bytes!("../../assets/fonts/Lato-Regular.ttf");
+const LATO_BOLD: &[u8] = include_bytes!("../../assets/fonts/Lato-Bold.ttf");
 const FONT_FAMILY: &str = "Lato";
 
 pub const DEFAULT_COLOR: &str = "#ff3b30";
@@ -33,12 +46,22 @@ const DEFAULT_CALLOUT_FILL: &str = "#ffffff";
 const CALLOUT_TEXT: &str = "#1d1d1f";
 const DEFAULT_FONT_SIZE: f64 = 16.0;
 const LINE_HEIGHT: f64 = 1.25;
+/// Hotspot colour when the style has none: the editor's hotspot blue, kept
+/// apart from the red of the other annotations.
+pub const DEFAULT_HOTSPOT_COLOR: &str = "#007aff";
+const HOTSPOT_TINT_OPACITY: f64 = 0.12;
+const HOTSPOT_BADGE_TEXT: &str = "#ffffff";
+/// Badge radius as a share of the view width, and its bounds in pixels.
+const HOTSPOT_BADGE_RATIO: f64 = 1.0 / 64.0;
+const HOTSPOT_BADGE_MIN: f64 = 10.0;
+const HOTSPOT_BADGE_MAX: f64 = 48.0;
 
 fn fontdb() -> Arc<fontdb::Database> {
     static DB: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_font_data(LATO.to_vec());
+        db.load_font_data(LATO_BOLD.to_vec());
         db.set_sans_serif_family(FONT_FAMILY);
         Arc::new(db)
     })
@@ -57,16 +80,38 @@ fn options() -> usvg::Options<'static> {
     }
 }
 
-/// Draws the drawable annotations (arrow, box, highlight, callout) of
-/// `annotations`, in order, onto `pixmap`. Geometry is in full-screenshot
-/// pixels; `origin` is where the pixmap's top-left sits in them.
+/// Which annotations [`draw`] draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// Arrows, boxes, highlights and callouts. Reports bad colours and
+    /// unusable hotspot geometry, for every annotation.
+    Shapes,
+    /// Hotspot markers only, reporting nothing ([`Layer::Shapes`] did).
+    Hotspots,
+}
+
+/// Draws the `layer` annotations of `annotations`, in order, onto
+/// `pixmap`. Geometry is in full-screenshot pixels; `origin` is where the
+/// pixmap's top-left sits in them. Hotspots are numbered among themselves.
 pub fn draw(
     annotations: &[Annotation],
     origin: Point,
     pixmap: &mut PixmapMut<'_>,
+    layer: Layer,
     warnings: &mut Vec<RenderWarning>,
 ) {
+    let mut ignored = Vec::new();
+    let warnings = match layer {
+        Layer::Shapes => warnings,
+        Layer::Hotspots => &mut ignored,
+    };
+    let view = View {
+        origin,
+        width: f64::from(pixmap.width()),
+        height: f64::from(pixmap.height()),
+    };
     let mut body = String::new();
+    let mut hotspots = 0;
     for (n, annotation) in annotations.iter().enumerate() {
         let style = &annotation.style;
         for value in [&style.color, &style.fill].into_iter().flatten() {
@@ -78,6 +123,17 @@ pub fn draw(
             }
         }
         let result = match &annotation.shape {
+            Shape::Hotspot(geometry) => {
+                hotspots += 1;
+                match finite_rect(&geometry.rect) {
+                    Ok(_) if layer == Layer::Hotspots => {
+                        hotspot(hotspots, geometry, style, view, &mut body)
+                    }
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            }
+            _ if layer == Layer::Hotspots => Ok(()),
             Shape::Arrow(geometry) => arrow(geometry, style, &mut body),
             Shape::Box(rect) => boxed(rect, style, &mut body),
             Shape::Highlight(rect) => highlight(rect, style, &mut body),
@@ -109,6 +165,14 @@ pub fn draw(
 }
 
 type Drawn = Result<(), String>;
+
+/// The pixmap's area in full-screenshot pixels.
+#[derive(Debug, Clone, Copy)]
+struct View {
+    origin: Point,
+    width: f64,
+    height: f64,
+}
 
 fn arrow(g: &ArrowGeometry, style: &AnnotationStyle, out: &mut String) -> Drawn {
     let (from, to) = (finite_point(g.from)?, finite_point(g.to)?);
@@ -266,6 +330,78 @@ fn callout(
         out.push_str("</text>");
     }
     out.push_str("</g>");
+    Ok(())
+}
+
+/// Hotspot `number`: outline, tint and numbered badge. Nothing is drawn
+/// for a hotspot entirely outside `view`, so its badge can't show up at the
+/// edge of an unrelated view (it keeps its number in the legend).
+fn hotspot(
+    number: u32,
+    g: &HotspotGeometry,
+    style: &AnnotationStyle,
+    view: View,
+    out: &mut String,
+) -> Drawn {
+    let r = finite_rect(&g.rect)?;
+    let (left, top) = (view.origin.x, view.origin.y);
+    let (right, bottom) = (left + view.width, top + view.height);
+    if r.x >= right || r.y >= bottom || r.x + r.width <= left || r.y + r.height <= top {
+        return Ok(());
+    }
+    let color = color(style.color.as_deref(), DEFAULT_HOTSPOT_COLOR);
+    // No larger than the hotspot, unless that would be unreadable.
+    let radius = (view.width * HOTSPOT_BADGE_RATIO)
+        .clamp(HOTSPOT_BADGE_MIN, HOTSPOT_BADGE_MAX)
+        .min((r.width.min(r.height) / 2.0).max(HOTSPOT_BADGE_MIN));
+    let sw = stroke_width(style, (radius / 4.0).max(2.0));
+    let ring = (radius / 6.0).max(1.5);
+    // Inside the top-left corner, and kept whole inside the view.
+    let reach = radius + ring;
+    let inside = |v: f64, lo: f64, hi: f64| {
+        if hi - lo < 2.0 * reach {
+            (lo + hi) / 2.0
+        } else {
+            v.clamp(lo + reach, hi - reach)
+        }
+    };
+    let inset = reach + sw / 2.0;
+    let (cx, cy) = (
+        inside(r.x + inset, left, right),
+        inside(r.y + inset, top, bottom),
+    );
+    let dashes = if g.title.trim().is_empty() {
+        format!(r#" stroke-dasharray="{} {}""#, num(sw * 3.0), num(sw * 2.0))
+    } else {
+        String::new()
+    };
+    let label = number.to_string();
+    // Two digits and more get a smaller size to stay inside the badge.
+    let font_size = radius * if label.len() > 1 { 0.95 } else { 1.2 };
+    let _ = write!(
+        out,
+        r#"<g{}><rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{color}" fill-opacity="{}" stroke="{color}" stroke-width="{}"{dashes}/>"#,
+        opacity_attr(style, None),
+        num(r.x),
+        num(r.y),
+        num(r.width),
+        num(r.height),
+        num(sw),
+        num(HOTSPOT_TINT_OPACITY),
+        num(sw),
+    );
+    let _ = write!(
+        out,
+        r#"<circle cx="{}" cy="{}" r="{}" fill="{color}" stroke="{HOTSPOT_BADGE_TEXT}" stroke-width="{}"/><text x="{}" y="{}" text-anchor="middle" font-family="{FONT_FAMILY}" font-weight="bold" font-size="{}" fill="{HOTSPOT_BADGE_TEXT}">{label}</text></g>"#,
+        num(cx),
+        num(cy),
+        num(radius),
+        num(ring),
+        num(cx),
+        // Digits are about 0.72 em tall in Lato: centre them on the badge.
+        num(cy + font_size * 0.36),
+        num(font_size),
+    );
     Ok(())
 }
 

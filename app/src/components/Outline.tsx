@@ -41,10 +41,10 @@ function plainLabel(markdown: string): string {
 // The menu (Radix and its positioning) loads with the first opened guide.
 const InsertMenu = lazy(() => import("@/components/InsertMenu"));
 
-function itemLabel(item: Item): string {
+function itemLabel(item: Item, annotated: boolean): string {
   switch (item.type) {
     case "step":
-      return plainLabel(item.title) || "Untitled step";
+      return plainLabel(item.title) || (annotated ? "Untitled page" : "Untitled step");
     case "section":
       return plainLabel(item.title) || "Untitled section";
     case "note":
@@ -90,6 +90,8 @@ export function Outline() {
   const doc = useEditor((s) => s.doc)!;
   const selectedId = useEditor((s) => s.selectedId);
   const { guide, readOnly } = doc;
+  // Annotation guides have pages, which AI doesn't write.
+  const annotated = guide.kind === "annotated";
   const numbers = useMemo(() => stepNumbers(guide.items), [guide.items]);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -145,7 +147,7 @@ export function Outline() {
             disabled={readOnly}
             onChange={(e) => dispatch(renameGuide(editorStore.getState().doc!.guide, e.target.value))}
           />
-          <RegenerateGuide readOnly={readOnly} />
+          {!annotated && <RegenerateGuide readOnly={readOnly} />}
         </div>
       </div>
       <ol className="min-h-0 flex-1 overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
@@ -198,8 +200,8 @@ export function Outline() {
                   <ItemIcon item={item} />
                 </span>
               )}
-              <span className="truncate">{itemLabel(item)}</span>
-              {item.type === "step" && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
+              <span className="truncate">{itemLabel(item, annotated)}</span>
+              {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
             </button>
             {!readOnly && (
               <span className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">

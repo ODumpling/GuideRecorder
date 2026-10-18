@@ -80,6 +80,12 @@ export function clientToImage(client: Point, box: ScreenBox, view: View): Point 
   return { x: view.x + (client.x - left) / scale, y: view.y + (client.y - top) / scale };
 }
 
+/** Where a point in full-screenshot pixels is on screen: the inverse of {@link clientToImage}. */
+export function imageToClient(p: Point, box: ScreenBox, view: View): Point {
+  const { scale, left, top } = fitted(box, view);
+  return { x: left + (p.x - view.x) * scale, y: top + (p.y - view.y) * scale };
+}
+
 /** Image pixels per screen pixel, e.g. to size handles on screen. */
 export function imagePixelsPerScreenPixel(box: ScreenBox, view: View): number {
   const { scale } = fitted(box, view);
@@ -179,6 +185,12 @@ export function dragAnnotation(annotation: Annotation, part: DragPart, pointer: 
       // The pointer stays on its target when the box moves.
       return { ...annotation, geometry: { ...g, x: moved.x, y: moved.y } };
     }
+    case "hotspot": {
+      const g = annotation.geometry;
+      if (part.kind === "rect") return { ...annotation, geometry: { ...g, ...resizeRect(g, part.handle, p) } };
+      const moved = move(g);
+      return { ...annotation, geometry: { ...g, x: moved.x, y: moved.y } };
+    }
     default: {
       const g = annotation.geometry;
       if (part.kind === "rect") return { ...annotation, geometry: resizeRect(g, part.handle, p) };
@@ -206,19 +218,40 @@ export const DEFAULT_BLOCK_SIZE = 10;
 export const MIN_BLUR_AMOUNT = 4;
 export const MAX_BLUR_AMOUNT = 1024;
 
+/** Hotspots without a colour of their own. */
+export const DEFAULT_HOTSPOT_COLOR = "#007aff";
+
 /** Redactions (blur and pixelate). */
 export const isRedaction = (annotation: Annotation) => annotation.type === "blur";
 
 /**
+ * Hotspots are not burned into the image: the reader of an exported guide
+ * hovers or clicks them, over the image and everything drawn on it.
+ */
+export const isHotspot = (annotation: Annotation) => annotation.type === "hotspot";
+
+/**
  * The exporter's drawing order: every other shape in order, then the
  * redactions, burned in last so nothing inside them survives (shapes drawn
- * over a blur are blurred too). Crops are not drawn.
+ * over a blur are blurred too). Crops are not drawn. Hotspots go on top,
+ * as the reader sees them.
  */
 export function drawOrder(annotations: Annotation[]): Annotation[] {
   return [
-    ...annotations.filter((a) => !isRedaction(a) && a.type !== "crop"),
+    ...annotations.filter((a) => !isRedaction(a) && !isHotspot(a) && a.type !== "crop"),
     ...annotations.filter(isRedaction),
+    ...annotations.filter(isHotspot),
   ];
+}
+
+/** A step's hotspots, numbered 1, 2, 3, ... in annotation order. */
+export function hotspots(annotations: Annotation[]): (Annotation & { type: "hotspot" })[] {
+  return annotations.filter((a): a is Annotation & { type: "hotspot" } => a.type === "hotspot");
+}
+
+/** Each hotspot's number by annotation id. */
+export function hotspotNumbers(annotations: Annotation[]): Map<string, number> {
+  return new Map(hotspots(annotations).map((a, i) => [a.id, i + 1]));
 }
 
 /**
@@ -296,6 +329,7 @@ const DEFAULT_SIZES: Record<Exclude<AnnotationType, "arrow">, [number, number]> 
   blur: [180, 40],
   callout: [220, 70],
   crop: [480, 300],
+  hotspot: [160, 90],
 };
 
 /** A drawing tool: an annotation type, or pixelate (a blur in pixelate mode). */
@@ -329,6 +363,8 @@ export function createAnnotation(tool: Tool, id: string, start: Point, end: Poin
   switch (type) {
     case "callout":
       return { id, type, geometry: { ...rect, text: "" } };
+    case "hotspot":
+      return { id, type, geometry: { ...rect, title: "", description: "" } };
     case "blur":
       return { id, type, geometry: rect, style: { blurMode: tool === "pixelate" ? "pixelate" : "blur" } };
     default:

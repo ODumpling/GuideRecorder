@@ -17,6 +17,7 @@ import {
   DEFAULT_FONT_SIZE,
   DEFAULT_HIGHLIGHT,
   DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_HOTSPOT_COLOR,
   DEFAULT_STROKE,
   LINE_HEIGHT,
   strokeWidth,
@@ -127,8 +128,74 @@ function Redaction({ annotation, backdrop }: { annotation: Annotation & { geomet
   );
 }
 
-/** One annotation as the export draws it. Crops are drawn by the layer. */
-export function Shape({ annotation, backdrop }: { annotation: Annotation; backdrop: Backdrop | null }) {
+/**
+ * A hotspot as the reader finds it: an outlined region with its number at
+ * the top left. Without a title it is dashed, as not finished yet. Sizes
+ * other than the region's are in screen pixels (`unit`: image pixels per
+ * screen pixel), as the exported page overlays them.
+ */
+function Hotspot({ annotation, number, unit }: { annotation: Annotation & { type: "hotspot" }; number: number; unit: number }) {
+  const g = annotation.geometry;
+  const color = colorOr(annotation.style?.color, DEFAULT_HOTSPOT_COLOR);
+  const untitled = !g.title.trim();
+  // Inside the corner, so it shows at the image's edge too; smaller on a small region.
+  const radius = Math.min(10 * unit, g.width / 2, g.height / 2);
+  return (
+    <g opacity={opacity(annotation)} data-hotspot={annotation.id}>
+      <rect
+        x={g.x}
+        y={g.y}
+        width={g.width}
+        height={g.height}
+        rx={3 * unit}
+        fill={color}
+        fillOpacity={0.12}
+        stroke={color}
+        strokeWidth={2}
+        strokeDasharray={untitled ? "6 4" : undefined}
+        vectorEffect="non-scaling-stroke"
+      />
+      {/* A white ring keeps it apart from a background of its own colour. */}
+      <circle
+        cx={g.x + radius}
+        cy={g.y + radius}
+        r={radius}
+        fill={color}
+        stroke="white"
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
+      <text
+        x={g.x + radius}
+        y={g.y + radius}
+        dy="0.35em"
+        fontSize={radius * 1.15}
+        fontWeight={600}
+        textAnchor="middle"
+        fill="white"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+      >
+        {number}
+      </text>
+    </g>
+  );
+}
+
+/**
+ * One annotation as the export draws it. Crops are drawn by the layer.
+ * `number`: a hotspot's number; `unit`: image pixels per screen pixel.
+ */
+export function Shape({
+  annotation,
+  backdrop,
+  number = 1,
+  unit = 1,
+}: {
+  annotation: Annotation;
+  backdrop: Backdrop | null;
+  number?: number;
+  unit?: number;
+}) {
   const style = annotation.style ?? {};
   switch (annotation.type) {
     case "arrow": {
@@ -244,6 +311,8 @@ export function Shape({ annotation, backdrop }: { annotation: Annotation; backdr
     }
     case "blur":
       return valid(annotation.geometry) ? <Redaction annotation={annotation} backdrop={backdrop} /> : null;
+    case "hotspot":
+      return valid(annotation.geometry) ? <Hotspot annotation={annotation} number={number} unit={unit} /> : null;
     case "crop":
       return null;
   }

@@ -21,8 +21,14 @@ use crate::SCHEMA_VERSION;
 pub type Step = fn(Value) -> Result<Value, String>;
 
 /// The real migrations: entry `i` takes version `i + 1` to `i + 2`.
-/// Empty while [`SCHEMA_VERSION`] is 1.
-pub const MIGRATIONS: &[Step] = &[];
+pub const MIGRATIONS: &[Step] = &[v1_to_v2];
+
+/// Version 2 added `Guide.kind` and the `hotspot` annotation. Both are
+/// new, so a version 1 document is already valid version 2; the bump only
+/// keeps older apps from opening (and failing on) guides that use them.
+fn v1_to_v2(value: Value) -> Result<Value, String> {
+    Ok(value)
+}
 
 const _: () = assert!(MIGRATIONS.len() as u32 + 1 == SCHEMA_VERSION);
 
@@ -162,6 +168,19 @@ mod tests {
             })
         );
         assert_eq!(migrate(value, 0), Err(MigrationError::InvalidVersion(0)));
+    }
+
+    #[test]
+    fn v1_guides_migrate_unchanged() {
+        let v1: Value = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        assert_eq!(v1["schemaVersion"], 1);
+        let (out, applied) = migrate(v1.clone(), 1).unwrap();
+        assert_eq!(applied, [1]);
+        let mut expected = v1;
+        expected["schemaVersion"] = 2.into();
+        assert_eq!(out, expected);
+        let guide: crate::model::Guide = serde_json::from_value(out).unwrap();
+        assert_eq!(guide.kind, crate::model::GuideKind::Walkthrough);
     }
 
     #[test]

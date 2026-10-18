@@ -94,6 +94,88 @@ code {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.hotspot-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.step-image .hotspot-frame img { border: 0; border-radius: 5px; }
+.hotspot, .hotspot-legend li { --hs: #007aff; }
+.hotspot {
+  position: absolute;
+  border: 2px solid var(--hs);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .8);
+  cursor: pointer;
+}
+.hotspot-untitled { border-style: dashed; }
+.hotspot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hs);
+  opacity: .12;
+}
+.hotspot:hover::before, .hotspot:focus::before { opacity: .24; }
+.hotspot:hover, .hotspot:focus, .hotspot:focus-within { z-index: 2; }
+.hotspot:focus { outline: none; }
+.hotspot:focus-visible { outline: 3px solid var(--hs); outline-offset: 2px; }
+.hotspot-badge, .hotspot-number {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 .35rem;
+  border-radius: .75rem;
+  background: var(--hs);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  line-height: 1.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.hotspot-badge {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.hotspot-popover {
+  display: none;
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + .5rem);
+  left: -2px;
+  width: max-content;
+  max-width: min(22rem, 64vw);
+  padding: .6rem .8rem;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--hs);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .2);
+  font-size: .9rem;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: auto;
+}
+/* Keeps the popover open while the pointer crosses the gap. */
+.hotspot-popover::before { content: ""; position: absolute; left: 0; right: 0; top: -.6rem; height: .6rem; }
+.hotspot-above .hotspot-popover { top: auto; bottom: calc(100% + .5rem); }
+.hotspot-above .hotspot-popover::before { top: auto; bottom: -.6rem; }
+.hotspot-center .hotspot-popover { left: 50%; transform: translateX(-50%); }
+.hotspot-end .hotspot-popover { left: auto; right: -2px; }
+.hotspot:hover .hotspot-popover, .hotspot:focus .hotspot-popover, .hotspot:focus-within .hotspot-popover { display: block; }
+.hotspot-popover strong, .hotspot-entry strong { display: block; }
+.hotspot-legend { list-style: none; padding: 0; margin: 0 0 1rem; }
+.hotspot-legend:last-child { margin-bottom: 0; }
+.hotspot-legend li { display: flex; align-items: flex-start; gap: .6rem; margin: 0 0 .5rem; }
+.hotspot-number { flex: none; margin-top: .05rem; }
+.hotspot-entry { overflow-wrap: anywhere; }
 .note {
   border-left: 4px solid var(--note);
   background: var(--card);
@@ -116,6 +198,9 @@ code {
   .step { border-color: #bbb; }
   a { color: inherit; }
   h2 { break-after: avoid; page-break-after: avoid; }
+  .hotspot-popover { display: none !important; }
+  .hotspot, .hotspot-badge, .hotspot-number { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .hotspot-legend li { break-inside: avoid; page-break-inside: avoid; }
 }
 </style>
 </head>

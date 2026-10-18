@@ -26,6 +26,8 @@ const COMMANDS: &[&str] = &[
     "delete_guide",
     "step_image",
     "add_image_step",
+    "new_annotated_guide",
+    "add_annotated_pages",
     "copy_step_images",
     "read_image_file",
     "choose_export_folder",

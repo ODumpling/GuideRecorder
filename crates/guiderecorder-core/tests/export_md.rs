@@ -547,4 +547,94 @@ fn empty_titles_use_no_heading_or_label_only() {
     let markdown = fs::read_to_string(out.join("guide.md")).unwrap();
     assert!(markdown.starts_with("## 1. Step\n"), "{markdown}");
     assert_eq!(headings(&markdown), ["1. Step"]);
+
+    // In an annotation guide, steps are pages.
+    guide.kind = GuideKind::Annotated;
+    let opts = MdOptions {
+        overwrite: true,
+        ..MdOptions::default()
+    };
+    export(&guide, &handle, &out, &opts);
+    let markdown = fs::read_to_string(out.join("guide.md")).unwrap();
+    assert_eq!(headings(&markdown), ["1. Page"]);
+}
+
+/// The ordered lists of `markdown`: each item's text, hard breaks as `\n`,
+/// bold as `**`.
+fn ordered_lists(markdown: &str) -> Vec<Vec<String>> {
+    let mut lists = Vec::new();
+    let mut depth = 0;
+    for event in Parser::new_ext(markdown, Options::empty()) {
+        match event {
+            Event::Start(Tag::List(Some(_))) => {
+                depth += 1;
+                lists.push(Vec::new());
+            }
+            Event::End(TagEnd::List(true)) => depth -= 1,
+            Event::Start(Tag::Item) if depth > 0 => {
+                lists.last_mut().unwrap().push(String::new());
+            }
+            Event::Text(text) if depth > 0 => lists
+                .last_mut()
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .push_str(&text),
+            Event::HardBreak if depth > 0 => {
+                lists.last_mut().unwrap().last_mut().unwrap().push('\n')
+            }
+            Event::Start(Tag::Strong) | Event::End(TagEnd::Strong) if depth > 0 => {
+                lists.last_mut().unwrap().last_mut().unwrap().push_str("**")
+            }
+            Event::Html(_) | Event::InlineHtml(_) => panic!("raw HTML in {markdown}"),
+            _ => {}
+        }
+    }
+    lists
+}
+
+#[test]
+fn hotspot_legends_parse_back_to_their_text() {
+    let fixtures = fixtures();
+    let (handle, guide) = fixtures
+        .guides
+        .iter()
+        .find(|(_, g)| g.kind == GuideKind::Annotated)
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    export(guide, handle, out.path(), &MdOptions::default());
+    let markdown = fs::read_to_string(out.path().join("guide.md")).unwrap();
+    assert_eq!(
+        ordered_lists(&markdown),
+        [
+            vec![
+                "**Reception**\nSign in here when you arrive.\nVisitor badges are in the top drawer.",
+                "**Kitchen & café**\nCoffee, tea and fruit. Please load the dishwasher before you leave.",
+                "**Meeting room \"Fjord\"**\nSeats 8. Book it on the panel by the door; to present, \
+                 press <Input> on the remote.",
+                "**Quiet zone**\nNo calls or meetings.",
+            ],
+            vec![
+                "**Stairwell B**\nUse the stairs in a fire, never the lifts.",
+                "**Stairwell A**\nLeads to the assembly point in the car park.",
+            ],
+        ]
+    );
+
+    // A description that starts with a numbered list stays its own list.
+    let mut guide = guide.clone();
+    let Some(Item::Step(page)) = guide.items.first_mut() else {
+        panic!("a page first");
+    };
+    page.description = "1. First\n2. Second\n".into();
+    let opts = MdOptions {
+        overwrite: true,
+        ..MdOptions::default()
+    };
+    export(&guide, handle, out.path(), &opts);
+    let markdown = fs::read_to_string(out.path().join("guide.md")).unwrap();
+    let lists = ordered_lists(&markdown);
+    assert_eq!(lists.len(), 3, "{markdown}");
+    assert_eq!(lists[0].len(), 4);
+    assert_eq!(lists[1], ["First", "Second"]);
 }

@@ -14,7 +14,8 @@ use std::fs;
 use guiderecorder_core::export::ast::{Block, Inline};
 use guiderecorder_core::export::blur::{effective_region, Region};
 use guiderecorder_core::export::{
-    render_step_image, ImageOptions, RenderGuide, RenderItem, RenderWarning, RenderedImage,
+    render_step_image, ImageOptions, PlacedHotspot, RenderGuide, RenderItem, RenderWarning,
+    RenderedImage,
 };
 use guiderecorder_core::library::{
     step_image_path, GuideHandle, Library, PixelBuffer, StepImageVariant,
@@ -236,6 +237,151 @@ fn golden_pixelate() {
         Shape::Blur(rect(50.0, 30.0, 70.0, 40.0)),
         blur_style(BlurMode::Pixelate, 8.0),
     );
+}
+
+#[test]
+fn golden_hotspot() {
+    golden_annotation(
+        "hotspot",
+        Shape::Hotspot(HotspotGeometry {
+            rect: rect(56.0, 36.0, 58.0, 28.0),
+            title: "Save".into(),
+            description: "Saves the file".into(),
+        }),
+        AnnotationStyle::default(),
+    );
+}
+
+fn hotspot(rect: Rect, title: &str) -> Annotation {
+    annotation(
+        Shape::Hotspot(HotspotGeometry {
+            rect,
+            title: title.into(),
+            description: format!("About {title}\nSecond line"),
+        }),
+        AnnotationStyle::default(),
+    )
+}
+
+fn placed(image: &RenderedImage) -> Vec<(u32, String, Option<[f64; 4]>)> {
+    let round = |v: f64| (v * 1e6).round() / 1e6;
+    image
+        .hotspots
+        .iter()
+        .map(|h: &PlacedHotspot| {
+            let rect = h
+                .rect
+                .map(|r| [round(r.x), round(r.y), round(r.width), round(r.height)]);
+            (h.number, h.title.clone(), rect)
+        })
+        .collect()
+}
+
+#[test]
+fn hotspots_are_placed_through_crop_and_scaling() {
+    let bundle = Bundle::new();
+    let annotations = vec![
+        hotspot(rect(60.0, 40.0, 50.0, 20.0), "Button"),
+        annotation(
+            Shape::Crop(rect(40.0, 20.0, 100.0, 50.0)),
+            Default::default(),
+        ),
+        // Half outside the crop, at its top-left.
+        hotspot(rect(20.0, 10.0, 40.0, 20.0), "Corner"),
+        // Entirely outside the crop: keeps its number, gets no rect.
+        hotspot(rect(0.0, 80.0, 20.0, 10.0), "Hidden"),
+    ];
+    let step = bundle.step(&screenshot(), None, None, annotations);
+    let rendered = bundle.render(&step);
+    assert_eq!(rendered.warnings, []);
+    assert_eq!((rendered.width, rendered.height), (100, 50));
+    let expected = vec![
+        (1, "Button".to_owned(), Some([0.2, 0.4, 0.5, 0.4])),
+        (2, "Corner".to_owned(), Some([0.0, 0.0, 0.2, 0.2])),
+        (3, "Hidden".to_owned(), None),
+    ];
+    assert_eq!(placed(&rendered), expected);
+    assert_eq!(
+        rendered.hotspots[0].description,
+        "About Button\nSecond line"
+    );
+    assert_eq!(rendered.hotspots[0].id, step.annotations[0].id);
+
+    // Scaling keeps the fractions.
+    let scaled = render_step_image(
+        &bundle.handle,
+        &step,
+        &ImageOptions {
+            max_width: Some(40),
+            ..Default::default()
+        },
+    );
+    assert_eq!((scaled.width, scaled.height), (40, 20));
+    assert_eq!(placed(&scaled), expected);
+
+    // Without markers: the same placement, and the pixels of a step with no
+    // hotspots at all.
+    let unmarked_opts = ImageOptions {
+        hotspot_markers: false,
+        ..Default::default()
+    };
+    let unmarked = render_step_image(&bundle.handle, &step, &unmarked_opts);
+    assert_eq!(placed(&unmarked), expected);
+    let mut bare = step.clone();
+    bare.annotations
+        .retain(|a| !matches!(a.shape, Shape::Hotspot(_)));
+    assert_eq!(decode(&unmarked), decode(&bundle.render(&bare)));
+    assert_ne!(decode(&rendered), decode(&unmarked));
+}
+
+#[test]
+fn hotspots_through_a_click_crop_and_on_placeholders() {
+    let bundle = Bundle::new();
+    let full = screenshot();
+    // A 64×40 crop with its top-left at (53, 30).
+    let crop = imageops::crop_imm(&full, 53, 30, 64, 40).to_image();
+    let mut step = bundle.step(
+        &full,
+        Some(&crop),
+        Some(point(85.0, 50.0)),
+        vec![hotspot(rect(69.0, 40.0, 16.0, 10.0), "Save")],
+    );
+    let rendered = bundle.render(&step);
+    assert_eq!(rendered.warnings, []);
+    assert_eq!(
+        placed(&rendered),
+        [(1, "Save".to_owned(), Some([0.25, 0.25, 0.25, 0.25]))]
+    );
+
+    // A placeholder still lists the hotspot, unplaced.
+    step.image.full = "steps/missing.webp".into();
+    step.image.crop = None;
+    let rendered = bundle.render(&step);
+    assert_eq!((rendered.width, rendered.height), (800, 450));
+    assert_eq!(placed(&rendered), [(1, "Save".to_owned(), None)]);
+}
+
+#[test]
+fn unusable_hotspots_warn_with_or_without_markers() {
+    let bundle = Bundle::new();
+    let empty = hotspot(rect(10.0, 10.0, 0.0, 5.0), "Empty");
+    let id = empty.id;
+    let step = bundle.step(&screenshot(), None, None, vec![empty]);
+    for hotspot_markers in [true, false] {
+        let opts = ImageOptions {
+            hotspot_markers,
+            ..Default::default()
+        };
+        let rendered = render_step_image(&bundle.handle, &step, &opts);
+        assert_eq!(
+            rendered.warnings,
+            [RenderWarning::AnnotationSkipped {
+                id,
+                reason: "empty rectangle".into()
+            }]
+        );
+        assert_eq!(placed(&rendered), [(1, "Empty".to_owned(), None)]);
+    }
 }
 
 #[test]
@@ -537,6 +683,32 @@ fn redaction_is_burned_in_over_annotations() {
             }
         }
     }
+}
+
+#[test]
+fn hotspot_markers_are_drawn_over_redaction() {
+    let bundle = Bundle::new();
+    let marker = annotation(
+        Shape::Hotspot(HotspotGeometry {
+            rect: rect(10.0, 10.0, 60.0, 40.0),
+            title: "Panel".into(),
+            description: String::new(),
+        }),
+        Default::default(),
+    );
+    let pixelate = annotation(
+        Shape::Blur(rect(0.0, 0.0, 80.0, 60.0)),
+        blur_style(BlurMode::Pixelate, 6.0),
+    );
+    // The blur comes after the hotspot, yet the marker stays on top, as in
+    // the editor.
+    let step = bundle.step(&noise(80, 60), None, None, vec![marker, pixelate]);
+    let out = decode(&bundle.render(&step));
+    let outline = out.get_pixel(40, 10);
+    assert!(
+        outline[2] > 200 && outline[0] < 60,
+        "hotspot outline is blue: {outline:?}"
+    );
 }
 
 #[test]

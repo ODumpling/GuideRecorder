@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { isValidColor } from "@/annotations/color";
-import { removeAnnotation, setAnnotationStyle, setCalloutText, updateAnnotation } from "@/annotations/commands";
+import {
+  removeAnnotation,
+  setAnnotationStyle,
+  setCalloutText,
+  setHotspotText,
+  updateAnnotation,
+} from "@/annotations/commands";
 import {
   blurAmount,
   DEFAULT_CALLOUT_STROKE,
@@ -9,10 +15,12 @@ import {
   DEFAULT_FONT_SIZE,
   DEFAULT_HIGHLIGHT,
   DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_HOTSPOT_COLOR,
   DEFAULT_STROKE,
   MIN_BLUR_AMOUNT,
   strokeWidth,
 } from "@/annotations/geometry";
+import { HotspotBadge } from "@/components/annotations/HotspotPopover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Command } from "@/editor/commands";
@@ -70,15 +78,23 @@ function ColorField({ value, onChange }: { value: string; onChange(color: string
   );
 }
 
-/** Style controls for the selected annotation. */
+const TEXTAREA =
+  "rounded-md border border-input bg-transparent px-2 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
+/**
+ * Style controls for the selected annotation; for a hotspot (`number`:
+ * its number), its title and description too.
+ */
 export function StyleBar({
   stepId,
   annotation,
+  number,
   run,
   onDeleted,
 }: {
   stepId: string;
   annotation: Annotation;
+  number?: number;
   run(build: (guide: Guide) => Command): boolean;
   onDeleted(): void;
 }) {
@@ -94,8 +110,17 @@ export function StyleBar({
       role="group"
       aria-label="Annotation style"
     >
+      {type === "hotspot" && (
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <HotspotBadge number={number ?? 1} style={style} />
+          Hotspot
+        </span>
+      )}
       {(type === "arrow" || type === "box" || type === "callout") && (
         <ColorField value={style.color ?? DEFAULT_COLOR} onChange={(color) => set({ color })} />
+      )}
+      {type === "hotspot" && (
+        <ColorField value={style.color ?? DEFAULT_HOTSPOT_COLOR} onChange={(color) => set({ color })} />
       )}
       {type === "highlight" && (
         // The highlight's fill wins over its colour at export; edit the colour.
@@ -201,7 +226,7 @@ export function StyleBar({
             // A new, empty callout is waiting for its text.
             autoFocus={annotation.geometry.text === ""}
             rows={2}
-            className="min-w-60 flex-1 rounded-md border border-input bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={cn("min-w-60 flex-1", TEXTAREA)}
             value={annotation.geometry.text}
             onChange={(e) => run((guide) => setCalloutText(guide, stepId, annotation.id, e.target.value))}
           />
@@ -221,6 +246,29 @@ export function StyleBar({
       >
         <Trash2 /> Delete
       </Button>
+      {type === "hotspot" && (
+        // Own rows, below the style.
+        <div className="flex basis-full flex-col gap-2">
+          <Input
+            aria-label="Hotspot title"
+            placeholder="Title"
+            // A new hotspot is waiting for its title.
+            autoFocus={!annotation.geometry.title && !annotation.geometry.description}
+            value={annotation.geometry.title}
+            onChange={(e) => run((guide) => setHotspotText(guide, stepId, annotation.id, "title", e.target.value))}
+          />
+          <textarea
+            aria-label="Hotspot description"
+            placeholder="What the reader sees when they point at or click the hotspot"
+            rows={3}
+            className={TEXTAREA}
+            value={annotation.geometry.description}
+            onChange={(e) =>
+              run((guide) => setHotspotText(guide, stepId, annotation.id, "description", e.target.value))
+            }
+          />
+        </div>
+      )}
     </div>
   );
 }

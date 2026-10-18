@@ -5,6 +5,7 @@ import {
   deleteItem,
   insertItemAfter,
   insertItemBefore,
+  insertItemsAfter,
   mergeWithNext,
   newNote,
   newSection,
@@ -13,8 +14,8 @@ import {
 } from "@/editor/commands";
 import { insertImageSteps } from "@/editor/images";
 import type { EditorStore } from "@/editor/store";
-import { copyStepImages, errorMessage } from "@/lib/ipc";
-import type { NoteKind, StepImage } from "@/lib/types";
+import { addAnnotatedPages, copyStepImages, errorMessage } from "@/lib/ipc";
+import type { NoteKind, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 
 function current(store: EditorStore) {
@@ -92,4 +93,29 @@ export async function insertImages(
   } catch (error) {
     store.getState().notify(`Could not add the image: ${errorMessage(error)}`);
   }
+}
+
+/**
+ * Pages from images or a PDF the user picks (natively), below the selected
+ * item, as one undoable command. Returns how many were added; failures end
+ * up in the store's notice.
+ */
+export async function insertPages(store: EditorStore): Promise<number> {
+  const state = current(store);
+  if (!state) return 0;
+  store.getState().notify(null);
+  let pages: Step[];
+  try {
+    pages = await addAnnotatedPages(state.guide.id);
+  } catch (error) {
+    store.getState().notify(`Could not add the pages: ${errorMessage(error)}`);
+    return 0;
+  }
+  if (pages.length === 0) return 0;
+  // The guide may have been closed or another opened meanwhile.
+  const now = current(store);
+  if (!now || now.guide.id !== state.guide.id) return 0;
+  const items = pages.map((page): Step => ({ ...page, type: "step" }));
+  const label = `Add ${items.length} ${items.length === 1 ? "page" : "pages"}`;
+  return now.dispatch(insertItemsAfter(now.guide, items, now.selected?.id ?? null, label)) ? items.length : 0;
 }

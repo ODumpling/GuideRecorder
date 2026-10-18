@@ -27,3 +27,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
+
+# PDF pages for annotated guides (`src/pdf.rs`); the capture crate uses the
+# same versions.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"

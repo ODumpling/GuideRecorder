@@ -11,6 +11,7 @@ const NAMES: Record<Annotation["type"], string> = {
   callout: "callout",
   blur: "blur",
   crop: "crop",
+  hotspot: "hotspot",
 };
 
 function name(annotation: Annotation): string {
@@ -91,6 +92,16 @@ export function setCalloutText(guide: Guide, stepId: string, id: string, text: s
   const current = find(guide, stepId, id);
   if (current.type !== "callout") throw new PatchError(`annotation ${id} is not a callout`);
   return updateAnnotation(guide, stepId, { ...current, geometry: { ...current.geometry, text } }, "text");
+}
+
+/** A hotspot's plain-text fields. */
+export type HotspotField = "title" | "description";
+
+/** Sets a hotspot's title or description; typing in one field merges into one undo step. */
+export function setHotspotText(guide: Guide, stepId: string, id: string, field: HotspotField, text: string): Command {
+  const current = find(guide, stepId, id);
+  if (current.type !== "hotspot") throw new PatchError(`annotation ${id} is not a hotspot`);
+  return updateAnnotation(guide, stepId, { ...current, geometry: { ...current.geometry, [field]: text } }, field);
 }
 
 export function removeAnnotation(guide: Guide, stepId: string, id: string): Command {

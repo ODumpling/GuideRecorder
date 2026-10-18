@@ -70,6 +70,17 @@ export interface CalloutGeometry extends Rect {
 }
 
 /**
+ * A region the reader hovers or clicks to see its title and description.
+ * Numbered 1, 2, 3, ... in annotation order among the step's hotspots.
+ */
+export interface HotspotGeometry extends Rect {
+  /** Plain text. */
+  title: string;
+  /** Plain text; may hold line breaks. */
+  description: string;
+}
+
+/**
  * Mirrors core's `Annotation` (`{ id, type, geometry, style }`). Geometry is
  * in full-screenshot pixels.
  */
@@ -77,6 +88,7 @@ export type Annotation = { id: Ulid; style?: AnnotationStyle } & (
   | { type: "arrow"; geometry: ArrowGeometry }
   | { type: "box" | "highlight" | "blur" | "crop"; geometry: Rect }
   | { type: "callout"; geometry: CalloutGeometry }
+  | { type: "hotspot"; geometry: HotspotGeometry }
 );
 
 export type AnnotationType = Annotation["type"];
@@ -129,6 +141,12 @@ export interface Note {
 
 export type Item = Step | Section | Note;
 
+/**
+ * `walkthrough`: recorded steps. `annotated`: uploaded pages (images, PDF
+ * pages), each a `manual` step showing its full image, explained by hotspots.
+ */
+export type GuideKind = "walkthrough" | "annotated";
+
 export interface Guide {
   schemaVersion: number;
   id: Ulid;
@@ -138,6 +156,8 @@ export interface Guide {
   intro: string;
   prerequisites: string;
   audience: "beginner" | "expert";
+  /** Absent: `walkthrough`. */
+  kind?: GuideKind;
   language: string;
   createdAt: string;
   updatedAt: string;

@@ -30,7 +30,10 @@ const ROTATE_FIRST_STEP: &str = "01M4WZCE2000000000000002R2";
 const ROTATE_PASSWORD_STEP: &str = "01M4WZCE2000000000000002R4";
 const CALENDAR: &str = "01M4WT7MM000000000000002G0";
 const CALENDAR_SECTION: &str = "01M4WT7MM000000000000002G1";
-const FIXTURE_COUNT: usize = 3;
+/// The annotation guide (pages with hotspots).
+const FLOOR_PLAN: &str = "01M4Z96G000000000000000380";
+const FLOOR_PLAN_FIRST_PAGE: &str = "01M4Z96G000000000000000385";
+const FIXTURE_COUNT: usize = 4;
 /// JSON-RPC error codes.
 const RESOURCE_NOT_FOUND: i64 = -32002;
 const INTERNAL_ERROR: i64 = -32603;
@@ -274,6 +277,7 @@ fn rendered(png: &[u8]) -> RenderedImage {
         width: 0,
         height: 0,
         warnings: Vec::new(),
+        hotspots: Vec::new(),
     }
 }
 
@@ -449,6 +453,47 @@ async fn get_guide_returns_markdown_with_anchors() {
         "{md}"
     );
     assert!(md.contains("## Invite people {#section-"));
+}
+
+#[tokio::test]
+async fn annotation_guides_list_their_hotspots() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.config()).await;
+    let result = client.ok("get_guide", json!({ "id": FLOOR_PLAN })).await;
+    let md = text(&result, 0);
+    assert!(md.contains("Kind: annotation guide"), "{md}");
+    assert!(
+        md.contains(&format!(
+            "### 1. Third floor {{#step-{FLOOR_PLAN_FIRST_PAGE}}}\n\n\
+             The lifts open onto the corridor in the middle.\n\n\
+             Hotspots:\n\n\
+             1. **Reception**\\\n   Sign in here when you arrive.\\\n   \
+             Visitor badges are in the top drawer.\n\
+             2. **Kitchen \\& café**\\\n"
+        )),
+        "{md}"
+    );
+    // User text is escaped; pages have no recorded action.
+    assert!(md.contains("press \\<Input\\> on the remote"), "{md}");
+    assert!(!md.contains("Action:"), "{md}");
+
+    let step = client
+        .ok(
+            "get_step",
+            json!({ "guide_id": FLOOR_PLAN, "step_id": FLOOR_PLAN_FIRST_PAGE }),
+        )
+        .await;
+    let body = text(&step, 0);
+    assert!(
+        body.contains("4. **Quiet zone**\\\n   No calls or meetings."),
+        "{body}"
+    );
+    assert!(!body.contains("Action:"), "{body}");
+
+    // Walkthroughs say nothing about a kind.
+    let rotate = client.ok("get_guide", json!({ "id": ROTATE })).await;
+    assert!(!text(&rotate, 0).contains("Kind:"));
+    assert!(!text(&rotate, 0).contains("Hotspots:"));
 }
 
 #[tokio::test]

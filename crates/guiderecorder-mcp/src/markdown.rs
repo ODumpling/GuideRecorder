@@ -5,10 +5,15 @@
 //! anchors or links of its own. Items carry stable anchors: steps are
 //! `### 3. Click **Save** {#step-<ulid>}`, sections `## Setup
 //! {#section-<ulid>}` and notes `> **Tip** {#note-<ulid>}`.
+//!
+//! A step's hotspots follow its description as a numbered list (the
+//! numbers drawn on its image), each with its bold title and description.
+//! In an annotation guide the steps are uploaded pages: the guide says so
+//! up front, and pages have no recorded action details.
 
 use guiderecorder_core::export::ast::{Block, Inline};
 use guiderecorder_core::export::{RenderGuide, RenderItem, RenderStep};
-use guiderecorder_core::model::{ElementInfo, NoteKind, StepKind};
+use guiderecorder_core::model::{ElementInfo, GuideKind, NoteKind, StepKind};
 
 /// Extra facts about the guide that are not in [`RenderGuide`].
 pub struct GuideMeta<'a> {
@@ -37,6 +42,14 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
         let tags: Vec<String> = meta.tags.iter().map(|t| escape_line(t)).collect();
         facts.insert(1, format!("Tags: {}", tags.join(", ")));
     }
+    if render.kind == GuideKind::Annotated {
+        facts.insert(
+            1,
+            "Kind: annotation guide (each step is an uploaded page; numbered hotspots on its \
+             image explain it)"
+                .to_owned(),
+        );
+    }
     out.push_str(&facts.join("  \n"));
     out.push_str("\n\n");
     if meta.read_only {
@@ -57,7 +70,7 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     }
     for item in &render.items {
         match item {
-            RenderItem::Step(step) => out.push_str(&self::step(step)),
+            RenderItem::Step(step) => out.push_str(&self::step(step, render.kind)),
             RenderItem::Section(section) => out.push_str(&format!(
                 "## {} {{#section-{}}}\n\n",
                 escape_line(&section.title),
@@ -86,8 +99,9 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     out
 }
 
-/// One step: heading, description and its recorded details.
-pub fn step(step: &RenderStep) -> String {
+/// One step: heading, description, hotspots and its recorded details (a
+/// page of an annotation guide has none).
+pub fn step(step: &RenderStep, kind: GuideKind) -> String {
     let mut out = format!(
         "### {}. {} {{#step-{}}}\n\n",
         step.number,
@@ -97,6 +111,14 @@ pub fn step(step: &RenderStep) -> String {
     if !step.description.is_empty() {
         out.push_str(&blocks(&step.description));
         out.push('\n');
+    }
+    let hotspots = hotspots(step);
+    if !hotspots.is_empty() {
+        out.push_str(&hotspots);
+        out.push_str("\n\n");
+    }
+    if kind == GuideKind::Annotated {
+        return out;
     }
     let mut details = vec![format!("Action: {}", kind_name(step.step.kind))];
     if let Some(element) = step.step.element.as_ref().and_then(element_line) {
@@ -108,6 +130,37 @@ pub fn step(step: &RenderStep) -> String {
     out.push_str(&details.join("  \n"));
     out.push_str("\n\n");
     out
+}
+
+/// `Hotspots:` and a numbered list: `1. **Title**`, then the description
+/// lines as hard breaks. Empty if the step has none.
+fn hotspots(step: &RenderStep) -> String {
+    let items: Vec<String> = step
+        .hotspots()
+        .map(|(number, hotspot)| {
+            let marker = format!("{number}. ");
+            let mut lines = Vec::new();
+            if !hotspot.title.trim().is_empty() {
+                lines.push(format!("**{}**", escape_line(hotspot.title.trim())));
+            }
+            lines.extend(
+                hotspot
+                    .description
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(escape_line),
+            );
+            let indent = " ".repeat(marker.len());
+            format!("{marker}{}", lines.join(&format!("\\\n{indent}")))
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    if items.is_empty() {
+        return String::new();
+    }
+    format!("Hotspots:\n\n{}", items.join("\n"))
 }
 
 pub fn kind_name(kind: StepKind) -> &'static str {
