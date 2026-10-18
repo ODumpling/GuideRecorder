@@ -157,3 +157,4 @@ cd app && pnpm test && pnpm e2e        # frontend unit and end-to-end tests
 
 GuideRecorder is released under the [MIT License](LICENSE). Third-party
 licences are listed in [docs/licences.md](docs/licences.md).
+
