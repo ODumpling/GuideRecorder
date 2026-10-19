@@ -47,23 +47,28 @@ import { StyleBar } from "@/components/annotations/StyleBar";
 import { BeforeAfterSwitch, type Frame } from "@/components/BeforeAfterSwitch";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
-import { setImageShow, type Command } from "@/editor/commands";
+import { IMAGE_SHOW_HINTS, setImageShow, type Command } from "@/editor/commands";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { tauriApi, verifyCrop } from "@/lib/ipc";
 import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { cn } from "@/lib/utils";
 
-const TOOLS: { tool: Tool | "select"; label: string; icon: typeof Square }[] = [
-  { tool: "select", label: "Select", icon: MousePointer2 },
-  { tool: "arrow", label: "Arrow", icon: MoveUpRight },
-  { tool: "box", label: "Box", icon: Square },
-  { tool: "highlight", label: "Highlight", icon: Highlighter },
-  { tool: "callout", label: "Callout", icon: MessageSquareText },
-  { tool: "hotspot", label: "Hotspot", icon: SquareDashedMousePointer },
-  { tool: "blur", label: "Blur", icon: Droplets },
-  { tool: "pixelate", label: "Pixelate", icon: Grid3x3 },
-  { tool: "crop", label: "Crop", icon: Crop },
+const TOOLS: { tool: Tool | "select"; label: string; hint: string; icon: typeof Square }[] = [
+  { tool: "select", label: "Select", hint: "Select: click a shape to move, resize or style it", icon: MousePointer2 },
+  { tool: "arrow", label: "Arrow", hint: "Arrow: drag from the tail to the tip, or click where it should point", icon: MoveUpRight },
+  { tool: "box", label: "Box", hint: "Box: drag to outline an area", icon: Square },
+  { tool: "highlight", label: "Highlight", hint: "Highlight: drag to tint an area with a see-through colour", icon: Highlighter },
+  { tool: "callout", label: "Callout", hint: "Callout: drag to add a text box, with an optional pointer", icon: MessageSquareText },
+  {
+    tool: "hotspot",
+    label: "Hotspot",
+    hint: "Hotspot: drag to mark an area that shows a title and description when the reader points at it",
+    icon: SquareDashedMousePointer,
+  },
+  { tool: "blur", label: "Blur", hint: "Blur: drag to hide sensitive details by blurring them", icon: Droplets },
+  { tool: "pixelate", label: "Pixelate", hint: "Pixelate: drag to hide sensitive details behind large pixels", icon: Grid3x3 },
+  { tool: "crop", label: "Crop", hint: "Crop: drag to choose the part of the image the export shows", icon: Crop },
 ];
 
 /** Builds a command against the current guide and applies it. */
@@ -753,6 +758,7 @@ function SuggestionList({
                 size="sm"
                 variant="outline"
                 aria-label={`Accept blur suggestion ${i + 1}`}
+                title="Blur this area"
                 onClick={() => {
                   onFocus(null);
                   run((guide) => acceptBlurSuggestion(guide, step.id, i, ulid()));
@@ -764,6 +770,7 @@ function SuggestionList({
                 size="sm"
                 variant="ghost"
                 aria-label={`Reject blur suggestion ${i + 1}`}
+                title="Dismiss this suggestion and leave the area as it is"
                 onClick={() => {
                   onFocus(null);
                   run((guide) => rejectBlurSuggestion(guide, step.id, i));
@@ -892,13 +899,13 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
       {(!readOnly || canPreview) && (
         <div className="flex flex-wrap items-center gap-1" role="toolbar" aria-label="Annotation tools">
           {editing &&
-            TOOLS.map(({ tool: value, label, icon: Icon }) => (
+            TOOLS.map(({ tool: value, label, hint, icon: Icon }) => (
               <Button
                 key={value}
                 variant="ghost"
                 size="icon"
                 aria-label={label}
-                title={label}
+                title={hint}
                 aria-pressed={tool === value}
                 className={cn(tool === value && "bg-accent text-accent-foreground")}
                 onClick={() => {
@@ -934,6 +941,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
                     size="sm"
                     variant={step.image.show === show ? "default" : "outline"}
                     disabled={show === "crop" && !step.image.crop}
+                    title={IMAGE_SHOW_HINTS[show]}
                     onClick={() => run((guide) => setImageShow(guide, step.id, show))}
                   >
                     {show === "crop" ? <Crop /> : <Maximize2 />}

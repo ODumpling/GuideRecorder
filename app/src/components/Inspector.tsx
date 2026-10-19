@@ -3,7 +3,7 @@ import { hotspots } from "@/annotations/geometry";
 import { HotspotBadge } from "@/components/annotations/HotspotPopover";
 import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
 import { Button } from "@/components/ui/button";
-import { setImageShow } from "@/editor/commands";
+import { IMAGE_SHOW_HINTS, setImageShow } from "@/editor/commands";
 import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
 import type { AiState, ImageShow, Step, StepKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -112,6 +112,7 @@ export function Inspector() {
               size="sm"
               variant={image.show === value ? "default" : "outline"}
               disabled={readOnly || (value === "crop" && !image.crop)}
+              title={IMAGE_SHOW_HINTS[value]}
               onClick={() => show(value)}
             >
               {value === "crop" ? "Click crop" : "Full screenshot"}

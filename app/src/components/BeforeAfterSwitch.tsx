@@ -15,6 +15,7 @@ export function BeforeAfterSwitch({ value, onChange }: { value: Frame; onChange(
           size="sm"
           variant={value === frame ? "default" : "outline"}
           aria-pressed={value === frame}
+          title={frame === "before" ? "Show the screenshot taken before the action" : "Show the screen after the action"}
           onClick={() => onChange(frame)}
         >
           {frame === "before" ? "Before" : "After"}

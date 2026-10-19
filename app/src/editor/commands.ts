@@ -186,6 +186,12 @@ export function dropTarget(from: number, before: number): number {
   return from < before ? before - 1 : before;
 }
 
+/** Tooltips for the step image choice. */
+export const IMAGE_SHOW_HINTS: Record<ImageShow, string> = {
+  crop: "Show only the area around the click in the guide",
+  full: "Show the whole screenshot in the guide",
+};
+
 export function setImageShow(guide: Guide, id: string, show: ImageShow): Command {
   const step = findStep(guide, id);
   return {

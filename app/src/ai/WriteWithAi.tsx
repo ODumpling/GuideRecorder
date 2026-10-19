@@ -22,7 +22,7 @@ export function WriteWithAi() {
         size="sm"
         className="ml-1"
         disabled={readOnly || explicit}
-        title={explicit ? "Wait for the AI action to finish" : undefined}
+        title={explicit ? "Wait for the AI action to finish" : "Write the guide details and step text with AI"}
         onClick={() => void aiStore.getState().start()}
       >
         <Sparkles /> Write with AI
@@ -35,6 +35,7 @@ export function WriteWithAi() {
       size="sm"
       className="ml-1"
       disabled={phase === "stopping"}
+      title="Stop writing with AI"
       onClick={() => void aiStore.getState().stop()}
     >
       <Square /> {phase === "stopping" ? "Stopping…" : "Stop"}
