@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { Backend } from "./backend";
-import { emitEvent, expect, openRegionOverlay, test } from "./fixtures";
+import { emitEvent, expect, openRegionOverlay, record, test } from "./fixtures";
 
 const grantAll = (backend: Backend) => {
   for (const p of Object.keys(backend.permissions)) backend.permissions[p] = "granted";
@@ -19,7 +19,7 @@ test.describe("capture area: window", () => {
   test("picks a window by filter and keyboard, and records it", async ({ page, backend }) => {
     grantAll(backend);
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     const dialog = page.getByRole("dialog", { name: "Choose a window to record" });
     const options = dialog.getByRole("option");
     await expect(options).toHaveCount(3);
@@ -55,7 +55,7 @@ test.describe("capture area: window", () => {
   test("a click on a window records it", async ({ page, backend }) => {
     grantAll(backend);
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     const dialog = page.getByRole("dialog", { name: "Choose a window to record" });
     await dialog.getByRole("option", { name: /Finder/ }).click();
     await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
@@ -65,27 +65,27 @@ test.describe("capture area: window", () => {
   test("cancel starts nothing", async ({ page, backend }) => {
     grantAll(backend);
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     const dialog = page.getByRole("dialog", { name: "Choose a window to record" });
     await expect(dialog.getByRole("option")).toHaveCount(3);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
 
     // Esc closes it too.
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     await expect(dialog.getByRole("option")).toHaveCount(3);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
 
     expect(startCalls(backend)).toHaveLength(0);
     expect(backend.recording).toEqual({ state: "idle" });
-    await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
   });
 
   test("a window that closed is explained and the list reloads", async ({ page, backend }) => {
     grantAll(backend);
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     const dialog = page.getByRole("dialog", { name: "Choose a window to record" });
     await expect(dialog.getByRole("option")).toHaveCount(3);
     backend.captureWindows.splice(0, 1);
@@ -116,7 +116,7 @@ test.describe("capture area: window", () => {
     grantAll(backend);
     backend.captureWindows = [];
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     const dialog = page.getByRole("dialog", { name: "Choose a window to record" });
     await expect(dialog.getByText("No windows available.")).toBeVisible();
     await dialog.getByRole("button", { name: "Record whole display instead" }).click();
@@ -150,7 +150,7 @@ test.describe("capture area: region", () => {
     const rect = { x: 120, y: 80, width: 640, height: 360 };
     backend.regionPick = { displayId: 2, rect };
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
     expect(backend.calls.filter((c) => c.cmd === "pick_region")).toHaveLength(1);
     expect(backend.recordingTargets).toEqual([{ kind: "region", displayId: 2, rect }]);
@@ -160,9 +160,9 @@ test.describe("capture area: region", () => {
     grantAll(backend);
     backend.regionPick = null;
     await ready(page);
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     await expect.poll(() => backend.calls.filter((c) => c.cmd === "pick_region").length).toBe(1);
-    await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
     expect(startCalls(backend)).toHaveLength(0);
     await expect(page.getByRole("alert")).toBeHidden();
   });

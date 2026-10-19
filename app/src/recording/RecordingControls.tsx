@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertDialog } from "radix-ui";
-import { Circle, Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
+import { Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
+import { NewGuideButton } from "@/components/NewGuideDialog";
 import { Button } from "@/components/ui/button";
 import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
@@ -61,8 +62,8 @@ function CancelButton({ disabled }: { disabled: boolean }) {
 }
 
 /**
- * The toolbar's Record button, or the live recording's controls; and the
- * display and window pickers a Record asks with when the capture area is
+ * The toolbar's New Guide button, or the live recording's controls; and the
+ * display and window pickers a recording asks with when the capture area is
  * One display or Application.
  */
 export function RecordingControls() {
@@ -80,20 +81,7 @@ function Controls() {
   const pending = useRecording((s) => s.pending);
   const { pause, resume, stop } = recordingStore.getState();
 
-  if (status.state === "idle") {
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        className="ml-1"
-        disabled={pending !== null}
-        onClick={() => void startFlow.getState().begin()}
-      >
-        {pending === "start" ? <LoaderCircle className="animate-spin" /> : <Circle className="text-[var(--status-danger)]" />}
-        {pending === "start" ? "Starting…" : "Record"}
-      </Button>
-    );
-  }
+  if (status.state === "idle") return <NewGuideButton />;
 
   if (status.state === "saving") {
     return (

@@ -22,9 +22,15 @@ async function pointAt(page: Page, target: Locator, [x, y]: [number, number]) {
   await page.mouse.move(box.x + box.width * x, box.y + box.height * y);
 }
 
+/** New Guide, then Annotation guide. */
+async function chooseAnnotationGuide(page: Page) {
+  await page.getByRole("button", { name: "New Guide" }).click();
+  await page.getByRole("dialog", { name: "New guide" }).getByRole("button", { name: "Annotation guide" }).click();
+}
+
 /** Makes an annotation guide from the library (the mock's dialog picks two pages) and waits for it. */
 async function newGuide(page: Page, backend: Backend): Promise<string> {
-  await page.getByRole("button", { name: "New annotation guide…" }).click();
+  await chooseAnnotationGuide(page);
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue(/^Floor plan/);
   return backend.annotatedGuides.at(-1)!;
 }
@@ -183,14 +189,14 @@ test("shows hotspot text on pointing, picks hotspots from the list, and previews
 
 test("a cancelled or failed new annotation guide opens nothing", async ({ page, backend }) => {
   backend.pagesDialog = null;
-  const button = page.getByRole("button", { name: "New annotation guide…" });
-  await button.click();
+  const button = page.getByRole("button", { name: "New Guide" });
+  await chooseAnnotationGuide(page);
   await expect.poll(() => backend.calls.filter((c) => c.cmd === "new_annotated_guide").length).toBe(1);
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveCount(0);
   await expect(button).toBeEnabled();
 
   backend.pagesError = { kind: "invalid", message: "The PDF could not be read" };
-  await button.click();
+  await chooseAnnotationGuide(page);
   await expect(page.getByText("Could not make the annotation guide: The PDF could not be read")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveCount(0);
 });

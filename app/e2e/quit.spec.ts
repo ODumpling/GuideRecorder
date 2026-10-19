@@ -1,4 +1,4 @@
-import { emitEvent, expect, openGuide, test } from "./fixtures";
+import { emitEvent, expect, openGuide, record, test } from "./fixtures";
 import type { Backend } from "./backend";
 
 const QUIT = "guiderecorder://quit-requested";
@@ -50,7 +50,7 @@ test("a quit while a recording command runs waits for it, then quits once", asyn
   for (const p of Object.keys(backend.permissions)) backend.permissions[p] = "granted";
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
   const start = hold(backend, "start_recording");
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   await expect.poll(start.held).toBe(true);
 
   await emitEvent(page, QUIT, null);

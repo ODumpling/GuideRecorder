@@ -33,7 +33,7 @@ export interface StartFlowState {
   /**
    * Starts a recording as the capture area says: every display at once, or
    * after picking a display or a window or drawing a region. With one
-   * display connected, One display starts on it at once. The Record button and
+   * display connected, One display starts on it at once. The New Guide dialog and
    * `recording://pick-area` both come here. Ignored unless idle.
    */
   begin(): Promise<void>;

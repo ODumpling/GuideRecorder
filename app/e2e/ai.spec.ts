@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { Guide, Step } from "../src/lib/types";
 import type { Backend } from "./backend";
-import { API_KEY, emitEvents, expect, openGuide, outlineItems, saved, test } from "./fixtures";
+import { API_KEY, emitEvents, expect, openGuide, outlineItems, record, saved, test } from "./fixtures";
 
 // "Rotate an API key": steps 1, 2, 4 and 5 can be written; step 3 is edited.
 const STEP_1 = "01M4WZCE2000000000000002R2";
@@ -86,10 +86,10 @@ test("without a key, Write with AI says why", async ({ page, backend }) => {
 });
 
 test.describe("after a recording", () => {
-  const record = async (page: Page, backend: Backend) => {
+  const recordGuide = async (page: Page, backend: Backend) => {
     for (const p of Object.keys(backend.permissions)) backend.permissions[p] = "granted";
     await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
-    await page.getByRole("button", { name: "Record" }).click();
+    await record(page);
     await page.getByRole("group", { name: "Recording" }).getByRole("button", { name: "Stop recording" }).click();
     await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue(/Recording 2026-10-15/);
     return backend.recordings[0].guideId;
@@ -97,14 +97,14 @@ test.describe("after a recording", () => {
 
   test("auto-run writes the new guide", async ({ page, backend }) => {
     backend.apiKeyStored = true;
-    const id = await record(page, backend);
+    const id = await recordGuide(page, backend);
     await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue(/^AI: Recording/);
     await expect(outlineItems(page).filter({ hasText: "AI step 1" })).toHaveCount(1);
     expect(backend.aiGenerations).toEqual([{ guideId: id, runId: 1 }]);
   });
 
   test("auto-run does nothing, silently, without a key", async ({ page, backend }) => {
-    await record(page, backend);
+    await recordGuide(page, backend);
     await expect(page.getByRole("button", { name: "Write with AI" })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
     expect(backend.calls.some((c) => c.cmd === "api_key_status")).toBe(true);

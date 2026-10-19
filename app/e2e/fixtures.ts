@@ -24,6 +24,12 @@ export async function openGuide(page: Page, title: string) {
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue(title);
 }
 
+/** Starts a recording the way the user does: New Guide, then Step-by-step guide. */
+export async function record(page: Page) {
+  await page.getByRole("button", { name: "New Guide" }).click();
+  await page.getByRole("dialog", { name: "New guide" }).getByRole("button", { name: "Step-by-step guide" }).click();
+}
+
 /** The outline's item buttons, in order. */
 export const outlineItems = (page: Page) => page.locator("[data-outline-item]");
 
