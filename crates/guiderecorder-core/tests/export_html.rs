@@ -10,8 +10,9 @@ mod support;
 
 use std::fs;
 
-use guiderecorder_core::export::html::{self, Branding, HtmlOptions, CSP};
+use guiderecorder_core::export::html::{self, Branding, HtmlMode, HtmlOptions, CSP};
 use guiderecorder_core::export::md::{self, BrandingError, ExportError};
+use guiderecorder_core::export::walkthrough;
 use guiderecorder_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guiderecorder_core::library::{GuideHandle, Library, PixelBuffer, StepImageVariant};
 use guiderecorder_core::model::*;
@@ -77,16 +78,22 @@ struct TagInfo {
     attrs: Vec<(String, String)>,
 }
 
-/// Every tag in `html`. Panics on a `<` that does not start a well-formed
-/// tag: escaped text never contains one.
+/// Every tag in `html`, skipping comments and the script's body. Panics on
+/// a `<` that does not start a well-formed tag: escaped text never contains
+/// one.
 fn tags(html: &str) -> Vec<TagInfo> {
     let mut out = Vec::new();
     let mut rest = html;
     while let Some(i) = rest.find('<') {
         rest = &rest[i + 1..];
+        if let Some(comment) = rest.strip_prefix("!--") {
+            rest = &comment[comment.find("-->").expect("unclosed comment") + 3..];
+            continue;
+        }
         let end = rest.find('>').expect("unclosed tag");
         let inner = &rest[..end];
         rest = &rest[end + 1..];
+        let closing = inner.starts_with('/');
         let inner = inner.strip_prefix('/').unwrap_or(inner);
         let name_end = inner
             .find(|c: char| c.is_whitespace())
@@ -112,6 +119,9 @@ fn tags(html: &str) -> Vec<TagInfo> {
             }
             attrs.push((key, value));
             a = a.trim_start();
+        }
+        if name == "script" && !closing {
+            rest = &rest[rest.find("</script>").expect("unclosed script")..];
         }
         out.push(TagInfo { name, attrs });
     }
@@ -605,3 +615,357 @@ const PNG_1X1: &[u8] = &[
     0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
     0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
+
+// ---------------------------------------------------------------------------
+// Interactive walkthrough (#9)
+
+fn walkthrough_opts() -> HtmlOptions {
+    HtmlOptions {
+        mode: HtmlMode::Walkthrough,
+        ..HtmlOptions::default()
+    }
+}
+
+const WALKTHROUGH_TAGS: &[&str] = &["nav", "button", "script", "h3"];
+const WALKTHROUGH_ATTRS: &[&str] = &[
+    "type",
+    "aria-labelledby",
+    "aria-live",
+    "aria-atomic",
+    "data-status",
+    "data-slide",
+    "data-next",
+    "data-back",
+    "data-restart",
+];
+
+/// The body of the page's one script.
+fn script_of(html: &str) -> &str {
+    let start = html.find("<script>").expect("script") + "<script>".len();
+    let end = start + html[start..].find("</script>").unwrap();
+    &html[start..end]
+}
+
+/// [`assert_safe`]'s checks for a walkthrough: the document's tags and
+/// attributes plus the controls', the one static inline script allowed by
+/// its hash, and nothing external.
+fn assert_walkthrough_safe(html: &str) {
+    let tags = tags(html);
+    for tag in &tags {
+        assert!(
+            ALLOWED_TAGS.contains(&tag.name.as_str())
+                || WALKTHROUGH_TAGS.contains(&tag.name.as_str()),
+            "tag {tag:?}"
+        );
+        let control = tag.attrs.iter().any(|(k, _)| k.starts_with("data-"));
+        for (key, value) in &tag.attrs {
+            assert!(
+                ALLOWED_ATTRS.contains(&key.as_str()) || WALKTHROUGH_ATTRS.contains(&key.as_str()),
+                "attribute {key} in {tag:?}"
+            );
+            if key == "src" {
+                assert!(value.starts_with("data:image/"), "src {value:?}");
+            }
+            if key == "style" {
+                assert_safe_style(value);
+            }
+            if key == "href" && control {
+                assert!(value.starts_with("#wt-slide-"), "control href {value:?}");
+            }
+        }
+    }
+    // Opening and closing tag of the one script, which has no attributes.
+    let scripts: Vec<&TagInfo> = tags.iter().filter(|t| t.name == "script").collect();
+    assert_eq!(scripts.len(), 2, "one script");
+    assert!(scripts[0].attrs.is_empty(), "inline, no src");
+    assert_eq!(script_of(html), walkthrough::SCRIPT);
+
+    let csp_tag = tags
+        .iter()
+        .find(|t| {
+            t.attrs
+                .iter()
+                .any(|(k, v)| k == "http-equiv" && v == "Content-Security-Policy")
+        })
+        .expect("CSP meta tag");
+    let content = csp_tag
+        .attrs
+        .iter()
+        .find(|(k, _)| k == "content")
+        .unwrap()
+        .1
+        .replace("&#x27;", "'");
+    assert_eq!(content, walkthrough::csp());
+    // The hash is the script's, computed independently.
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(script_of(html).as_bytes());
+    assert!(content.contains(&format!("script-src 'sha256-{}'", base64(&digest))));
+    assert!(content.starts_with("default-src 'none'; img-src data:; style-src 'unsafe-inline';"));
+    assert!(!content.contains("unsafe-eval") && !content.contains("script-src 'unsafe-inline'"));
+
+    let lower = html.to_ascii_lowercase();
+    assert!(!lower.contains("url("), "css url()");
+    assert!(!lower.contains("@import"));
+    // The script loads nothing and writes no markup; the only external
+    // URLs on the page are guide link hrefs (checked by the tag walk).
+    let script = walkthrough::SCRIPT.to_ascii_lowercase();
+    for needle in [
+        "http",
+        "fetch(",
+        "xmlhttprequest",
+        "eval(",
+        "innerhtml",
+        "import(",
+        "src",
+    ] {
+        assert!(!script.contains(needle), "script contains {needle}");
+    }
+}
+
+/// `(status, has target, notes, section)` of each slide.
+fn slides(html: &str) -> Vec<(String, bool, usize, Option<String>)> {
+    html.split("<section class=\"wt-slide ")
+        .skip(1)
+        .map(|slide| {
+            let slide = &slide[..slide.find("</section>").unwrap()];
+            let status = slide
+                .split("data-status=\"")
+                .nth(1)
+                .and_then(|s| s.split('"').next())
+                .unwrap()
+                .to_owned();
+            let section = slide
+                .split("<p class=\"wt-section\">")
+                .nth(1)
+                .and_then(|s| s.split("</p>").next())
+                .map(str::to_owned);
+            (
+                status,
+                slide.contains("class=\"wt-target\""),
+                slide.matches("<aside class=\"note").count(),
+                section,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn walkthrough_fixture_goldens() {
+    let fixtures = fixtures();
+    for (handle, guide) in &fixtures.guides {
+        let (html, report) = render(guide, handle, &walkthrough_opts());
+        assert_walkthrough_safe(&html);
+        let mut golden = strip_data(&html);
+        golden.push_str("<!-- warnings\n");
+        for (id, warning) in &report.warnings {
+            golden.push_str(&format!("{id} {warning}\n"));
+        }
+        golden.push_str("-->\n");
+        assert_golden_text(
+            &format!("html/walkthrough/{}.golden", md::slug(&guide.title)),
+            &golden,
+        );
+    }
+}
+
+#[test]
+fn walkthrough_shows_one_slide_per_step_with_targets() {
+    let fixtures = fixtures();
+    let (handle, guide) = fixtures
+        .guides
+        .iter()
+        .find(|(_, g)| g.title == "Share a calendar event")
+        .unwrap();
+    let (html, report) = render(guide, handle, &walkthrough_opts());
+    // The same images as the document, so the same warnings.
+    let (_, document) = render(guide, handle, &HtmlOptions::default());
+    assert_eq!(report.warnings, document.warnings);
+    assert!(html.starts_with("<!doctype html>\n<!-- Embed this walkthrough"));
+    assert!(
+        html.contains("<iframe src=\"guide.html\" title=\"Share a calendar event\" width=\"100%\"")
+    );
+
+    // Intro, five steps (sections and notes take no slide), the end.
+    let expected = [
+        ("Before you start", false, 0, None),
+        (
+            "Step 1 of 5: Click Calendar in the Dock",
+            true,
+            0,
+            Some("Open the event"),
+        ),
+        (
+            "Step 2 of 5: Double-click the Team sync event",
+            true,
+            0,
+            Some("Open the event"),
+        ),
+        // The tip after step 2 shows with step 3, in reading order. Its
+        // crop can't be placed in the screenshot, so it has no target.
+        (
+            "Step 3 of 5: Type the guest&#x27;s email",
+            false,
+            1,
+            Some("Invite people"),
+        ),
+        (
+            "Step 4 of 5: Right-click the guest",
+            true,
+            0,
+            Some("Invite people"),
+        ),
+        // A shortcut has no click point: Next only.
+        (
+            "Step 5 of 5: Press ⌘S to save",
+            false,
+            0,
+            Some("Invite people"),
+        ),
+        // The trailing note closes the walkthrough.
+        ("Done", false, 1, None),
+    ];
+    let actual = slides(&html);
+    assert_eq!(actual.len(), expected.len(), "{actual:#?}");
+    for (a, (status, target, notes, section)) in actual.iter().zip(expected) {
+        assert!(a.0.starts_with(status), "{actual:#?}");
+        assert_eq!(
+            (a.1, a.2, a.3.as_deref()),
+            (target, notes, section),
+            "{status}"
+        );
+    }
+    // Each target links to the next slide, for pages without script.
+    assert!(html.contains("<a class=\"wt-target\" href=\"#wt-slide-2\" style=\"left:"));
+
+    // Controls: an aria-live status, Back/Next/Restart, the step list
+    // with section labels.
+    assert!(html.contains("role=\"status\" aria-live=\"polite\" aria-atomic=\"true\""));
+    for control in ["data-back>", "data-next>", "data-restart>"] {
+        assert!(html.contains(control), "{control}");
+    }
+    assert!(html.contains("<nav class=\"wt-nav\" aria-label=\"Steps\">"));
+    assert!(html.contains("<li class=\"wt-list-section\">Open the event</li>"));
+    assert_eq!(html.matches("data-slide=\"").count(), 7);
+    // Headings take focus when a slide is shown.
+    assert_eq!(html.matches("class=\"step-title wt-heading\"").count(), 5);
+    assert_eq!(html.matches("tabindex=\"-1\"").count(), 7);
+    // Reduced motion stops the pulse.
+    assert!(html.contains("@media (prefers-reduced-motion: reduce)"));
+    // One embedded image per step, as in the document.
+    assert_eq!(
+        html.matches("src=\"data:image/png;base64,").count(),
+        guide.steps().count()
+    );
+}
+
+#[test]
+fn walkthrough_targets_follow_the_crop() {
+    let fixtures = fixtures();
+    let (handle, guide) = fixtures
+        .guides
+        .iter()
+        .find(|(_, g)| g.title == "Share a calendar event")
+        .unwrap();
+    let render_guide = RenderGuide::new(guide, handle);
+    let opts = walkthrough_opts();
+    let (html, _) = html::render_string(&render_guide, handle, &opts).unwrap();
+    let image_opts = guiderecorder_core::export::ImageOptions {
+        hotspot_markers: false,
+        locate_point: true,
+        ..opts.image.clone()
+    };
+    let styles: Vec<&str> = html
+        .split("<a class=\"wt-target\" href=\"")
+        .skip(1)
+        .map(|rest| {
+            let style = rest.split("style=\"").nth(1).unwrap();
+            style.split('"').next().unwrap()
+        })
+        .collect();
+    let points: Vec<String> = render_guide
+        .steps()
+        .filter_map(|step| render_guide.step_image(step, &image_opts).point)
+        .map(|p| format!("left:{}%;top:{}%", round(p.x), round(p.y)))
+        .collect();
+    assert_eq!(styles.len(), 3);
+    assert_eq!(styles, points);
+}
+
+/// A fraction as the template's percentage, rounded to 1/1000 %.
+fn round(fraction: f64) -> f64 {
+    (fraction * 100_000.0).round() / 1000.0
+}
+
+#[test]
+fn walkthrough_hostile_text_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path()).unwrap();
+    let (handle, guide) = hostile_guide(&library);
+    let (html, _) = render(&guide, &handle, &walkthrough_opts());
+    assert_walkthrough_safe(&html);
+    assert!(!html.contains("49 x"), "template expression evaluated");
+    assert!(html.contains("{{ 7*7 }} {% if true %}x{% endif %}"));
+    // The embed comment can't be closed early by the title.
+    let comment_end = html.find("-->").unwrap();
+    let comment = &html[..comment_end];
+    assert!(comment.contains("title=\"&lt;"), "{comment}");
+    // <!doctype>, <!--, <iframe> and </iframe>.
+    assert_eq!(comment.matches('<').count(), 4, "{comment}");
+    assert!(html[comment_end..].starts_with("-->\n<html lang=\"\">"));
+    // Statuses and list entries are plain, escaped text.
+    let script = "&lt;script&gt;alert(1)&lt;&#x2f;script&gt;";
+    assert!(html.contains(&format!("data-status=\"Step 1 of 11: {script}\"")));
+    assert!(html.contains(&format!("<span class=\"wt-list-text\">{script}</span>")));
+    assert!(html.contains(&format!("<li class=\"wt-list-section\">{script}</li>")));
+    // Hostile hotspots are still escaped overlays.
+    assert_eq!(
+        html.matches("class=\"hotspot hotspot-").count(),
+        HOSTILE.len()
+    );
+}
+
+#[test]
+fn walkthrough_without_intro_or_points() {
+    let fixtures = fixtures();
+    let (handle, guide) = fixtures
+        .guides
+        .iter()
+        .find(|(_, g)| g.kind == GuideKind::Annotated)
+        .unwrap();
+    let mut guide = guide.clone();
+    guide.intro.clear();
+    guide.prerequisites.clear();
+    let (html, _) = render(&guide, handle, &walkthrough_opts());
+    assert_walkthrough_safe(&html);
+    let actual = slides(&html);
+    let statuses: Vec<&str> = actual.iter().map(|s| s.0.as_str()).collect();
+    assert_eq!(
+        statuses,
+        [
+            "Page 1 of 2: Third floor",
+            "Page 2 of 2: Fire exits",
+            "Done"
+        ]
+    );
+    // Manual pages have no click point; their hotspots still overlay, and
+    // the tip between them shows with the second.
+    assert!(actual.iter().all(|s| !s.1));
+    assert_eq!(actual[1].2, 1);
+    assert!(html.contains("aria-label=\"1. Reception\""));
+    assert!(!html.contains("Before you start"));
+}
+
+#[test]
+fn walkthrough_export_writes_one_file() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let out = tempfile::tempdir().unwrap();
+    let render_guide = RenderGuide::new(guide, handle);
+    let report = html::export(&render_guide, handle, out.path(), &walkthrough_opts()).unwrap();
+    assert_eq!(report.files, [out.path().join("guide.html")]);
+    let written = fs::read_to_string(&report.files[0]).unwrap();
+    assert_eq!(written, render(guide, handle, &walkthrough_opts()).0);
+    // German labels for a German guide.
+    assert_eq!(guide.language, "de");
+    assert!(written.contains(">Weiter<"));
+}

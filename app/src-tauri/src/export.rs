@@ -28,21 +28,24 @@ use crate::editor::{check_image_path, file_error, parse_id, AppError, ErrorKind,
 pub enum Format {
     Md,
     Html,
+    /// The interactive click-through HTML (`HtmlMode::Walkthrough`).
+    Walkthrough,
     Docx,
     #[default]
     Pdf,
 }
 
 impl Format {
-    /// Markdown and HTML write into a folder; DOCX and PDF write one file.
+    /// Markdown and HTML (either mode) write into a folder; DOCX and PDF
+    /// write one file.
     pub fn is_folder(self) -> bool {
-        matches!(self, Self::Md | Self::Html)
+        matches!(self, Self::Md | Self::Html | Self::Walkthrough)
     }
 
     /// The file extension of a DOCX or PDF export.
     pub fn extension(self) -> Option<&'static str> {
         match self {
-            Self::Md | Self::Html => None,
+            Self::Md | Self::Html | Self::Walkthrough => None,
             Self::Docx => Some("docx"),
             Self::Pdf => Some("pdf"),
         }
@@ -304,8 +307,14 @@ pub fn export_guide(
             };
             md::export(&render, &handle, out, &opts).map_err(md_error)?
         }
-        Format::Html => {
+        Format::Html | Format::Walkthrough => {
+            let mode = if format == Format::Walkthrough {
+                html::HtmlMode::Walkthrough
+            } else {
+                html::HtmlMode::Document
+            };
             let opts = html::HtmlOptions {
+                mode,
                 overwrite,
                 branding,
                 ..html::HtmlOptions::default()
@@ -624,6 +633,26 @@ mod tests {
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
+        let walkthrough = export_guide(
+            &session,
+            &chosen,
+            &id,
+            Format::Walkthrough,
+            &dir.join("walkthrough"),
+            false,
+            &none,
+            docx::Paper::A4,
+        )
+        .unwrap();
+        assert_eq!(
+            walkthrough.files,
+            [dir.join("walkthrough").join(html::GUIDE_FILE)]
+        );
+        let page = std::fs::read_to_string(&walkthrough.files[0]).unwrap();
+        assert!(page.contains("<script>"));
+        assert!(!std::fs::read_to_string(&html.files[0])
+            .unwrap()
+            .contains("<script>"));
 
         for format in [Format::Docx, Format::Pdf] {
             let out = with_extension(dir.join("Guide"), format.extension().unwrap());

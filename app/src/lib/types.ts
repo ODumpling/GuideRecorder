@@ -218,7 +218,7 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "docx" | "pdf";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf";
 
 /** Paper size of a DOCX or PDF export (core `export::docx::Paper`). */
 export type PaperSize = "a4" | "letter";

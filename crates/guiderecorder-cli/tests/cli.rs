@@ -678,6 +678,7 @@ fn export_each_format() {
     let cases = [
         ("md", "md", "guide.md"),
         ("html", "html", "guide.html"),
+        ("walkthrough", "walkthrough", "guide.html"),
         ("docx", "drucker.docx", ""),
         ("pdf", "drucker.pdf", ""),
     ];
@@ -705,6 +706,10 @@ fn export_each_format() {
             assert!(files.len() > 1, "md writes step images");
         }
     }
+    let document = fs::read_to_string(fx.out("html").join("guide.html")).unwrap();
+    assert!(!document.contains("<script>"));
+    let walkthrough = fs::read_to_string(fx.out("walkthrough").join("guide.html")).unwrap();
+    assert!(walkthrough.contains("<script>") && walkthrough.contains("script-src &#x27;sha256-"));
     let pdf = fs::read(fx.out("drucker.pdf")).unwrap();
     assert!(pdf.starts_with(b"%PDF-"));
     let docx = fs::read(fx.out("drucker.docx")).unwrap();

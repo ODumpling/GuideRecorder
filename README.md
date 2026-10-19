@@ -122,7 +122,8 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <p
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
 
-`export` takes `--format md|html|docx|pdf`, `--out`, and optionally
+`export` takes `--format md|html|walkthrough|docx|pdf` (`walkthrough` is an
+interactive click-through `guide.html`), `--out`, and optionally
 `--paper a4|letter` (DOCX and PDF; default A4), `--logo`, `--accent`,
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 

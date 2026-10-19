@@ -6,6 +6,7 @@ import {
   isAccent,
   isPlainName,
   localePaper,
+  isFolderFormat,
   outPath,
   rememberPaper,
   runExport,
@@ -58,6 +59,8 @@ describe("export names and paths", () => {
     const destination = { folder: "/Users/me/Desktop/", name: " Guide ", file: "/Users/me/Guide.pdf" };
     expect(outPath("md", destination)).toBe("/Users/me/Desktop/Guide");
     expect(outPath("html", { ...destination, folder: null })).toBeNull();
+    expect(isFolderFormat("walkthrough")).toBe(true);
+    expect(outPath("walkthrough", destination)).toBe("/Users/me/Desktop/Guide");
     expect(outPath("md", { ...destination, name: "a/b" })).toBeNull();
     expect(outPath("pdf", destination)).toBe("/Users/me/Guide.pdf");
     // The file chosen for another format doesn't count.
