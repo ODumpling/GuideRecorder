@@ -16,6 +16,7 @@ mod navigation;
 mod pdf;
 mod picker;
 mod recording;
+mod redaction;
 mod settings;
 mod settings_commands;
 mod terminate;

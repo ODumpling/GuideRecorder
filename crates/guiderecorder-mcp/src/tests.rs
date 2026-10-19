@@ -12,7 +12,8 @@ use guiderecorder_core::export::{render_step_image, RenderedImage};
 use guiderecorder_core::index::Index;
 use guiderecorder_core::library::{read_webp, write_webp, Library, PixelBuffer};
 use guiderecorder_core::model::{
-    AiStatus, Guide, GuideField, ImageShow, Item, NoteKind, Rect, Shape,
+    AiStatus, Guide, GuideField, ImageShow, Item, NoteKind, Rect, RedactionSuggestion, Shape,
+    SuggestionSource,
 };
 use guiderecorder_core::Ulid;
 use rmcp::ServiceExt;
@@ -786,6 +787,82 @@ async fn get_step_burns_in_the_blur() {
         "only {changed} of {area} blurred pixels changed"
     );
     assert!(kept > 0);
+}
+
+/// Text found sensitive on the device is never sent, reviewed or not: an
+/// on-device blur suggestion is blurred in the image, an AI one is not.
+#[tokio::test]
+async fn get_step_burns_in_on_device_suggestions() {
+    let fx = Fixture::new();
+    let library = Library::open(&fx.library).unwrap();
+    let (handle, step) = step_of(&library, ROTATE, ROTATE_PASSWORD_STEP);
+    let full = handle.resolve(&step.image.full).unwrap();
+    let (w, h) = read_webp(&full).unwrap().dimensions();
+    let pixels: Vec<u8> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| if (x + y) % 2 == 0 { 255 } else { 0 }))
+        .flat_map(|v| [v, v, v, 255])
+        .collect();
+    write_webp(&full, &PixelBuffer::rgba(w, h, &pixels)).unwrap();
+    let raw = read_webp(&full).unwrap();
+    // The 64 × 40 screenshot's corners, away from its blur at (4, 8).
+    assert_eq!((w, h), (64, 40));
+    let on_device = Rect {
+        x: 44.0,
+        y: 24.0,
+        width: 16.0,
+        height: 12.0,
+    };
+    let ai = Rect {
+        x: 0.0,
+        y: 32.0,
+        width: 12.0,
+        height: 8.0,
+    };
+    let mut loaded = library.read(&handle.path).unwrap();
+    for item in &mut loaded.guide.items {
+        if let Item::Step(step) = item {
+            if step.id.to_string() == ROTATE_PASSWORD_STEP {
+                step.ai_state.redaction_suggestions = vec![
+                    RedactionSuggestion {
+                        rect: on_device,
+                        reason: "API key".into(),
+                        source: SuggestionSource::OnDevice,
+                    },
+                    RedactionSuggestion {
+                        rect: ai,
+                        reason: "name".into(),
+                        source: SuggestionSource::Ai,
+                    },
+                ];
+            }
+        }
+    }
+    library.save_to(&handle, &loaded.guide).unwrap();
+    let fx = fx.with_index();
+    let mut client = Client::start(fx.config()).await;
+
+    let result = client
+        .ok(
+            "get_step",
+            json!({ "guide_id": ROTATE, "step_id": ROTATE_PASSWORD_STEP, "image": "full" }),
+        )
+        .await;
+    let pngs = images(&result);
+    assert_eq!(pngs.len(), 1);
+    let sent = rendered(&pngs[0]).to_rgba().expect("a PNG");
+    assert_eq!(sent.dimensions(), (w, h));
+    let changed = |r: &Rect| {
+        (r.y as u32..(r.y + r.height) as u32)
+            .flat_map(|y| (r.x as u32..(r.x + r.width) as u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| sent.get_pixel(x, y).0 != raw.get_pixel(x, y).0)
+            .count()
+    };
+    let area = (on_device.width * on_device.height) as usize;
+    assert!(
+        changed(&on_device) * 10 >= area * 9,
+        "on-device suggestion not blurred"
+    );
+    assert_eq!(changed(&ai), 0, "AI suggestion blurred");
 }
 
 #[tokio::test]

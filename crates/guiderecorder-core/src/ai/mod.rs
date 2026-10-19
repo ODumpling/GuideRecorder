@@ -25,8 +25,8 @@ use std::pin::Pin;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-pub use crate::model::RedactionSuggestion;
 use crate::model::{Audience, ElementInfo, Rect, StepKind};
+pub use crate::model::{RedactionSuggestion, SuggestionSource};
 
 mod base64;
 pub mod claude;

@@ -16,8 +16,12 @@
 //!   [`AiState::error`]; a later successful pass clears it. A cancelled step
 //!   is left as it was. Either way the rest of the run carries on.
 //! - Redaction suggestions are stored in [`AiState::redaction_suggestions`]
-//!   as suggestions only (Q9), replacing earlier ones; they never become
+//!   as suggestions only (Q9), replacing the AI's earlier ones and keeping
+//!   those found on the device ([`crate::redact`]); they never become
 //!   annotations without the user.
+//! - Images are sent with the step's blurs and on-device suggestions burned
+//!   in ([`burn_in_redactions`]), so what was found sensitive on the device
+//!   never leaves it.
 //! - Guide-level fields (title, intro, prerequisites, summary, tags) are
 //!   written one by one, each only when the user has not edited it
 //!   ([`Guide::is_field_edited`]). The editor marks a field edited when the
@@ -43,11 +47,12 @@ use ulid::Ulid;
 use super::concurrency::{for_each_bounded, DEFAULT_STEP_CONCURRENCY};
 use super::{
     fit_for_api, AiError, AiProvider, GuideInput, GuideOutput, GuideStepText, ImageData,
-    ImageMediaType, RedactionSuggestion, StepInput, StepOutput, Usage,
+    ImageMediaType, RedactionSuggestion, StepInput, StepOutput, SuggestionSource, Usage,
 };
 use crate::export::raster::locate_crop;
 use crate::library::GuideHandle;
 use crate::model::{AiState, AiStatus, Guide, GuideField, Item, Point, Rect, Step};
+use crate::redact::burn_in_redactions;
 
 /// Reads a step image by its bundle-relative path (e.g. `steps/<id>.webp`).
 pub trait ImageSource: Send + Sync {
@@ -280,10 +285,11 @@ pub fn step_input_text(guide: &Guide, index: usize) -> Option<StepInput> {
     })
 }
 
-/// Loads `step`'s crop and full screenshot into `input`, downscaled to the
-/// API limits. The full screenshot is attached when `include_full` is set or
-/// the step has no crop. Images that fail to load or encode are left out and
-/// returned as warnings. CPU-bound: call off the async runtime.
+/// Loads `step`'s crop and full screenshot into `input`, with its blurs and
+/// on-device blur suggestions burned in, downscaled to the API limits. The
+/// full screenshot is attached when `include_full` is set or the step has
+/// no crop. Images that fail to load or encode are left out and returned as
+/// warnings. CPU-bound: call off the async runtime.
 pub fn attach_images(
     input: &mut StepInput,
     step: &Step,
@@ -324,24 +330,34 @@ fn attach_images_until(
             }
         }
     };
-    let full = load(&step.image.full);
-    let crop = step.image.crop.as_deref().and_then(&mut load);
+    let mut full = load(&step.image.full);
+    let mut crop = step.image.crop.as_deref().and_then(&mut load);
 
-    if let (Some(crop), Some(path)) = (&crop, step.image.crop.as_deref()) {
+    if let (Some(crop), Some(path)) = (&mut crop, step.image.crop.as_deref()) {
         if cancelled() {
             return warnings;
         }
+        // Placed by the full screenshot as it is, before its blurs.
         let rect = crop_source_rect(step, crop, full.as_ref());
+        burn_in_redactions(
+            crop,
+            Point {
+                x: rect.x,
+                y: rect.y,
+            },
+            step,
+        );
         match encode_for_api(crop, rect) {
             Ok(data) => input.crop = Some(data),
             Err(message) => warn(path, message),
         }
     }
-    if let Some(full) = &full {
+    if let Some(full) = &mut full {
         if include_full || input.crop.is_none() {
             if cancelled() {
                 return warnings;
             }
+            burn_in_redactions(full, Point { x: 0.0, y: 0.0 }, step);
             let rect = Rect {
                 x: 0.0,
                 y: 0.0,
@@ -452,7 +468,7 @@ fn step_mut(guide: &mut Guide, step_id: Ulid) -> Option<&mut Step> {
 /// [`AiState`] (`ai`, model, prompt version, the redaction suggestions; no
 /// error). Returns `SkippedEdited`, and changes nothing, for an `edited`
 /// step; `None` if there is no such step. Suggestions are stored, not turned
-/// into annotations.
+/// into annotations: the step's on-device ones, then the AI's.
 pub fn apply_step_output(
     guide: &mut Guide,
     step_id: Ulid,
@@ -464,12 +480,27 @@ pub fn apply_step_output(
     }
     step.title = output.title.clone();
     step.description = output.description.clone().unwrap_or_default();
+    let on_device = |s: &&RedactionSuggestion| s.source == SuggestionSource::OnDevice;
+    let mut redaction_suggestions: Vec<RedactionSuggestion> = step
+        .ai_state
+        .redaction_suggestions
+        .iter()
+        .filter(on_device)
+        .cloned()
+        .collect();
+    redaction_suggestions.extend(
+        output
+            .redaction_suggestions
+            .iter()
+            .filter(|s| !on_device(s))
+            .cloned(),
+    );
     step.ai_state = AiState {
         status: AiStatus::Ai,
         model: Some(output.meta.model.clone()),
         prompt_version: Some(output.meta.prompt_version.clone()),
         error: None,
-        redaction_suggestions: output.redaction_suggestions.clone(),
+        redaction_suggestions,
     };
     Some(StepOutcome::Applied)
 }
@@ -938,6 +969,7 @@ mod tests {
                 height: 16.0,
             },
             reason: reason.into(),
+            source: SuggestionSource::Ai,
         }
     }
 
@@ -1147,6 +1179,7 @@ mod tests {
                             height: 10.0,
                         },
                         reason: "email address".into(),
+                        source: SuggestionSource::Ai,
                     }],
                     meta: GenerationMeta {
                         usage: Usage {
@@ -1327,6 +1360,87 @@ mod tests {
         attach_images(&mut input, &s, &*images(), false);
         assert!(input.crop.is_none());
         assert!(input.full.is_some());
+    }
+
+    #[test]
+    fn images_are_sent_with_blurs_and_on_device_suggestions_burned_in() {
+        // Vertical stripes, which any blur turns grey.
+        let stripes = |w, h| {
+            RgbaImage::from_fn(w, h, |x, _| {
+                let v = if x % 2 == 0 { 0 } else { 255 };
+                image::Rgba([v, v, v, 255])
+            })
+        };
+        let source: Arc<dyn ImageSource> = Arc::new(move |path: &str| {
+            Ok(if path.ends_with(".crop.webp") {
+                stripes(400, 200)
+            } else {
+                stripes(800, 600)
+            })
+        });
+        let mut s = step("Click", AiStatus::Template);
+        let at = |x, y| Rect {
+            x,
+            y,
+            width: 40.0,
+            height: 20.0,
+        };
+        s.annotations.push(crate::model::Annotation {
+            id: Ulid::new(),
+            shape: crate::model::Shape::Blur(at(600.0, 500.0)),
+            style: Default::default(),
+        });
+        s.ai_state.redaction_suggestions = vec![
+            RedactionSuggestion {
+                rect: at(350.0, 250.0),
+                reason: "email address".into(),
+                source: SuggestionSource::OnDevice,
+            },
+            RedactionSuggestion {
+                rect: at(10.0, 10.0),
+                reason: "name".into(),
+                source: SuggestionSource::Ai,
+            },
+        ];
+        let mut input = step_input_text(&guide(vec![s.clone()]), 0).unwrap();
+        assert!(attach_images(&mut input, &s, &*source, true).is_empty());
+        let decode = |data: &ImageData| image::load_from_memory(&data.bytes).unwrap().to_rgba8();
+        let grey = |image: &RgbaImage, x, y| !matches!(image.get_pixel(x, y).0[0], 0 | 255);
+
+        let full = decode(input.full.as_ref().unwrap());
+        assert_eq!(full.dimensions(), (800, 600));
+        assert!(grey(&full, 610, 510), "the blur");
+        assert!(grey(&full, 360, 255), "the on-device suggestion");
+        assert!(!grey(&full, 20, 15), "the AI's suggestion is not burned in");
+        assert!(!grey(&full, 200, 300));
+        // The crop sits at (300, 200): the suggestion is at (50, 50) in it.
+        let crop = decode(input.crop.as_ref().unwrap());
+        assert!(grey(&crop, 60, 55));
+        assert!(!grey(&crop, 10, 10));
+    }
+
+    #[test]
+    fn on_device_suggestions_survive_an_ai_pass() {
+        let mut s = step("a", AiStatus::Template);
+        let found = RedactionSuggestion {
+            source: SuggestionSource::OnDevice,
+            ..suggestion("card number")
+        };
+        s.ai_state.redaction_suggestions = vec![suggestion("old"), found.clone()];
+        let id = s.id;
+        let mut g = guide(vec![s]);
+        let out = StepOutput {
+            title: "New".into(),
+            description: None,
+            redaction_suggestions: vec![suggestion("new")],
+            meta: mock_meta("step.v1"),
+        };
+        assert_eq!(
+            apply_step_output(&mut g, id, &out),
+            Some(StepOutcome::Applied)
+        );
+        let kept = &g.steps().next().unwrap().ai_state.redaction_suggestions;
+        assert_eq!(kept, &[found, suggestion("new")]);
     }
 
     /// Delegates to a [`MockProvider`] after a delay, tracking calls in flight.

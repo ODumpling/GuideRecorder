@@ -58,6 +58,10 @@
 //! Each step also gets an after-frame (`recording.afterFrames`), taken
 //! `recording.afterFrameDelayMs` after its action; see the capture
 //! session's `# After frames`.
+//!
+//! While saving, the screenshots are scanned on the device for sensitive
+//! text (`redaction`, see [`crate::redaction`]); what was found is counted
+//! in [`RecordingSaved`].
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,7 +83,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
 use crate::picker::{self, CaptureTargetArg};
-use crate::settings::{CaptureArea, Settings, SettingsStore};
+use crate::settings::{CaptureArea, Redaction, Settings, SettingsStore};
 use crate::settings_commands;
 
 /// Emitted with a [`RecordingStatus`] whenever the status changes.
@@ -175,6 +179,14 @@ pub struct RecordingSaved {
     pub steps: usize,
     /// Detected steps left out because no snapshot was close enough.
     pub skipped: usize,
+    /// Blur suggestions added for text found sensitive on the device
+    /// (settings `redaction`; see [`crate::redaction`]).
+    pub suggested_blurs: usize,
+    /// Blurs added for it, when the settings apply them.
+    pub applied_blurs: usize,
+    /// Steps that could not be scanned for sensitive text (0 when the
+    /// settings turn scanning off).
+    pub unscanned_steps: usize,
 }
 
 /// A screenshot the running session took (sent as [`SNAPSHOT_EVENT`]).
@@ -858,7 +870,16 @@ fn stop<R: Runtime>(
             title: title.clone(),
         },
     );
-    let saved = save(session, cell, title.unwrap_or_else(default_title));
+    let redaction = app
+        .try_state::<Arc<SettingsStore>>()
+        .map(|store| store.get().redaction)
+        .unwrap_or_default();
+    let saved = save(
+        session,
+        cell,
+        title.unwrap_or_else(default_title),
+        &redaction,
+    );
     emit_status(app, recorder, RecordingStatus::Idle);
     let saved = saved?;
     if let Err(e) = app.emit(SAVED_EVENT, &saved) {
@@ -867,23 +888,34 @@ fn stop<R: Runtime>(
     Ok(saved)
 }
 
-/// Stops `session`, writes its guide into the library and indexes it.
+/// Stops `session`, writes its guide into the library, scans its
+/// screenshots for sensitive text as `redaction` says and indexes it.
 fn save(
     session: RecordingSession,
     cell: Arc<SessionCell>,
     title: String,
+    redaction: &Redaction,
 ) -> Result<RecordingSaved> {
     // Dropping the `Recording` on any error removes the session folder.
     let recording = session.stop().map_err(session_error)?;
     let library = cell.get()?;
-    let saved = recording
+    let mut saved = recording
         .save_guide(library.library(), &title)
         .map_err(session_error)?;
+    let redacted = crate::redaction::redact_recording(
+        library.library(),
+        &saved.handle,
+        &mut saved.guide,
+        redaction,
+    );
     library.index_bundle(&saved.handle);
     Ok(RecordingSaved {
         guide_id: saved.guide.id.to_string(),
         steps: saved.guide.steps().count(),
         skipped: saved.skipped,
+        suggested_blurs: redacted.suggested,
+        applied_blurs: redacted.blurred,
+        unscanned_steps: redacted.unscanned,
     })
 }
 
@@ -1414,9 +1446,12 @@ mod tests {
                 guide_id: "01J".into(),
                 steps: 3,
                 skipped: 1,
+                suggested_blurs: 2,
+                applied_blurs: 0,
+                unscanned_steps: 1,
             })
             .unwrap(),
-            json!({"guideId": "01J", "steps": 3, "skipped": 1})
+            json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0, "unscannedSteps": 1})
         );
         assert_eq!(
             serde_json::to_value(RecordingSnapshot {

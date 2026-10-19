@@ -1,4 +1,5 @@
-//! GuideRecorder core: guide format, library, index, step detection, export and AI.
+//! GuideRecorder core: guide format, library, index, step detection, export,
+//! AI and on-device redaction.
 //!
 //! See design scratchpads #444 (format), #443 (export) and #442 (AI).
 
@@ -12,6 +13,7 @@ pub mod markdown;
 pub mod migrate;
 pub mod model;
 pub mod pages;
+pub mod redact;
 pub mod steps;
 
 pub use ulid::Ulid;

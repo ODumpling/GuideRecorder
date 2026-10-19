@@ -27,6 +27,7 @@ const DEFAULTS: Settings = {
     audience: "beginner",
   },
   export: { format: "pdf", folder: null, logo: null, accent: null },
+  redaction: { mode: "suggest", patterns: [], words: [] },
   mcp: { writable: false },
 };
 

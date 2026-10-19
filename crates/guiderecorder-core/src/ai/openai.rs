@@ -357,7 +357,9 @@ fn json_in_text(text: &str) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::ai::claude::{self, ClaudeConfig};
-    use crate::ai::{GuideStepText, ImageMediaType, RedactionSuggestion, RewriteStyle};
+    use crate::ai::{
+        GuideStepText, ImageMediaType, RedactionSuggestion, RewriteStyle, SuggestionSource,
+    };
     use crate::model::{Audience, ElementInfo, Rect, StepKind};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -630,6 +632,7 @@ mod tests {
             [RedactionSuggestion {
                 rect: rect(1100.0, 550.0, 100.0, 25.0),
                 reason: "email address".into(),
+                source: SuggestionSource::Ai,
             }]
         );
 

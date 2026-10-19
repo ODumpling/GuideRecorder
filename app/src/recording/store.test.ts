@@ -17,7 +17,7 @@ const T0 = Date.parse(STARTED);
 const run = { startedAt: STARTED, title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null, captureLost: null };
 const recording: RecordingStatus = { state: "recording", ...run };
 const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
-const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0 };
+const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0, suggestedBlurs: 0, appliedBlurs: 0, unscannedSteps: 0 };
 const SNAP1: RecordingSnapshot = { id: "0-5000000", ts: 7_000_000, width: 16, height: 10, point: { x: 8, y: 5 } };
 const SNAP2: RecordingSnapshot = { id: "0-9000000", ts: 12_000_000, width: 16, height: 10, point: null };
 

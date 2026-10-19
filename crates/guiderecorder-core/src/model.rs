@@ -394,9 +394,10 @@ pub struct AiState {
     /// pass succeeds. The text and `status` are left as they were.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Blur regions the AI suggests for the step's screenshot. Suggestions
-    /// only (Q9): never applied as annotations without the user. Replaced by
-    /// each successful per-step pass.
+    /// Blur regions suggested for the step's screenshot, by the AI or found
+    /// on the device ([`crate::redact`]). Suggestions only (Q9): never
+    /// applied as annotations without the user. Each successful per-step AI
+    /// pass replaces the AI's own; on-device ones stay until reviewed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redaction_suggestions: Vec<RedactionSuggestion>,
 }
@@ -409,6 +410,21 @@ pub struct RedactionSuggestion {
     pub rect: Rect,
     /// Why it looks sensitive, e.g. `email address`.
     pub reason: String,
+    /// Who suggested it. Absent (the AI) in guides saved before on-device
+    /// redaction.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub source: SuggestionSource,
+}
+
+/// Where a [`RedactionSuggestion`] came from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SuggestionSource {
+    /// The AI step pass.
+    #[default]
+    Ai,
+    /// Text recognised and matched on this device ([`crate::redact`]).
+    OnDevice,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -667,17 +683,31 @@ mod tests {
             model: None,
             prompt_version: Some("guide.v1".into()),
             error: Some("network error: reset".into()),
-            redaction_suggestions: vec![RedactionSuggestion {
-                rect: Rect {
-                    x: 1.0,
-                    y: 2.0,
-                    width: 3.0,
-                    height: 4.0,
+            redaction_suggestions: vec![
+                RedactionSuggestion {
+                    rect: Rect {
+                        x: 1.0,
+                        y: 2.0,
+                        width: 3.0,
+                        height: 4.0,
+                    },
+                    reason: "email address".into(),
+                    source: SuggestionSource::Ai,
                 },
-                reason: "email address".into(),
-            }],
+                RedactionSuggestion {
+                    rect: Rect {
+                        x: 5.0,
+                        y: 6.0,
+                        width: 7.0,
+                        height: 8.0,
+                    },
+                    reason: "card number".into(),
+                    source: SuggestionSource::OnDevice,
+                },
+            ],
         };
         let json = serde_json::to_value(&guide).unwrap();
+        // The AI's suggestions are written as before, without a source.
         assert_eq!(
             json["aiState"],
             json!({
@@ -687,6 +717,10 @@ mod tests {
                 "redactionSuggestions": [{
                     "rect": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 },
                     "reason": "email address"
+                }, {
+                    "rect": { "x": 5.0, "y": 6.0, "width": 7.0, "height": 8.0 },
+                    "reason": "card number",
+                    "source": "onDevice"
                 }]
             })
         );

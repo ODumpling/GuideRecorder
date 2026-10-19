@@ -63,7 +63,7 @@ use resvg::tiny_skia::{IntSize, Pixmap};
 use super::annotate::{self, Layer};
 use super::blur::{self, Region};
 use crate::library::GuideHandle;
-use crate::model::{Annotation, BlurMode, ImageShow, Point, Rect, Shape, Step};
+use crate::model::{Annotation, BlurMode, ImageShow, Point, Rect, Shape, Step, SuggestionSource};
 
 /// How to render a step image.
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +79,11 @@ pub struct ImageOptions {
     /// Off for a writer that overlays its own markers using
     /// [`RenderedImage::hotspots`].
     pub hotspot_markers: bool,
+    /// Also blur the step's on-device blur suggestions, reviewed or not
+    /// (off by default). On for images that leave the device with no
+    /// review in between (the MCP server, the CLI): text found here as
+    /// sensitive is never sent.
+    pub burn_on_device_suggestions: bool,
     /// Look up a crop's origin even when nothing is drawn on it, so
     /// [`RenderedImage::point`] can be placed (off by default; it reads the
     /// full screenshot).
@@ -92,6 +97,7 @@ impl Default for ImageOptions {
             max_width: None,
             placeholder_size: (800, 450),
             hotspot_markers: true,
+            burn_on_device_suggestions: false,
             locate_point: false,
         }
     }
@@ -226,7 +232,7 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
         &mut warnings,
     );
     // Redaction comes before any scaling.
-    burn_in_redactions(&mut pixmap, origin, step);
+    burn_in_redactions(&mut pixmap, origin, step, opts.burn_on_device_suggestions);
     // Markers show only numbers and outlines, and stay readable over a blur.
     if opts.hotspot_markers {
         annotate::draw(
@@ -514,7 +520,7 @@ fn apply_crop(
 /// `rect` (full-screenshot pixels) as whole view pixels, grown outward to
 /// cover every partly covered pixel and clamped to the view. `None` if
 /// nothing is left.
-fn region(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Region> {
+pub(crate) fn region(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Region> {
     if ![rect.x, rect.y, rect.width, rect.height]
         .iter()
         .all(|v| v.is_finite())
@@ -539,22 +545,28 @@ fn region(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Region> {
     })
 }
 
-/// Burns every blur annotation into the pixels, in order.
-fn burn_in_redactions(pixmap: &mut Pixmap, origin: Point, step: &Step) {
+/// Burns every blur annotation into the pixels, in order, then the
+/// on-device blur suggestions if `on_device` (see
+/// [`ImageOptions::burn_on_device_suggestions`]).
+fn burn_in_redactions(pixmap: &mut Pixmap, origin: Point, step: &Step, on_device: bool) {
     let (w, h) = (pixmap.width(), pixmap.height());
-    for annotation in &step.annotations {
-        let Shape::Blur(rect) = &annotation.shape else {
-            continue;
-        };
-        let mode = annotation.style.blur_mode.unwrap_or(BlurMode::Blur);
-        if let Some(r) = region(rect, origin, (w, h)) {
-            blur::burn_in(
-                pixmap.data_mut(),
-                (w, h),
-                r,
-                mode,
-                annotation.style.blur_amount,
-            );
+    let blurs = step.annotations.iter().filter_map(|a| match &a.shape {
+        Shape::Blur(rect) => Some((
+            *rect,
+            a.style.blur_mode.unwrap_or(BlurMode::Blur),
+            a.style.blur_amount,
+        )),
+        _ => None,
+    });
+    let suggested = step
+        .ai_state
+        .redaction_suggestions
+        .iter()
+        .filter(|s| on_device && s.source == SuggestionSource::OnDevice)
+        .map(|s| (s.rect, BlurMode::Blur, None));
+    for (rect, mode, amount) in blurs.chain(suggested) {
+        if let Some(r) = region(&rect, origin, (w, h)) {
+            blur::burn_in(pixmap.data_mut(), (w, h), r, mode, amount);
         }
     }
 }

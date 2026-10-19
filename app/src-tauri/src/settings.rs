@@ -18,6 +18,7 @@ use std::sync::Mutex;
 use guiderecorder_core::ai::claude::{DEFAULT_GUIDE_MODEL, DEFAULT_STEP_MODEL};
 use guiderecorder_core::library::{write_atomic, Durability};
 use guiderecorder_core::model::Audience;
+use guiderecorder_core::redact::{self, RedactionMode};
 use serde::{Deserialize, Serialize};
 
 use crate::editor::{AppError, ErrorKind, Result};
@@ -52,6 +53,7 @@ pub struct Settings {
     pub recording: Recording,
     pub ai: Ai,
     pub export: ExportDefaults,
+    pub redaction: Redaction,
     pub mcp: Mcp,
 }
 
@@ -63,6 +65,7 @@ impl Default for Settings {
             recording: Recording::default(),
             ai: Ai::default(),
             export: ExportDefaults::default(),
+            redaction: Redaction::default(),
             mcp: Mcp::default(),
         }
     }
@@ -280,6 +283,18 @@ pub struct ExportDefaults {
     pub folder: Option<PathBuf>,
     pub logo: Option<PathBuf>,
     pub accent: Option<String>,
+}
+
+/// On-device redaction of new recordings (see `redaction`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Redaction {
+    /// What happens to sensitive text found in a recording's screenshots.
+    pub mode: RedactionMode,
+    /// The user's own regular expressions (Rust `regex` syntax).
+    pub patterns: Vec<String>,
+    /// Words and phrases to blur wherever they appear, ignoring case.
+    pub words: Vec<String>,
 }
 
 /// The MCP server setup shown in Settings → MCP.
@@ -505,6 +520,25 @@ impl Settings {
             return Err(invalid(format!(
                 "accent {accent:?} is not a hex colour (#rgb or #rrggbb)"
             )));
+        }
+        let r = &self.redaction;
+        if r.patterns.len() > redact::detect::MAX_PATTERNS {
+            return Err(invalid(format!(
+                "at most {} patterns to blur",
+                redact::detect::MAX_PATTERNS
+            )));
+        }
+        if r.words.len() > redact::detect::MAX_WORDS {
+            return Err(invalid(format!(
+                "at most {} words to blur",
+                redact::detect::MAX_WORDS
+            )));
+        }
+        for pattern in &r.patterns {
+            redact::check_pattern(pattern).map_err(|e| invalid(e.0))?;
+        }
+        for word in &r.words {
+            redact::check_word(word).map_err(|e| invalid(e.0))?;
         }
         Ok(())
     }
@@ -790,6 +824,12 @@ fn sanitize(mut settings: Settings) -> Settings {
     if !check(&probe) {
         settings.export.accent = None;
     }
+    // Keeps the mode and every usable pattern and word.
+    let r = &mut settings.redaction;
+    r.patterns.retain(|p| redact::check_pattern(p).is_ok());
+    r.patterns.truncate(redact::detect::MAX_PATTERNS);
+    r.words.retain(|w| redact::check_word(w).is_ok());
+    r.words.truncate(redact::detect::MAX_WORDS);
     settings.version = SETTINGS_VERSION;
     settings
 }
@@ -1079,6 +1119,47 @@ mod tests {
         let mut s = Settings::default();
         s.ai.open_ai_compatible.base_url = "api.example.com".into();
         assert!(s.validate().unwrap_err().message.contains("URL"));
+    }
+
+    #[test]
+    fn redaction_rules_are_checked_and_kept_on_load() {
+        let settings = Settings::default();
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["redaction"],
+            serde_json::json!({ "mode": "suggest", "patterns": [], "words": [] })
+        );
+        let mut s = Settings {
+            redaction: Redaction {
+                mode: RedactionMode::Apply,
+                patterns: vec![r"INC-\d+".into()],
+                words: vec!["Acme Corp".into()],
+            },
+            ..Settings::default()
+        };
+        s.validate().unwrap();
+        s.redaction.patterns.push("(".into());
+        let message = s.validate().unwrap_err().message;
+        assert!(message.contains(r#""(" is not valid"#), "{message}");
+        s.redaction.patterns.pop();
+        s.redaction.words.push("  ".into());
+        assert!(s.validate().is_err());
+        s.redaction.words.pop();
+        s.redaction.patterns = vec![r"\d".into(); redact::detect::MAX_PATTERNS + 1];
+        assert!(s.validate().is_err());
+
+        // A stored bad pattern or word goes; the rest stays.
+        let path = scratch().join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            r#"{"version":2,"redaction":{"mode":"apply","patterns":["(","INC-\\d+"],"words":["Acme",""]}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path));
+        let r = store.get().redaction;
+        assert_eq!(r.mode, RedactionMode::Apply);
+        assert_eq!(r.patterns, [r"INC-\d+"]);
+        assert_eq!(r.words, ["Acme"]);
+        assert!(store.view().load_error.is_some());
     }
 
     #[test]

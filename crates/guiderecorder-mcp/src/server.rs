@@ -10,7 +10,8 @@
 //! `guiderecorder_core::edit`). They never write the index: the app
 //! indexes their changes at its next sync, and until then reads here fall
 //! back to scanning. Images come only from [`render_step_image`], so annotations,
-//! blur and pixelation are burned in; the raw screenshots are never sent.
+//! blur and pixelation are burned in, and so are on-device blur
+//! suggestions, reviewed or not; the raw screenshots are never sent.
 //!
 //! Read-only SQLite opens of the index may create the `-shm` and `-wal`
 //! sidecar files next to it (normal WAL behaviour); the index itself is
@@ -1044,6 +1045,8 @@ pub fn image_options(show: Option<ImageShow>) -> ImageOptions {
     ImageOptions {
         show,
         max_width: Some(IMAGE_MAX_WIDTH),
+        // A client's model is off the device; nothing is reviewed here.
+        burn_on_device_suggestions: true,
         ..ImageOptions::default()
     }
 }

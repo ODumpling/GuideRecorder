@@ -171,6 +171,7 @@ export class Backend {
       audience: "beginner",
     },
     export: { format: "pdf", folder: null, logo: null, accent: null },
+    redaction: { mode: "suggest", patterns: [], words: [] },
     mcp: { writable: false },
   };
   /** Whether an API key is "stored"; the key itself is never kept. */

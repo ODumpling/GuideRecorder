@@ -99,7 +99,10 @@ export interface AiState {
   promptVersion?: string;
   /** Short message from the last failed AI pass; the text was left as it was. */
   error?: string | null;
-  /** Blur regions the AI suggests for the step's screenshot; never applied by themselves. */
+  /**
+   * Blur regions suggested for the step's screenshot, by the AI or found on
+   * this Mac; never applied by themselves.
+   */
   redactionSuggestions?: RedactionSuggestion[];
 }
 
@@ -107,6 +110,8 @@ export interface AiState {
 export interface RedactionSuggestion {
   rect: Rect;
   reason: string;
+  /** Who suggested it; absent: the AI. "onDevice": text found on this Mac. */
+  source?: "ai" | "onDevice";
 }
 
 export interface Step {
@@ -361,11 +366,22 @@ export interface Settings {
     logo: string | null;
     accent: string | null;
   };
+  /** On-device redaction of new recordings. */
+  redaction: {
+    mode: RedactionMode;
+    /** Regular expressions (Rust `regex` syntax). */
+    patterns: string[];
+    /** Words and phrases, matched ignoring case. */
+    words: string[];
+  };
   mcp: {
     /** The setup command passes `--writable`, so MCP clients may edit and create guides. */
     writable: boolean;
   };
 }
+
+/** What happens to sensitive text found in a new recording's screenshots. */
+export type RedactionMode = "off" | "suggest" | "apply";
 
 export interface SettingsView {
   settings: Settings;
@@ -454,6 +470,12 @@ export interface RecordingSaved {
   guideId: Ulid;
   steps: number;
   skipped: number;
+  /** Blur suggestions added for text found sensitive on this Mac. */
+  suggestedBlurs: number;
+  /** Blurs added for it, when Settings apply them. */
+  appliedBlurs: number;
+  /** Steps that could not be scanned for sensitive text. */
+  unscannedSteps: number;
 }
 
 /**
