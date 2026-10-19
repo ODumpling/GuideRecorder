@@ -69,7 +69,7 @@ jobs:
           retention-days: 7
 
   web:
-    name: Web (guide schema, sync, typecheck, unit, build)
+    name: Web (guide schema, sync, ui, typecheck, unit, build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -88,6 +88,8 @@ jobs:
       - run: pnpm --filter @guiderecorder/guide-schema test
       - run: pnpm --filter @guiderecorder/sync typecheck
       - run: pnpm --filter @guiderecorder/sync test
+      - run: pnpm --filter @guiderecorder/ui typecheck
+      - run: pnpm --filter @guiderecorder/ui test
       - run: pnpm --filter @guiderecorder/web typecheck
       - run: pnpm --filter @guiderecorder/web test
       - run: pnpm --filter @guiderecorder/web build

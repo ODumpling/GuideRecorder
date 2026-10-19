@@ -19,6 +19,7 @@ import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as GuidesGuideIdEditRouteImport } from './routes/guides.$guideId_.edit'
 import { Route as ApiShareTokenAssetsSha256RouteImport } from './routes/api/share/$token/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
@@ -79,6 +80,11 @@ const STokenRoute = STokenRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidesGuideIdEditRoute = GuidesGuideIdEditRouteImport.update({
+  id: '/guides/$guideId_/edit',
+  path: '/guides/$guideId/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiShareTokenAssetsSha256Route =
@@ -159,6 +165,7 @@ export interface FileRoutesByFullPath {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -182,6 +189,7 @@ export interface FileRoutesByTo {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -206,6 +214,7 @@ export interface FileRoutesById {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId_/edit': typeof GuidesGuideIdEditRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -231,6 +240,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/guides/$guideId/edit'
     | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
@@ -254,6 +264,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/guides/$guideId/edit'
     | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
@@ -277,6 +288,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/guides/$guideId_/edit'
     | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
@@ -301,6 +313,7 @@ export interface RootRouteChildren {
   InvitationsIdRoute: typeof InvitationsIdRoute
   STokenRoute: typeof STokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  GuidesGuideIdEditRoute: typeof GuidesGuideIdEditRoute
   ApiShareTokenAssetsSha256Route: typeof ApiShareTokenAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -384,6 +397,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guides/$guideId_/edit': {
+      id: '/guides/$guideId_/edit'
+      path: '/guides/$guideId/edit'
+      fullPath: '/guides/$guideId/edit'
+      preLoaderRoute: typeof GuidesGuideIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/share/$token/assets/$sha256': {
@@ -477,6 +497,7 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsIdRoute: InvitationsIdRoute,
   STokenRoute: STokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  GuidesGuideIdEditRoute: GuidesGuideIdEditRoute,
   ApiShareTokenAssetsSha256Route: ApiShareTokenAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
     ApiWorkspacesWorkspaceIdAssetsSha256Route,

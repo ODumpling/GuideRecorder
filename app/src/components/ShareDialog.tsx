@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Dialog } from "radix-ui";
 import { Copy, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { useEditor } from "@/editor/editor";
 import type { ShareLink } from "@/sync/share";
 import { shareStore, useShare } from "@/sync/sync";

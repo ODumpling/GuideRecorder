@@ -19,7 +19,7 @@ import { SettingsDialog, type SettingsPage } from "@/components/settings/Setting
 import { ShareDialog } from "@/components/ShareDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";

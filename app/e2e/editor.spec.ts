@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { Editor } from "@tiptap/core";
-import type { Annotation, Step } from "../src/lib/types";
+import type { Annotation, Step } from "@guiderecorder/guide-schema";
 import type { Backend } from "./backend";
 import { API_KEY, CALENDAR, expect, openGuide, outlineItems, saved, SCHEMA_VERSION, test } from "./fixtures";
 

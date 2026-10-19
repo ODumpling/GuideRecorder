@@ -38,6 +38,6 @@ export function isValidColor(value: string): boolean {
 }
 
 /** `value` if valid (trimmed), else `fallback`, as the exporter does. */
-export function colorOr(value: string | undefined, fallback: string): string {
-  return value !== undefined && isValidColor(value) ? value.trim() : fallback;
+export function colorOr(value: string | null | undefined, fallback: string): string {
+  return value != null && isValidColor(value) ? value.trim() : fallback;
 }

@@ -2,7 +2,7 @@ import { Cloud, CloudAlert, CloudOff, CloudUpload } from "lucide-react";
 import type { GuideStatus } from "@/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
 import { useSync } from "@/sync/sync";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const BADGES: Record<GuideStatus, { icon: typeof Cloud; label: string; className: string }> = {
   synced: { icon: Cloud, label: "Synced with the web", className: "text-muted-foreground" },

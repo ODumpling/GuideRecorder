@@ -1,4 +1,4 @@
-import { useRouter } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import type { Guide } from "@guiderecorder/guide-schema";
 import type { Revision } from "@guiderecorder/sync";
@@ -69,9 +69,13 @@ export function GuideView({ revision, assetUrl, canEdit, header }: Props) {
               </Button>
             </span>
           ) : (
-            <Button variant="secondary" onClick={() => setDraft(structuredClone(revision.guide))}>
+            <Link
+              to="/guides/$guideId/edit"
+              params={{ guideId: revision.guideId }}
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted"
+            >
               Edit
-            </Button>
+            </Link>
           )
         ) : null}
       </header>

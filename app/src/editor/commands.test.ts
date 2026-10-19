@@ -24,7 +24,7 @@ import {
   type Command,
 } from "@/editor/commands";
 import { guide, step } from "@/editor/test-fixtures";
-import type { Annotation, Step } from "@/lib/types";
+import type { Annotation, Step } from "@guiderecorder/guide-schema";
 
 const ids = (g: ReturnType<typeof guide>) => g.items.map((item) => item.id);
 

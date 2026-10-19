@@ -15,7 +15,7 @@ import {
 import { insertImageSteps } from "@/editor/images";
 import type { EditorStore } from "@/editor/store";
 import { addAnnotatedPages, copyStepImages, errorMessage } from "@/lib/ipc";
-import type { NoteKind, Step, StepImage } from "@/lib/types";
+import type { NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
 
 function current(store: EditorStore) {

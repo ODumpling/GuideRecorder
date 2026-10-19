@@ -1,13 +1,15 @@
 # GuideRecorder Web
 
 The web app for Pro and Enterprise workspaces: accounts, workspaces and
-roles, billing, image storage for synced guides, and share links. Later
-phases add the cloud library, the web editor, approvals and audit.
+roles, billing, image storage for synced guides, the web editor, and share
+links. Later phases add the cloud library, approvals and audit.
 
 TanStack Start (Vite, file routes in `src/routes`, server functions in
 `src/server`), Better Auth (email/password, magic link, Google, Microsoft,
 organizations, Stripe), Drizzle on Postgres, and any S3-compatible store. The `guide.json` types come from
-`packages/guide-schema`, generated from the Rust model.
+`packages/guide-schema`, generated from the Rust model; the editors, step
+view, annotation shapes and theme tokens from `packages/ui`, shared with the
+desktop app.
 
 ## Run locally
 
@@ -42,6 +44,17 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   again. Every change gives the guide a new `seq`; clients follow
   `changes?since=<cursor>`. Deleted guides sit in the trash for 30 days, then
   lose their revisions but stay in the feed as tombstones.
+- The web editor (`/guides/:id/edit`, `src/lib/edit.ts`) edits a guide's text:
+  its title, introduction and prerequisites, step titles and descriptions,
+  section titles and notes; steps, sections and notes can be reordered and
+  deleted, not added. Images and annotations are shown read-only. A save goes
+  through the same `push` as a sync from the desktop app (source `web`), on
+  the revision the edit began on. If the guide changed meanwhile, the server
+  merges the edit into the head with `packages/sync`, as the app would, and
+  pushes again; clashing edits to the same field come back for the user to
+  choose which to keep. Text the user writes is marked edited, so the
+  app's AI passes leave it. Needs the `guide:update` permission and a plan
+  with `webEditor`.
 - Share links (`src/lib/sharing.ts`) show a guide to anyone with the link at
   `/s/<token>`: a pinned revision or the latest published one (the head,
   until approvals publish), optionally with an expiry, a password (scrypt

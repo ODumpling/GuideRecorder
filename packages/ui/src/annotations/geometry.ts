@@ -7,7 +7,7 @@
 // Drawing rules (sizes, arrow heads, defaults) follow the exporter in core
 // `export/annotate.rs`, so the editor shows what the export will contain.
 
-import type { Annotation, AnnotationType, ArrowGeometry, Point, Rect, StepImage } from "@/lib/types";
+import type { Annotation, AnnotationType, ArrowGeometry, Point, Rect, StepImage } from "@guiderecorder/guide-schema";
 
 /** The part of the full screenshot on screen, in its pixels. */
 export type View = Rect;
@@ -264,15 +264,15 @@ export function hitOrder(annotations: Annotation[]): Annotation[] {
 }
 
 /** The exporter's rule for `strokeWidth`. */
-export function strokeWidth(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, 256) : fallback;
+export function strokeWidth(value: number | null | undefined, fallback: number): number {
+  return value != null && Number.isFinite(value) && value > 0 ? Math.min(value, 256) : fallback;
 }
 
 /** The exporter's rule for `blurAmount`. */
 export function blurAmount(annotation: Annotation): number {
   const fallback = annotation.style?.blurMode === "pixelate" ? DEFAULT_BLOCK_SIZE : DEFAULT_BLUR_RADIUS;
   const value = annotation.style?.blurAmount;
-  return value !== undefined && Number.isFinite(value) && value > 0
+  return value != null && Number.isFinite(value) && value > 0
     ? Math.min(Math.max(Math.round(value), MIN_BLUR_AMOUNT), MAX_BLUR_AMOUNT)
     : fallback;
 }
