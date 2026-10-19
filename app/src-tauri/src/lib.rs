@@ -21,6 +21,7 @@ mod settings_commands;
 mod terminate;
 mod toolbar;
 mod tray;
+mod updater;
 
 use editor::{DroppedFiles, SessionCell};
 
@@ -43,17 +44,29 @@ fn app_info() -> AppInfo {
 
 /// Id of the app menu's own Quit item; see [`app_menu`].
 const QUIT_MENU_ID: &str = "guiderecorder-quit";
+/// Id of the app menu's Check for Updates… item, after About.
+const CHECK_UPDATES_MENU_ID: &str = "guiderecorder-check-updates";
 
-/// Tauri's default menu with its Quit item swapped for one that goes
-/// through the `QuitGate`. The predefined item sends NSApp `terminate:`,
-/// which tao handles in `applicationWillTerminate` without a
-/// `RunEvent::ExitRequested`, so the editor would not get to save.
+/// Tauri's default menu with Check for Updates… after About, and its Quit
+/// item swapped for one that goes through the `QuitGate`. The predefined
+/// item sends NSApp `terminate:`, which tao handles in
+/// `applicationWillTerminate` without a `RunEvent::ExitRequested`, so the
+/// editor would not get to save.
 fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
     #[cfg(target_os = "macos")]
     {
         use tauri::menu::{MenuItem, MenuItemKind};
         if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+            let check = MenuItem::with_id(
+                app,
+                CHECK_UPDATES_MENU_ID,
+                "Check for Updates…",
+                true,
+                None::<&str>,
+            )?;
+            // About is first.
+            app_menu.insert(&check, 1)?;
             let items = app_menu.items()?;
             let quit = items.iter().position(|item| match item {
                 MenuItemKind::Predefined(item) => item.text().is_ok_and(|t| t.starts_with("Quit")),
@@ -81,6 +94,9 @@ pub fn run() {
         .on_menu_event(|app, event| {
             if event.id() == QUIT_MENU_ID {
                 app.state::<Arc<commands::QuitGate>>().on_quit_menu(app);
+            } else if event.id() == CHECK_UPDATES_MENU_ID {
+                tray::show_main(app);
+                updater::check_from_menu(app);
             }
         })
         .plugin(navigation::guard())
@@ -92,6 +108,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Used from Rust only (`updater.rs`); no capability grants it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(Arc::new(commands::QuitGate::default()));
             // Dock Quit, AppleScript `quit` and logout save first too.
@@ -118,6 +136,8 @@ pub fn run() {
             }
             app.manage(Arc::new(store));
             app.manage(Arc::new(chosen));
+            app.manage(Arc::new(updater::Updates::default()));
+            updater::start_background_checks(app.handle());
             let cell = Arc::new(SessionCell::default());
             app.manage(Arc::clone(&cell));
             let from_env = std::env::var_os(editor::LIBRARY_ENV).filter(|v| !v.is_empty());
@@ -206,15 +226,24 @@ pub fn run() {
             commands::quit_ack,
             commands::quit_app,
             commands::quit_cancel,
+            updater::update_status,
+            updater::check_for_update,
+            updater::install_update,
+            updater::restart_to_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building GuideRecorder")
-        .run(|app, event| {
-            if let RunEvent::ExitRequested { code, api, .. } = event {
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { code, api, .. } => {
                 let gate = app.state::<Arc<commands::QuitGate>>();
                 if gate.on_exit_requested(app, code) {
                     api.prevent_exit();
                 }
             }
+            // After `restart_to_update`: start the installed version.
+            RunEvent::Exit if app.state::<Arc<updater::Updates>>().restart_requested() => {
+                tauri::process::restart(&app.env());
+            }
+            _ => {}
         });
 }

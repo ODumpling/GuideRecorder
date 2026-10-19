@@ -27,6 +27,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
+tokio = { version = "1", features = ["time"] }
 
 # PDF pages for annotated guides (`src/pdf.rs`); the capture crate uses the
 # same versions.

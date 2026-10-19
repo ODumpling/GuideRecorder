@@ -7,8 +7,8 @@ import { useEditor } from "@/editor/editor";
 import { setupStore } from "@/onboarding/onboarding";
 import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
-import { errorMessage, tauriExportApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
-import type { CaptureArea, LibraryInfo, McpSetup, Permission, PermissionStatus, Settings } from "@/lib/types";
+import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
+import type { CaptureArea, LibraryInfo, McpSetup, Permission, PermissionStatus, Settings, UpdateStatus } from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
 import {
   AFTER_FRAME_DELAY_MS,
@@ -23,6 +23,8 @@ import {
 } from "@/settings/validate";
 import { isAccent } from "@/export/export";
 import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
+import { progressText } from "@/updater/UpdateBanner";
+import { updaterStore, useUpdater } from "@/updater/updater";
 
 type Change = (update: (s: Settings) => Settings) => void;
 
@@ -33,6 +35,75 @@ function useChange(): Change {
 function ErrorText({ children }: { children: string | null }) {
   if (!children) return null;
   return <p className="mt-2 text-xs text-[var(--status-danger)]">{children}</p>;
+}
+
+/** The updater's state in a few words. */
+function updateText(status: UpdateStatus): string | null {
+  switch (status.state) {
+    case "checking":
+      return "Checking…";
+    case "upToDate":
+      return "Up to date.";
+    case "available":
+      return `Version ${status.version} is available.`;
+    case "downloading":
+      return `Downloading ${status.version}… ${progressText(status.downloaded, status.total)}`;
+    case "ready":
+      return `Version ${status.version} is installed; restart to use it.`;
+    case "failed":
+      return status.message;
+    default:
+      return null;
+  }
+}
+
+function UpdatesRow() {
+  const settings = useSettings((s) => s.settings)!;
+  const readOnly = useSettings((s) => s.readOnly);
+  const change = useChange();
+  const status = useUpdater((s) => s.status);
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    tauriUpdaterApi.version().then(setVersion, () => setVersion(null));
+  }, []);
+  const { check, install, restart } = updaterStore.getState();
+  const text = updateText(status);
+  return (
+    <Row
+      label="Updates"
+      note={
+        <>
+          {version && `You have version ${version}. `}
+          {text ?? "GuideRecorder checks for a new version at startup and every few hours."}
+        </>
+      }
+    >
+      <Toggle
+        label="Check for updates automatically"
+        checked={settings.general.checkForUpdates}
+        disabled={readOnly}
+        onChange={(on) => change((s) => ({ ...s, general: { ...s.general, checkForUpdates: on } }))}
+      />
+      {status.state === "available" ? (
+        <Button variant="outline" size="sm" onClick={() => void install()}>
+          Install update
+        </Button>
+      ) : status.state === "ready" ? (
+        <Button variant="outline" size="sm" onClick={() => void restart()}>
+          Restart now
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={status.state === "checking" || status.state === "downloading"}
+          onClick={() => void check()}
+        >
+          Check now
+        </Button>
+      )}
+    </Row>
+  );
 }
 
 export function GeneralSection({ api }: { api: SettingsApi }) {
@@ -125,6 +196,7 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
           Run setup again
         </Button>
       </Row>
+      <UpdatesRow />
       <Row label="Menu bar icon" note="Coming with recording; stored for now.">
         <Toggle
           label="Menu bar icon"

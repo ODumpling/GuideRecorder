@@ -25,6 +25,7 @@ import type {
   StampedStatus,
   Step,
   StepImage,
+  UpdateStatus,
 } from "@/lib/types";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -329,3 +330,27 @@ export const AI_STEP_EVENT = "ai://step";
 export const AI_GUIDE_EVENT = "ai://guide";
 /** `AiFinishedEvent`. */
 export const AI_FINISHED_EVENT = "ai://finished";
+
+/** App updates (see app/src-tauri/src/updater.rs). Progress arrives as `UPDATE_STATUS_EVENT`s. */
+export interface UpdaterApi {
+  /** The running app's version. */
+  version(): Promise<string>;
+  status(): Promise<UpdateStatus>;
+  /** Starts a check; returns at once. */
+  check(): Promise<void>;
+  /** Downloads and installs the update the last check found. */
+  install(): Promise<void>;
+  /** Quits through the quit flow (the editor saves first) and starts the installed update. */
+  restart(): Promise<void>;
+}
+
+export const tauriUpdaterApi: UpdaterApi = {
+  version: async () => (await invoke<{ version: string }>("app_info")).version,
+  status: () => invoke("update_status"),
+  check: () => invoke("check_for_update"),
+  install: () => invoke("install_update"),
+  restart: () => invoke("restart_to_update"),
+};
+
+/** Emitted with an `UpdateStatus` on every change of the updater's state. */
+export const UPDATE_STATUS_EVENT = "updater://status";

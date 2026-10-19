@@ -5,7 +5,7 @@ import { createSettingsStore } from "@/settings/store";
 
 const DEFAULTS: Settings = {
   version: 1,
-  general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true },
+  general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
   recording: {
     hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
     captureArea: "display",

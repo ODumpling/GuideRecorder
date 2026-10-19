@@ -58,6 +58,10 @@
     "allow-ai-rewrite-step",
     "allow-quit-ack",
     "allow-quit-app",
-    "allow-quit-cancel"
+    "allow-quit-cancel",
+    "allow-update-status",
+    "allow-check-for-update",
+    "allow-install-update",
+    "allow-restart-to-update"
   ]
 }

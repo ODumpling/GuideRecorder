@@ -268,6 +268,8 @@ export interface Settings {
     menuBarIcon: boolean;
     /** First-run setup was finished. */
     onboarded: boolean;
+    /** Check for updates at startup and every few hours. */
+    checkForUpdates: boolean;
   };
   recording: {
     hotkeys: { record: string; pause: string; manualStep: string };
@@ -453,3 +455,19 @@ export interface AiFinishedEvent {
    */
   error: string | null;
 }
+
+/**
+ * The updater's state (see updater.rs). `manual`: the user asked for this
+ * check, so its result is shown even when there is nothing to install.
+ */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking"; manual: boolean }
+  | { state: "upToDate"; manual: boolean }
+  | { state: "available"; version: string; notes: string | null }
+  /** `total` null: the size is unknown. */
+  | { state: "downloading"; version: string; downloaded: number; total: number | null }
+  /** Installed; takes effect after a restart. */
+  | { state: "ready"; version: string }
+  /** A check or install failed; `message` says which. */
+  | { state: "failed"; message: string; manual: boolean };

@@ -26,6 +26,7 @@ import type {
   StampedStatus,
   Step,
   StepImage,
+  UpdateStatus,
 } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
@@ -83,6 +84,8 @@ export interface BackendOptions {
   libraryError?: string;
   /** The stored capture area (default: display). */
   captureArea?: CaptureArea;
+  /** A newer version `check_for_update` finds (default: none, up to date). */
+  updateVersion?: string;
 }
 
 /** An event the app receives, as the Rust side would emit it. */
@@ -133,10 +136,16 @@ export class Backend {
   /** `step_image` reads held until released, by image path (see `holdImage`). */
   private heldImages = new Map<string, { released: Promise<void>; release(): void }>();
 
+  /** The updater's state; `check_for_update` finds `options.updateVersion`. */
+  updateStatus: UpdateStatus = { state: "idle" };
+  /** Whether `restart_to_update` was called. */
+  restartedToUpdate = false;
+  private updateVersion: string | undefined;
+
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 1,
-    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true },
+    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
     recording: {
       hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
       captureArea: "display",
@@ -245,6 +254,7 @@ export class Backend {
       this.bundles.set(guide.id, { path, guide, files });
     }
     if (options.firstRun) this.settings.general.onboarded = false;
+    this.updateVersion = options.updateVersion;
     if (options.captureArea) this.settings.recording.captureArea = options.captureArea;
     if (options.libraryError) {
       this.settings.general.library = "/Volumes/Team/Guides";
@@ -480,6 +490,12 @@ export class Backend {
     this.recordingSeq += 1;
     if (status.state === "idle") this.snapshots.clear();
     this.events.push({ event: "recording://status", payload: this.stamped() });
+  }
+
+  /** Stores an updater status and emits it with the reply (`events`) or after it (`after`). */
+  private setUpdate(status: UpdateStatus, when: "events" | "after" = "events") {
+    this.updateStatus = status;
+    this[when].push({ event: "updater://status", payload: structuredClone(status) });
   }
 
   /** The recorder's status with its `seq`, as commands return and events carry it. */
@@ -870,6 +886,31 @@ export class Backend {
       case "quit_ack":
       case "quit_app":
       case "quit_cancel":
+        return null;
+      case "app_info":
+        return { version: "0.1.0", schemaVersion: SCHEMA_VERSION, captureBackend: "mock" };
+      case "update_status":
+        return structuredClone(this.updateStatus);
+      case "check_for_update":
+        this.setUpdate({ state: "checking", manual: true });
+        this.setUpdate(
+          this.updateVersion
+            ? { state: "available", version: this.updateVersion, notes: null }
+            : { state: "upToDate", manual: true },
+          "after",
+        );
+        return null;
+      case "install_update": {
+        const status = this.updateStatus;
+        if (status.state !== "available") return fail("invalid", "there is no update to install; check for updates first");
+        this.setUpdate({ state: "downloading", version: status.version, downloaded: 0, total: 1000 }, "after");
+        this.setUpdate({ state: "downloading", version: status.version, downloaded: 500, total: 1000 }, "after");
+        this.setUpdate({ state: "ready", version: status.version }, "after");
+        return null;
+      }
+      case "restart_to_update":
+        if (this.updateStatus.state !== "ready") return fail("invalid", "no update is installed yet");
+        this.restartedToUpdate = true;
         return null;
       default:
         return fail("invalid", `the e2e backend has no command ${cmd}`);

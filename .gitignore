@@ -11,3 +11,4 @@ dist/
 
 # Tauri generated
 app/src-tauri/gen/
+app/src-tauri/binaries/

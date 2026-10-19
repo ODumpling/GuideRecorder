@@ -1,0 +1,101 @@
+name: Release
+
+# Push a tag vX.Y.Z (after `scripts/version.sh set X.Y.Z` and a commit) to
+# build a signed, notarized universal macOS app and attach it, with the
+# updater's latest.json, to a draft GitHub Release. Publishing the draft is
+# what makes installed apps see the update. See docs/releasing.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag matches the version
+        id: version
+        run: echo "version=$(scripts/version.sh check "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      # Bundled as a sidecar (tauri.release.conf.json `externalBin`), so it
+      # lands next to the app's executable, where Settings → MCP looks.
+      - name: Build guiderecorder-mcp (universal)
+        run: |
+          cargo build --release --locked -p guiderecorder-mcp --target aarch64-apple-darwin
+          cargo build --release --locked -p guiderecorder-mcp --target x86_64-apple-darwin
+          mkdir -p app/src-tauri/binaries
+          lipo -create -output app/src-tauri/binaries/guiderecorder-mcp-universal-apple-darwin \
+            target/aarch64-apple-darwin/release/guiderecorder-mcp \
+            target/x86_64-apple-darwin/release/guiderecorder-mcp
+
+      - name: Release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          args=(-f tag_name="$GITHUB_REF_NAME")
+          [ -n "$previous" ] && args+=(-f previous_tag_name="$previous")
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body > notes.md
+          {
+            echo "body<<GUIDERECORDER_NOTES_EOF"
+            cat notes.md
+            echo "GUIDERECORDER_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Developer ID Application certificate (.p12, base64) and its password.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # e.g. "Developer ID Application: Jane Doe (TEAMID1234)"; overrides
+          # the local identity in tauri.conf.json.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization: Apple ID, app-specific password, team id.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Signs the updater artifacts; pairs with plugins.updater.pubkey.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tauriScript: pnpm tauri
+          args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
+          tagName: ${{ github.ref_name }}
+          releaseName: GuideRecorder ${{ steps.version.outputs.version }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          includeUpdaterJson: true

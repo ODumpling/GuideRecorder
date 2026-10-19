@@ -11,8 +11,9 @@ Everything stays on your machine. AI writing is optional and uses your own
 Anthropic API key.
 
 > **Status:** early and in active development. macOS only for now (Windows is
-> planned). There are no downloadable releases yet, so you build it from source
-> (see [Build from source](#build-from-source)).
+> planned). Download the latest version from
+> [Releases](https://github.com/ODumpling/GuideRecorder/releases) (it updates
+> itself), or build it from source (see [Build from source](#build-from-source)).
 
 ## How it works
 
@@ -143,7 +144,7 @@ crates/
 app/                       desktop app: Tauri 2, React, TypeScript, Tailwind
   src-tauri/               the app's Rust side (guiderecorder-app)
 fixtures/guides/           sample guides used by the tests
-docs/                      signing, capture smoke test, dependency licences
+docs/                      signing, releasing, capture smoke test, dependency licences
 ```
 
 ### Tests
@@ -152,6 +153,9 @@ docs/                      signing, capture smoke test, dependency licences
 cargo test --workspace                 # Rust, from the repo root
 cd app && pnpm test && pnpm e2e        # frontend unit and end-to-end tests
 ```
+
+CI runs these on every pull request. To publish a release, see
+[docs/releasing.md](docs/releasing.md).
 
 ## Licence
 

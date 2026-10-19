@@ -12,8 +12,8 @@ designated requirement `identifier "dev.dufflebear.guiderecorder" and certificat
 That stays the same across rebuilds for as long as you keep the certificate
 (it is valid for 10 years).
 
-Public releases will use Developer ID signing and notarization instead (see
-design scratchpad #439). That is not covered here.
+Public releases use Developer ID signing and notarization instead; see
+[releasing.md](releasing.md).
 
 ## One-time setup
 

@@ -1,4 +1,4 @@
-# cargo-deny licence policy (run `cargo deny check licenses`; not yet in CI).
+# cargo-deny licence policy (run `cargo deny check licenses`; CI runs it).
 # GuideRecorder is MIT-licensed: permissive dependencies only. MPL-2.0 is allowed
 # solely because Tauri pulls it in (cssparser, selectors, dtoa-short,
 # option-ext); it is file-level copyleft and we do not modify those files.

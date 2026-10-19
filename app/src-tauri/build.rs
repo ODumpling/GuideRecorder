@@ -69,6 +69,10 @@ const COMMANDS: &[&str] = &[
     "quit_ack",
     "quit_app",
     "quit_cancel",
+    "update_status",
+    "check_for_update",
+    "install_update",
+    "restart_to_update",
 ];
 
 fn main() {

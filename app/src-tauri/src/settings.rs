@@ -65,7 +65,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct General {
     /// The library folder; `None` is `~/Documents/GuideRecorder`.
@@ -78,6 +78,21 @@ pub struct General {
     pub menu_bar_icon: bool,
     /// First-run setup was finished (or skipped through to the end).
     pub onboarded: bool,
+    /// Check for updates at startup and every few hours (release builds;
+    /// see `updater`).
+    pub check_for_updates: bool,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            library: None,
+            launch_at_login: false,
+            menu_bar_icon: false,
+            onboarded: false,
+            check_for_updates: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

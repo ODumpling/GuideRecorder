@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use guiderecorder_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{
     DialogExt, FileDialogBuilder, FilePath, MessageDialogButtons, MessageDialogKind,
 };
@@ -595,6 +595,8 @@ pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
 /// could not be stopped): a held Dock Quit or logout is cancelled now.
 #[tauri::command]
 pub fn quit_cancel<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
+    // A restart to update is off too.
+    app.state::<Arc<crate::updater::Updates>>().cancel_restart();
     gate.cancel(&app);
 }
 
