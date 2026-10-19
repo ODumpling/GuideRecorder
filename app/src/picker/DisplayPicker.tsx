@@ -51,8 +51,8 @@ export function DisplayPicker({ flow, recording }: { flow: StartFlowStore; recor
   return (
     <Dialog.Root open={picker !== null} onOpenChange={(next) => !next && !starting && closeDisplayPicker()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-lg border border-border bg-background p-5 text-foreground shadow-lg">
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[28rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl">
           <div className="flex items-center justify-between">
             <Dialog.Title className="text-base font-semibold">Choose a display to record</Dialog.Title>
             <Dialog.Close asChild>

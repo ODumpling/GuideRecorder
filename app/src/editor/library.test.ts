@@ -8,6 +8,8 @@ import {
   addMonths,
   hasOwner,
   hasTag,
+  inFolder,
+  initials,
   isReviewOverdue,
   libraryOwners,
   libraryTags,
@@ -16,6 +18,7 @@ import {
   parentFolder,
   reviewDue,
   sortGuides,
+  timeAgo,
 } from "@/editor/library";
 
 function item(title: string, extra: Partial<GuideListItem> = {}): GuideListItem {
@@ -144,5 +147,30 @@ describe("review", () => {
     expect(libraryOwners(guides)).toEqual(["Finance", "IT"]);
     expect(hasOwner(guides[1], "IT")).toBe(true);
     expect(hasOwner(guides[3], "IT")).toBe(false);
+  });
+});
+
+describe("library cards", () => {
+  it("shows a folder with its subfolders", () => {
+    expect(inFolder({ folder: "Work" }, "Work")).toBe(true);
+    expect(inFolder({ folder: "Work/Onboarding" }, "Work")).toBe(true);
+    expect(inFolder({ folder: "Workshop" }, "Work")).toBe(false);
+    expect(inFolder({ folder: "" }, "Work")).toBe(false);
+    expect(inFolder({ folder: "Work" }, "")).toBe(true);
+  });
+
+  it("says how long ago", () => {
+    const now = new Date("2026-10-19T12:00:00Z");
+    expect(timeAgo("2026-10-19T11:59:30Z", now, "en")).toBe("just now");
+    expect(timeAgo("2026-10-19T10:00:00Z", now, "en")).toBe("2 hours ago");
+    expect(timeAgo("2026-10-18T12:00:00Z", now, "en")).toBe("yesterday");
+    expect(timeAgo("2026-07-19T12:00:00Z", now, "en")).toBe("3 months ago");
+  });
+
+  it("makes initials", () => {
+    expect(initials("Dana Ortiz")).toBe("DO");
+    expect(initials("sam")).toBe("S");
+    expect(initials("jordan.miles@acme.co")).toBe("JM");
+    expect(initials("  ")).toBe("");
   });
 });

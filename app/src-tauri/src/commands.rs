@@ -192,6 +192,14 @@ pub async fn step_image(
     Ok(Response::new(bytes))
 }
 
+/// The first screenshot of a guide in the library, for its card (empty:
+/// none). The guide needn't be open.
+#[tauri::command]
+pub async fn guide_cover(cell: State<'_, Arc<SessionCell>>, guide_id: String) -> Result<Response> {
+    let bytes = with_session(cell, move |s| s.guide_cover(&guide_id)).await?;
+    Ok(Response::new(bytes))
+}
+
 /// Header naming the guide for [`add_image_step`], whose body is the PNG.
 pub const GUIDE_ID_HEADER: &str = "guiderecorder-guide-id";
 

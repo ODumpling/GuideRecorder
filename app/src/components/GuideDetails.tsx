@@ -23,7 +23,7 @@ function set<K extends GuideTextField>(key: K, value: Guide[K]): boolean {
   return !!doc && dispatch(setGuideField(doc.guide, key, value));
 }
 
-const LABEL = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
+const LABEL = "text-[11px] font-semibold tracking-wide text-muted-foreground uppercase";
 
 /** A field's name; `id` ties it to a plain input (Markdown editors carry their own label). */
 function FieldLabel({ id, label, edited, hint }: { id?: string; label: string; edited: boolean; hint: string }) {
@@ -46,6 +46,8 @@ function FieldLabel({ id, label, edited, hint }: { id?: string; label: string; e
   );
 }
 
+const CARD = "flex flex-col gap-5 rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm";
+
 function Field({ children }: { children: ReactNode }) {
   return <section className="flex flex-col gap-1.5">{children}</section>;
 }
@@ -67,7 +69,10 @@ function MarkdownField({
   const fallback = (
     <div
       aria-label={label}
-      className={cn("min-h-16 rounded-md border border-input px-2.5 py-1.5 text-sm whitespace-pre-wrap", !value && "text-muted-foreground")}
+      className={cn(
+        "min-h-16 rounded-md border border-input px-2.5 py-1.5 text-sm whitespace-pre-wrap",
+        !value && "text-muted-foreground",
+      )}
     >
       {markdownToPlainText(value) || placeholder}
     </div>
@@ -163,45 +168,61 @@ export function GuideDetails() {
   if (!guide) return null;
   const edited = new Set(editedGuideFields(guide));
   return (
-    <div key={guide.id} className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-6" aria-label="Guide details">
-      <h1 className="text-lg font-semibold">{guide.title || "Untitled"}</h1>
-      <Field>
-        <FieldLabel label="Introduction" edited={edited.has("intro")} hint="Shown before the first step" />
-        <MarkdownField
-          field="intro"
-          value={guide.intro}
-          readOnly={readOnly}
-          label="Introduction"
-          placeholder="What this guide helps the reader do"
-        />
-      </Field>
-      <Field>
-        <FieldLabel label="Prerequisites" edited={edited.has("prerequisites")} hint="What the reader needs first" />
-        <MarkdownField
-          field="prerequisites"
-          value={guide.prerequisites}
-          readOnly={readOnly}
-          label="Prerequisites"
-          placeholder="A list, e.g. an account with admin access"
-        />
-      </Field>
-      <Field>
-        <FieldLabel id={`${id}-summary`} label="Summary" edited={edited.has("summary")} hint="Shown in the library and search" />
-        <textarea
-          id={`${id}-summary`}
-          rows={2}
-          className="w-full min-w-0 resize-y rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-          placeholder="One or two sentences about the guide"
-          value={guide.summary}
-          disabled={readOnly}
-          onChange={(e) => set("summary", e.target.value)}
-        />
-      </Field>
-      <Field>
-        <FieldLabel id={`${id}-tags`} label="Tags" edited={edited.has("tags")} hint="Press Enter or comma to add" />
-        <TagsField id={`${id}-tags`} tags={guide.tags} readOnly={readOnly} />
-      </Field>
-      <ReviewSection id={`${id}-review`} guide={guide} readOnly={readOnly} />
+    <div
+      key={guide.id}
+      className="mx-auto flex w-full max-w-[52rem] flex-col gap-6 px-10 pt-7 pb-10"
+      aria-label="Guide details"
+    >
+      <div>
+        <p className="text-[11px] font-semibold tracking-[0.08em] text-brand uppercase">Guide details</p>
+        <h1 className="mt-2 font-serif text-[40px] leading-none tracking-tight">{guide.title || "Untitled"}</h1>
+      </div>
+      <div className={CARD}>
+        <Field>
+          <FieldLabel label="Introduction" edited={edited.has("intro")} hint="Shown before the first step" />
+          <MarkdownField
+            field="intro"
+            value={guide.intro}
+            readOnly={readOnly}
+            label="Introduction"
+            placeholder="What this guide helps the reader do"
+          />
+        </Field>
+        <Field>
+          <FieldLabel label="Prerequisites" edited={edited.has("prerequisites")} hint="What the reader needs first" />
+          <MarkdownField
+            field="prerequisites"
+            value={guide.prerequisites}
+            readOnly={readOnly}
+            label="Prerequisites"
+            placeholder="A list, e.g. an account with admin access"
+          />
+        </Field>
+        <Field>
+          <FieldLabel
+            id={`${id}-summary`}
+            label="Summary"
+            edited={edited.has("summary")}
+            hint="Shown in the library and search"
+          />
+          <textarea
+            id={`${id}-summary`}
+            rows={2}
+            className="w-full min-w-0 resize-y rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+            placeholder="One or two sentences about the guide"
+            value={guide.summary}
+            disabled={readOnly}
+            onChange={(e) => set("summary", e.target.value)}
+          />
+        </Field>
+        <Field>
+          <FieldLabel id={`${id}-tags`} label="Tags" edited={edited.has("tags")} hint="Press Enter or comma to add" />
+          <TagsField id={`${id}-tags`} tags={guide.tags} readOnly={readOnly} />
+        </Field>
+      </div>
+      <div className={CARD}>
+        <ReviewSection id={`${id}-review`} guide={guide} readOnly={readOnly} />
+      </div>
     </div>
   );
 }
@@ -231,7 +252,11 @@ function ReviewSection({ id, guide, readOnly }: { id: string; guide: Guide; read
         label="Ownership and review"
         edited={false}
         hint={
-          due ? (overdue ? `Review overdue since ${due}` : `Next review due ${due}`) : "Shown in the library and exports"
+          due
+            ? overdue
+              ? `Review overdue since ${due}`
+              : `Next review due ${due}`
+            : "Shown in the library and exports"
         }
       />
       <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 sm:grid-cols-3">

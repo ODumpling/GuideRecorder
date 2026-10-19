@@ -18,9 +18,9 @@ export function WriteWithAi() {
   if (phase === "idle" || explicit) {
     return (
       <Button
-        variant="outline"
+        variant="ghost"
         size="sm"
-        className="ml-1"
+        className="ml-1 bg-ai/12 text-ai hover:bg-ai/20 hover:text-ai"
         disabled={readOnly || explicit}
         title={explicit ? "Wait for the AI action to finish" : "Write the guide details and step text with AI"}
         onClick={() => void aiStore.getState().start()}

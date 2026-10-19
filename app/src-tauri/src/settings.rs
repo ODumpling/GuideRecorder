@@ -87,6 +87,8 @@ pub struct General {
     /// Check for updates at startup and every few hours (release builds;
     /// see `updater`).
     pub check_for_updates: bool,
+    /// The app's colour theme; the windows apply it themselves.
+    pub theme: Theme,
 }
 
 impl Default for General {
@@ -97,8 +99,23 @@ impl Default for General {
             menu_bar_icon: false,
             onboarded: false,
             check_for_updates: true,
+            theme: Theme::default(),
         }
     }
+}
+
+/// The app's colour theme (Settings → Appearance). Settings saved before
+/// there was a choice have no `theme` and get Arctic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Theme {
+    #[default]
+    Arctic,
+    Paper,
+    PaperDark,
+    Sage,
+    Steel,
+    Nebula,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1423,6 +1440,19 @@ mod tests {
         // Off unless chosen, also in a settings file from before the option.
         let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
         assert!(!old.mcp.writable);
+    }
+
+    #[test]
+    fn theme_defaults_to_arctic_and_round_trips() {
+        let old: Settings =
+            serde_json::from_str(r#"{"version":2,"general":{"onboarded":true}}"#).unwrap();
+        assert_eq!(old.general.theme, Theme::Arctic);
+        let mut settings = Settings::default();
+        settings.general.theme = Theme::PaperDark;
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["general"]["theme"], "paperDark");
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.general.theme, Theme::PaperDark);
     }
 
     #[test]

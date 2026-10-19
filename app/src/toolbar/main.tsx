@@ -6,6 +6,7 @@ import "./toolbar.css";
 import { installIpcDiagnostics } from "@/lib/ipc-diagnostics";
 import { addManualStep, tauriRecordingApi } from "@/lib/ipc";
 import { createRecordingStore, subscribe } from "@/recording/store";
+import { applyTheme, parseTheme, storedTheme, THEME_STORAGE_KEY } from "@/settings/theme";
 import { FloatingToolbar } from "@/toolbar/FloatingToolbar";
 import { createManualStepStore } from "@/toolbar/toolbar";
 
@@ -13,11 +14,11 @@ if (import.meta.env.DEV) installIpcDiagnostics();
 
 document.documentElement.classList.add("toolbar-window");
 
-// Follow the system appearance, as the main window does.
-const dark = window.matchMedia("(prefers-color-scheme: dark)");
-const applyTheme = () => document.documentElement.classList.toggle("dark", dark.matches);
-applyTheme();
-dark.addEventListener("change", applyTheme);
+// The main window's theme, which it keeps in the windows' shared storage.
+applyTheme(storedTheme());
+window.addEventListener("storage", (e) => {
+  if (e.key === THEME_STORAGE_KEY) applyTheme(parseTheme(e.newValue));
+});
 
 // This window's own recording store. No `onSaved`: the main window handles
 // `recording://saved` and opens the guide; Rust closes this window.

@@ -20,9 +20,11 @@ import type {
   PermissionStatus,
   RedactionMode,
   Settings,
+  Theme,
   UpdateStatus,
 } from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
+import { THEMES } from "@/settings/theme";
 import { cn } from "@/lib/utils";
 import {
   AFTER_FRAME_DELAY_MS,
@@ -223,6 +225,47 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
         />
       </Row>
       <ErrorText>{error}</ErrorText>
+    </Section>
+  );
+}
+
+/** The colour theme: a card per theme, with a small picture of it. */
+export function AppearanceSection() {
+  const theme = useSettings((s) => s.settings!.general.theme);
+  const readOnly = useSettings((s) => s.readOnly);
+  const choose = (value: Theme) =>
+    void settingsStore.getState().change((s) => ({ ...s, general: { ...s.general, theme: value } }));
+  return (
+    <Section title="Appearance" intro="The colours of GuideRecorder's windows. Exported guides keep their own look.">
+      <div role="radiogroup" aria-label="Theme" className="mt-2 grid grid-cols-3 gap-3">
+        {THEMES.map(({ value, label, swatch: [background, sidebar, accent] }) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={theme === value}
+            disabled={readOnly}
+            onClick={() => choose(value)}
+            className={cn(
+              "flex flex-col gap-2 rounded-lg border p-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+              theme === value ? "border-[var(--status-info)] ring-1 ring-[var(--status-info)]" : "border-border hover:bg-accent/60",
+            )}
+          >
+            <span aria-hidden className="flex h-16 overflow-hidden rounded-md border border-black/10" style={{ background }}>
+              <span className="w-1/4" style={{ background: sidebar }} />
+              <span className="flex flex-1 flex-col justify-end gap-1.5 p-2">
+                <span className="h-1.5 w-3/4 rounded-full opacity-25" style={{ background: accent }} />
+                <span className="h-1.5 w-1/2 rounded-full opacity-25" style={{ background: accent }} />
+                <span className="h-3 w-8 rounded" style={{ background: accent }} />
+              </span>
+            </span>
+            <span className="flex items-center justify-between gap-1 px-0.5">
+              <span className="font-medium">{label}</span>
+              {theme === value && <Check className="size-4 text-[var(--status-info)]" />}
+            </span>
+          </button>
+        ))}
+      </div>
     </Section>
   );
 }

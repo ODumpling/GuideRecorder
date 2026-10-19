@@ -41,8 +41,8 @@ function CancelButton({ disabled }: { disabled: boolean }) {
         </Button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <AlertDialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[26rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-lg border border-border bg-background p-5 text-foreground shadow-lg">
+        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+        <AlertDialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[26rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl">
           <AlertDialog.Title className="text-base font-semibold">Discard this recording?</AlertDialog.Title>
           <AlertDialog.Description className="text-sm text-muted-foreground">
             The steps recorded so far are deleted and no guide is made.
@@ -98,7 +98,7 @@ function Controls() {
   const lost = captureLostLabel(status);
   const busy = pending !== null;
   return (
-    <div role="group" aria-label="Recording" className="ml-1 flex items-center gap-1 rounded-md border border-border px-1.5">
+    <div role="group" aria-label="Recording" className="ml-1 flex h-8 items-center gap-1 rounded-lg border border-border bg-card px-2 shadow-sm">
       <span
         className={`size-2 rounded-full ${excluded || lost ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
           paused || excluded || lost ? "opacity-40" : "animate-pulse"

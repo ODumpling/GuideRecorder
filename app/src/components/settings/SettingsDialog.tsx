@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { Bot, EyeOff, FileOutput, Keyboard, Lock, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
+import { Bot, EyeOff, FileOutput, Keyboard, Lock, Palette, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import {
   AiSection,
+  AppearanceSection,
   ExportSection,
   GeneralSection,
   McpSection,
@@ -15,10 +16,11 @@ import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } fr
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
-export type SettingsPage = "general" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp";
+export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp";
 
 const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "general", label: "General", icon: SlidersHorizontal },
+  { page: "appearance", label: "Appearance", icon: Palette },
   { page: "recording", label: "Recording", icon: Keyboard },
   { page: "privacy", label: "Privacy", icon: EyeOff },
   { page: "ai", label: "AI", icon: Bot },
@@ -57,8 +59,8 @@ export function SettingsDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex h-[min(40rem,90vh)] w-[min(52rem,95vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-lg">
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex h-[min(40rem,90vh)] w-[min(52rem,95vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl">
           <nav aria-label="Settings sections" className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-sidebar-border bg-sidebar p-2">
             <Dialog.Title className="px-2 py-2 text-sm font-semibold">Settings</Dialog.Title>
             {PAGES.map(({ page: p, label, icon: Icon }) => (
@@ -108,6 +110,8 @@ export function SettingsDialog({
                 <p className="text-sm text-muted-foreground">{loadError ? "Settings could not be loaded." : "Loading…"}</p>
               ) : page === "general" ? (
                 <GeneralSection api={api} />
+              ) : page === "appearance" ? (
+                <AppearanceSection />
               ) : page === "recording" ? (
                 <RecordingSection api={api} />
               ) : page === "privacy" ? (

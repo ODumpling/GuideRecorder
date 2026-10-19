@@ -77,6 +77,14 @@ export interface EditorApi {
   cancelQuit(): Promise<void>;
 }
 
+/**
+ * WebP bytes of a library guide's first screenshot, for its card; empty if
+ * it has none. The guide needn't be open.
+ */
+export async function guideCover(guideId: string): Promise<ArrayBuffer> {
+  return toArrayBuffer(await invoke("guide_cover", { guideId }));
+}
+
 export const tauriApi: EditorApi = {
   listGuides: (query) => invoke("list_guides", { query: query ?? null }),
   openGuide: (id) => invoke("open_guide", { id }),

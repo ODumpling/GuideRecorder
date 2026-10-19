@@ -53,20 +53,22 @@ export function NewGuideButton() {
   const creating = useEditor((s) => s.creating);
   const opening = useEditor((s) => s.opening);
   const busy = useEditor((s) => s.busy);
+  // The library's main action; quieter beside an open guide's own.
+  const editing = useEditor((s) => s.doc !== null);
   const [open, setOpen] = useState(false);
   const starting = pending === "start";
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <Button variant="outline" size="sm" className="ml-1" disabled={pending !== null || creating}>
+        <Button variant={editing ? "outline" : "brand"} size="sm" className="ml-1" disabled={pending !== null || creating}>
           {starting || creating ? <LoaderCircle className="animate-spin" /> : <Plus />}
           {starting ? "Starting…" : creating ? "Creating…" : "New Guide"}
         </Button>
       </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[28rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-lg border border-border bg-background p-5 text-foreground shadow-lg">
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[28rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl">
           <div className="flex items-center justify-between">
             <Dialog.Title className="text-base font-semibold">New guide</Dialog.Title>
             <Dialog.Close asChild>

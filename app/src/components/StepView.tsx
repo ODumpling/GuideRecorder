@@ -1,15 +1,33 @@
 import { lazy, Suspense, useRef, useState, type Ref } from "react";
-import { ChevronDown, ImageOff, Merge, Scissors, Sparkles, Trash2 } from "lucide-react";
-import { useAi } from "@/ai/ai";
+import {
+  ChevronLeft,
+  ChevronRight,
+  GraduationCap,
+  ImageOff,
+  Info,
+  Lightbulb,
+  Merge,
+  Minimize2,
+  PenLine,
+  RefreshCw,
+  Rocket,
+  Scissors,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
+import { aiStore, useAi } from "@/ai/ai";
+import { BUSY_HINT } from "@/ai/controller";
 import { CustomRewrite } from "@/ai/CustomRewrite";
+import { useAiBlocked } from "@/ai/WriteWithAi";
+import { KIND_LABELS } from "@/components/Inspector";
 import { GuideDetails } from "@/components/GuideDetails";
 import type { MarkdownEditorHandle } from "@/components/MarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { canMergeSelected, deleteSelected, mergeSelected, splitSelected } from "@/editor/actions";
 import { setItemText, type TextField } from "@/editor/commands";
-import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
-import type { Item, Step } from "@/lib/types";
+import { editorStore, stepNoun, stepNumbers, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
+import type { Item, NoteKind, RewriteStyleArg, Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
 
@@ -17,14 +35,12 @@ import { markdownToPlainText } from "@/text/markdown";
 const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
 // The annotation layer, likewise; the plain image shows until it loads.
 const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
-// The AI menu (Radix), likewise.
-const StepAiMenu = lazy(() => import("@/components/StepAiMenu"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
   const { url, error } = useStepImage(guideId, path);
   return (
-    <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
+    <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted shadow-lg">
       {url ? (
         <img src={url} alt="" className="max-h-[60vh] max-w-full object-contain" />
       ) : (
@@ -68,7 +84,7 @@ function TextEditor({
     <div
       aria-label={label}
       className={cn(
-        "rounded-md border border-input px-2.5 py-1.5 whitespace-pre-wrap",
+        "-mx-2.5 rounded-md border border-transparent px-2.5 py-1.5 whitespace-pre-wrap",
         !singleLine && "min-h-16",
         !value && "text-muted-foreground",
         className,
@@ -89,6 +105,7 @@ function TextEditor({
         placeholder={placeholder}
         singleLine={singleLine}
         className={className}
+        bare
         onChange={(markdown) => {
           const { doc, dispatch } = editorStore.getState();
           return !!doc && dispatch(setItemText(doc.guide, id, field, markdown));
@@ -102,29 +119,17 @@ function TextEditor({
 
 /**
  * Delete, merge and split for the selected item. A page of an annotation
- * guide is only deleted: AI doesn't write pages, and merging would drop
- * the next page's image.
+ * guide is only deleted: merging would drop the next page's image.
  */
-function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void; onCustom(): void }) {
+function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
   // Re-render when the guide changes, so merge availability stays current.
   const canMerge = useEditor(() => canMergeSelected(editorStore));
   const annotated = useAnnotated();
   const name = item.type === "note" ? item.kind : item.type === "step" ? stepNoun(annotated) : item.type;
-  const writing = useAi((s) => s.generating.has(item.id));
   return (
-    <div className="flex items-center gap-1" role="toolbar" aria-label={`${name} actions`}>
-      {writing && <span className="animate-pulse text-xs text-muted-foreground">Writing…</span>}
+    <div className="flex items-center gap-0.5" role="toolbar" aria-label={`${name} actions`}>
       {item.type === "step" && !annotated && (
         <>
-          <Suspense
-            fallback={
-              <Button variant="ghost" size="sm" disabled>
-                <Sparkles /> AI <ChevronDown />
-              </Button>
-            }
-          >
-            <StepAiMenu stepId={item.id} onCustom={onCustom} />
-          </Suspense>
           <Button
             variant="ghost"
             size="sm"
@@ -153,6 +158,108 @@ function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void;
   );
 }
 
+const REWRITES: { style: RewriteStyleArg; label: string; icon: typeof Minimize2 }[] = [
+  { style: { kind: "shorter" }, label: "Shorter", icon: Minimize2 },
+  { style: { kind: "beginner" }, label: "For beginners", icon: GraduationCap },
+  { style: { kind: "expert" }, label: "For experts", icon: Rocket },
+];
+
+const CHIP =
+  "inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs text-foreground/80 transition-colors outline-none hover:border-ai hover:text-ai focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-3.5";
+
+/**
+ * The step's AI actions under its text: Regenerate, and Rewrite in a style.
+ * Each replaces the step's text (edited or not) as one undoable change.
+ */
+function AiActions({ stepId, onCustom }: { stepId: string; onCustom(): void }) {
+  const { busy, background } = useAiBlocked();
+  const writing = useAi((s) => s.generating.has(stepId));
+  return (
+    <div role="toolbar" aria-label="AI actions" className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        title={writing ? "AI is writing this step" : "Write this step again with AI"}
+        onClick={() => void aiStore.getState().regenerateStep(stepId)}
+        className={cn(CHIP, "border-transparent bg-ai/12 font-medium text-ai hover:bg-ai/18")}
+      >
+        <RefreshCw className={cn(writing && "animate-spin")} /> Regenerate
+      </button>
+      {REWRITES.map(({ style, label, icon: Icon }) => (
+        <button
+          key={style.kind}
+          type="button"
+          disabled={busy}
+          title={`Rewrite this step ${label.toLowerCase()}`}
+          onClick={() => void aiStore.getState().rewriteStep(stepId, style)}
+          className={CHIP}
+        >
+          <Icon /> {label}
+        </button>
+      ))}
+      <button type="button" disabled={busy} title="Rewrite this step your way" onClick={onCustom} className={CHIP}>
+        <PenLine /> Custom…
+      </button>
+      {background && <span className="text-xs text-muted-foreground">{BUSY_HINT}</span>}
+    </div>
+  );
+}
+
+const NOTE_STYLES: Record<NoteKind, { icon: typeof Info; color: string }> = {
+  tip: { icon: Lightbulb, color: "var(--status-success)" },
+  warning: { icon: TriangleAlert, color: "var(--status-warning)" },
+  note: { icon: Info, color: "var(--status-info)" },
+};
+
+/** "Step 3 of 7" over the item, with what kind of item it is, and the previous and next items. */
+function ItemHeader({ item }: { item: Item }) {
+  const items = useEditor((s) => s.doc!.guide.items);
+  const annotated = useAnnotated();
+  const numbers = stepNumbers(items);
+  const index = items.findIndex((i) => i.id === item.id);
+  const select = (i: number) => editorStore.getState().select(items[i].id);
+  return (
+    <div className="flex min-h-8 items-center gap-2">
+      <span className="text-[11px] font-semibold tracking-[0.08em] text-brand uppercase">
+        {item.type === "step" ? (
+          <>
+            {stepNoun(annotated)} {numbers.get(item.id)} <span className="text-muted-foreground">of {numbers.size}</span>
+          </>
+        ) : item.type === "section" ? (
+          "Section"
+        ) : (
+          item.kind
+        )}
+      </span>
+      {item.type === "step" && !annotated && (
+        <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground/75">
+          {KIND_LABELS[item.kind]}
+        </span>
+      )}
+      {item.type === "step" && item.element?.app && (
+        <span className="max-w-48 truncate rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground/75">
+          {item.element.app}
+        </span>
+      )}
+      <span className="ml-auto flex items-center">
+        <Button variant="ghost" size="icon" aria-label="Previous item" title="Previous (↑ in the outline)" disabled={index <= 0} onClick={() => select(index - 1)}>
+          <ChevronLeft />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Next item"
+          title="Next (↓ in the outline)"
+          disabled={index < 0 || index >= items.length - 1}
+          onClick={() => select(index + 1)}
+        >
+          <ChevronRight />
+        </Button>
+      </span>
+    </div>
+  );
+}
+
 /** The centre pane: the selected step, section or note, or else the guide's details. */
 export function StepView() {
   const doc = useEditor((s) => s.doc);
@@ -175,13 +282,10 @@ export function StepView() {
     // Until the editor has loaded, the whole description stays.
     void splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
   };
+  const note = item.type === "note" ? NOTE_STYLES[item.kind] : null;
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
-      {!doc.readOnly && (
-        <div className="-my-2 flex justify-end">
-          <ItemActions item={item} onSplit={split} onCustom={() => setCustomFor(item.id)} />
-        </div>
-      )}
+    <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
+      <ItemHeader item={item} />
       {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
       {item.type === "step" && (
         <>
@@ -189,31 +293,34 @@ export function StepView() {
             {/* Fresh tools and selection per step. */}
             <AnnotationEditor key={item.id} guideId={doc.guide.id} step={item} readOnly={doc.readOnly} />
           </Suspense>
-          <TextEditor
-            id={item.id}
-            field="title"
-            value={item.title}
-            readOnly={doc.readOnly}
-            label={`${Noun} title`}
-            placeholder={`${Noun} title`}
-            singleLine
-            className="font-medium"
-          />
-          <TextEditor
-            handle={description}
-            id={item.id}
-            field="description"
-            value={item.description}
-            readOnly={doc.readOnly}
-            label={`${Noun} description`}
-            placeholder="Add a description"
-            className="text-sm"
-          />
+          <div className="mt-3 flex flex-col gap-1">
+            <TextEditor
+              id={item.id}
+              field="title"
+              value={item.title}
+              readOnly={doc.readOnly}
+              label={`${Noun} title`}
+              placeholder={`${Noun} title`}
+              singleLine
+              className="font-serif text-[28px] leading-tight tracking-tight [&_strong]:font-normal [&_strong]:italic"
+            />
+            <TextEditor
+              handle={description}
+              id={item.id}
+              field="description"
+              value={item.description}
+              readOnly={doc.readOnly}
+              label={`${Noun} description`}
+              placeholder="Add a description"
+              className="text-[15px] leading-relaxed text-foreground/85"
+            />
+          </div>
           {item.aiState.error && (
             <p className="text-xs text-muted-foreground" data-testid="ai-error">
               AI could not write this step: {item.aiState.error}
             </p>
           )}
+          {!doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
         </>
       )}
       {item.type === "section" && (
@@ -225,21 +332,34 @@ export function StepView() {
           label="Section title"
           placeholder="Section title"
           singleLine
-          className="text-lg font-semibold"
+          className="font-serif text-4xl tracking-tight"
         />
       )}
-      {item.type === "note" && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{item.kind}</p>
-          <TextEditor
-            id={item.id}
-            field="body"
-            value={item.body}
-            readOnly={doc.readOnly}
-            label={`${item.kind} text`}
-            placeholder="Write the note"
-            className="text-sm"
-          />
+      {note && item.type === "note" && (
+        <div
+          className="flex gap-3 rounded-xl border p-4"
+          style={{
+            borderColor: `color-mix(in oklab, ${note.color} 30%, transparent)`,
+            background: `color-mix(in oklab, ${note.color} 9%, transparent)`,
+          }}
+        >
+          <note.icon className="mt-2 size-4 shrink-0" style={{ color: note.color }} />
+          <div className="min-w-0 flex-1">
+            <TextEditor
+              id={item.id}
+              field="body"
+              value={item.body}
+              readOnly={doc.readOnly}
+              label={`${item.kind} text`}
+              placeholder="Write the note"
+              className="text-[15px] leading-relaxed"
+            />
+          </div>
+        </div>
+      )}
+      {!doc.readOnly && (
+        <div className="mt-2 flex justify-end border-t border-border pt-2">
+          <ItemActions item={item} onSplit={split} />
         </div>
       )}
     </div>

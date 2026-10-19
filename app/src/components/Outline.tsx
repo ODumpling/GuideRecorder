@@ -19,9 +19,10 @@ import { StepStatusBadge, useAiBlocked } from "@/ai/WriteWithAi";
 import { Button } from "@/components/ui/button";
 import { deleteSelected } from "@/editor/actions";
 import { Input } from "@/components/ui/input";
+import { useStepThumbnail } from "@/components/useStepThumbnail";
 import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
 import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
-import type { Item } from "@/lib/types";
+import type { Item, Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
 
@@ -62,6 +63,16 @@ function ItemIcon({ item }: { item: Item }) {
   }
   if (item.kind === "manual") return <ImageIcon className="size-3.5 text-muted-foreground" />;
   return <MousePointerClick className="size-3.5 text-muted-foreground" />;
+}
+
+/** A step's screenshot, small: the close-up if it has one. */
+function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
+  const url = useStepThumbnail(guideId, step.image.crop || step.image.full || null);
+  return (
+    <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background">
+      {url ? <img src={url} alt="" className="size-full object-cover" /> : <ItemIcon item={step} />}
+    </span>
+  );
 }
 
 /**
@@ -125,7 +136,7 @@ export function Outline() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-col gap-2 border-b border-sidebar-border p-3">
+      <div className="flex flex-col gap-1.5 border-b border-sidebar-border p-2.5">
         <div className="flex items-center justify-between">
           <Button variant="ghost" size="sm" title="Close this guide and go back to the library" onClick={() => void back()}>
             <ArrowLeft /> Library
@@ -143,7 +154,7 @@ export function Outline() {
         <div className="flex items-center gap-1">
           <Input
             aria-label="Guide title"
-            className="font-semibold"
+            className="h-9 border-transparent bg-transparent px-2 text-[15px] font-semibold hover:border-sidebar-border focus-visible:bg-background"
             value={guide.title}
             disabled={readOnly}
             onChange={(e) => dispatch(renameGuide(editorStore.getState().doc!.guide, e.target.value))}
@@ -156,14 +167,14 @@ export function Outline() {
           title="Edit the guide's introduction, prerequisites, summary and tags"
           onClick={() => select(null)}
           className={cn(
-            "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
-            selectedId === null && "bg-sidebar-accent text-sidebar-accent-foreground",
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-sidebar-foreground/5",
+            selectedId === null && "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
           )}
         >
           <FileText className="size-3.5 text-muted-foreground" /> Guide details
         </button>
       </div>
-      <ol className="min-h-0 flex-1 overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
+      <ol className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
         {guide.items.map((item, index) => (
           <li
             key={item.id}
@@ -178,7 +189,8 @@ export function Outline() {
             }}
             {...dropZone(index)}
             className={cn(
-              "group flex items-center gap-1 rounded-md border-t-2 border-transparent",
+              "group flex items-center gap-0.5 rounded-lg border-t-2 border-transparent",
+              item.type === "section" && "mt-2 first:mt-0",
               dropIndex === index && dragId !== item.id && "border-[var(--status-info)]",
               dragId === item.id && "opacity-50",
             )}
@@ -199,21 +211,33 @@ export function Outline() {
               }}
               data-outline-item={item.id}
               className={cn(
-                "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
-                item.type === "section" && "font-semibold",
-                item.id === selectedId && "bg-sidebar-accent text-sidebar-accent-foreground",
+                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-[13px] text-sidebar-foreground/85 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                item.type === "section" && "py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase",
+                item.type === "note" && "bg-sidebar-foreground/[0.04] text-xs",
+                item.id === selectedId &&
+                  "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
               )}
             >
               {item.type === "step" ? (
-                <span className="w-5 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
-                  {numbers.get(item.id)}
-                </span>
+                <>
+                  <span
+                    className={cn(
+                      "w-4 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums",
+                      item.id === selectedId && "font-semibold text-brand",
+                    )}
+                  >
+                    {numbers.get(item.id)}
+                  </span>
+                  <StepThumb guideId={guide.id} step={item} />
+                </>
               ) : (
-                <span className="flex w-5 shrink-0 justify-end">
+                <span className="flex w-4 shrink-0 justify-end">
                   <ItemIcon item={item} />
                 </span>
               )}
-              <span className="truncate">{itemLabel(item, annotated)}</span>
+              <span className={cn(item.type === "step" ? "line-clamp-2 leading-snug" : "truncate")}>
+                {itemLabel(item, annotated)}
+              </span>
               {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
             </button>
             {!readOnly && (

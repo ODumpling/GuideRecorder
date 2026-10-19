@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-set-theme",
     "allow-app-info",
     "allow-library-root",
     "allow-list-guides",
@@ -22,6 +23,7 @@
     "allow-move-guide",
     "allow-reveal-in-library",
     "allow-step-image",
+    "allow-guide-cover",
     "allow-add-image-step",
     "allow-new-annotated-guide",
     "allow-add-annotated-pages",

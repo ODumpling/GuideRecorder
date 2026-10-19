@@ -24,7 +24,7 @@ use crate::recording::{Recorder, RecordingStatus};
 pub const LABEL: &str = "toolbar";
 const URL: &str = "toolbar.html";
 /// Logical size.
-const WIDTH: f64 = 320.0;
+const WIDTH: f64 = 360.0;
 const HEIGHT: f64 = 44.0;
 /// Logical gap between the top of the work area (below the menu bar) and
 /// the toolbar.
@@ -146,9 +146,9 @@ mod tests {
     #[test]
     fn toolbar_sits_top_centre_of_the_work_area() {
         // A 1512×949-point Retina work area below a 33-point menu bar.
-        assert_eq!(top_centre(0, 66, 3024, 2.0), (596.0, 41.0));
+        assert_eq!(top_centre(0, 66, 3024, 2.0), (576.0, 41.0));
         // A display left of the main one, at 1×.
-        assert_eq!(top_centre(-1920, 25, 1920, 1.0), (-1120.0, 33.0));
-        assert_eq!(top_centre(0, 0, 320, 0.0), (0.0, 8.0));
+        assert_eq!(top_centre(-1920, 25, 1920, 1.0), (-1140.0, 33.0));
+        assert_eq!(top_centre(0, 0, 360, 0.0), (0.0, 8.0));
     }
 }

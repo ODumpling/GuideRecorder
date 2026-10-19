@@ -336,6 +336,7 @@ export interface Settings {
     onboarded: boolean;
     /** Check for updates at startup and every few hours. */
     checkForUpdates: boolean;
+    theme: Theme;
   };
   recording: {
     hotkeys: { record: string; pause: string; manualStep: string };
@@ -379,6 +380,9 @@ export interface Settings {
     writable: boolean;
   };
 }
+
+/** The app's colour theme (Settings → Appearance). */
+export type Theme = "arctic" | "paper" | "paperDark" | "sage" | "steel" | "nebula";
 
 /** What happens to sensitive text found in a new recording's screenshots. */
 export type RedactionMode = "off" | "suggest" | "apply";

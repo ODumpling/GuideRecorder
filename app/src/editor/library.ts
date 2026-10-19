@@ -179,3 +179,36 @@ export function copyTitle(title: string, taken: string[]): string {
     if (!used.has(candidate.toLowerCase())) return candidate;
   }
 }
+
+/** Whether a guide is in `folder` or a folder below it (`""`: the top, so every guide). */
+export function inFolder(guide: { folder: string }, folder: string): boolean {
+  return folder === "" || guide.folder === folder || guide.folder.startsWith(`${folder}/`);
+}
+
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 365 * 24 * 3600],
+  ["month", 30 * 24 * 3600],
+  ["week", 7 * 24 * 3600],
+  ["day", 24 * 3600],
+  ["hour", 3600],
+  ["minute", 60],
+];
+
+/** How long ago `iso` was, e.g. "2 hours ago" or "yesterday"; "just now" under a minute. */
+export function timeAgo(iso: string, now: Date = new Date(), locale?: string): string {
+  const seconds = (now.getTime() - time(iso)) / 1000;
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  for (const [unit, size] of UNITS) {
+    if (Math.abs(seconds) >= size) return format.format(-Math.round(seconds / size), unit);
+  }
+  return "just now";
+}
+
+/** Up to two initials of a name, for an avatar: "Dana Ortiz" → "DO". */
+export function initials(name: string): string {
+  const words = name.trim().split(/[\s._@-]+/).filter(Boolean);
+  return words
+    .slice(0, 2)
+    .map((w) => [...w][0]!.toUpperCase())
+    .join("");
+}

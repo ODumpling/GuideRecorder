@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "zustand";
-import { Check, LoaderCircle, Pause, Play, Plus, Square, TriangleAlert } from "lucide-react";
+import { Camera, Check, LoaderCircle, Pause, Play, Plus, Square, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { elapsedMs, formatElapsed, type RecordingStore } from "@/recording/store";
 import { toolbarView, type ManualStepStore } from "@/toolbar/toolbar";
@@ -17,11 +17,14 @@ function Elapsed({ recording }: { recording: RecordingStore }) {
   }, [state]);
   const ms = useStore(recording, (s) => elapsedMs(s.status, now));
   return (
-    <span aria-label="Recording time" className="font-mono text-xs tabular-nums">
+    <span aria-label="Recording time" className="font-mono text-[13px] text-white tabular-nums">
       {formatElapsed(ms)}
     </span>
   );
 }
+
+// The toolbar floats over any app and wallpaper, so it is dark glass in every theme.
+const HUD_BUTTON = "size-8 rounded-lg text-white/85 hover:bg-white/10 hover:text-white disabled:opacity-40";
 
 /** The floating toolbar: state, clock, step count, and Pause/Resume, Manual step, Stop. */
 export function FloatingToolbar({ recording, manual }: { recording: RecordingStore; manual: ManualStepStore }) {
@@ -38,19 +41,19 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
       data-tauri-drag-region
       role="toolbar"
       aria-label="Recording toolbar"
-      className="flex h-full w-full items-center gap-1.5 rounded-xl border border-border bg-background/95 px-2 text-foreground shadow-lg select-none"
+      className="flex h-full w-full items-center gap-1 rounded-[14px] bg-[#181614]/90 px-1.5 text-white ring-1 ring-white/10 backdrop-blur-xl select-none ring-inset"
     >
       <span
         data-tauri-drag-region
         aria-hidden
-        className={`size-2 shrink-0 rounded-full ${view.excluded || view.lost ? "bg-muted-foreground" : "bg-[var(--status-danger)]"} ${
-          view.paused || view.excluded || view.lost ? "opacity-40" : "animate-pulse"
+        className={`ml-1.5 size-2.5 shrink-0 rounded-full ${view.excluded || view.lost ? "bg-white/40" : "bg-[#ff4d3a] shadow-[0_0_0_3px_rgb(255_77_58/0.25)]"} ${
+          view.paused || view.excluded || view.lost ? "opacity-50" : "animate-pulse"
         }`}
       />
       <span
         data-tauri-drag-region
         role="status"
-        className="min-w-0 flex-1 truncate text-xs font-medium"
+        className="min-w-0 flex-1 truncate pl-1 text-xs font-medium text-white/75"
         title={
           view.lost ??
           (view.excluded ? "Nothing is captured while an excluded app is in front (Settings → Recording)." : view.label)
@@ -61,26 +64,43 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
       <Elapsed recording={recording} />
       <span
         data-tauri-drag-region
-        aria-label="Screenshots"
         title="Screenshots taken so far"
-        className={`rounded px-1 font-mono text-xs tabular-nums transition-colors ${
-          phase === "added" ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+        className={`ml-1 flex items-center gap-1 rounded-md border-l border-white/10 py-0.5 pr-1 pl-2 text-xs tabular-nums transition-colors ${
+          phase === "added" ? "bg-white/15 text-white" : "text-white/70"
         }`}
       >
-        {view.steps}
+        <Camera aria-hidden className="size-3.5" />
+        <span aria-label="Screenshots">{view.steps}</span>
       </span>
       {view.paused ? (
-        <Button variant="ghost" size="icon" aria-label="Resume recording" title="Resume" disabled={!view.canResume} onClick={() => void resume()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={HUD_BUTTON}
+          aria-label="Resume recording"
+          title="Resume"
+          disabled={!view.canResume}
+          onClick={() => void resume()}
+        >
           <Play />
         </Button>
       ) : (
-        <Button variant="ghost" size="icon" aria-label="Pause recording" title="Pause" disabled={!view.canPause} onClick={() => void pause()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={HUD_BUTTON}
+          aria-label="Pause recording"
+          title="Pause"
+          disabled={!view.canPause}
+          onClick={() => void pause()}
+        >
           <Pause />
         </Button>
       )}
       <Button
         variant="ghost"
         size="icon"
+        className={HUD_BUTTON}
         aria-label="Add manual step"
         title={
           manualError
@@ -97,9 +117,9 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
         {phase === "adding" ? (
           <LoaderCircle className="animate-spin" />
         ) : phase === "added" ? (
-          <Check className="text-[var(--status-info)]" />
+          <Check className="text-[#4be3a8]" />
         ) : phase === "failed" ? (
-          <TriangleAlert className="text-[var(--status-danger)]" />
+          <TriangleAlert className="text-[#ffb547]" />
         ) : (
           <Plus />
         )}
@@ -107,8 +127,15 @@ export function FloatingToolbar({ recording, manual }: { recording: RecordingSto
       <span className="sr-only" role="alert">
         {phase === "added" ? "Step added" : phase === "failed" ? `Couldn't add a step: ${manualError}` : ""}
       </span>
-      <Button variant="ghost" size="icon" aria-label="Stop recording" title="Stop and save" disabled={!view.canStop} onClick={() => void stop()}>
-        <Square className="fill-current" />
+      <Button
+        size="sm"
+        className="ml-0.5 h-8 rounded-lg bg-[#ff4d3a] px-3 font-semibold text-white hover:bg-[#ff4d3a]/90 disabled:opacity-50"
+        aria-label="Stop recording"
+        title="Stop and save"
+        disabled={!view.canStop}
+        onClick={() => void stop()}
+      >
+        <Square className="size-3! fill-current" /> Done
       </Button>
     </div>
   );

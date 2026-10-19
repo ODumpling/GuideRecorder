@@ -2,13 +2,16 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
+import { ChevronRight, FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
 import { WriteWithAi } from "@/ai/WriteWithAi";
 import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { Onboarding } from "@/components/Onboarding";
-import { LibrarySidebar } from "@/components/LibrarySidebar";
+import { LibraryHome, LibrarySearch } from "@/components/library/LibraryHome";
+import { LibraryNav } from "@/components/library/LibraryNav";
+import { StatusPill } from "@/components/library/bits";
+import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
@@ -57,6 +60,27 @@ function Notice() {
   );
 }
 
+/** The open guide's folder, title and status, in the title bar. */
+function DocTitle() {
+  const doc = useEditor((s) => s.doc)!;
+  const folder = useEditor((s) => s.guides.find((g) => g.id === s.doc?.guide.id)?.folder);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 pl-1 text-sm">
+      {folder && (
+        <>
+          <span className="truncate text-muted-foreground">{folderName(folder)}</span>
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
+        </>
+      )}
+      <span className="truncate font-semibold">{doc.guide.title || "Untitled"}</span>
+      {doc.guide.status && <StatusPill status={doc.guide.status} className="ml-1" />}
+      {doc.migratedFrom != null && !doc.migrationError && (
+        <span className="shrink-0 text-xs text-muted-foreground">upgraded from schema v{doc.migratedFrom}</span>
+      )}
+    </div>
+  );
+}
+
 function Toolbar({ onSettings }: { onSettings(): void }) {
   const doc = useEditor((s) => s.doc);
   const canUndo = useEditor((s) => s.undoStack.length > 0 && !s.doc?.readOnly);
@@ -64,33 +88,38 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
   const { undo, redo } = editorStore.getState();
   const [exporting, setExporting] = useState(false);
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-      <span className="truncate text-sm font-medium">{doc ? doc.guide.title || "Untitled" : "GuideRecorder"}</span>
-      {doc?.migratedFrom != null && !doc.migrationError && (
-        <span className="text-xs text-muted-foreground">upgraded from schema v{doc.migratedFrom}</span>
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+      {!doc && (
+        <div className="flex min-w-0 flex-1 justify-center pl-24">
+          <LibrarySearch />
+        </div>
       )}
-      <div className="ml-auto flex items-center gap-1">
+      {doc && <DocTitle />}
+      <div className={doc ? "ml-auto flex items-center gap-1" : "flex shrink-0 items-center gap-1"}>
         <RecordingControls />
         {doc && <SaveIndicator />}
-        <Button variant="ghost" size="icon" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
-          <Undo2 />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Redo"
-          title="Redo (⇧⌘Z)"
-          disabled={!canRedo}
-          onClick={redo}
-        >
-          <Redo2 />
-        </Button>
+        {doc && (
+          <>
+            <Button variant="ghost" size="icon" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+              <Undo2 />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Redo"
+              title="Redo (⇧⌘Z)"
+              disabled={!canRedo}
+              onClick={redo}
+            >
+              <Redo2 />
+            </Button>
+          </>
+        )}
         {/* AI doesn't write annotation guides. */}
         {doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
         {doc && (
           <>
             <Button
-              variant="outline"
               size="sm"
               className="ml-1"
               title="Export this guide as Markdown, HTML, Word or PDF"
@@ -111,6 +140,8 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
 
 export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
+  // Guide details (nothing selected) has nothing to inspect.
+  const selected = useEditor((s) => s.selectedId !== null);
   const annotated = useAnnotated();
   const draggingImages = useImageDrop();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -191,9 +222,11 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
-      <aside className="flex w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-        {hasDoc ? <Outline /> : <LibrarySidebar />}
+    <div className="app-backdrop flex h-screen bg-background text-foreground">
+      <aside
+        className={`flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground ${hasDoc ? "w-72" : "w-60"}`}
+      >
+        {hasDoc ? <Outline /> : <LibraryNav />}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <Toolbar onSettings={() => openSettings()} />
@@ -203,11 +236,9 @@ export default function App() {
         <ReadOnlyBanner />
         <Notice />
         <div className="flex min-h-0 flex-1">
-          <main className="flex min-w-0 flex-1 overflow-y-auto">
-            <StepView />
-          </main>
-          {hasDoc && (
-            <aside className="w-72 shrink-0 overflow-y-auto border-l border-border">
+          <main className="flex min-w-0 flex-1 overflow-y-auto">{hasDoc ? <StepView /> : <LibraryHome />}</main>
+          {hasDoc && selected && (
+            <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-background/40">
               <Inspector />
             </aside>
           )}

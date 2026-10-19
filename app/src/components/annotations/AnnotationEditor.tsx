@@ -189,7 +189,7 @@ function useCropCheck(guideId: string, image: StepImage): boolean | null {
 
 function ImageStatus({ error }: { error: string | null }) {
   return (
-    <div className="flex min-h-48 items-center justify-center rounded-lg border border-border bg-muted">
+    <div className="flex min-h-48 items-center justify-center rounded-xl border border-border bg-muted shadow-lg">
       <span className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
         {error ? (
           <>
@@ -241,7 +241,7 @@ function AfterFrameImage({
     return <ImageStatus error={error ?? (failed ? "The after screenshot can't be shown: the image is damaged." : null)} />;
   }
   return (
-    <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
+    <div className="flex items-center justify-center overflow-hidden rounded-xl border border-border bg-muted shadow-lg">
       <svg
         role="img"
         aria-label="Step screenshot after the action"
@@ -546,7 +546,7 @@ function Layer({
         </p>
       )}
     <div ref={box} className="relative">
-    <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
+    <div className="flex items-center justify-center overflow-hidden rounded-xl border border-border bg-muted shadow-lg">
       <svg
         ref={svg}
         role="img"
@@ -918,7 +918,11 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
     <div className="flex flex-col gap-2">
       {frameSwitch && <div className="flex items-center justify-end">{frameSwitch}</div>}
       {(!readOnly || canPreview) && (
-        <div className="flex flex-wrap items-center gap-1" role="toolbar" aria-label="Annotation tools">
+        <div
+          className="mx-auto flex w-max max-w-full flex-wrap items-center gap-0.5 rounded-xl border border-border bg-card p-1 text-card-foreground shadow-md"
+          role="toolbar"
+          aria-label="Annotation tools"
+        >
           {editing &&
             TOOLS.map(({ tool: value, label, hint, icon: Icon }) => (
               <Button
@@ -928,7 +932,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
                 aria-label={label}
                 title={hint}
                 aria-pressed={tool === value}
-                className={cn(tool === value && "bg-accent text-accent-foreground")}
+                className={cn(tool === value && "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground")}
                 onClick={() => {
                   setTool(value);
                   if (value !== "select") select(null);
@@ -938,11 +942,14 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
               </Button>
             ))}
           {previewing && (
-            <span className="text-xs text-muted-foreground">
+            <span className="px-2 text-xs text-muted-foreground">
               As the reader sees it: point at a hotspot, or click it to keep it open.
             </span>
           )}
-          <div className="ml-auto flex items-center gap-1">
+          {(editing || previewing) && (canPreview || (!readOnly && !annotated)) && (
+            <span aria-hidden className="mx-1 h-5 w-px bg-border" />
+          )}
+          <div className="flex items-center gap-1">
             {canPreview && (
               <Button
                 size="sm"
@@ -955,12 +962,17 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
               </Button>
             )}
             {!readOnly && !annotated && (
-              <div className="flex items-center gap-1" role="group" aria-label="Image">
+              <div className="flex items-center gap-0.5 rounded-lg bg-foreground/[0.06] p-0.5" role="group" aria-label="Image">
                 {(["crop", "full"] as const).map((show) => (
                   <Button
                     key={show}
                     size="sm"
-                    variant={step.image.show === show ? "default" : "outline"}
+                    variant="ghost"
+                    aria-pressed={step.image.show === show}
+                    className={cn(
+                      "h-6 rounded-md",
+                      step.image.show === show && "bg-card text-card-foreground shadow-sm hover:bg-card",
+                    )}
                     disabled={show === "crop" && !step.image.crop}
                     title={IMAGE_SHOW_HINTS[show]}
                     onClick={() => run((guide) => setImageShow(guide, step.id, show))}
