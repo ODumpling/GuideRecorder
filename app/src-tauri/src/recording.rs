@@ -184,6 +184,9 @@ pub struct RecordingSaved {
     pub suggested_blurs: usize,
     /// Blurs added for it, when the settings apply them.
     pub applied_blurs: usize,
+    /// Steps that could not be scanned for sensitive text (0 when the
+    /// settings turn scanning off).
+    pub unscanned_steps: usize,
 }
 
 /// A screenshot the running session took (sent as [`SNAPSHOT_EVENT`]).
@@ -912,6 +915,7 @@ fn save(
         skipped: saved.skipped,
         suggested_blurs: redacted.suggested,
         applied_blurs: redacted.blurred,
+        unscanned_steps: redacted.unscanned,
     })
 }
 
@@ -1444,9 +1448,10 @@ mod tests {
                 skipped: 1,
                 suggested_blurs: 2,
                 applied_blurs: 0,
+                unscanned_steps: 1,
             })
             .unwrap(),
-            json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0})
+            json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0, "unscannedSteps": 1})
         );
         assert_eq!(
             serde_json::to_value(RecordingSnapshot {

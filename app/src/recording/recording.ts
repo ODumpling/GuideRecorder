@@ -11,7 +11,12 @@ import { settingsStore } from "@/settings/settings";
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** What to say about a saved recording: left-out steps, and text found sensitive on this Mac. */
-export function savedNotice(skipped: number, suggestedBlurs: number, appliedBlurs: number): string | null {
+export function savedNotice({
+  skipped,
+  suggestedBlurs,
+  appliedBlurs,
+  unscannedSteps,
+}: Omit<RecordingSaved, "guideId" | "steps">): string | null {
   const parts: string[] = [];
   if (skipped) {
     parts.push(`${plural(skipped, "step", "steps")} had no screenshot and ${skipped === 1 ? "was" : "were"} left out.`);
@@ -20,6 +25,11 @@ export function savedNotice(skipped: number, suggestedBlurs: number, appliedBlur
     parts.push(`${plural(suggestedBlurs, "area looks", "areas look")} sensitive: review the suggested blurs.`);
   }
   if (appliedBlurs) parts.push(`${plural(appliedBlurs, "sensitive area was", "sensitive areas were")} blurred.`);
+  if (unscannedSteps) {
+    parts.push(
+      `${plural(unscannedSteps, "step", "steps")} couldn't be scanned for sensitive text; check ${unscannedSteps === 1 ? "it" : "them"} before sharing.`,
+    );
+  }
   return parts.length ? parts.join(" ") : null;
 }
 
@@ -27,14 +37,15 @@ export function savedNotice(skipped: number, suggestedBlurs: number, appliedBlur
  * Opens a saved recording in the editor (after the leave flow) and refreshes
  * the library; then auto-runs AI writing if the settings ask for it.
  */
-async function openSaved({ guideId, skipped, suggestedBlurs, appliedBlurs }: RecordingSaved) {
+async function openSaved(saved: RecordingSaved) {
+  const { guideId } = saved;
   const editor = editorStore.getState();
   void editor.loadGuides();
   // Not opened if the open guide's changes could not be saved (the leave
   // dialog shows) or the editor is busy; the new guide is in the library.
   if (!(await editor.openGuide(guideId))) return;
   // After opening, which clears the notice.
-  const notice = savedNotice(skipped, suggestedBlurs, appliedBlurs);
+  const notice = savedNotice(saved);
   if (notice) editor.notify(notice);
   // Write it with AI when the settings say so and a key is set.
   await autoRun(aiStore, guideId, settingsStore.getState().settings, tauriSettingsApi.apiKeyStored);

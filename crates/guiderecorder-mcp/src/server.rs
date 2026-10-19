@@ -3,7 +3,8 @@
 //! Every read goes through [`Library::find`] / [`Library::read`] and the
 //! index's `*_with_fallback` readers, none of which write to the library or
 //! the index. Images come only from [`render_step_image`], so annotations,
-//! blur and pixelation are burned in; the raw screenshots are never sent.
+//! blur and pixelation are burned in, and so are on-device blur
+//! suggestions, reviewed or not; the raw screenshots are never sent.
 //!
 //! Read-only SQLite opens of the index may create the `-shm` and `-wal`
 //! sidecar files next to it (normal WAL behaviour); the index itself is
@@ -596,6 +597,8 @@ pub fn image_options(show: Option<ImageShow>) -> ImageOptions {
     ImageOptions {
         show,
         max_width: Some(IMAGE_MAX_WIDTH),
+        // A client's model is off the device; nothing is reviewed here.
+        burn_on_device_suggestions: true,
         ..ImageOptions::default()
     }
 }

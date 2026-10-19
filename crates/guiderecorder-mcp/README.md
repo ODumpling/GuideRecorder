@@ -86,7 +86,8 @@ masked.
 
 Screenshots are rendered with `guiderecorder_core::export::render_step_image`.
 Annotations are drawn, and blur and pixelate regions are burned in before the
-image is scaled down. The images are PNG. The raw WebP screenshots never leave
+image is scaled down. Blur suggestions for text found sensitive on the device
+are blurred too, reviewed or not. The images are PNG. The raw WebP screenshots never leave
 the server.
 
 - `get_step` scales its single image to at most 1280 px wide.

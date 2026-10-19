@@ -425,6 +425,8 @@ export interface RecordingSaved {
   suggestedBlurs: number;
   /** Blurs added for it, when Settings apply them. */
   appliedBlurs: number;
+  /** Steps that could not be scanned for sensitive text. */
+  unscannedSteps: number;
 }
 
 /**

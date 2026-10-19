@@ -79,7 +79,7 @@ GuideRecorder is built to be safe to leave running:
   keys and tokens, long numbers, and your own words and patterns. Each
   finding becomes a suggested blur, or a blur straight away; Settings ›
   Privacy chooses, or turns it off. Export asks you to review suggestions
-  left.
+  left; the MCP server and the command line, which ask no one, blur them.
 - **AI only when you say so.** Nothing is sent anywhere unless AI is turned
   on and you have added your own key, which is kept in the macOS Keychain.
   Screenshots are sent with their blurs, and the sensitive text found on your

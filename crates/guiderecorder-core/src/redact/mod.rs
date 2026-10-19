@@ -688,6 +688,43 @@ mod tests {
     }
 
     #[test]
+    fn on_device_suggestions_are_burned_in_only_when_asked() {
+        let original = stripes(100, 100);
+        let (_dir, handle, mut guide) = bundle(&[Some(&original)]);
+        let Some(Item::Step(s)) = guide.items.first_mut() else {
+            panic!("expected a step");
+        };
+        s.ai_state.redaction_suggestions = vec![
+            RedactionSuggestion {
+                rect: rect(10.0, 10.0, 20.0, 20.0),
+                reason: "API key".into(),
+                source: SuggestionSource::OnDevice,
+            },
+            RedactionSuggestion {
+                rect: rect(60.0, 60.0, 20.0, 20.0),
+                reason: "name".into(),
+                source: SuggestionSource::Ai,
+            },
+        ];
+        let render = |burn_on_device_suggestions| {
+            let opts = ImageOptions {
+                show: Some(ImageShow::Full),
+                burn_on_device_suggestions,
+                ..ImageOptions::default()
+            };
+            let rendered = render_step_image(&handle, s, &opts);
+            assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+            image::load_from_memory(&rendered.png).unwrap().to_rgba8()
+        };
+        // The editor's export: suggestions are reviewed first.
+        assert_eq!(render(false), original);
+        // The MCP server and the CLI: no review, so the on-device ones go.
+        let out = render(true);
+        assert!(changed(&original, &out, rect(10.0, 10.0, 20.0, 20.0)));
+        assert!(!changed(&original, &out, rect(60.0, 60.0, 20.0, 20.0)));
+    }
+
+    #[test]
     fn burn_in_covers_blurs_and_on_device_suggestions_only() {
         let original = stripes(100, 100);
         let mut s = step();

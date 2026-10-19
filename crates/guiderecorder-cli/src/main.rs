@@ -677,11 +677,17 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
     }
+    // No review here, so on-device blur suggestions are blurred too.
+    let unreviewed = |image: &ImageOptions| ImageOptions {
+        burn_on_device_suggestions: true,
+        ..image.clone()
+    };
     let report = match args.format {
         Format::Md => {
             let opts = md::MdOptions {
                 overwrite,
                 branding,
+                image: unreviewed(&md::MdOptions::default().image),
                 ..md::MdOptions::default()
             };
             md::export(&render, &handle, out, &opts)?
@@ -690,6 +696,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             let opts = html::HtmlOptions {
                 overwrite,
                 branding,
+                image: unreviewed(&html::HtmlOptions::default().image),
                 ..html::HtmlOptions::default()
             };
             html::export(&render, &handle, out, &opts)?
@@ -700,6 +707,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 timestamp,
                 paper,
                 branding,
+                image: unreviewed(&docx::DocxOptions::default().image),
                 ..docx::DocxOptions::default()
             };
             docx::export(&render, &handle, out, &opts)?
@@ -710,6 +718,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 timestamp,
                 paper,
                 branding,
+                image: unreviewed(&pdf::PdfOptions::default().image),
                 ..pdf::PdfOptions::default()
             };
             pdf::export(&render, &handle, out, &opts)?
