@@ -623,12 +623,16 @@ export class Backend {
               summary: bundle.guide.summary,
               tags: bundle.guide.tags,
               stepCount: bundle.guide.items.filter((item) => item.type === "step").length,
+              createdAt: bundle.guide.createdAt,
               updatedAt: bundle.guide.updatedAt,
+              folder: "",
               readOnly: this.readOnly(bundle),
               duplicateOf: null,
             }),
           );
       }
+      case "list_folders":
+        return [];
       case "open_guide": {
         const bundle = this.bundle(String(args.id));
         this.openGuides.add(bundle.guide.id);

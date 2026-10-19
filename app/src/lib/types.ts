@@ -178,9 +178,19 @@ export interface GuideListItem {
   summary: string;
   tags: string[];
   stepCount: number;
+  createdAt: string;
   updatedAt: string;
+  /** The library folder holding it, `/` separated; `""` at the top. */
+  folder: string;
   readOnly: boolean;
   duplicateOf: string | null;
+}
+
+/** `rename_guide`'s result. */
+export interface RenamedGuide {
+  path: string;
+  title: string;
+  updatedAt: string;
 }
 
 export interface OpenedGuide {

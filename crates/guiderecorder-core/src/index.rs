@@ -76,14 +76,16 @@ use rusqlite::types::Type;
 use rusqlite::{params, Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction};
 use ulid::Ulid;
 
-use crate::library::{is_bundle_extension, GuideHandle, Library, LibraryError, GUIDE_FILE};
+use crate::library::{
+    bundle_paths, is_bundle_extension, GuideHandle, Library, LibraryError, GUIDE_FILE,
+};
 use crate::markdown;
 use crate::model::{Guide, Item, Shape};
 
 /// Version of the index layout. Bump it whenever the tables or what goes
 /// into them change; an index at another version is rebuilt by the writer
 /// and reported stale to readers.
-pub const FORMAT_VERSION: i64 = 4;
+pub const FORMAT_VERSION: i64 = 5;
 
 /// `PRAGMA application_id` of a GuideRecorder index ("GYix"). The writer only
 /// recreates files that carry it.
@@ -127,9 +129,10 @@ CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- One row per bundle folder in the library root, readable or not.
+-- One row per bundle folder in the library, readable or not.
 CREATE TABLE guides (
-    bundle         TEXT PRIMARY KEY, -- folder name, e.g. 'My Guide.guiderecorder'
+    bundle         TEXT PRIMARY KEY, -- path relative to the root, '/' separated,
+                                     -- e.g. 'Work/My Guide.guiderecorder'
     mtime_ns       INTEGER,          -- guide.json; NULL if missing
     size           INTEGER,
     error          TEXT,             -- set if unreadable; the fields below are NULL
@@ -142,6 +145,7 @@ CREATE TABLE guides (
     tags_folded    TEXT,             -- JSON array, lowercase
     step_count     INTEGER,
     updated_us     INTEGER,          -- microseconds since the Unix epoch
+    created_us     INTEGER,
     duplicate_of   TEXT              -- canonical bundle holding the same id
 );
 CREATE INDEX guides_updated ON guides (updated_us);
@@ -204,7 +208,11 @@ pub struct IndexedGuide {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The library folder holding the bundle (see
+    /// [`crate::library::GuideSummary::folder`]).
+    pub folder: String,
     /// The guide is from a newer app or not yet migrated (see
     /// [`crate::library::LoadedGuide::read_only`]).
     pub read_only: bool,
@@ -300,7 +308,7 @@ impl SearchOptions {
     }
 }
 
-/// What [`Index::sync`] changed, as bundle folder names.
+/// What [`Index::sync`] changed, as bundle paths relative to the root.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncReport {
     pub added: Vec<String>,
@@ -549,15 +557,16 @@ impl Index {
         Ok(report)
     }
 
-    /// Re-indexes the bundle at `path` (a `.guiderecorder` folder directly in the
-    /// library root), or drops it if it is gone. For the app's file watcher.
+    /// Re-indexes the bundle at `path` (a `.guiderecorder` folder in the
+    /// library root or one of its folders), or drops it if it is gone. For
+    /// the app's file watcher.
     pub fn update(&mut self, library: &Library, path: impl AsRef<Path>) -> Result<()> {
         self.check_writable()?;
         if self.root()?.as_deref() != Some(library.root()) {
             self.rebuild(library)?;
             return Ok(());
         }
-        let Some(bundle) = bundle_name(path.as_ref()) else {
+        let Some(bundle) = bundle_name(library.root(), path.as_ref()) else {
             return Err(LibraryError::NotABundle(path.as_ref().to_path_buf()).into());
         };
         let bundle_path = library.root().join(&bundle);
@@ -577,7 +586,10 @@ impl Index {
     /// Drops the bundle at `path` from the index.
     pub fn remove(&mut self, path: impl AsRef<Path>) -> Result<()> {
         self.check_writable()?;
-        if let Some(bundle) = bundle_name(path.as_ref()) {
+        let Some(root) = self.root()? else {
+            return Ok(());
+        };
+        if let Some(bundle) = bundle_name(&root, path.as_ref()) {
             let tx = self.conn.transaction()?;
             delete(&tx, &bundle)?;
             mark_duplicates(&tx, None)?;
@@ -597,20 +609,27 @@ impl Index {
         let tag = filter.tag.as_deref().map(str::to_lowercase);
         let limit = sql_limit(filter.limit);
         let columns = "g.bundle, g.id, g.title, g.summary, g.tags, g.step_count, g.updated_us, \
-                       g.read_only, g.duplicate_of";
+                       g.read_only, g.duplicate_of, g.created_us";
         let tag_clause = "(?1 IS NULL OR EXISTS \
                           (SELECT 1 FROM json_each(g.tags_folded) WHERE value = ?1))";
         let match_query = filter.query.as_deref().map(fts_queries);
         let mut guides = Vec::new();
         let mut push = |row: &rusqlite::Row<'_>| -> rusqlite::Result<()> {
+            let bundle: String = row.get(0)?;
+            let updated_at = parse_micros(row, 6)?;
             guides.push(IndexedGuide {
-                path: root.join(row.get::<_, String>(0)?),
+                path: root.join(&bundle),
+                folder: bundle_folder(&bundle).to_owned(),
                 id: parse_ulid(row, 1)?,
                 title: row.get(2)?,
                 summary: row.get(3)?,
                 tags: parse_tags(row, 4)?,
                 step_count: row.get::<_, i64>(5)? as usize,
-                updated_at: parse_micros(row, 6)?,
+                created_at: match row.get::<_, Option<i64>>(9)? {
+                    Some(_) => parse_micros(row, 9)?,
+                    None => updated_at,
+                },
+                updated_at,
                 read_only: row.get(7)?,
                 duplicate_of: row.get::<_, Option<String>>(8)?.map(|b| root.join(b)),
             });
@@ -1012,7 +1031,9 @@ pub fn list_library(library: &Library, filter: &ListFilter) -> Result<Vec<Indexe
                 summary: summary.summary,
                 tags: summary.tags,
                 step_count: summary.step_count,
+                created_at: summary.created_at,
                 updated_at: summary.updated_at,
+                folder: summary.folder,
                 read_only,
                 duplicate_of: summary.duplicate_of,
             },
@@ -1325,8 +1346,8 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
     let folded: Vec<String> = guide.tags.iter().map(|t| t.to_lowercase()).collect();
     tx.execute(
         "INSERT INTO guides (bundle, mtime_ns, size, id, schema_version, read_only, title,
-                             summary, tags, tags_folded, step_count, updated_us)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                             summary, tags, tags_folded, step_count, updated_us, created_us)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             bundle,
             mtime_ns,
@@ -1340,6 +1361,7 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
             serde_json::to_string(&folded).expect("strings serialize"),
             guide.steps().count() as i64,
             guide.updated_at.timestamp_micros(),
+            guide.created_at.timestamp_micros(),
         ],
     )?;
     let mut insert = tx.prepare_cached(
@@ -1406,8 +1428,10 @@ fn mark_duplicates(tx: &Transaction<'_>, library: Option<&Library>) -> Result<()
             .collect::<rusqlite::Result<_>>()?;
         let found = library
             .zip(id.parse::<Ulid>().ok())
-            .and_then(|(library, id)| library.find(id).ok().flatten())
-            .and_then(|handle| bundle_name(&handle.path))
+            .and_then(|(library, id)| {
+                let handle = library.find(id).ok().flatten()?;
+                bundle_name(library.root(), &handle.path)
+            })
             .filter(|found| copies.iter().any(|(bundle, _)| bundle == found));
         let current = || {
             let mut canonical = copies.iter().filter(|(_, is_canonical)| *is_canonical);
@@ -1436,25 +1460,49 @@ fn set_root(tx: &Transaction<'_>, root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Bundle folders directly in `root`, by name, with their `guide.json`
-/// stamps. Names that are not UTF-8 are skipped.
+/// Bundle folders in `root` and its folders (as [`Library::scan`] finds
+/// them), by relative path, with their `guide.json` stamps. Paths that are
+/// not UTF-8 are skipped.
 fn bundles_on_disk(root: &Path) -> Result<BTreeMap<String, Option<Stamp>>> {
-    let entries = fs::read_dir(root).map_err(|source| IndexError::Io {
+    let paths = bundle_paths(root).map_err(|source| IndexError::Io {
         path: root.to_path_buf(),
         source,
     })?;
-    Ok(entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .filter_map(|path| Some((bundle_name(&path)?, stamp(&path))))
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| Some((bundle_name(root, &path)?, stamp(&path))))
         .collect())
 }
 
-/// The folder name of a bundle path, if it is one.
-fn bundle_name(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    is_bundle_extension(path.extension()?).then(|| name.to_owned())
+/// The path of a bundle relative to `root`, `/` separated (the `bundle`
+/// key), if it is a bundle below `root`. `path` need not be canonical.
+fn bundle_name(root: &Path, path: &Path) -> Option<String> {
+    is_bundle_extension(path.extension()?).then_some(())?;
+    let relative = match path.strip_prefix(root) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => {
+            let parent = fs::canonicalize(path.parent()?).ok()?;
+            parent
+                .join(path.file_name()?)
+                .strip_prefix(root)
+                .ok()?
+                .to_path_buf()
+        }
+    };
+    let parts: Option<Vec<&str>> = relative
+        .components()
+        .map(|c| match c {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    let parts = parts?;
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// The folder part of a `bundle` key: `""` in the root.
+fn bundle_folder(bundle: &str) -> &str {
+    bundle.rsplit_once('/').map_or("", |(folder, _)| folder)
 }
 
 fn stamp(bundle_path: &Path) -> Option<Stamp> {
@@ -1654,15 +1702,27 @@ mod tests {
 
     #[test]
     fn bundle_name_accepts_legacy_extension() {
+        let root = Path::new("/l");
         assert_eq!(
-            bundle_name(Path::new("/l/A.guiderecorder")).as_deref(),
+            bundle_name(root, Path::new("/l/A.guiderecorder")).as_deref(),
             Some("A.guiderecorder")
         );
         assert_eq!(
-            bundle_name(Path::new("/l/A.guidesya")).as_deref(),
+            bundle_name(root, Path::new("/l/A.guidesya")).as_deref(),
             Some("A.guidesya")
         );
-        assert_eq!(bundle_name(Path::new("/l/A.txt")), None);
+        assert_eq!(bundle_name(root, Path::new("/l/A.txt")), None);
+    }
+
+    #[test]
+    fn bundle_name_is_relative_to_the_root() {
+        let root = Path::new("/l");
+        assert_eq!(
+            bundle_name(root, Path::new("/l/Work/Team/A.guiderecorder")).as_deref(),
+            Some("Work/Team/A.guiderecorder")
+        );
+        assert_eq!(bundle_folder("Work/Team/A.guiderecorder"), "Work/Team");
+        assert_eq!(bundle_folder("A.guiderecorder"), "");
     }
 
     #[test]

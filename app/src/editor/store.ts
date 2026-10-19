@@ -3,6 +3,7 @@ import { errorMessage, type EditorApi } from "@/lib/ipc";
 import type { Guide, GuideListItem } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
+import { copyTitle, type GuideSort } from "@/editor/library";
 
 /** The guide being edited, as opened. */
 export interface OpenDoc {
@@ -28,7 +29,12 @@ interface HistoryEntry {
 
 export interface EditorState {
   guides: GuideListItem[];
+  /** The library's folders (relative paths), including empty ones. */
+  folders: string[];
   query: string;
+  /** The sidebar's tag filter (case-insensitive); null shows every guide. */
+  tag: string | null;
+  sort: GuideSort;
   listError: string | null;
 
   doc: OpenDoc | null;
@@ -54,8 +60,27 @@ export interface EditorState {
   /** A message about a failed action (e.g. an image that would not load). */
   notice: string | null;
 
+  /** Lists the guides and folders. */
   loadGuides(): Promise<void>;
   setQuery(query: string): Promise<void>;
+  setTag(tag: string | null): void;
+  setSort(sort: GuideSort): void;
+  /** Makes a folder in `parent` (`""`: the top). False if it failed (in `notice`). */
+  createFolder(parent: string, name: string): Promise<boolean>;
+  /**
+   * Copies a listed guide (new id, images copied) as "<title> copy", next
+   * to it. The open guide is saved first, so the copy has its edits.
+   */
+  duplicateGuide(item: GuideListItem): Promise<boolean>;
+  /**
+   * Retitles a listed guide (its folder on disk follows). The open guide is
+   * saved first and takes the new title, outside the undo history.
+   */
+  renameGuide(item: GuideListItem, title: string): Promise<boolean>;
+  /** Moves a listed guide into `folder` (`""`: the top); the open guide follows. */
+  moveGuide(item: GuideListItem, folder: string): Promise<boolean>;
+  /** Shows a guide or a library folder in Finder. */
+  reveal(target: { path: string } | { folder: string }): Promise<void>;
   /**
    * These save first. If that fails they set `leave` and return false;
    * `resolveLeave` then retries, discards the changes or stays.
@@ -359,9 +384,44 @@ export function createEditorStore({
       return current;
     }
 
+    /**
+     * Runs a library action on `item` while busy (no edits land meanwhile).
+     * If `item` is the open guide its changes are saved first; `action` may
+     * then update the open doc. Failures go to `notice` as `what`.
+     */
+    async function organize(
+      item: GuideListItem,
+      what: string,
+      action: (isOpen: boolean) => Promise<void>,
+    ): Promise<boolean> {
+      if (get().busy) return false;
+      const isOpen = get().doc?.guide.id === item.id && get().doc?.path === item.path;
+      set({ busy: true });
+      try {
+        if (isOpen && !(await flush())) {
+          get().notify(`Could not ${what}: the guide's changes could not be saved first.`);
+          return false;
+        }
+        try {
+          await action(isOpen);
+        } catch (error) {
+          get().notify(`Could not ${what}: ${errorMessage(error)}`);
+          return false;
+        }
+        await get().loadGuides();
+        return true;
+      } finally {
+        if (!isSaved()) autosave.schedule();
+        idle();
+      }
+    }
+
     return {
       guides: [],
+      folders: [],
       query: "",
+      tag: null,
+      sort: "updated",
       listError: null,
       doc: null,
       opening: false,
@@ -380,9 +440,14 @@ export function createEditorStore({
 
       async loadGuides() {
         const request = ++listRequest;
+        const folders = api.listFolders().catch((error: unknown) => {
+          console.error("listing folders failed:", error);
+          return null;
+        });
         try {
           const guides = await api.listGuides(get().query || undefined);
-          if (request === listRequest) set({ guides, listError: null });
+          const listed = await folders;
+          if (request === listRequest) set({ guides, listError: null, ...(listed && { folders: listed }) });
         } catch (error) {
           if (request === listRequest) set({ listError: errorMessage(error) });
         }
@@ -391,6 +456,64 @@ export function createEditorStore({
       async setQuery(query) {
         set({ query });
         await get().loadGuides();
+      },
+
+      setTag(tag) {
+        set({ tag });
+      },
+
+      setSort(sort) {
+        set({ sort });
+      },
+
+      async createFolder(parent, name) {
+        try {
+          await api.createFolder(parent, name);
+        } catch (error) {
+          get().notify(`Could not make the folder: ${errorMessage(error)}`);
+          return false;
+        }
+        await get().loadGuides();
+        return true;
+      },
+
+      duplicateGuide: (item) =>
+        organize(item, "duplicate the guide", async () => {
+          const title = copyTitle(
+            item.title || "Untitled",
+            get().guides.map((g) => g.title),
+          );
+          await api.duplicateGuide(item.id, item.path, title);
+        }),
+
+      renameGuide: (item, title) =>
+        organize(item, "rename the guide", async (isOpen) => {
+          const renamed = await api.renameGuide(item.id, item.path, title.trim());
+          const doc = get().doc;
+          if (isOpen && doc) {
+            set({
+              doc: {
+                ...doc,
+                path: renamed.path,
+                guide: { ...doc.guide, title: renamed.title, updatedAt: renamed.updatedAt },
+              },
+            });
+          }
+        }),
+
+      moveGuide: (item, folder) =>
+        organize(item, "move the guide", async (isOpen) => {
+          const path = await api.moveGuide(item.id, item.path, folder);
+          const doc = get().doc;
+          if (isOpen && doc) set({ doc: { ...doc, path } });
+        }),
+
+      async reveal(target) {
+        try {
+          await api.reveal(target);
+        } catch (error) {
+          get().notify(`Could not show it in Finder: ${errorMessage(error)}`);
+        }
       },
 
       async openGuide(id) {

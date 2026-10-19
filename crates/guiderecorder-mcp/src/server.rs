@@ -177,7 +177,9 @@ impl GuideRecorderMcp {
 impl GuideRecorderMcp {
     #[tool(
         description = "List guides in the GuideRecorder library, most recently updated first. Returns \
-                       id, title, summary, tags, step_count, updated_at and read_only for each. \
+                       id, title, summary, tags, step_count, updated_at, read_only and folder for \
+                       each. folder is the library subfolder holding the guide (\"Work/Onboarding\"; \
+                       empty at the top level). \
                        read_only is true when the GuideRecorder app will not edit the guide as it is: \
                        it was saved by a newer GuideRecorder, or uses an older format the app \
                        upgrades when it next opens the guide. Read-only guides can still be read \
@@ -330,6 +332,7 @@ fn list_guides(config: &Config, args: &ListGuidesArgs) -> ToolResult<CallToolRes
                 "step_count": g.step_count,
                 "updated_at": g.updated_at.to_rfc3339(),
                 "read_only": g.read_only,
+                "folder": g.folder,
             })
         })
         .collect();

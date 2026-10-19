@@ -72,8 +72,14 @@ impl From<LibraryError> for AppError {
             | LibraryError::ChangedOnDisk(_)
             | LibraryError::Json { .. }
             | LibraryError::NotABundle(_) => ErrorKind::Conflict,
-            LibraryError::InvalidRelativePath(_) | LibraryError::SymlinkInBundle(_) => {
-                ErrorKind::Invalid
+            LibraryError::InvalidRelativePath(_)
+            | LibraryError::SymlinkInBundle(_)
+            | LibraryError::InvalidFolder(_)
+            | LibraryError::OutsideLibrary(_) => ErrorKind::Invalid,
+            LibraryError::Io { source, .. }
+                if source.kind() == std::io::ErrorKind::AlreadyExists =>
+            {
+                ErrorKind::Exists
             }
             _ => ErrorKind::Io,
         };
@@ -93,7 +99,10 @@ pub struct GuideListItem {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    pub created_at: String,
     pub updated_at: String,
+    /// The library folder holding it, `/` separated; `""` at the top.
+    pub folder: String,
     pub read_only: bool,
     pub duplicate_of: Option<PathBuf>,
 }
@@ -107,11 +116,23 @@ impl From<IndexedGuide> for GuideListItem {
             summary: g.summary,
             tags: g.tags,
             step_count: g.step_count,
+            created_at: g.created_at.to_rfc3339(),
             updated_at: g.updated_at.to_rfc3339(),
+            folder: g.folder,
             read_only: g.read_only,
             duplicate_of: g.duplicate_of,
         }
     }
+}
+
+/// `rename_guide`'s result: where the bundle is now, and its new title and
+/// update time (for the editor, if the guide is open).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedGuide {
+    pub path: PathBuf,
+    pub title: String,
+    pub updated_at: String,
 }
 
 /// `open_guide`'s result.
@@ -488,6 +509,111 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// The library's folders (see [`Library::folders`]).
+    pub fn list_folders(&self) -> Result<Vec<String>> {
+        Ok(self.library.folders()?)
+    }
+
+    /// Makes folder `name` inside `parent` (`""`: the top) and returns its
+    /// path relative to the library.
+    pub fn create_folder(&self, parent: &str, name: &str) -> Result<String> {
+        if name.trim().is_empty() {
+            return Err(AppError::new(ErrorKind::Invalid, "the folder needs a name"));
+        }
+        Ok(self.library.create_folder(parent, name)?)
+    }
+
+    /// Copies the guide at `path` (a listing row's) into a new guide with a
+    /// new id and `title`, next to it, and indexes it. Returns its id. The
+    /// editor saves an open guide first, so the copy has its latest edits.
+    pub fn duplicate_guide(&self, guide_id: &str, path: &Path, title: &str) -> Result<String> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let copy = self.library.duplicate(
+            &GuideHandle {
+                id,
+                path: path.to_path_buf(),
+            },
+            title,
+        )?;
+        self.index_bundle(&copy);
+        Ok(copy.id.to_string())
+    }
+
+    /// Renames the guide at `path`: its title, and its folder to match (see
+    /// [`Library::rename`]). An open guide from that bundle follows it; the
+    /// editor saves it first and takes the new title from the result.
+    pub fn rename_guide(&self, guide_id: &str, path: &Path, title: &str) -> Result<RenamedGuide> {
+        let id = parse_id(guide_id)?;
+        if title.trim().is_empty() {
+            return Err(AppError::new(ErrorKind::Invalid, "the guide needs a title"));
+        }
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let old = GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        };
+        let (renamed, guide) = self.library.rename(&old, title)?;
+        let result = RenamedGuide {
+            path: renamed.path.clone(),
+            title: guide.title.clone(),
+            updated_at: guide.updated_at.to_rfc3339(),
+        };
+        self.follow(&old, &renamed, Some(guide));
+        Ok(result)
+    }
+
+    /// Moves the guide at `path` into `folder` (`""`: the top) and returns
+    /// its new path. An open guide from that bundle follows it.
+    pub fn move_guide(&self, guide_id: &str, path: &Path, folder: &str) -> Result<PathBuf> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let old = GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        };
+        let moved = self.library.move_to(&old, folder)?;
+        self.follow(&old, &moved, None);
+        Ok(moved.path)
+    }
+
+    /// Checks that `path` is a guide bundle in the library, for revealing
+    /// it in Finder.
+    pub fn check_bundle(&self, path: &Path) -> Result<()> {
+        if !self.library.contains(path) || !path.is_dir() {
+            return Err(AppError::new(
+                ErrorKind::Invalid,
+                format!("{} is not a guide in the library", path.display()),
+            ));
+        }
+        Ok(())
+    }
+
+    /// After a bundle moved from `old` to `new` (the guide lock held):
+    /// points an open guide from `old` at `new` (with `guide` as its saved
+    /// copy, if given) and updates the index.
+    fn follow(&self, old: &GuideHandle, new: &GuideHandle, guide: Option<Guide>) {
+        if let Some(entry) = self.open.lock().unwrap().get_mut(&old.id) {
+            if entry.handle.path == old.path || entry.handle.path == new.path {
+                entry.handle = new.clone();
+                if let Some(guide) = guide {
+                    entry.guide = guide;
+                }
+            }
+        }
+        if let Some(index) = self.index.lock().unwrap().as_mut() {
+            let updated = index
+                .update(&self.library, &old.path)
+                .and_then(|()| index.update(&self.library, &new.path));
+            if let Err(e) = updated {
+                eprintln!("guiderecorder: index update failed: {e}");
+            }
+        }
     }
 }
 
@@ -1058,6 +1184,85 @@ pub(crate) mod tests {
         let err = session.delete_guide(&id, &other.path).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Conflict);
         assert!(other.path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn organizing_follows_an_open_guide_and_updates_the_index() {
+        let root = library();
+        let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
+        let id = fixture_id(&root);
+        let listed = |session: &Session| {
+            session
+                .list_guides(None)
+                .unwrap()
+                .into_iter()
+                .find(|g| g.id == id)
+                .unwrap()
+        };
+        let path = listed(&session).path;
+        assert_eq!(listed(&session).folder, "");
+
+        assert_eq!(session.create_folder("", "Work").unwrap(), "Work");
+        assert_eq!(
+            session.create_folder("", "Work").unwrap_err().kind,
+            ErrorKind::Exists
+        );
+        assert_eq!(
+            session.create_folder("", "  ").unwrap_err().kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(session.list_folders().unwrap(), ["Work"]);
+
+        // Move and rename while open: saves keep going to the bundle.
+        let opened = session.open_guide(&id).unwrap();
+        let moved = session.move_guide(&id, &path, "Work").unwrap();
+        assert_eq!(moved, session.root().join("Work").join(FIXTURE));
+        assert_eq!(listed(&session).folder, "Work");
+        let renamed = session.rename_guide(&id, &moved, "Renamed").unwrap();
+        assert_eq!(
+            renamed.path,
+            session.root().join("Work/Renamed.guiderecorder")
+        );
+        assert_eq!(renamed.title, "Renamed");
+        let mut guide = opened.guide;
+        guide.title = renamed.title.clone();
+        guide.summary = "after the move".into();
+        session.save_guide(guide).unwrap();
+        let row = listed(&session);
+        assert_eq!(
+            (row.path, row.title),
+            (renamed.path.clone(), "Renamed".into())
+        );
+        assert_eq!(row.summary, "after the move");
+        assert_eq!(
+            session
+                .move_guide(&id, &renamed.path, "Missing")
+                .unwrap_err()
+                .kind,
+            ErrorKind::Invalid
+        );
+
+        // Duplicate: a new id next to it, listed and openable.
+        let copy = session
+            .duplicate_guide(&id, &renamed.path, "Renamed copy")
+            .unwrap();
+        assert_ne!(copy, id);
+        let rows = session.list_guides(None).unwrap();
+        let copy_row = rows.iter().find(|g| g.id == copy).unwrap();
+        assert_eq!(copy_row.folder, "Work");
+        assert_eq!(copy_row.title, "Renamed copy");
+        assert!(copy_row.duplicate_of.is_none());
+        assert_eq!(
+            session.open_guide(&copy).unwrap().guide.summary,
+            "after the move"
+        );
+
+        session.check_bundle(&copy_row.path).unwrap();
+        assert!(session.check_bundle(&root.join("Work")).is_err());
+        assert!(session
+            .check_bundle(&root.join("Nope.guiderecorder"))
+            .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
