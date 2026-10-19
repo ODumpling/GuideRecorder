@@ -4,6 +4,9 @@
 export const TYPING_IDLE_MS = { min: 300, max: 10_000 };
 export const AFTER_FRAME_DELAY_MS = { min: 0, max: 3_000 };
 export const MAX_EXCLUDED_APPS = 100;
+/** Limits of the redaction rules (core's `redact::detect`). */
+export const MAX_REDACTION_PATTERNS = 50;
+export const MAX_REDACTION_WORDS = 500;
 
 const MODIFIERS = ["CmdOrCtrl", "CommandOrControl", "Cmd", "Command", "Super", "Ctrl", "Control", "Alt", "Option", "Shift"];
 const NAMED_KEYS = ["Space", "Enter", "Tab", "Escape", "Backspace", "Delete"];

@@ -14,6 +14,7 @@ import {
   Square,
 } from "lucide-react";
 import {
+  acceptAllBlurSuggestions,
   acceptBlurSuggestion,
   addAnnotation,
   rejectBlurSuggestion,
@@ -679,8 +680,9 @@ function Layer({
 }
 
 /**
- * AI blur suggestions as dashed, numbered proposals (full-screenshot pixels,
- * like annotations). Editor-only: they are in `aiState`, never exported.
+ * Blur suggestions (from the AI or found on this Mac) as dashed, numbered
+ * proposals (full-screenshot pixels, like annotations). Editor-only: they
+ * are in `aiState`, never exported.
  */
 function Suggestions({
   suggestions,
@@ -725,7 +727,7 @@ function Suggestions({
   );
 }
 
-/** Accept or reject each blur suggestion; both are undoable. */
+/** Accept or reject each blur suggestion, or accept them all; all undoable. */
 function SuggestionList({
   step,
   readOnly,
@@ -738,51 +740,70 @@ function SuggestionList({
   const suggestions = step.aiState.redactionSuggestions ?? [];
   if (!suggestions.length) return null;
   return (
-    <ul className="flex flex-col gap-1 text-sm" aria-label="Blur suggestions">
-      {suggestions.map((suggestion, i) => (
-        <li
-          key={`${i}:${suggestion.rect.x},${suggestion.rect.y}`}
-          className="flex items-center gap-2 rounded-md border border-dashed border-[var(--status-warning)] px-2 py-1"
-          onPointerEnter={() => onFocus(i)}
-          onPointerLeave={() => onFocus(null)}
-          onFocus={() => onFocus(i)}
-          onBlur={() => onFocus(null)}
+    <div className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1 text-sm" aria-label="Blur suggestions">
+        {suggestions.map((suggestion, i) => (
+          <li
+            key={`${i}:${suggestion.rect.x},${suggestion.rect.y}`}
+            className="flex items-center gap-2 rounded-md border border-dashed border-[var(--status-warning)] px-2 py-1"
+            onPointerEnter={() => onFocus(i)}
+            onPointerLeave={() => onFocus(null)}
+            onFocus={() => onFocus(i)}
+            onBlur={() => onFocus(null)}
+          >
+            <span className="text-xs font-semibold text-[var(--status-warning)] tabular-nums">{i + 1}</span>
+            <span
+              className="min-w-0 flex-1 truncate"
+              title={suggestion.source === "onDevice" ? `${suggestion.reason} (found on this Mac)` : suggestion.reason}
+            >
+              Suggested blur: {suggestion.reason || "may be sensitive"}
+            </span>
+            {!readOnly && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label={`Accept blur suggestion ${i + 1}`}
+                  title="Blur this area"
+                  onClick={() => {
+                    onFocus(null);
+                    run((guide) => acceptBlurSuggestion(guide, step.id, i, ulid()));
+                  }}
+                >
+                  Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Reject blur suggestion ${i + 1}`}
+                  title="Dismiss this suggestion and leave the area as it is"
+                  onClick={() => {
+                    onFocus(null);
+                    run((guide) => rejectBlurSuggestion(guide, step.id, i));
+                  }}
+                >
+                  Reject
+                </Button>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+      {!readOnly && suggestions.length > 1 && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-end"
+          title="Blur every suggested area"
+          onClick={() => {
+            onFocus(null);
+            run((guide) => acceptAllBlurSuggestions(guide, step.id, suggestions.map(() => ulid())));
+          }}
         >
-          <span className="text-xs font-semibold text-[var(--status-warning)] tabular-nums">{i + 1}</span>
-          <span className="min-w-0 flex-1 truncate" title={suggestion.reason}>
-            Suggested blur: {suggestion.reason || "may be sensitive"}
-          </span>
-          {!readOnly && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={`Accept blur suggestion ${i + 1}`}
-                title="Blur this area"
-                onClick={() => {
-                  onFocus(null);
-                  run((guide) => acceptBlurSuggestion(guide, step.id, i, ulid()));
-                }}
-              >
-                Accept
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`Reject blur suggestion ${i + 1}`}
-                title="Dismiss this suggestion and leave the area as it is"
-                onClick={() => {
-                  onFocus(null);
-                  run((guide) => rejectBlurSuggestion(guide, step.id, i));
-                }}
-              >
-                Reject
-              </Button>
-            </>
-          )}
-        </li>
-      ))}
-    </ul>
+          Accept all {suggestions.length}
+        </Button>
+      )}
+    </div>
   );
 }
 

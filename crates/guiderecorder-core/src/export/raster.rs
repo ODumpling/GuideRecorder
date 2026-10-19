@@ -455,7 +455,7 @@ fn apply_crop(
 /// `rect` (full-screenshot pixels) as whole view pixels, grown outward to
 /// cover every partly covered pixel and clamped to the view. `None` if
 /// nothing is left.
-fn region(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Region> {
+pub(crate) fn region(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Region> {
     if ![rect.x, rect.y, rect.width, rect.height]
         .iter()
         .all(|v| v.is_finite())

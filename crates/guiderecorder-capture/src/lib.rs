@@ -4,6 +4,7 @@
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod ocr;
 pub mod permissions;
 
 pub use permissions::{Permission, PermissionReport, PermissionStatus};

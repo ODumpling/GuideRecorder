@@ -29,6 +29,8 @@ Anthropic API key.
    - reword, reorder, merge, split or delete steps, and add sections and notes;
    - annotate screenshots with arrows, boxes, highlights, callouts and blurs,
      and switch between a close-up crop and the full screenshot;
+   - review blurs suggested for sensitive text found in the screenshots
+     (see Privacy below);
    - undo and redo everything; changes save automatically.
 3. **Let AI write it (optional).** With an API key set, **Write with AI** turns
    the raw steps into clear instructions and writes a title, intro,
@@ -71,9 +73,18 @@ GuideRecorder is built to be safe to leave running:
   kept out of every screenshot, even behind other apps. By default this covers
   1Password, Bitwarden, Keychain Access, Passwords and Messages, and you can
   edit the list in Settings.
+- **Sensitive text is found on your Mac.** When a recording stops, the text
+  in its screenshots is read on the device (no key, no network) and checked
+  for email addresses, phone numbers, card numbers, IBANs, IP addresses, API
+  keys and tokens, long numbers, and your own words and patterns. Each
+  finding becomes a suggested blur, or a blur straight away; Settings ›
+  Privacy chooses, or turns it off. Export asks you to review suggestions
+  left.
 - **AI only when you say so.** Nothing is sent anywhere unless AI is turned
   on and you have added your own key, which is kept in the macOS Keychain.
-  Blur suggestions are only suggestions until you accept them.
+  Screenshots are sent with their blurs, and the sensitive text found on your
+  Mac, already blurred. Blur suggestions are only suggestions until you
+  accept them.
 
 ## Requirements
 

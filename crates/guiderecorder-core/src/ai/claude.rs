@@ -22,7 +22,7 @@ use super::retry::{retry_after_from_headers, with_retry, RetryPolicy};
 use super::{
     base64, fits_api_limit, AiError, AiFuture, AiProvider, GenerationMeta, GuideInput, GuideOutput,
     ImageData, RedactionSuggestion, RewriteInput, RewriteOutput, RewriteStyle, StepEdit, StepInput,
-    StepOutput, Usage,
+    StepOutput, SuggestionSource, Usage,
 };
 use crate::model::Rect;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -645,6 +645,7 @@ pub fn parse_step_output(input: &StepInput, parsed: Parsed) -> Result<StepOutput
             Some(RedactionSuggestion {
                 rect: bbox,
                 reason: r["reason"].as_str().unwrap_or_default().trim().to_owned(),
+                source: SuggestionSource::Ai,
             })
         })
         .collect();
@@ -1052,10 +1053,12 @@ mod tests {
                 RedactionSuggestion {
                     rect: rect(1100.0, 550.0, 100.0, 25.0),
                     reason: "email address".into(),
+                    source: SuggestionSource::Ai,
                 },
                 RedactionSuggestion {
                     rect: rect(2400.0, 1500.0, 160.0, 100.0),
                     reason: "name".into(),
+                    source: SuggestionSource::Ai,
                 },
             ]
         );

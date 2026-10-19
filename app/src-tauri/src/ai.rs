@@ -801,7 +801,9 @@ pub fn cancel_on_quit<R: Runtime>(app: &AppHandle<R>) {
 mod tests {
     use super::*;
     use guiderecorder_core::ai::mock::{mock_meta, MockProvider};
-    use guiderecorder_core::ai::{prompts, GuideOutput, StepEdit, StepOutput, Usage};
+    use guiderecorder_core::ai::{
+        prompts, GuideOutput, StepEdit, StepOutput, SuggestionSource, Usage,
+    };
     use guiderecorder_core::model::{Audience, Rect, StepImage, StepKind};
     use serde_json::json;
     use std::sync::atomic::AtomicBool;
@@ -910,6 +912,7 @@ mod tests {
                         height: 4.0,
                     },
                     reason: "email address".into(),
+                    source: SuggestionSource::Ai,
                 }],
                 meta: guiderecorder_core::ai::GenerationMeta {
                     usage: Usage {
@@ -1843,6 +1846,7 @@ mod tests {
                 height: 4.0,
             },
             reason: "email address".into(),
+            source: SuggestionSource::Ai,
         };
         if let Item::Step(step) = &mut guide.items[1] {
             step.description = "Mine too.".into();

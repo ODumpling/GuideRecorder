@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  acceptAllBlurSuggestions,
   acceptBlurSuggestion,
   addAnnotation,
   rejectBlurSuggestion,
@@ -144,5 +145,20 @@ describe("blur suggestions", () => {
   it("refuses a suggestion that is not there", () => {
     expect(() => rejectBlurSuggestion(withSuggestions(), "A", 2)).toThrow(PatchError);
     expect(() => acceptBlurSuggestion(guide(), "A", 0, "X")).toThrow(PatchError);
+    expect(() => acceptAllBlurSuggestions(guide(), "A", [])).toThrow(PatchError);
+    expect(() => acceptAllBlurSuggestions(withSuggestions(), "A", ["X"])).toThrow(PatchError);
+  });
+
+  it("Accept all blurs every suggestion as one undo step", () => {
+    const g = withSuggestions();
+    const command = acceptAllBlurSuggestions(g, "A", ["BL1", "BL2"]);
+    const after = roundTrip(g, command);
+    expect(stepOf(after).annotations).toEqual([
+      box,
+      { id: "BL1", type: "blur", geometry: suggestions[0].rect },
+      { id: "BL2", type: "blur", geometry: suggestions[1].rect },
+    ]);
+    expect(stepOf(after).aiState).toEqual({ status: "edited", redactionSuggestions: [] });
+    expect(command.label).toBe("Accept blur suggestions");
   });
 });

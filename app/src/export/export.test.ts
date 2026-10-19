@@ -9,6 +9,8 @@ import {
   outPath,
   rememberPaper,
   runExport,
+  unreviewedBlurs,
+  unreviewedBlursText,
   warningLines,
 } from "@/export/export";
 import type { ExportApi } from "@/lib/ipc";
@@ -158,4 +160,38 @@ it("names warnings by step number", () => {
     notes: [],
   };
   expect(warningLines(result, items)).toEqual(["Step 2: crop position unknown", "A removed step: gone"]);
+});
+
+describe("unreviewed blur suggestions", () => {
+  const rect = { x: 1, y: 2, width: 3, height: 4 };
+  function steps(counts: number[]): Item[] {
+    return counts.map((n, i) => ({
+      type: "step",
+      id: `S${i + 1}`,
+      title: "",
+      description: "",
+      kind: "click",
+      image: { full: "steps/x.webp", show: "full" },
+      annotations: [],
+      aiState: { status: "ai", redactionSuggestions: Array.from({ length: n }, () => ({ rect, reason: "email address" })) },
+    }));
+  }
+
+  it("counts suggestions by step number, skipping other items", () => {
+    const items: Item[] = [{ type: "section", id: "X", title: "Start" }, ...steps([0, 2, 0, 1])];
+    expect(unreviewedBlurs(items)).toEqual({ stepIds: ["S2", "S4"], steps: [2, 4], count: 3 });
+    expect(unreviewedBlurs(steps([0, 0]))).toEqual({ stepIds: [], steps: [], count: 0 });
+  });
+
+  it("words the warning", () => {
+    expect(unreviewedBlursText({ steps: [], count: 0 })).toBeNull();
+    expect(unreviewedBlursText({ steps: [3], count: 1 })).toBe(
+      "1 suggested blur in step 3 has not been reviewed. Unless accepted, it is not blurred in the export.",
+    );
+    expect(unreviewedBlursText({ steps: [2, 4], count: 3 })).toBe(
+      "3 suggested blurs in steps 2 and 4 have not been reviewed. Unless accepted, they are not blurred in the export.",
+    );
+    expect(unreviewedBlursText({ steps: [1, 2, 3, 4, 5, 6, 7], count: 7 })).toContain("in steps 1, 2, 3, 4 and 3 more have");
+    expect(unreviewedBlursText({ steps: [1, 2, 3, 4, 5], count: 5 })).toContain("in steps 1, 2, 3, 4 and 5 have");
+  });
 });

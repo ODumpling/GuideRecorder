@@ -12,6 +12,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 pulldown-cmark = { version = "0.13", default-features = false }
+regex = "1.13.1"
 ulid = { version = "1", features = ["serde"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 tempfile = "3.27.0"

@@ -64,7 +64,7 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   await emitEvent(page, "recording://status", { state: "saving", startedAt: status.startedAt, title: null });
   await expect(page.getByRole("status")).toHaveText("Saving recording…");
   await emitEvent(page, "recording://status", { state: "idle" });
-  await emitEvent(page, "recording://saved", { guideId: CALENDAR, steps: 3, skipped: 0 });
+  await emitEvent(page, "recording://saved", { guideId: CALENDAR, steps: 3, skipped: 0, suggestedBlurs: 0, appliedBlurs: 0 });
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue("Share a calendar event");
   await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
 });

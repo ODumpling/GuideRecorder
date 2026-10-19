@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { Bot, FileOutput, Keyboard, Lock, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
+import { Bot, EyeOff, FileOutput, Keyboard, Lock, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import {
   AiSection,
   ExportSection,
   GeneralSection,
   McpSection,
   PermissionsSection,
+  PrivacySection,
   RecordingSection,
 } from "@/components/settings/sections";
 import { Button } from "@/components/ui/button";
@@ -14,11 +15,12 @@ import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } fr
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
-export type SettingsPage = "general" | "recording" | "ai" | "export" | "permissions" | "mcp";
+export type SettingsPage = "general" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp";
 
 const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "general", label: "General", icon: SlidersHorizontal },
   { page: "recording", label: "Recording", icon: Keyboard },
+  { page: "privacy", label: "Privacy", icon: EyeOff },
   { page: "ai", label: "AI", icon: Bot },
   { page: "export", label: "Export", icon: FileOutput },
   { page: "permissions", label: "Permissions", icon: ShieldCheck },
@@ -108,6 +110,8 @@ export function SettingsDialog({
                 <GeneralSection api={api} />
               ) : page === "recording" ? (
                 <RecordingSection api={api} />
+              ) : page === "privacy" ? (
+                <PrivacySection />
               ) : page === "ai" ? (
                 <AiSection api={api} />
               ) : page === "export" ? (

@@ -17,6 +17,7 @@ import type {
   AiState,
   AiStepEvent,
   Guide,
+  RedactionSuggestion,
   RewriteStyleArg,
   Settings,
   Step,
@@ -200,6 +201,16 @@ function findStep(guide: Guide, id: string): Step | null {
   return item?.type === "step" ? item : null;
 }
 
+/**
+ * The blur suggestions a step gets with an AI result: the live step's
+ * on-device ones, which stay until reviewed (also ones the AI run started
+ * before, so one rejected meanwhile stays gone), then the AI's own.
+ */
+export function withOnDeviceSuggestions(live: Step, incoming: RedactionSuggestion[] | undefined): RedactionSuggestion[] {
+  const onDevice = (s: RedactionSuggestion) => s.source === "onDevice";
+  return [...(live.aiState.redactionSuggestions ?? []).filter(onDevice), ...(incoming ?? []).filter((s) => !onDevice(s))];
+}
+
 /** The patches that apply a step result to the live step; null to leave it. */
 export function stepPatches(live: Step | null, event: AiStepEvent): Patch[] | null {
   if (!live || live.aiState.status === "edited") return null;
@@ -207,7 +218,10 @@ export function stepPatches(live: Step | null, event: AiStepEvent): Patch[] | nu
   if (event.outcome === "applied" && event.step) {
     const aiState = {
       ...event.step.aiState,
-      redactionSuggestions: event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
+      redactionSuggestions: withOnDeviceSuggestions(
+        live,
+        event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
+      ),
     };
     return [
       { op: "setItem", id, key: "title", value: event.step.title },
@@ -359,7 +373,10 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
             description: event.step.description,
             aiState: {
               ...event.step.aiState,
-              redactionSuggestions: event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
+              redactionSuggestions: withOnDeviceSuggestions(
+                live,
+                event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
+              ),
             },
           };
           if (editor.getState().dispatch(stepResultCommand(live, "Regenerate step", result))) {

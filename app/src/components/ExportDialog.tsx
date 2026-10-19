@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { CircleAlert, CircleCheck, FileOutput, FolderOpen, ImageIcon, LoaderCircle, X } from "lucide-react";
+import { CircleAlert, CircleCheck, FileOutput, FolderOpen, ImageIcon, LoaderCircle, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
@@ -15,6 +15,8 @@ import {
   PAPERS,
   rememberPaper,
   runExport,
+  unreviewedBlurs,
+  unreviewedBlursText,
   warningLines,
   type Destination,
   type ExportOutcome,
@@ -108,6 +110,8 @@ export function ExportDialog({
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
+  // Exporting with unreviewed blur suggestions takes a second look.
+  const [skipReview, setSkipReview] = useState(false);
 
   // A new guide starts from its own name and a fresh file.
   useEffect(() => {
@@ -126,6 +130,7 @@ export function ExportDialog({
       setPaper(start.paper);
       setOutcome(null);
       setRevealError(null);
+      setSkipReview(false);
     }
   }, [open]);
 
@@ -137,7 +142,16 @@ export function ExportDialog({
   }, [open, guideId, out]);
 
   const accentOk = isAccent(accent);
-  const canExport = !!guideId && !!out && accentOk && !busy;
+  const unreviewed = unreviewedBlurs(doc?.guide.items ?? []);
+  const reviewText = unreviewedBlursText(unreviewed);
+  const canExport = !!guideId && !!out && accentOk && !busy && (!reviewText || skipReview);
+
+  /** Closes the dialog on the first step with suggestions left. */
+  const review = () => {
+    const first = unreviewed.stepIds[0];
+    if (first) editorStore.getState().select(first);
+    onOpenChange(false);
+  };
 
   const choose = async (pick: () => Promise<string | null>, apply: (path: string) => void) => {
     try {
@@ -367,6 +381,35 @@ export function ExportDialog({
                   PNG or JPEG logo, up to 2 MB. Markdown shows the logo but not the accent colour.
                 </span>
               </Field>
+
+              {reviewText && (
+                <div
+                  role="status"
+                  className="flex flex-col gap-2 rounded-md border border-[var(--status-warning)] bg-muted p-3 text-xs"
+                >
+                  <p className="flex items-start gap-2">
+                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--status-warning)]" />
+                    <span>
+                      <span className="font-medium">Review blurs. </span>
+                      {reviewText}
+                    </span>
+                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={skipReview}
+                        disabled={busy}
+                        onChange={(e) => setSkipReview(e.target.checked)}
+                      />
+                      Export without them
+                    </label>
+                    <Button variant="outline" size="sm" disabled={busy} onClick={review}>
+                      Review
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {outcome && !outcome.ok && (
                 <p role="alert" className="flex items-start gap-2 text-sm text-[var(--status-danger)]">

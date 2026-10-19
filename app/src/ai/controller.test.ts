@@ -501,6 +501,25 @@ describe("explicit AI actions", () => {
     expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual(suggestions);
   });
 
+  it("keeps on-device blur suggestions, and one rejected during the run stays gone", async () => {
+    const { e, ai, events } = await setup();
+    const found = [
+      { rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email address", source: "onDevice" as const },
+      { rect: { x: 5, y: 6, width: 7, height: 8 }, reason: "card number", source: "onDevice" as const },
+    ];
+    const aiState = { ...stepOf(e().doc!.guide, "A").aiState, redactionSuggestions: found };
+    e().applyUntracked([{ op: "setItem", id: "A", key: "aiState", value: aiState }]);
+    await ai.getState().start();
+    // Rejected while the AI writes; the run's copy still has it.
+    expect(e().dispatch(rejectBlurSuggestion(e().doc!.guide, "A", 0))).toBe(true);
+    const fromAi = { rect: { x: 9, y: 9, width: 9, height: 9 }, reason: "name" };
+    const event = stepEvent(7, "A");
+    event.step!.aiState.redactionSuggestions = [...found, fromAi];
+    events.emit("ai://step", event);
+    events.emit("ai://finished", finished(7));
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([found[1], fromAi]);
+  });
+
   it("a failed Regenerate records its error without dropping undo history", async () => {
     const { e, ai, events } = await setup();
     e().dispatch(setItemText(e().doc!.guide, "A", "title", "Mine"));

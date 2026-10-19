@@ -16,10 +16,12 @@ import type {
   Permission,
   PermissionRow,
   PermissionStatus,
+  RedactionMode,
   Settings,
   UpdateStatus,
 } from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
+import { cn } from "@/lib/utils";
 import {
   AFTER_FRAME_DELAY_MS,
   bundleIdError,
@@ -29,6 +31,8 @@ import {
   isLanguage,
   isModelId,
   MAX_EXCLUDED_APPS,
+  MAX_REDACTION_PATTERNS,
+  MAX_REDACTION_WORDS,
   TYPING_IDLE_MS,
 } from "@/settings/validate";
 import { isAccent } from "@/export/export";
@@ -389,6 +393,137 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
           </div>
         )}
       </div>
+    </Section>
+  );
+}
+
+const REDACTION_MODES: { value: RedactionMode; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "suggest", label: "Suggest blurs" },
+  { value: "apply", label: "Blur automatically" },
+];
+
+const REDACTION_NOTES: Record<RedactionMode, string> = {
+  off: "Screenshots are not scanned.",
+  suggest: "Each finding becomes a suggested blur to accept or reject in the editor.",
+  apply: "Each finding is blurred at once; delete a blur in the editor to show the text again.",
+};
+
+/**
+ * A list of strings to add to and remove from, saved as each change is
+ * made. Rust checks each entry; a refused one stays in the field and the
+ * reason shows at the top of Settings.
+ */
+function RuleList({
+  title,
+  note,
+  label,
+  placeholder,
+  items,
+  max,
+  mono,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  note: string;
+  label: string;
+  placeholder: string;
+  items: string[];
+  max: number;
+  mono?: boolean;
+  disabled: boolean;
+  onChange(items: string[]): Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState("");
+  const value = draft.trim();
+  const full = items.length >= max;
+  const canAdd = !disabled && !full && value !== "" && !items.includes(value);
+  const add = async () => {
+    if (canAdd && (await onChange([...items, value]))) setDraft("");
+  };
+  return (
+    <div className="flex flex-col gap-2 border-b border-border py-3 last:border-b-0">
+      <span className="text-sm font-medium">{title}</span>
+      <span className="text-xs text-muted-foreground">{note}</span>
+      {items.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {items.map((item) => (
+            <li key={item} className="flex items-center justify-between rounded-md bg-muted px-2 py-1 text-sm">
+              <span className={cn("min-w-0 truncate", mono && "font-mono text-xs")}>{item}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Remove ${item}`}
+                disabled={disabled}
+                onClick={() => void onChange(items.filter((i) => i !== item))}
+              >
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          aria-label={label}
+          placeholder={placeholder}
+          value={draft}
+          disabled={disabled}
+          className={cn(mono && "font-mono")}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void add()}
+        />
+        <Button variant="outline" disabled={!canAdd} onClick={() => void add()}>
+          Add
+        </Button>
+      </div>
+      {full && <span className="text-xs text-muted-foreground">The list is full ({max}); remove one first.</span>}
+    </div>
+  );
+}
+
+export function PrivacySection() {
+  const settings = useSettings((s) => s.settings)!;
+  const readOnly = useSettings((s) => s.readOnly);
+  const r = settings.redaction;
+  const setRedaction = (patch: Partial<Settings["redaction"]>) =>
+    settingsStore.getState().change((s) => ({ ...s, redaction: { ...s.redaction, ...patch } }));
+  return (
+    <Section
+      title="Privacy"
+      intro="When a recording stops, GuideRecorder reads the text in its screenshots on this Mac and looks for email addresses, phone numbers, card numbers, IBANs, IP addresses, API keys and tokens, and long numbers. Nothing is uploaded and no API key is needed. Before you export, you are asked to review any suggestions left."
+    >
+      <Row label="Sensitive text" note={REDACTION_NOTES[r.mode]}>
+        <Select
+          label="Sensitive text"
+          value={r.mode}
+          options={REDACTION_MODES}
+          disabled={readOnly}
+          onChange={(mode) => void setRedaction({ mode })}
+        />
+      </Row>
+      <RuleList
+        title="Words to blur"
+        note="Names, customers, internal host names: blurred wherever they appear as whole words, ignoring case."
+        label="Word to blur"
+        placeholder="Acme Corp"
+        items={r.words}
+        max={MAX_REDACTION_WORDS}
+        disabled={readOnly || r.mode === "off"}
+        onChange={(words) => setRedaction({ words })}
+      />
+      <RuleList
+        title="Patterns to blur"
+        note="Regular expressions, such as INC-\d{6} or (?i)\w+\.corp\.example\.com; (?i) ignores case."
+        label="Pattern to blur"
+        placeholder="INC-\d{6}"
+        items={r.patterns}
+        max={MAX_REDACTION_PATTERNS}
+        mono
+        disabled={readOnly || r.mode === "off"}
+        onChange={(patterns) => setRedaction({ patterns })}
+      />
     </Section>
   );
 }

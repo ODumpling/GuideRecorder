@@ -110,8 +110,9 @@ export function removeAnnotation(guide: Guide, stepId: string, id: string): Comm
   return setAnnotations(guide, stepId, annotations, `Delete ${name(current)}`);
 }
 
-// AI blur suggestions (#366). They live in the step's `aiState` only, so
-// the export never sees them; accepting one makes it a real blur.
+// Blur suggestions, from the AI (#366) or found on this Mac (#10). They
+// live in the step's `aiState` only, so the export never sees them;
+// accepting one makes it a real blur.
 
 function suggestionsOf(guide: Guide, stepId: string, index: number) {
   const step = findStep(guide, stepId);
@@ -135,6 +136,24 @@ export function acceptBlurSuggestion(guide: Guide, stepId: string, index: number
       ...added.forward,
       { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: suggestions.filter((_, i) => i !== index) } },
     ],
+    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }, ...added.inverse],
+  };
+}
+
+/**
+ * Accepts every blur suggestion of the step: blur annotations `ids[i]`
+ * over suggestion `i`, and the suggestions go. One undo step.
+ */
+export function acceptAllBlurSuggestions(guide: Guide, stepId: string, ids: string[]): Command {
+  const step = findStep(guide, stepId);
+  const suggestions = step.aiState.redactionSuggestions ?? [];
+  if (!suggestions.length) throw new PatchError(`step ${stepId} has no blur suggestions`);
+  if (ids.length !== suggestions.length) throw new PatchError(`${ids.length} ids for ${suggestions.length} suggestions`);
+  const blurs: Annotation[] = suggestions.map((s, i) => ({ id: ids[i], type: "blur", geometry: { ...s.rect } }));
+  const added = setAnnotations(guide, stepId, [...step.annotations, ...blurs], "Accept blur suggestions");
+  return {
+    ...added,
+    forward: [...added.forward, { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: [] } }],
     inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }, ...added.inverse],
   };
 }

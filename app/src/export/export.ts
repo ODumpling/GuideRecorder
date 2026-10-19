@@ -1,6 +1,6 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperSize } from "@/lib/types";
+import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperSize, Step } from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -165,4 +165,38 @@ export function warningLines(result: ExportResult, items: Item[]): string[] {
     const n = numbers.get(stepId);
     return `${n ? `Step ${n}` : "A removed step"}: ${message}`;
   });
+}
+
+/**
+ * Blur suggestions nobody has accepted or rejected yet: the steps that
+ * have them (ids and numbers) and how many there are. A suggestion is
+ * never exported, so its area shows as it is unless it is accepted.
+ */
+export function unreviewedBlurs(items: Item[]): { stepIds: string[]; steps: number[]; count: number } {
+  const unreviewed = { stepIds: [] as string[], steps: [] as number[], count: 0 };
+  items
+    .filter((item): item is Step => item.type === "step")
+    .forEach((step, i) => {
+      const n = step.aiState.redactionSuggestions?.length ?? 0;
+      if (!n) return;
+      unreviewed.stepIds.push(step.id);
+      unreviewed.steps.push(i + 1);
+      unreviewed.count += n;
+    });
+  return unreviewed;
+}
+
+/** `[2, 5, 7]` as "steps 2, 5 and 7"; after five, "and N more". */
+function stepList(steps: number[]): string {
+  if (steps.length === 1) return `step ${steps[0]}`;
+  const shown = steps.length > 5 ? steps.slice(0, 4) : steps.slice(0, -1);
+  const rest = steps.length > 5 ? `${steps.length - 4} more` : String(steps.at(-1));
+  return `steps ${shown.join(", ")} and ${rest}`;
+}
+
+/** The pre-export "review blurs" warning; null when nothing is left to review. */
+export function unreviewedBlursText({ steps, count }: { steps: number[]; count: number }): string | null {
+  if (!count) return null;
+  const one = count === 1;
+  return `${count} suggested blur${one ? "" : "s"} in ${stepList(steps)} ${one ? "has" : "have"} not been reviewed. Unless accepted, ${one ? "it is" : "they are"} not blurred in the export.`;
 }

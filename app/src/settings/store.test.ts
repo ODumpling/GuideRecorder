@@ -16,6 +16,7 @@ const DEFAULTS: Settings = {
   },
   ai: { enabled: true, autoRun: true, stepModel: "claude-haiku-5-5", guideModel: "claude-sonnet-5-5", language: "", audience: "beginner" },
   export: { format: "pdf", folder: null, logo: null, accent: null },
+  redaction: { mode: "suggest", patterns: [], words: [] },
 };
 
 function api(overrides: Partial<SettingsApi> = {}): SettingsApi {
