@@ -1,8 +1,15 @@
-//! The MCP handler: tools and resources over a library, read-only.
+//! The MCP handler: tools and resources over a library, read-only unless
+//! [`Config::writable`].
 //!
 //! Every read goes through [`Library::find`] / [`Library::read`] and the
 //! index's `*_with_fallback` readers, none of which write to the library or
-//! the index. Images come only from [`render_step_image`], so annotations,
+//! the index. The write tools are only routed (and listed) when writable;
+//! they write through [`Library::edit`] and
+//! [`pages::create_from_images`], which refuse guides open in the app's
+//! editor and read-only guides, and mark changed text as the user's (see
+//! `guiderecorder_core::edit`). They never write the index: the app
+//! indexes their changes at its next sync, and until then reads here fall
+//! back to scanning. Images come only from [`render_step_image`], so annotations,
 //! blur and pixelation are burned in; the raw screenshots are never sent.
 //!
 //! Read-only SQLite opens of the index may create the `-shm` and `-wal`
@@ -13,14 +20,18 @@
 //! bad argument) are tool results with `isError` set and a helpful message;
 //! protocol errors are kept for unroutable requests.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
+use guiderecorder_core::edit::{self, EditError, Edited, GuideFields, Position};
 use guiderecorder_core::export::{render_step_image, ImageOptions, RenderGuide, RenderStep};
 use guiderecorder_core::index::{self, ListFilter};
 use guiderecorder_core::library::{Library, LibraryError, LoadedGuide};
-use guiderecorder_core::model::{local_today, GuideStatus, ImageShow, Item};
+use guiderecorder_core::model::{
+    local_today, Guide, GuideField, GuideStatus, ImageShow, Item, NoteKind,
+};
+use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -33,7 +44,7 @@ use rmcp::service::RequestContext;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::markdown;
 
@@ -59,12 +70,23 @@ Use list_guides or search_steps to find a guide, get_guide for its full Markdown
 {#step-<id>} anchors), and get_step for one step with its screenshot. Screenshots are rendered \
 with the author's annotations and redactions.";
 
+const WRITABLE_INSTRUCTIONS: &str = "GuideRecorder step-by-step guides recorded on this Mac. \
+Use list_guides or search_steps to find a guide, get_guide for its full Markdown (items carry \
+{#step-<id>}, {#section-<id>} and {#note-<id>} anchors), and get_step for one step with its \
+screenshot. Screenshots are rendered with the author's annotations and redactions. \
+Editing is allowed: update_guide_fields, update_step, add_note, reorder_items, add_tags and \
+remove_tags change a guide, and create_guide_from_images makes an annotation guide from image \
+files. Text you change counts as written by the user, so GuideRecorder's AI passes will not \
+overwrite it. A guide open in the GuideRecorder editor, or read-only, cannot be changed.";
+
 /// Where to read from.
 #[derive(Debug)]
 pub struct Config {
     pub library: Library,
     /// The app's search index; `None` always scans the library.
     pub index: Option<PathBuf>,
+    /// Also route the write tools (`--writable`).
+    pub writable: bool,
 }
 
 /// The MCP server.
@@ -149,11 +171,109 @@ pub struct SearchStepsArgs {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct UpdateGuideFieldsArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// New title (plain text, not empty).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// New introduction (Markdown).
+    #[serde(default)]
+    pub intro: Option<String>,
+    /// New prerequisites (Markdown).
+    #[serde(default)]
+    pub prerequisites: Option<String>,
+    /// New one-line summary (plain text).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// The new tag list, replacing the old one. To add or remove a few, use
+    /// add_tags or remove_tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct UpdateStepArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// Step id (the `{#step-<id>}` anchor in get_guide, with or without
+    /// `step-`).
+    pub step_id: String,
+    /// New step title (Markdown, one line).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// New step description (Markdown).
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// What kind of note.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteKindArg {
+    Tip,
+    Warning,
+    #[default]
+    Note,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct AddNoteArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// The note text (Markdown, not empty).
+    pub body: String,
+    /// "tip", "warning" or "note" (default).
+    #[serde(default)]
+    pub kind: NoteKindArg,
+    /// Put the note right after this item (a step, section or note id, as
+    /// in get_guide's anchors).
+    #[serde(default)]
+    pub after_id: Option<String>,
+    /// Put the note right before this item. Without after_id or before_id,
+    /// the note goes at the end of the guide.
+    #[serde(default)]
+    pub before_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ReorderItemsArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// Every item id of the guide (steps, sections and notes, as in
+    /// get_guide's anchors, with or without their `step-`, `section-` or
+    /// `note-` prefix), each exactly once, in the new order.
+    pub item_ids: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct TagsArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// Tags (case-insensitive; commas separate tags too).
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CreateGuideFromImagesArgs {
+    /// Absolute paths of PNG, JPEG or WebP files, one page each, in order
+    /// (at most 100).
+    pub paths: Vec<String>,
+    /// The guide title. Default: the first file's name.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
 impl GuideRecorderMcp {
     pub fn new(config: Config) -> Self {
+        let mut tool_router = Self::read_tools();
+        if config.writable {
+            tool_router += Self::write_tools();
+        }
         Self {
             config: Arc::new(config),
-            tool_router: Self::tool_router(),
+            tool_router,
         }
     }
 
@@ -173,7 +293,7 @@ impl GuideRecorderMcp {
     }
 }
 
-#[tool_router(router = tool_router)]
+#[tool_router(router = read_tools)]
 impl GuideRecorderMcp {
     #[tool(
         description = "List guides in the GuideRecorder library, most recently updated first. Returns \
@@ -233,6 +353,132 @@ impl GuideRecorderMcp {
     }
 }
 
+/// Routed only when [`Config::writable`].
+#[tool_router(router = write_tools)]
+impl GuideRecorderMcp {
+    #[tool(
+        description = "Change a guide's title, intro, prerequisites, summary and/or tags; fields \
+                       left out stay as they are, and tags replaces the whole list. Returns the \
+                       fields that changed. Changed fields count as written by the user, so \
+                       GuideRecorder's AI will not overwrite them.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
+    async fn update_guide_fields(
+        &self,
+        Parameters(args): Parameters<UpdateGuideFieldsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| update_guide_fields(config, args))
+            .await
+    }
+
+    #[tool(
+        description = "Change a step's title and/or description (Markdown). The step then counts \
+                       as written by the user, so GuideRecorder's AI will not overwrite it. \
+                       Sections and notes are not steps.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
+    async fn update_step(
+        &self,
+        Parameters(args): Parameters<UpdateStepArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| update_step(config, args)).await
+    }
+
+    #[tool(
+        description = "Add a tip, warning or note (Markdown) to a guide: after or before an item, \
+                       or at the end. Returns the new note's id.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn add_note(
+        &self,
+        Parameters(args): Parameters<AddNoteArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| add_note(config, args)).await
+    }
+
+    #[tool(
+        description = "Reorder a guide's steps, sections and notes. Pass every item id exactly \
+                       once, in the new order (get_guide shows them as anchors).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn reorder_items(
+        &self,
+        Parameters(args): Parameters<ReorderItemsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| reorder_items(config, &args))
+            .await
+    }
+
+    #[tool(
+        description = "Add tags to a guide; ones already there (ignoring case) are skipped. \
+                       Returns the tags added and the guide's tags.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn add_tags(
+        &self,
+        Parameters(args): Parameters<TagsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| add_tags(config, &args)).await
+    }
+
+    #[tool(
+        description = "Remove tags from a guide (ignoring case). Returns the tags removed and the \
+                       guide's tags.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
+    async fn remove_tags(
+        &self,
+        Parameters(args): Parameters<TagsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| remove_tags(config, &args))
+            .await
+    }
+
+    #[tool(
+        description = "Create an annotation guide from image files (PNG, JPEG or WebP; absolute \
+                       paths, at most 100), one page per image titled after its file, as \
+                       GuideRecorder's New annotation guide does. Returns the new guide's id and \
+                       its page (step) ids; add text with update_step and update_guide_fields. \
+                       Hotspots are drawn in the GuideRecorder app.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn create_guide_from_images(
+        &self,
+        Parameters(args): Parameters<CreateGuideFromImagesArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| create_guide_from_images(config, &args))
+            .await
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for GuideRecorderMcp {
     fn get_info(&self) -> ServerConfig {
@@ -243,7 +489,11 @@ impl ServerHandler for GuideRecorderMcp {
                 .build(),
         )
         .with_server_info(Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION")))
-        .with_instructions(INSTRUCTIONS)
+        .with_instructions(if self.config.writable {
+            WRITABLE_INSTRUCTIONS
+        } else {
+            INSTRUCTIONS
+        })
     }
 
     async fn list_resources(
@@ -524,6 +774,181 @@ fn guide_resources(config: &Config) -> ToolResult<Vec<Resource>> {
 }
 
 // ---------------------------------------------------------------------------
+// Write tools, synchronous
+
+fn update_guide_fields(config: &Config, args: UpdateGuideFieldsArgs) -> ToolResult<CallToolResult> {
+    let id = parse_id(&args.guide_id, "guide")?;
+    let fields = GuideFields {
+        title: args.title,
+        intro: args.intro,
+        prerequisites: args.prerequisites,
+        summary: args.summary,
+        tags: args.tags,
+    };
+    if fields == GuideFields::default() {
+        return Err(ToolError(
+            "nothing to change; pass title, intro, prerequisites, summary or tags".into(),
+        ));
+    }
+    let edited = edit_guide(config, id, |guide| edit::set_guide_fields(guide, fields))?;
+    let fields: Vec<&str> = edited.value.iter().map(|f| field_name(*f)).collect();
+    Ok(edit_result(&edited, json!({ "changed_fields": fields })))
+}
+
+fn update_step(config: &Config, args: UpdateStepArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let step_id = parse_item_id(&args.step_id, "step")?;
+    if args.title.is_none() && args.description.is_none() {
+        return Err(ToolError(
+            "nothing to change; pass title or description".into(),
+        ));
+    }
+    let edited = edit_guide(config, guide_id, |guide| {
+        edit::set_step_text(guide, step_id, args.title, args.description)
+    })?;
+    Ok(edit_result(
+        &edited,
+        json!({ "step_id": step_id.to_string() }),
+    ))
+}
+
+fn add_note(config: &Config, args: AddNoteArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let position = match (&args.after_id, &args.before_id) {
+        (Some(_), Some(_)) => {
+            return Err(ToolError("pass after_id or before_id, not both".into()));
+        }
+        (Some(id), None) => Position::After(parse_item_id(id, "item")?),
+        (None, Some(id)) => Position::Before(parse_item_id(id, "item")?),
+        (None, None) => Position::End,
+    };
+    let kind = match args.kind {
+        NoteKindArg::Tip => NoteKind::Tip,
+        NoteKindArg::Warning => NoteKind::Warning,
+        NoteKindArg::Note => NoteKind::Note,
+    };
+    let edited = edit_guide(config, guide_id, |guide| {
+        edit::insert_note(guide, kind, args.body, position)
+    })?;
+    Ok(edit_result(
+        &edited,
+        json!({ "note_id": edited.value.to_string() }),
+    ))
+}
+
+fn reorder_items(config: &Config, args: &ReorderItemsArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let order = args
+        .item_ids
+        .iter()
+        .map(|id| parse_item_id(id, "item"))
+        .collect::<ToolResult<Vec<_>>>()?;
+    let edited = edit_guide(config, guide_id, |guide| edit::reorder_items(guide, &order))?;
+    Ok(edit_result(&edited, json!({})))
+}
+
+fn add_tags(config: &Config, args: &TagsArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let edited = edit_guide(config, guide_id, |guide| {
+        Ok(edit::add_guide_tags(guide, &args.tags))
+    })?;
+    Ok(edit_result(
+        &edited,
+        json!({ "added": edited.value, "tags": edited.guide.tags }),
+    ))
+}
+
+fn remove_tags(config: &Config, args: &TagsArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let edited = edit_guide(config, guide_id, |guide| {
+        Ok(edit::remove_guide_tags(guide, &args.tags))
+    })?;
+    Ok(edit_result(
+        &edited,
+        json!({ "removed": edited.value, "tags": edited.guide.tags }),
+    ))
+}
+
+fn create_guide_from_images(
+    config: &Config,
+    args: &CreateGuideFromImagesArgs,
+) -> ToolResult<CallToolResult> {
+    let mut paths = Vec::with_capacity(args.paths.len());
+    for path in &args.paths {
+        let path = Path::new(path);
+        if !path.is_absolute() {
+            return Err(ToolError(format!(
+                "{} is not an absolute path; pass the full paths of the image files",
+                path.display()
+            )));
+        }
+        paths.push(path.to_path_buf());
+    }
+    let (handle, guide) = pages::create_from_images(&config.library, &paths, args.title.as_deref())
+        .map_err(|e| match e {
+            PageError::Invalid(m) if m.ends_with("is not a PNG, JPEG or WebP image") => ToolError(
+                format!("{m}; PDFs can be added in the GuideRecorder app (New annotation guide…)"),
+            ),
+            e => ToolError(e.to_string()),
+        })?;
+    let step_ids: Vec<String> = guide.steps().map(|s| s.id.to_string()).collect();
+    Ok(CallToolResult::structured(json!({
+        "guide_id": guide.id.to_string(),
+        "title": guide.title,
+        "folder": config.library.folder_of(&handle.path),
+        "step_count": step_ids.len(),
+        "step_ids": step_ids,
+    })))
+}
+
+/// Runs `f` on guide `id` through [`Library::edit`], with its errors
+/// explained as the read tools explain theirs.
+fn edit_guide<T>(
+    config: &Config,
+    id: Ulid,
+    f: impl FnOnce(&mut Guide) -> edit::Result<T>,
+) -> ToolResult<Edited<T>> {
+    config.library.edit(id, f).map_err(|e| {
+        ToolError(match e {
+            EditError::Library(LibraryError::NotFound(_)) => not_found(id),
+            EditError::Library(LibraryError::NewerSchema { .. }) => format!(
+                "guide {id} is read-only: it was saved by a newer GuideRecorder. Update \
+                 GuideRecorder and guiderecorder-mcp to edit it."
+            ),
+            EditError::Library(LibraryError::ChangedOnDisk(_)) => {
+                format!("guide {id} changed on disk while it was being edited; try again")
+            }
+            EditError::Library(e) => format!("guide {id} could not be edited: {e}"),
+            e => e.to_string(),
+        })
+    })
+}
+
+/// An edit's result: `guide_id`, whether it `changed` anything and the
+/// guide's `updated_at`, plus the tool's own `fields`.
+fn edit_result<T>(edited: &Edited<T>, fields: Value) -> CallToolResult {
+    let mut result = json!({
+        "guide_id": edited.guide.id.to_string(),
+        "changed": edited.changed,
+        "updated_at": edited.guide.updated_at.to_rfc3339(),
+    });
+    if let (Some(result), Value::Object(fields)) = (result.as_object_mut(), fields) {
+        result.extend(fields);
+    }
+    CallToolResult::structured(result)
+}
+
+fn field_name(field: GuideField) -> &'static str {
+    match field {
+        GuideField::Title => "title",
+        GuideField::Intro => "intro",
+        GuideField::Prerequisites => "prerequisites",
+        GuideField::Summary => "summary",
+        GuideField::Tags => "tags",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 
 /// Canonical guides only (duplicate copies are hidden), index first.
@@ -545,6 +970,20 @@ fn parse_id(id: &str, what: &str) -> ToolResult<Ulid> {
              01J9ZQ3K8V4N6T2W5X7Y8Z9A0B)"
         ))
     })
+}
+
+/// An item id as get_guide shows it, with or without its anchor prefix.
+fn parse_item_id(id: &str, what: &str) -> ToolResult<Ulid> {
+    let id = id.trim();
+    let bare = ["step-", "section-", "note-"]
+        .iter()
+        .find_map(|prefix| id.strip_prefix(prefix))
+        .unwrap_or(id);
+    parse_id(bare, what)
+}
+
+fn not_found(id: Ulid) -> String {
+    format!("no guide with id {id} in the library; use list_guides or search_steps to find one")
 }
 
 /// Why [`read_guide`] failed; resources map the two cases to different
@@ -571,12 +1010,7 @@ fn read_guide(config: &Config, id: Ulid) -> Result<LoadedGuide, ReadError> {
         .library
         .find(id)
         .map_err(|e| ReadError::Failed(format!("cannot search the library for {id}: {e}")))?
-        .ok_or_else(|| {
-            ReadError::NotFound(format!(
-                "no guide with id {id} in the library; use list_guides or search_steps to find \
-                 one"
-            ))
-        })?;
+        .ok_or_else(|| ReadError::NotFound(not_found(id)))?;
     config.library.read(&handle.path).map_err(|e| {
         ReadError::Failed(match e {
             LibraryError::NewerSchema {

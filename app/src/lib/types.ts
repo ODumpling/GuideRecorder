@@ -361,6 +361,10 @@ export interface Settings {
     logo: string | null;
     accent: string | null;
   };
+  mcp: {
+    /** The setup command passes `--writable`, so MCP clients may edit and create guides. */
+    writable: boolean;
+  };
 }
 
 export interface SettingsView {

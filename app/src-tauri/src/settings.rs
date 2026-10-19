@@ -52,6 +52,7 @@ pub struct Settings {
     pub recording: Recording,
     pub ai: Ai,
     pub export: ExportDefaults,
+    pub mcp: Mcp,
 }
 
 impl Default for Settings {
@@ -62,6 +63,7 @@ impl Default for Settings {
             recording: Recording::default(),
             ai: Ai::default(),
             export: ExportDefaults::default(),
+            mcp: Mcp::default(),
         }
     }
 }
@@ -278,6 +280,16 @@ pub struct ExportDefaults {
     pub folder: Option<PathBuf>,
     pub logo: Option<PathBuf>,
     pub accent: Option<String>,
+}
+
+/// The MCP server setup shown in Settings → MCP.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Mcp {
+    /// Let MCP clients edit and create guides: the setup command passes
+    /// `--writable`. Only the command changes; a server already set up
+    /// keeps the flags it was added with.
+    pub writable: bool,
 }
 
 /// Limits for the stored values.
@@ -835,12 +847,13 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 /// The `claude mcp add` command that registers the GuideRecorder MCP server for
-/// the library at `library`.
-pub fn mcp_add_command(mcp: &Path, library: &Path) -> String {
+/// the library at `library`, with its write tools if `writable`.
+pub fn mcp_add_command(mcp: &Path, library: &Path, writable: bool) -> String {
     format!(
-        "claude mcp add guiderecorder -- {} --library {}",
+        "claude mcp add guiderecorder -- {} --library {}{}",
         shell_quote(&mcp.to_string_lossy()),
-        shell_quote_home(&library.to_string_lossy())
+        shell_quote_home(&library.to_string_lossy()),
+        if writable { " --writable" } else { "" }
     )
 }
 
@@ -1308,7 +1321,11 @@ mod tests {
     #[test]
     fn mcp_command_keeps_the_home_tilde() {
         assert_eq!(
-            mcp_add_command(Path::new("/a/mcp"), Path::new("~/Documents/GuideRecorder")),
+            mcp_add_command(
+                Path::new("/a/mcp"),
+                Path::new("~/Documents/GuideRecorder"),
+                false
+            ),
             "claude mcp add guiderecorder -- /a/mcp --library ~/Documents/GuideRecorder"
         );
         assert_eq!(shell_quote_home("~/My Guides"), "~/'My Guides'");
@@ -1317,16 +1334,28 @@ mod tests {
     }
 
     #[test]
+    fn mcp_command_adds_writable_when_allowed() {
+        assert_eq!(
+            mcp_add_command(Path::new("/a/mcp"), Path::new("/lib"), true),
+            "claude mcp add guiderecorder -- /a/mcp --library /lib --writable"
+        );
+        // Off unless chosen, also in a settings file from before the option.
+        let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        assert!(!old.mcp.writable);
+    }
+
+    #[test]
     fn mcp_command_quotes_paths() {
         assert_eq!(
             mcp_add_command(
                 Path::new("/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp"),
-                Path::new("/Users/me/Documents/GuideRecorder")
+                Path::new("/Users/me/Documents/GuideRecorder"),
+                false
             ),
             "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder"
         );
         assert_eq!(
-            mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's")),
+            mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's"), false),
             r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it'\''s'"
         );
     }

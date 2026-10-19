@@ -1,14 +1,15 @@
-//! Read-only stdio MCP server over a GuideRecorder library. See design
-//! scratchpad #441 and the crate README.
+//! Stdio MCP server over a GuideRecorder library, read-only unless started
+//! with `--writable`. See design scratchpad #441 and the crate README.
 //!
 //! ```text
-//! guiderecorder-mcp --library <dir> [--index <path>]
+//! guiderecorder-mcp --library <dir> [--index <path>] [--writable]
 //! ```
 //!
 //! The library comes from `--library` or `GUIDERECORDER_LIBRARY`; the index from
 //! `--index`, defaulting to the app's ([`Index::default_path`]). A missing
-//! or stale index falls back to scanning the library. Nothing is ever
-//! written to either. stdout carries the protocol; messages go to stderr.
+//! or stale index falls back to scanning the library. The index is never
+//! written; the library only by the write tools `--writable` adds. stdout
+//! carries the protocol; messages go to stderr.
 
 mod markdown;
 mod server;
@@ -29,13 +30,14 @@ use server::{Config, GuideRecorderMcp};
 const LIBRARY_ENV: &str = "GUIDERECORDER_LIBRARY";
 
 const USAGE: &str = "\
-Usage: guiderecorder-mcp --library <dir> [--index <path>]
+Usage: guiderecorder-mcp --library <dir> [--index <path>] [--writable]
 
-Read-only MCP server (stdio) over a GuideRecorder library.
+MCP server (stdio) over a GuideRecorder library, read-only by default.
 
 Options:
   --library <dir>   Library folder (default: $GUIDERECORDER_LIBRARY)
   --index <path>    Search index (default: the GuideRecorder app's index)
+  --writable        Also offer tools that edit and create guides
   -h, --help        Show this help
   -V, --version     Show the version
 
@@ -47,6 +49,7 @@ enum Command {
     Serve {
         library: PathBuf,
         index: Option<PathBuf>,
+        writable: bool,
     },
     Help,
     Version,
@@ -58,6 +61,7 @@ fn parse_args(
 ) -> anyhow::Result<Command> {
     let mut library = None;
     let mut index = None;
+    let mut writable = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
@@ -68,6 +72,10 @@ fn parse_args(
         let slot = match flag.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
+            "--writable" if inline.is_none() => {
+                writable = true;
+                continue;
+            }
             "--library" => &mut library,
             "--index" => &mut index,
             _ => bail!("unexpected argument {text:?}\n\n{USAGE}"),
@@ -91,11 +99,13 @@ fn parse_args(
     Ok(Command::Serve {
         library,
         index: index.or_else(Index::default_path),
+        writable,
     })
 }
 
 /// Opens the library without creating it: a reader must not write, and a
-/// typo should fail loudly rather than serve an empty library.
+/// typo should fail loudly rather than serve an empty library (or create
+/// guides in a new one).
 fn open_library(root: &std::path::Path) -> anyhow::Result<Library> {
     if !root.is_dir() {
         bail!("library {} is not a folder", root.display());
@@ -120,7 +130,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (library, index) = match command {
+    let (library, index, writable) = match command {
         Command::Help => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -133,14 +143,22 @@ fn main() -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
-        Command::Serve { library, index } => (library, index),
+        Command::Serve {
+            library,
+            index,
+            writable,
+        } => (library, index, writable),
     };
     let result = open_library(&library).and_then(|library| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("cannot start the async runtime")?
-            .block_on(serve(Config { library, index }))
+            .block_on(serve(Config {
+                library,
+                index,
+                writable,
+            }))
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,

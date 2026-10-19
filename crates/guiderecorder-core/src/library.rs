@@ -46,7 +46,9 @@
 //! with the app using only those. The app opens guides with
 //! [`Library::load`] (which may migrate and rewrite the file), saves,
 //! creates, renames, deletes and calls [`Library::recover`]. The SQLite
-//! index (#340) is a separate layer.
+//! index (#340) is a separate layer. The one other writer is the MCP
+//! server when started with `--writable`, through [`Library::edit`] and
+//! [`crate::pages::create_from_images`] (see [`crate::edit`]).
 //!
 //! Schema versions (#444 "Versioning", [`crate::migrate`]): every read
 //! migrates older `guide.json` files in memory. `load` also backs up the
@@ -57,7 +59,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, NaiveDate, Utc};
@@ -359,6 +361,9 @@ pub struct Library {
     /// Guide id → bundle path, filled by `scan`, `create` and `load`.
     /// Only a hint: entries are re-checked before use.
     known: RwLock<HashMap<Ulid, PathBuf>>,
+    /// Held across each [`Library::edit`], so two edits through this
+    /// `Library` never interleave their read and write.
+    pub(crate) edits: Mutex<()>,
 }
 
 impl Library {
@@ -376,6 +381,7 @@ impl Library {
             root,
             schema,
             known: RwLock::new(HashMap::new()),
+            edits: Mutex::new(()),
         })
     }
 
@@ -655,7 +661,7 @@ impl Library {
 
     /// Reads, migrates in memory and decodes a bundle's guide. Returns the
     /// original bytes for the backup. Pure.
-    fn open_guide(&self, path: &Path) -> Result<(LoadedGuide, Vec<u8>)> {
+    pub(crate) fn open_guide(&self, path: &Path) -> Result<(LoadedGuide, Vec<u8>)> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }
@@ -1052,7 +1058,7 @@ impl Library {
 
     /// Checks that `path` is a bundle in the root or one of its folders
     /// (not inside another bundle, a hidden folder or too deep).
-    fn check_inside(&self, path: &Path) -> Result<()> {
+    pub(crate) fn check_inside(&self, path: &Path) -> Result<()> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }

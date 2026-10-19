@@ -27,6 +27,7 @@ const DEFAULTS: Settings = {
     audience: "beginner",
   },
   export: { format: "pdf", folder: null, logo: null, accent: null },
+  mcp: { writable: false },
 };
 
 function api(overrides: Partial<SettingsApi> = {}): SettingsApi {

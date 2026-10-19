@@ -1,6 +1,6 @@
 [package]
 name = "guiderecorder-mcp"
-description = "Read-only stdio MCP server over a GuideRecorder library"
+description = "Stdio MCP server over a GuideRecorder library, read-only unless --writable"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

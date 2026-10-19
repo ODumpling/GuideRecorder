@@ -14,9 +14,9 @@ use image::RgbaImage;
 /// Pixels per PDF point: 144 dpi, sharp on a Retina screen.
 pub const PDF_SCALE: f64 = 2.0;
 
-/// Longest side of a rendered page in pixels; larger pages (posters,
-/// plans) are scaled down to it.
-pub const MAX_PAGE_SIDE: u32 = 4000;
+/// Longest side of a rendered page in pixels, as for image pages; larger
+/// pages (posters, plans) are scaled down to it.
+pub use guiderecorder_core::pages::MAX_PAGE_SIDE;
 
 /// Why a PDF or one of its pages can't be shown. Says nothing of the file:
 /// the caller names it.
