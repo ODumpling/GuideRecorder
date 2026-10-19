@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use guiderecorder_core::edit::DetailsEdit;
 use guiderecorder_core::export::docx::Paper;
 use guiderecorder_core::model::{Guide, NaiveDate, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -97,6 +98,49 @@ pub async fn delete_guide<R: Runtime>(
     Ok(true)
 }
 
+/// A listed guide a library action works on: its id and bundle.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GuideTarget {
+    id: String,
+    path: PathBuf,
+}
+
+/// Asks once to delete `guides` (more than one, from the library's
+/// selection), then deletes them one by one, stopping at the first that
+/// fails. False if the user cancelled.
+#[tauri::command]
+pub async fn delete_guides<R: Runtime>(
+    window: WebviewWindow<R>,
+    cell: State<'_, Arc<SessionCell>>,
+    guides: Vec<GuideTarget>,
+) -> Result<bool> {
+    let count = guides.len();
+    let confirmed = blocking(move || {
+        Ok(window
+            .dialog()
+            .message("The guides and all their screenshots are deleted. This can't be undone.")
+            .title(format!("Delete {count} guides?"))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Delete".into(),
+                "Cancel".into(),
+            ))
+            .parent(&window)
+            .blocking_show())
+    })
+    .await?;
+    if !confirmed {
+        return Ok(false);
+    }
+    with_session(cell, move |s| {
+        guides
+            .iter()
+            .try_for_each(|g| s.delete_guide(&g.id, &g.path))
+    })
+    .await?;
+    Ok(true)
+}
+
 /// The library's folders, relative paths with `/` separators.
 #[tauri::command]
 pub async fn list_folders(cell: State<'_, Arc<SessionCell>>) -> Result<Vec<String>> {
@@ -144,6 +188,18 @@ pub async fn mark_guide_reviewed(
     today: NaiveDate,
 ) -> Result<ReviewedGuide> {
     with_session(cell, move |s| s.mark_guide_reviewed(&id, &path, today)).await
+}
+
+/// Sets the status, owner and tags of the guide at `path`; returns it as
+/// saved.
+#[tauri::command]
+pub async fn edit_guide_details(
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    edit: DetailsEdit,
+) -> Result<Guide> {
+    with_session(cell, move |s| s.edit_guide_details(&id, &path, &edit)).await
 }
 
 /// Moves the guide at `path` into `folder`; returns its new path.

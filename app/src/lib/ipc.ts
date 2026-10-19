@@ -6,11 +6,13 @@ import type {
   CaptureDisplay,
   CaptureTargetArg,
   CaptureWindow,
+  DetailsEdit,
   ExportBranding,
   ExportFormat,
   ExportResult,
   Guide,
   GuideListItem,
+  GuideTarget,
   LibraryInfo,
   McpSetup,
   MotionOptions,
@@ -51,6 +53,11 @@ export interface EditorApi {
    * images. False if the user cancelled.
    */
   deleteGuide(id: string, path: string, title: string): Promise<boolean>;
+  /**
+   * Asks (natively) once to delete several guides, then deletes them in
+   * turn, stopping at the first that fails. False if the user cancelled.
+   */
+  deleteGuides(guides: GuideTarget[]): Promise<boolean>;
   /** The library's folders: relative paths with `/` separators. */
   listFolders(): Promise<string[]>;
   /** Makes folder `name` in `parent` (`""`: the top). Returns its path. */
@@ -62,6 +69,8 @@ export interface EditorApi {
   /** Sets the last review day of the guide at `path` to `today` (`YYYY-MM-DD`). */
   markGuideReviewed(id: string, path: string, today: string): Promise<ReviewedGuide>;
   /** Moves the guide at `path` into `folder` (`""`: the top). Returns its new path. */
+  /** Sets the status, owner and tags of the guide at `path`. Returns the guide as saved. */
+  editGuideDetails(id: string, path: string, edit: DetailsEdit): Promise<Guide>;
   moveGuide(id: string, path: string, folder: string): Promise<string>;
   /** Shows a guide's bundle, or a library folder, in Finder. */
   reveal(target: { path: string } | { folder: string }): Promise<void>;
@@ -93,11 +102,13 @@ export const tauriApi: EditorApi = {
   saveGuide: (guide) => invoke("save_guide", { guide }),
   closeGuide: (id) => invoke("close_guide", { id }),
   deleteGuide: (id, path, title) => invoke("delete_guide", { id, path, title }),
+  deleteGuides: (guides) => invoke("delete_guides", { guides }),
   listFolders: () => invoke("list_folders"),
   createFolder: (parent, name) => invoke("create_folder", { parent, name }),
   duplicateGuide: (id, path, title) => invoke("duplicate_guide", { id, path, title }),
   renameGuide: (id, path, title) => invoke("rename_guide", { id, path, title }),
   markGuideReviewed: (id, path, today) => invoke("mark_guide_reviewed", { id, path, today }),
+  editGuideDetails: (id, path, edit) => invoke("edit_guide_details", { id, path, edit }),
   moveGuide: (id, path, folder) => invoke("move_guide", { id, path, folder }),
   reveal: (target) =>
     invoke("reveal_in_library", {

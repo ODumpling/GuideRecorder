@@ -224,6 +224,21 @@ export interface ReviewedGuide {
   updatedAt: string;
 }
 
+/** `edit_guide_details`'s changes (the library's bulk actions); unset fields are left as they are. */
+export interface DetailsEdit {
+  status?: GuideStatus;
+  /** Trimmed; empty clears the owner. */
+  owner?: string;
+  addTags?: string[];
+  removeTags?: string[];
+}
+
+/** A listed guide a library action works on. */
+export interface GuideTarget {
+  id: Ulid;
+  path: string;
+}
+
 /** `rename_guide`'s result. */
 export interface RenamedGuide {
   path: string;

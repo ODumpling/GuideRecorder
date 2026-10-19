@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { BookOpen, ChevronRight, Folder, FolderPlus, HardDrive, TriangleAlert } from "lucide-react";
 import { NavHeading, STATUS_COLORS } from "@/components/library/bits";
 import { askName, showFolderMenu } from "@/components/library/menus";
+import { droppedGuides, guidesAt, isGuideDrag } from "@/components/library/selection";
 import { editorStore, useEditor } from "@/editor/editor";
 import { buildTree, GUIDE_STATUSES, isReviewOverdue, libraryTags, localToday, type FolderNode } from "@/editor/library";
 import { tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
@@ -20,6 +21,7 @@ function NavItem({
   title,
   onClick,
   onContextMenu,
+  onDropGuides,
   children,
 }: {
   icon: ReactNode;
@@ -32,8 +34,26 @@ function NavItem({
   title?: string;
   onClick(): void;
   onContextMenu?(e: React.MouseEvent): void;
+  /** Guides dragged from the grid or list are dropped here (their paths). */
+  onDropGuides?(paths: string[]): void;
   children?: ReactNode;
 }) {
+  const [dropping, setDropping] = useState(false);
+  const drop = onDropGuides && {
+    onDragOver: (e: React.DragEvent) => {
+      if (!isGuideDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropping(true);
+    },
+    onDragLeave: () => setDropping(false),
+    onDrop: (e: React.DragEvent) => {
+      setDropping(false);
+      if (!isGuideDrag(e)) return;
+      e.preventDefault();
+      onDropGuides(droppedGuides(e));
+    },
+  };
   return (
     <div className="relative">
       {children}
@@ -43,10 +63,12 @@ function NavItem({
         title={title}
         onClick={onClick}
         onContextMenu={onContextMenu}
+        {...drop}
         style={{ paddingLeft: pad }}
         className={cn(
           "flex h-7 w-full items-center gap-2 rounded-md pr-2 text-left text-[13px] text-sidebar-foreground/80 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           current && "bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
+          dropping && "bg-sidebar-foreground/10 ring-2 ring-sidebar-ring",
         )}
       >
         <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
@@ -66,6 +88,13 @@ function NavItem({
       </button>
     </div>
   );
+}
+
+/** Moves guides dropped on a folder there (those not in it already). */
+function moveDropped(paths: string[], folder: string) {
+  const editor = editorStore.getState();
+  const moving = guidesAt(editor.guides, paths).filter((g) => g.folder !== folder);
+  return moving.length > 0 && editor.moveGuides(moving, folder);
 }
 
 function countGuides(node: FolderNode): number {
@@ -99,6 +128,7 @@ function FolderItems({
           current={current === node.path}
           onClick={() => editorStore.getState().setFolder(node.path)}
           onContextMenu={(e) => void showFolderMenu(e, node.path, () => askName({ kind: "folder", parent: node.path }))}
+          onDropGuides={(paths) => void moveDropped(paths, node.path)}
         >
           {hasChildren && (
             <button

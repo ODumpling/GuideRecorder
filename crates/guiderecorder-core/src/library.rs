@@ -69,6 +69,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use ulid::Ulid;
 
+use crate::edit::{apply_details, DetailsEdit};
 use crate::migrate::{self, MigrationError, Schema};
 use crate::model::{Guide, ReviewInfo};
 
@@ -863,6 +864,22 @@ impl Library {
         guide.review.last_reviewed = Some(on);
         guide.updated_at = Utc::now();
         self.save_to(&loaded.handle, &guide)?;
+        Ok(guide)
+    }
+
+    /// Sets a guide's status, owner and tags from `edit` (see
+    /// [`apply_details`]), and `updated_at` if anything changed. Loads and
+    /// saves like [`Library::rename`]; nothing is written if nothing
+    /// changed. Returns the guide as saved.
+    pub fn edit_details(&self, handle: &GuideHandle, edit: &DetailsEdit) -> Result<Guide> {
+        self.check_inside(&handle.path)?;
+        let loaded = self.load(&handle.path)?;
+        check_guide_id(handle, &loaded.guide)?;
+        let mut guide = loaded.guide;
+        if apply_details(&mut guide, edit) {
+            guide.updated_at = Utc::now();
+            self.save_to(&loaded.handle, &guide)?;
+        }
         Ok(guide)
     }
 
@@ -1928,7 +1945,7 @@ pub fn read_webp(path: &Path) -> Result<RgbaImage> {
 mod tests {
     use super::*;
     use crate::migrate::test_schema;
-    use crate::model::{Item, Section};
+    use crate::model::{GuideStatus, Item, Section};
     use crate::SCHEMA_VERSION;
     use std::cell::RefCell;
 
@@ -3415,6 +3432,34 @@ mod tests {
             path: handle.path.clone(),
         };
         assert!(lib.mark_reviewed(&other, day).is_err());
+    }
+
+    #[test]
+    fn edit_details_saves_status_owner_and_tags() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Rotate", "en");
+        let handle = lib.create(&guide).unwrap();
+        let edit = DetailsEdit {
+            status: Some(GuideStatus::InReview),
+            owner: Some("IT".into()),
+            add_tags: vec!["security".into()],
+            ..DetailsEdit::default()
+        };
+        let saved = lib.edit_details(&handle, &edit).unwrap();
+        assert_eq!(saved.review.status, Some(GuideStatus::InReview));
+        assert_eq!(saved.tags, ["security"]);
+        assert!(saved.updated_at >= guide.updated_at);
+        assert_eq!(lib.read(&handle.path).unwrap().guide, saved);
+        let listed = &lib.list().unwrap()[0];
+        assert_eq!(listed.review.owner.as_deref(), Some("IT"));
+
+        // The same edit again changes nothing.
+        assert_eq!(lib.edit_details(&handle, &edit).unwrap(), saved);
+        let other = GuideHandle {
+            id: Ulid::new(),
+            path: handle.path.clone(),
+        };
+        assert!(lib.edit_details(&other, &edit).is_err());
     }
 
     #[test]

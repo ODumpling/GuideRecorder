@@ -20,6 +20,8 @@
     "allow-duplicate-guide",
     "allow-rename-guide",
     "allow-mark-guide-reviewed",
+    "allow-edit-guide-details",
+    "allow-delete-guides",
     "allow-move-guide",
     "allow-reveal-in-library",
     "allow-step-image",

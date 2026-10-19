@@ -11,6 +11,7 @@ import type {
   CaptureArea,
   CaptureTargetArg,
   CaptureWindow,
+  DetailsEdit,
   ExportBranding,
   ExportResult,
   Guide,
@@ -653,6 +654,8 @@ export class Backend {
               folder: "",
               readOnly: this.readOnly(bundle),
               duplicateOf: null,
+              owner: bundle.guide.owner,
+              status: bundle.guide.status,
             }),
           );
       }
@@ -676,6 +679,19 @@ export class Backend {
         bundle.guide = structuredClone(guide);
         this.saves.push(structuredClone(guide));
         return null;
+      }
+      case "edit_guide_details": {
+        const bundle = this.bundle(String(args.id));
+        const edit = args.edit as DetailsEdit;
+        const guide = bundle.guide;
+        if (edit.status) guide.status = edit.status;
+        if (edit.owner !== undefined) guide.owner = edit.owner.trim() || null;
+        const removed = new Set((edit.removeTags ?? []).map((t) => t.toLowerCase()));
+        guide.tags = guide.tags.filter((t) => !removed.has(t.toLowerCase()));
+        for (const tag of edit.addTags ?? []) {
+          if (!guide.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) guide.tags.push(tag);
+        }
+        return structuredClone(guide);
       }
       case "new_annotated_guide": {
         const n = this.annotatedGuides.length + 1;

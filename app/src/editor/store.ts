@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
-import type { Guide, GuideListItem } from "@/lib/types";
+import type { DetailsEdit, Guide, GuideListItem } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
 import { copyTitle, localToday, type GuideSort, type StatusFilter } from "@/editor/library";
@@ -107,6 +107,19 @@ export interface EditorState {
    * unsaved changes go with it. Returns false if cancelled or failed.
    */
   deleteGuide(item: GuideListItem): Promise<boolean>;
+  /**
+   * The library's bulk actions: each works on every guide in `items` in
+   * turn (saving the open guide first, if it is one), keeps going past a
+   * guide that fails and reports the failures in `notice`. True if every
+   * guide was done.
+   */
+  moveGuides(items: GuideListItem[], folder: string): Promise<boolean>;
+  markGuidesReviewed(items: GuideListItem[], today?: string): Promise<boolean>;
+  /** Sets the status, owner and tags of `items`; the open guide takes them outside the undo history. */
+  editGuides(items: GuideListItem[], edit: DetailsEdit): Promise<boolean>;
+  duplicateGuides(items: GuideListItem[]): Promise<boolean>;
+  /** Deletes `items` after one native confirmation (as `deleteGuide` for one). */
+  deleteGuides(items: GuideListItem[]): Promise<boolean>;
   /**
    * Makes an annotation guide from images or a PDF the user picks, then
    * lists and opens it. False if cancelled or failed (in `openError`).
@@ -404,32 +417,56 @@ export function createEditorStore({
      * If `item` is the open guide its changes are saved first; `action` may
      * then update the open doc. Failures go to `notice` as `what`.
      */
-    async function organize(
+    function organize(
       item: GuideListItem,
       what: string,
       action: (isOpen: boolean) => Promise<void>,
     ): Promise<boolean> {
-      if (get().busy) return false;
-      const isOpen = get().doc?.guide.id === item.id && get().doc?.path === item.path;
+      return organizeAll([item], what, (_, isOpen) => action(isOpen));
+    }
+
+    /**
+     * `organize` for several guides: `action` runs on each in turn, past
+     * failures (counted in `notice`). The list is reloaded once something
+     * was done.
+     */
+    async function organizeAll(
+      items: GuideListItem[],
+      what: string,
+      action: (item: GuideListItem, isOpen: boolean) => Promise<void>,
+    ): Promise<boolean> {
+      if (get().busy || items.length === 0) return false;
+      const doc = get().doc;
+      const open = items.map((item) => doc?.guide.id === item.id && doc?.path === item.path);
       set({ busy: true });
       try {
-        if (isOpen && !(await flush())) {
+        if (open.includes(true) && !(await flush())) {
           get().notify(`Could not ${what}: the guide's changes could not be saved first.`);
           return false;
         }
-        try {
-          await action(isOpen);
-        } catch (error) {
-          get().notify(`Could not ${what}: ${errorMessage(error)}`);
-          return false;
+        let failed = 0;
+        let firstError = "";
+        for (const [i, item] of items.entries()) {
+          try {
+            await action(item, open[i]!);
+          } catch (error) {
+            if (failed++ === 0) firstError = errorMessage(error);
+          }
         }
-        await get().loadGuides();
-        return true;
+        if (failed > 0) {
+          const count = items.length > 1 ? ` (${failed} of ${items.length})` : "";
+          get().notify(`Could not ${what}${count}: ${firstError}`);
+        }
+        if (failed < items.length) await get().loadGuides();
+        return failed === 0;
       } finally {
         if (!isSaved()) autosave.schedule();
         idle();
       }
     }
+
+    /** "the guide" or "the 3 guides", for notices. */
+    const theGuides = (items: GuideListItem[]) => (items.length === 1 ? "the guide" : `the ${items.length} guides`);
 
     return {
       guides: [],
@@ -507,14 +544,16 @@ export function createEditorStore({
         return true;
       },
 
-      duplicateGuide: (item) =>
-        organize(item, "duplicate the guide", async () => {
-          const title = copyTitle(
-            item.title || "Untitled",
-            get().guides.map((g) => g.title),
-          );
+      duplicateGuide: (item) => get().duplicateGuides([item]),
+
+      duplicateGuides(items) {
+        const taken = get().guides.map((g) => g.title);
+        return organizeAll(items, `duplicate ${theGuides(items)}`, async (item) => {
+          const title = copyTitle(item.title || "Untitled", taken);
           await api.duplicateGuide(item.id, item.path, title);
-        }),
+          taken.push(title);
+        });
+      },
 
       renameGuide: (item, title) =>
         organize(item, "rename the guide", async (isOpen) => {
@@ -531,8 +570,10 @@ export function createEditorStore({
           }
         }),
 
-      markReviewed: (item, today = localToday()) =>
-        organize(item, "mark the guide reviewed", async (isOpen) => {
+      markReviewed: (item, today) => get().markGuidesReviewed([item], today),
+
+      markGuidesReviewed: (items, today = localToday()) =>
+        organizeAll(items, `mark ${theGuides(items)} reviewed`, async (item, isOpen) => {
           const reviewed = await api.markGuideReviewed(item.id, item.path, today);
           const doc = get().doc;
           if (isOpen && doc) {
@@ -545,11 +586,23 @@ export function createEditorStore({
           }
         }),
 
-      moveGuide: (item, folder) =>
-        organize(item, "move the guide", async (isOpen) => {
+      moveGuide: (item, folder) => get().moveGuides([item], folder),
+
+      moveGuides: (items, folder) =>
+        organizeAll(items, `move ${theGuides(items)}`, async (item, isOpen) => {
           const path = await api.moveGuide(item.id, item.path, folder);
           const doc = get().doc;
           if (isOpen && doc) set({ doc: { ...doc, path } });
+        }),
+
+      editGuides: (items, edit) =>
+        organizeAll(items, `change ${theGuides(items)}`, async (item, isOpen) => {
+          const saved = await api.editGuideDetails(item.id, item.path, edit);
+          const doc = get().doc;
+          if (isOpen && doc) {
+            const { owner, status, tags, aiState, editedFields, updatedAt } = saved;
+            set({ doc: { ...doc, guide: { ...doc.guide, owner, status, tags, aiState, editedFields, updatedAt } } });
+          }
         }),
 
       async reveal(target) {
@@ -582,6 +635,36 @@ export function createEditorStore({
             deleted = await api.deleteGuide(item.id, item.path, item.title || "Untitled");
           } catch (error) {
             get().notify(`Could not delete the guide: ${errorMessage(error)}`);
+            return false;
+          }
+          if (!deleted) return false;
+          if (isOpen()) set({ doc: null, selectedId: null, ...cleanHistory });
+          await get().loadGuides();
+          return true;
+        } finally {
+          if (!isSaved()) autosave.schedule();
+          idle();
+        }
+      },
+
+      async deleteGuides(items) {
+        if (items.length <= 1) return items.length === 1 && get().deleteGuide(items[0]!);
+        if (get().busy) return false;
+        const isOpen = () => items.some((item) => get().doc?.guide.id === item.id && get().doc?.path === item.path);
+        set({ busy: true });
+        try {
+          if (isOpen()) {
+            // No save may land in a bundle once it is gone.
+            autosave.cancel();
+            if (saving) await saving;
+          }
+          let deleted: boolean;
+          try {
+            deleted = await api.deleteGuides(items.map(({ id, path }) => ({ id, path })));
+          } catch (error) {
+            get().notify(`Could not delete ${theGuides(items)}: ${errorMessage(error)}`);
+            // Some may be gone already.
+            await get().loadGuides();
             return false;
           }
           if (!deleted) return false;
