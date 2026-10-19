@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
-import type { Guide, GuideKind, GuideListItem } from "@/lib/types";
+import type { Guide, GuideKind } from "@guiderecorder/guide-schema";
+import type { GuideListItem } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
 import { copyTitle, localToday, type GuideSort, type StatusFilter } from "@/editor/library";

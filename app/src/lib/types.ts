@@ -1,207 +1,15 @@
-// Mirrors guiderecorder_core::model (guide.json) and the app's IPC types.
+// The app's IPC types. The guide.json model comes from
+// `@guiderecorder/guide-schema`, generated from guiderecorder_core::model.
+
+import type { AiState, Guide, GuideField, GuideKind, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
 
 export type Ulid = string;
-
-export type StepKind =
-  | "click"
-  | "doubleClick"
-  | "rightClick"
-  | "type"
-  | "shortcut"
-  | "drag"
-  | "manual";
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface ElementInfo {
-  role?: string;
-  label?: string;
-  app?: string;
-  bundleId?: string;
-  window?: string;
-}
-
-export type ImageShow = "crop" | "full";
-
-export interface StepImage {
-  full: string;
-  crop?: string;
-  cropRect?: Rect;
-  after?: string;
-  show: ImageShow;
-}
-
-export type BlurMode = "blur" | "pixelate";
-
-/** Visual style; unset fields use the renderer's defaults (core `export/annotate.rs`). */
-export interface AnnotationStyle {
-  /** CSS colour: hex or a CSS colour name. */
-  color?: string;
-  fill?: string;
-  strokeWidth?: number;
-  opacity?: number;
-  fontSize?: number;
-  /** Blur annotations only. */
-  blurMode?: BlurMode;
-  /** Blur radius or pixel block size, in image pixels. */
-  blurAmount?: number;
-}
-
-export interface ArrowGeometry {
-  from: Point;
-  to: Point;
-}
-
-export interface CalloutGeometry extends Rect {
-  /** Point the callout's pointer targets, if any. */
-  anchor?: Point;
-  /** Plain text. */
-  text: string;
-}
-
-/**
- * A region the reader hovers or clicks to see its title and description.
- * Numbered 1, 2, 3, ... in annotation order among the step's hotspots.
- */
-export interface HotspotGeometry extends Rect {
-  /** Plain text. */
-  title: string;
-  /** Plain text; may hold line breaks. */
-  description: string;
-}
-
-/**
- * Mirrors core's `Annotation` (`{ id, type, geometry, style }`). Geometry is
- * in full-screenshot pixels.
- */
-export type Annotation = { id: Ulid; style?: AnnotationStyle } & (
-  | { type: "arrow"; geometry: ArrowGeometry }
-  | { type: "box" | "highlight" | "blur" | "crop"; geometry: Rect }
-  | { type: "callout"; geometry: CalloutGeometry }
-  | { type: "hotspot"; geometry: HotspotGeometry }
-);
-
-export type AnnotationType = Annotation["type"];
-
-export interface AiState {
-  status: "template" | "generating" | "ai" | "edited";
-  model?: string;
-  promptVersion?: string;
-  /** Short message from the last failed AI pass; the text was left as it was. */
-  error?: string | null;
-  /**
-   * Blur regions suggested for the step's screenshot, by the AI or found on
-   * this Mac; never applied by themselves.
-   */
-  redactionSuggestions?: RedactionSuggestion[];
-}
-
-/** A suggested blur region; `rect` in full-screenshot pixels, like annotations. */
-export interface RedactionSuggestion {
-  rect: Rect;
-  reason: string;
-  /** Who suggested it; absent: the AI. "onDevice": text found on this Mac. */
-  source?: "ai" | "onDevice";
-}
-
-export interface Step {
-  type: "step";
-  id: Ulid;
-  title: string;
-  description: string;
-  kind: StepKind;
-  point?: Point;
-  endPoint?: Point;
-  element?: ElementInfo;
-  keystrokes?: string;
-  image: StepImage;
-  annotations: Annotation[];
-  aiState: AiState;
-}
-
-export interface Section {
-  type: "section";
-  id: Ulid;
-  title: string;
-}
-
-export type NoteKind = "tip" | "warning" | "note";
-
-export interface Note {
-  type: "note";
-  id: Ulid;
-  kind: NoteKind;
-  body: string;
-}
-
-export type Item = Step | Section | Note;
-
-/**
- * `walkthrough`: recorded steps. `annotated`: uploaded pages (images, PDF
- * pages), each a `manual` step showing its full image, explained by hotspots.
- */
-export type GuideKind = "walkthrough" | "annotated";
-
-/** Where a guide stands in its review cycle (core `GuideStatus`). */
-export type GuideStatus = "draft" | "inReview" | "published" | "needsUpdate";
 
 /**
  * Owner, status, version and review schedule (core `ReviewInfo`), at the
  * top level of `guide.json`. All optional; absent when unset.
  */
-export interface ReviewFields {
-  owner?: string | null;
-  status?: GuideStatus | null;
-  /** Free text, e.g. `1.2`. */
-  version?: string | null;
-  /** `YYYY-MM-DD`. */
-  lastReviewed?: string | null;
-  /** Review every N months; unset or 0: no schedule. */
-  reviewIntervalMonths?: number | null;
-}
-
-export interface Guide extends ReviewFields {
-  schemaVersion: number;
-  id: Ulid;
-  title: string;
-  summary: string;
-  tags: string[];
-  intro: string;
-  prerequisites: string;
-  audience: "beginner" | "expert";
-  /** Absent: `walkthrough`. */
-  kind?: GuideKind;
-  language: string;
-  createdAt: string;
-  updatedAt: string;
-  recording?: unknown;
-  items: Item[];
-  /**
-   * Provenance of the guide-level fields (title, intro, prerequisites,
-   * summary, tags). `edited` once the user changes one, and while any is in
-   * `editedFields`. Absent in older guides (as `template`).
-   */
-  aiState?: AiState;
-  /**
-   * The guide-level fields the user wrote by hand; AI leaves them and may
-   * still write the others. Absent in older guides: there an `edited`
-   * `aiState` means every field is the user's.
-   */
-  editedFields?: GuideTextField[];
-}
-
-/** The guide-level fields the AI guide pass writes. */
-export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
+export type ReviewFields = Pick<Guide, "owner" | "status" | "version" | "lastReviewed" | "reviewIntervalMonths">;
 
 export interface GuideListItem extends ReviewFields {
   id: Ulid;
@@ -300,13 +108,6 @@ export interface CaptureWindow {
   appName: string;
   bundleId: string | null;
   title: string | null;
-  width: number;
-  height: number;
-}
-
-export interface Rect {
-  x: number;
-  y: number;
   width: number;
   height: number;
 }
@@ -566,7 +367,7 @@ export interface AiGuideEvent {
   guideId: Ulid;
   fields: AiGuideFields | null;
   /** The fields the pass wrote (not ones the user edited); the rest of `fields` is as it was. Absent: all. */
-  written?: GuideTextField[];
+  written?: GuideField[];
   aiState: AiState;
   error: string | null;
 }

@@ -1,8 +1,8 @@
 // Where the after frame (`StepImage.after`) is shown: in the Before view's
 // framing, so the two line up when switching.
 
-import { sizesMatch } from "@/annotations/geometry";
-import type { Rect } from "@/lib/types";
+import { sizesMatch } from "@guiderecorder/ui/geometry";
+import type { Rect } from "@guiderecorder/guide-schema";
 
 type Size = { width: number; height: number };
 

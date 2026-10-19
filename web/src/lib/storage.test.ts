@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { hexToBase64, s3Store } from "./storage";
+import { contentDisposition, hexToBase64, s3Store } from "./storage";
 
 const store = s3Store({
   endpoint: "https://s3.example.com/",
@@ -26,4 +26,10 @@ it("presigns short-lived GETs", async () => {
   const url = new URL(await store.presignGet("orgs/o/assets/x", 300));
   expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
   expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+});
+
+it("names downloads with a signed Content-Disposition", async () => {
+  const url = new URL(await store.presignGet("orgs/o/exports/r/pdf.pdf", 300, { filename: "Drucker – Fach.pdf" }));
+  expect(url.searchParams.get("response-content-disposition")).toBe(contentDisposition("Drucker – Fach.pdf"));
+  expect(contentDisposition('a"b – c.pdf')).toBe(`attachment; filename="a_b _ c.pdf"; filename*=UTF-8''a%22b%20%E2%80%93%20c.pdf`);
 });

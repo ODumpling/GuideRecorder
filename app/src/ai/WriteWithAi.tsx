@@ -1,9 +1,9 @@
 import { Sparkles, Square } from "lucide-react";
 import { aiStore, useAi } from "@/ai/ai";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { useEditor } from "@/editor/editor";
-import type { AiState } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { AiState } from "@guiderecorder/guide-schema";
+import { cn } from "@guiderecorder/ui/utils";
 
 /**
  * The editor header's AI control: "Write with AI" starts a run on the open

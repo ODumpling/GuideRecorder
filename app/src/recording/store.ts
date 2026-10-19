@@ -6,14 +6,7 @@ import {
   RECORDING_STATUS_EVENT,
   type RecordingApi,
 } from "@/lib/ipc";
-import type {
-  AppError,
-  CaptureTargetArg,
-  RecordingSaved,
-  RecordingSnapshot,
-  RecordingStatus,
-  StampedStatus,
-} from "@/lib/types";
+import type { AppError, CaptureTargetArg, RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
 
 export type RecordingAction = "start" | "pause" | "resume" | "stop" | "cancel";
 

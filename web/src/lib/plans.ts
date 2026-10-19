@@ -8,6 +8,8 @@ export interface Entitlements {
   sync: boolean;
   /** Public and unlisted share links. */
   sharing: boolean;
+  /** Admins can require passwords on share links, cap how long they last, or turn them off. */
+  sharingControls: boolean;
   webEditor: boolean;
   approvals: boolean;
   audit: boolean;
@@ -24,6 +26,7 @@ export const ENTITLEMENTS: Record<PlanName, Entitlements> = {
   free: {
     sync: false,
     sharing: false,
+    sharingControls: false,
     webEditor: false,
     approvals: false,
     audit: false,
@@ -34,6 +37,7 @@ export const ENTITLEMENTS: Record<PlanName, Entitlements> = {
   pro: {
     sync: true,
     sharing: true,
+    sharingControls: false,
     webEditor: true,
     approvals: false,
     audit: false,
@@ -44,6 +48,7 @@ export const ENTITLEMENTS: Record<PlanName, Entitlements> = {
   enterprise: {
     sync: true,
     sharing: true,
+    sharingControls: true,
     webEditor: true,
     approvals: true,
     audit: true,

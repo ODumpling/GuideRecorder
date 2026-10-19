@@ -1,7 +1,7 @@
 import { Dialog } from "radix-ui";
 import { X } from "lucide-react";
 import type { Conflict } from "@guiderecorder/sync";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import type { Resolution } from "@/sync/engine";
 import { syncStore, useSync } from "@/sync/sync";
 

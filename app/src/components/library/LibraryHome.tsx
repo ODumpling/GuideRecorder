@@ -23,7 +23,7 @@ import type { CaptureArea } from "@/lib/types";
 import { startFlow, useRecording } from "@/recording/recording";
 import { useSettings } from "@/settings/settings";
 import { formatHotkey } from "@/settings/validate";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const SEARCH_DELAY_MS = 200;
 

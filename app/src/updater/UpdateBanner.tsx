@@ -1,5 +1,5 @@
 import { CircleCheck, Download, LoaderCircle, RotateCw, TriangleAlert, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { bannerFor } from "@/updater/store";
 import { updaterStore, useUpdater } from "@/updater/updater";
 

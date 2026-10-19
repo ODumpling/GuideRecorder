@@ -4,8 +4,6 @@ import {
   ChevronRight,
   GraduationCap,
   ImageOff,
-  Info,
-  Lightbulb,
   Merge,
   Minimize2,
   PenLine,
@@ -13,7 +11,6 @@ import {
   Rocket,
   Scissors,
   Trash2,
-  TriangleAlert,
 } from "lucide-react";
 import { aiStore, useAi } from "@/ai/ai";
 import { BUSY_HINT } from "@/ai/controller";
@@ -21,18 +18,20 @@ import { CustomRewrite } from "@/ai/CustomRewrite";
 import { useAiBlocked } from "@/ai/WriteWithAi";
 import { KIND_LABELS } from "@/components/Inspector";
 import { GuideDetails } from "@/components/GuideDetails";
-import type { MarkdownEditorHandle } from "@/components/MarkdownEditor";
-import { Button } from "@/components/ui/button";
+import type { MarkdownEditorHandle } from "@guiderecorder/ui/markdown-editor";
+import { Button } from "@guiderecorder/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { canMergeSelected, deleteSelected, mergeSelected, splitSelected } from "@/editor/actions";
 import { setItemText, type TextField } from "@/editor/commands";
 import { editorStore, stepNoun, stepNumbers, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
-import type { Item, NoteKind, RewriteStyleArg, Step } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { markdownToPlainText } from "@/text/markdown";
+import type { Item, Step } from "@guiderecorder/guide-schema";
+import { ItemView } from "@guiderecorder/ui/step-view";
+import type { RewriteStyleArg } from "@/lib/types";
+import { cn } from "@guiderecorder/ui/utils";
+import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 
 // TipTap is most of the bundle; load it with the first opened guide.
-const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
+const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
 // The annotation layer, likewise; the plain image shows until it loads.
 const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
 
@@ -205,12 +204,6 @@ function AiActions({ stepId, onCustom }: { stepId: string; onCustom(): void }) {
   );
 }
 
-const NOTE_STYLES: Record<NoteKind, { icon: typeof Info; color: string }> = {
-  tip: { icon: Lightbulb, color: "var(--status-success)" },
-  warning: { icon: TriangleAlert, color: "var(--status-warning)" },
-  note: { icon: Info, color: "var(--status-info)" },
-};
-
 /** "Step 3 of 7" over the item, with what kind of item it is, and the previous and next items. */
 function ItemHeader({ item }: { item: Item }) {
   const items = useEditor((s) => s.doc!.guide.items);
@@ -282,81 +275,32 @@ export function StepView() {
     // Until the editor has loaded, the whole description stays.
     void splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
   };
-  const note = item.type === "note" ? NOTE_STYLES[item.kind] : null;
   return (
     <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
       <ItemHeader item={item} />
       {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
-      {item.type === "step" && (
-        <>
-          <Suspense fallback={<StepImage guideId={doc.guide.id} step={item} />}>
-            {/* Fresh tools and selection per step. */}
-            <AnnotationEditor key={item.id} guideId={doc.guide.id} step={item} readOnly={doc.readOnly} />
-          </Suspense>
-          <div className="mt-3 flex flex-col gap-1">
-            <TextEditor
-              id={item.id}
-              field="title"
-              value={item.title}
-              readOnly={doc.readOnly}
-              label={`${Noun} title`}
-              placeholder={`${Noun} title`}
-              singleLine
-              className="font-serif text-[28px] leading-tight tracking-tight [&_strong]:font-normal [&_strong]:italic"
-            />
-            <TextEditor
-              handle={description}
-              id={item.id}
-              field="description"
-              value={item.description}
-              readOnly={doc.readOnly}
-              label={`${Noun} description`}
-              placeholder="Add a description"
-              className="text-[15px] leading-relaxed text-foreground/85"
-            />
-          </div>
-          {item.aiState.error && (
-            <p className="text-xs text-muted-foreground" data-testid="ai-error">
-              AI could not write this step: {item.aiState.error}
-            </p>
-          )}
-          {!doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
-        </>
-      )}
-      {item.type === "section" && (
-        <TextEditor
-          id={item.id}
-          field="title"
-          value={item.title}
-          readOnly={doc.readOnly}
-          label="Section title"
-          placeholder="Section title"
-          singleLine
-          className="font-serif text-4xl tracking-tight"
-        />
-      )}
-      {note && item.type === "note" && (
-        <div
-          className="flex gap-3 rounded-xl border p-4"
-          style={{
-            borderColor: `color-mix(in oklab, ${note.color} 30%, transparent)`,
-            background: `color-mix(in oklab, ${note.color} 9%, transparent)`,
-          }}
-        >
-          <note.icon className="mt-2 size-4 shrink-0" style={{ color: note.color }} />
-          <div className="min-w-0 flex-1">
-            <TextEditor
-              id={item.id}
-              field="body"
-              value={item.body}
-              readOnly={doc.readOnly}
-              label={`${item.kind} text`}
-              placeholder="Write the note"
-              className="text-[15px] leading-relaxed"
-            />
-          </div>
-        </div>
-      )}
+      <ItemView
+        item={item}
+        noun={Noun}
+        image={
+          item.type === "step" && (
+            <Suspense fallback={<StepImage guideId={doc.guide.id} step={item} />}>
+              {/* Fresh tools and selection per step. */}
+              <AnnotationEditor key={item.id} guideId={doc.guide.id} step={item} readOnly={doc.readOnly} />
+            </Suspense>
+          )
+        }
+        text={(props) => (
+          <TextEditor {...props} handle={props.field === "description" ? description : undefined} id={item.id} readOnly={doc.readOnly} />
+        )}
+      >
+        {item.type === "step" && item.aiState.error && (
+          <p className="text-xs text-muted-foreground" data-testid="ai-error">
+            AI could not write this step: {item.aiState.error}
+          </p>
+        )}
+        {item.type === "step" && !doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
+      </ItemView>
       {!doc.readOnly && (
         <div className="mt-2 flex justify-end border-t border-border pt-2">
           <ItemActions item={item} onSplit={split} />

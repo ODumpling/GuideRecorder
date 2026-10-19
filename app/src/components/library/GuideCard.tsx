@@ -6,7 +6,7 @@ import { useGuideCover } from "@/components/library/useGuideCover";
 import { editorStore, useEditor } from "@/editor/editor";
 import { folderName, guideContents, isReviewOverdue, localToday, reviewDue, timeAgo } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** A guide in the library grid: its first screenshot, title, status, folder and owner. */
 export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: string[] }) {

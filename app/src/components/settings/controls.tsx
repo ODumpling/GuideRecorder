@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Switch } from "radix-ui";
-import { Input } from "@/components/ui/input";
+import { Input } from "@guiderecorder/ui/input";
 import { formatHotkey, hotkeyFromEvent } from "@/settings/validate";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** One setting: a label and note on the left, the control on the right. */
 export function Row({ label, note, children }: { label: string; note?: ReactNode; children: ReactNode }) {

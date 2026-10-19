@@ -13,7 +13,7 @@ import {
   type FolderNode,
 } from "@/editor/library";
 import { tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** Indent per folder level, in pixels. */
 const INDENT_PX = 12;

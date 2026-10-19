@@ -1,4 +1,5 @@
-import type { GuideKind, GuideListItem, GuideStatus, ReviewFields } from "@/lib/types";
+import type { GuideKind, GuideStatus } from "@guiderecorder/guide-schema";
+import type { GuideListItem, ReviewFields } from "@/lib/types";
 
 /** How the library sidebar orders guides (a search orders by best match instead). */
 export type GuideSort = "updated" | "created" | "title";
