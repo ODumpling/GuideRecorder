@@ -35,7 +35,7 @@ export function useRecording<T>(selector: (state: RecordingState) => T): T {
   return useStore(recordingStore, selector);
 }
 
-/** Starting a recording as the capture area says (the Record button, `recording://pick-area`). */
+/** Starting a recording as the capture area says (the New Guide dialog, `recording://pick-area`). */
 export const startFlow = createStartFlow({
   recording: recordingStore,
   picker: tauriPickerApi,

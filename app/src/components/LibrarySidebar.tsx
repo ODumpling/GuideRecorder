@@ -1,7 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
-import { BookOpen, FilePlus2, Lock, Search } from "lucide-react";
+import { BookOpen, Lock, Search } from "lucide-react";
 import { Menu } from "@tauri-apps/api/menu";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
 import type { GuideListItem } from "@/lib/types";
@@ -34,8 +33,6 @@ export function LibrarySidebar() {
   const listError = useEditor((s) => s.listError);
   const opening = useEditor((s) => s.opening);
   const openError = useEditor((s) => s.openError);
-  const creating = useEditor((s) => s.creating);
-  const busy = useEditor((s) => s.busy);
   const [query, setQuery] = useState(() => editorStore.getState().query);
 
   useEffect(() => {
@@ -55,17 +52,6 @@ export function LibrarySidebar() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          className="size-8"
-          aria-label="New annotation guide…"
-          title="New annotation guide: images or a PDF with hotspots to explain them"
-          disabled={creating || opening || busy}
-          onClick={() => void editorStore.getState().createAnnotatedGuide()}
-        >
-          <FilePlus2 />
-        </Button>
       </div>
       {(listError || openError) && (
         <p className="px-3 pb-2 text-xs text-[var(--status-danger)]">{listError ?? openError}</p>

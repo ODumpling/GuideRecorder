@@ -1,4 +1,4 @@
-import { CALENDAR, emitEvent, expect, outlineItems, test } from "./fixtures";
+import { CALENDAR, emitEvent, expect, outlineItems, record, test } from "./fixtures";
 
 const grantAll = (permissions: Record<string, string>) => {
   for (const p of Object.keys(permissions)) permissions[p] = "granted";
@@ -9,7 +9,7 @@ test("records a guide: start, pause, resume, stop, then edit it", async ({ page,
   backend.recordingSkipped = 2;
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const controls = page.getByRole("group", { name: "Recording" });
   await expect(controls.getByText("Recording", { exact: true })).toBeVisible();
   await expect(controls.getByLabel("Recording time")).toHaveText(/^0:0\d$/);
@@ -29,7 +29,7 @@ test("records a guide: start, pause, resume, stop, then edit it", async ({ page,
   const id = backend.recordings[0].guideId;
   await expect(outlineItems(page)).toHaveCount(backend.guide(id).items.length);
   await expect(page.getByRole("alert")).toHaveText(/2 steps had no screenshot and were left out\./);
-  await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
   expect(backend.recording).toEqual({ state: "idle" });
   // Opening the guide happened once, though both the result and the event announce it.
   expect(backend.calls.filter((c) => c.cmd === "open_guide")).toHaveLength(1);
@@ -38,11 +38,11 @@ test("records a guide: start, pause, resume, stop, then edit it", async ({ page,
 
 test("a missing permission is explained, with a way to Settings", async ({ page, backend }) => {
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const alert = page.getByRole("alert");
   await expect(alert).toHaveText(/recording needs Accessibility, Input Monitoring permission/);
   expect(backend.recording).toEqual({ state: "idle" });
-  await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
 
   await alert.getByRole("button", { name: "Open Permissions" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -55,7 +55,7 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   grantAll(backend.permissions);
   backend.captureAreaFallback = true;
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   await expect(page.getByText("Recording all displays: no window or region was chosen for this recording.")).toBeVisible();
 
   // A stop from elsewhere (a hotkey, later): saving, then the saved guide opens.
@@ -66,13 +66,13 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   await emitEvent(page, "recording://status", { state: "idle" });
   await emitEvent(page, "recording://saved", { guideId: CALENDAR, steps: 3, skipped: 0 });
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue("Share a calendar event");
-  await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
 });
 
 test("shows the screenshots taken so far while recording", async ({ page, backend }) => {
   grantAll(backend.permissions);
   await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const controls = page.getByRole("group", { name: "Recording" });
   await expect(controls).toBeVisible();
   const strip = page.getByRole("region", { name: "Screenshots so far" });
@@ -101,7 +101,7 @@ test("shows the screenshots taken so far while recording", async ({ page, backen
 
 test("cancelling asks first and discards the recording", async ({ page, backend }) => {
   grantAll(backend.permissions);
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const controls = page.getByRole("group", { name: "Recording" });
   await controls.getByRole("button", { name: "Cancel recording" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Keep recording" }).click();
@@ -109,14 +109,14 @@ test("cancelling asks first and discards the recording", async ({ page, backend 
 
   await controls.getByRole("button", { name: "Cancel recording" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Discard recording" }).click();
-  await expect(page.getByRole("button", { name: "Record" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Guide" })).toBeVisible();
   expect(backend.recording).toEqual({ state: "idle" });
   expect(backend.recordings).toHaveLength(0);
 });
 
 test("quitting while recording saves the recording first", async ({ page, backend }) => {
   grantAll(backend.permissions);
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
 
   await emitEvent(page, "guiderecorder://quit-requested", null);
@@ -133,7 +133,7 @@ test("quitting while recording saves the recording first", async ({ page, backen
 
 test("shows when an excluded app is in front", async ({ page, backend }) => {
   grantAll(backend.permissions);
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const controls = page.getByRole("group", { name: "Recording" });
   const label = controls.getByRole("status");
   await expect(label).toHaveText("Recording");
@@ -166,7 +166,7 @@ test("shows when an excluded app is in front", async ({ page, backend }) => {
 
 test("says when capture stopped, refuses a resume and still stops and saves", async ({ page, backend }) => {
   grantAll(backend.permissions);
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   const controls = page.getByRole("group", { name: "Recording" });
   const label = controls.getByRole("status");
   await expect(label).toHaveText("Recording");
@@ -200,7 +200,7 @@ test("says when capture stopped, refuses a resume and still stops and saves", as
 
 test("the recording clock survives a reload, paused time included", async ({ page, backend }) => {
   grantAll(backend.permissions);
-  await page.getByRole("button", { name: "Record" }).click();
+  await record(page);
   await expect(page.getByRole("group", { name: "Recording" })).toBeVisible();
 
   // Started 125 s ago, paused 5 s ago after 20 s of earlier pauses: 1:40 recorded.
