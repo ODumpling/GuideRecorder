@@ -80,12 +80,12 @@ use crate::library::{
     bundle_paths, is_bundle_extension, GuideHandle, Library, LibraryError, GUIDE_FILE,
 };
 use crate::markdown;
-use crate::model::{Guide, Item, ReviewInfo, Shape};
+use crate::model::{Guide, GuideKind, Item, ReviewInfo, Shape};
 
 /// Version of the index layout. Bump it whenever the tables or what goes
 /// into them change; an index at another version is rebuilt by the writer
 /// and reported stale to readers.
-pub const FORMAT_VERSION: i64 = 6;
+pub const FORMAT_VERSION: i64 = 7;
 
 /// `PRAGMA application_id` of a GuideRecorder index ("GYix"). The writer only
 /// recreates files that carry it.
@@ -144,6 +144,8 @@ CREATE TABLE guides (
     tags           TEXT,             -- JSON array as written
     tags_folded    TEXT,             -- JSON array, lowercase
     step_count     INTEGER,
+    kind           TEXT,             -- 'walkthrough' or 'annotated'
+    hotspot_count  INTEGER,
     updated_us     INTEGER,          -- microseconds since the Unix epoch
     created_us     INTEGER,
     review         TEXT,             -- JSON ReviewInfo; NULL if no field is set
@@ -209,6 +211,11 @@ pub struct IndexedGuide {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    /// Walkthrough or annotation guide (see
+    /// [`crate::library::GuideSummary::kind`]).
+    pub kind: GuideKind,
+    /// Hotspot annotations across all steps.
+    pub hotspot_count: usize,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// The library folder holding the bundle (see
@@ -624,7 +631,8 @@ impl Index {
         let tag = filter.tag.as_deref().map(str::to_lowercase);
         let limit = sql_limit(filter.limit);
         let columns = "g.bundle, g.id, g.title, g.summary, g.tags, g.step_count, g.updated_us, \
-                       g.read_only, g.duplicate_of, g.created_us, g.review";
+                       g.read_only, g.duplicate_of, g.created_us, g.review, g.kind, \
+                       g.hotspot_count";
         let tag_clause = "(?1 IS NULL OR EXISTS \
                           (SELECT 1 FROM json_each(g.tags_folded) WHERE value = ?1))";
         let match_query = filter.query.as_deref().map(fts_queries);
@@ -640,6 +648,8 @@ impl Index {
                 summary: row.get(3)?,
                 tags: parse_tags(row, 4)?,
                 step_count: row.get::<_, i64>(5)? as usize,
+                kind: parse_kind(row, 11)?,
+                hotspot_count: row.get::<_, i64>(12)? as usize,
                 created_at: match row.get::<_, Option<i64>>(9)? {
                     Some(_) => parse_micros(row, 9)?,
                     None => updated_at,
@@ -1047,6 +1057,8 @@ pub fn list_library(library: &Library, filter: &ListFilter) -> Result<Vec<Indexe
                 summary: summary.summary,
                 tags: summary.tags,
                 step_count: summary.step_count,
+                kind: summary.kind,
+                hotspot_count: summary.hotspot_count,
                 created_at: summary.created_at,
                 updated_at: summary.updated_at,
                 folder: summary.folder,
@@ -1364,8 +1376,8 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
     tx.execute(
         "INSERT INTO guides (bundle, mtime_ns, size, id, schema_version, read_only, title,
                              summary, tags, tags_folded, step_count, updated_us, created_us,
-                             review)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                             review, kind, hotspot_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             bundle,
             mtime_ns,
@@ -1382,6 +1394,8 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
             guide.created_at.timestamp_micros(),
             (guide.review != ReviewInfo::default())
                 .then(|| serde_json::to_string(&guide.review).expect("review serializes")),
+            guide.kind.as_str(),
+            guide.hotspot_count() as i64,
         ],
     )?;
     let mut insert = tx.prepare_cached(
@@ -1715,6 +1729,11 @@ fn parse_review(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<ReviewI
         Some(json) => serde_json::from_str(&json).map_err(|e| conversion_error(idx, e)),
         None => Ok(ReviewInfo::default()),
     }
+}
+
+fn parse_kind(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<GuideKind> {
+    let kind: String = row.get(idx)?;
+    serde_json::from_value(serde_json::Value::String(kind)).map_err(|e| conversion_error(idx, e))
 }
 
 fn parse_micros(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<DateTime<Utc>> {

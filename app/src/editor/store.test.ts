@@ -29,6 +29,8 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
               summary: "",
               tags: [],
               stepCount: 3,
+              kind: "walkthrough" as const,
+              hotspotCount: 0,
               createdAt: "",
               updatedAt: "",
               folder: "",

@@ -6,6 +6,7 @@ import { editorStore, useEditor } from "@/editor/editor";
 import {
   folderName,
   folderPaths,
+  GUIDE_KINDS,
   GUIDE_SORTS,
   GUIDE_STATUSES,
   hasOwner,
@@ -167,6 +168,7 @@ export function LibraryHome() {
   const tag = useEditor((s) => s.tag);
   const statusFilter = useEditor((s) => s.statusFilter);
   const owner = useEditor((s) => s.owner);
+  const kind = useEditor((s) => s.kind);
   const folder = useEditor((s) => s.folder);
   const query = useEditor((s) => s.query.trim());
   const listError = useEditor((s) => s.listError);
@@ -183,11 +185,12 @@ export function LibraryHome() {
         (folder === null || inFolder(g, folder)) &&
         (!activeTag || hasTag(g, activeTag)) &&
         (!activeOwner || hasOwner(g, activeOwner)) &&
-        (!statusFilter || matchesStatus(g, statusFilter, today)),
+        (!statusFilter || matchesStatus(g, statusFilter, today)) &&
+        (!kind || g.kind === kind),
     );
     // A search lists best matches first; the sort applies to browsing.
     return query ? filtered : sortGuides(filtered, sort);
-  }, [guides, folder, activeTag, activeOwner, statusFilter, today, query, sort]);
+  }, [guides, folder, activeTag, activeOwner, statusFilter, kind, today, query, sort]);
   const moveTargets = useMemo(() => folderPaths(folders, guides), [folders, guides]);
   const overdue = shown.filter((g) => isReviewOverdue(g, today)).length;
 
@@ -201,8 +204,10 @@ export function LibraryHome() {
           ? GUIDE_STATUSES.find((s) => s.value === statusFilter)!.label
           : activeTag
             ? `#${activeTag}`
-            : "All guides";
-  const filtered = !!(query || folder !== null || statusFilter || activeTag || activeOwner);
+            : kind
+              ? GUIDE_KINDS.find((k) => k.value === kind)!.label
+              : "All guides";
+  const filtered = !!(query || folder !== null || statusFilter || activeTag || activeOwner || kind);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-7 px-9 py-8">

@@ -56,7 +56,7 @@ Without `--writable` the server never writes to the library or the index:
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. Also `owner`, `status`, `version`, `last_reviewed`, `review_interval_months`, `review_due` (null when unset) and `review_overdue`. |
+| `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `kind` (`walkthrough` or `annotated`; an annotation guide's steps are its pages), `hotspot_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. Also `owner`, `status`, `version`, `last_reviewed`, `review_interval_months`, `review_due` (null when unset) and `review_overdue`. |
 | `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set), and optionally step screenshots (at most about 5 MB of images). |
 | `get_step` | `guide_id`, `step_id`, `image?` (`"crop"`, `"full"` or `"none"`; default `"crop"`) | The step's text, element, keys and screenshot. |
 | `search_steps` | `query`, `limit?` (20, max 100) | Hits with `guide_id`, `guide_title`, `kind`, `item_id`, `step_number`, `title` and `snippet` (matches in `**bold**`). |

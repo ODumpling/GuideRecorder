@@ -209,7 +209,11 @@ export interface GuideListItem extends ReviewFields {
   title: string;
   summary: string;
   tags: string[];
+  /** Steps, or an annotation guide's pages. */
   stepCount: number;
+  kind: GuideKind;
+  /** Hotspots across all steps (an annotation guide's pages). */
+  hotspotCount: number;
   createdAt: string;
   updatedAt: string;
   /** The library folder holding it, `/` separated; `""` at the top. */

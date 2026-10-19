@@ -1,10 +1,10 @@
-import { BookOpen, Camera, Lock } from "lucide-react";
+import { BookOpen, Camera, Lock, Target } from "lucide-react";
 import { Avatar, StatusPill } from "@/components/library/bits";
 import { SyncBadge } from "@/components/library/SyncBadge";
 import { askName, showGuideMenu } from "@/components/library/menus";
 import { useGuideCover } from "@/components/library/useGuideCover";
 import { editorStore, useEditor } from "@/editor/editor";
-import { folderName, isReviewOverdue, localToday, reviewDue, timeAgo } from "@/editor/library";
+import { folderName, guideContents, isReviewOverdue, localToday, reviewDue, timeAgo } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +13,7 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
   const opening = useEditor((s) => s.opening);
   const cover = useGuideCover(guide.id, guide.updatedAt);
   const overdue = isReviewOverdue(guide, localToday());
-  const steps = `${guide.stepCount} ${guide.stepCount === 1 ? "step" : "steps"}`;
+  const KindIcon = guide.kind === "annotated" ? Target : Camera;
   const meta = [guide.folder && folderName(guide.folder), timeAgo(guide.updatedAt)].filter(Boolean).join(" · ");
   return (
     <li className={cn(guide.duplicateOf && "opacity-60")}>
@@ -38,7 +38,7 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
             </span>
           )}
           <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur">
-            <Camera className="size-3" /> {steps}
+            <KindIcon className="size-3" /> {guideContents(guide)}
           </span>
           {overdue && (
             <span
