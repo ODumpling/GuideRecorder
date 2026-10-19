@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { editorStore } from "@/editor/editor";
 import { tauriSyncApi, tauriSyncBackend } from "@/lib/ipc";
+import { createShareStore, type ShareStoreState } from "@/sync/share";
 import { createSyncStore, type SyncStoreState } from "@/sync/store";
 
 /** The app's sync store. */
@@ -12,6 +13,16 @@ export const syncStore = createSyncStore({
 
 export function useSync<T>(selector: (state: SyncStoreState) => T): T {
   return useStore(syncStore, selector);
+}
+
+/** The app's share dialog, over the sync sign-in. */
+export const shareStore = createShareStore({
+  backend: tauriSyncBackend,
+  workspaceId: () => syncStore.getState().state.workspaceId,
+});
+
+export function useShare<T>(selector: (state: ShareStoreState) => T): T {
+  return useStore(shareStore, selector);
 }
 
 const INTERVAL_MS = 30_000;
