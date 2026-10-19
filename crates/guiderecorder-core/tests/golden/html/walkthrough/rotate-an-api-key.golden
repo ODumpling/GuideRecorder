@@ -1,0 +1,486 @@
+<!doctype html>
+<!-- Embed this walkthrough in a web page (keep the file next to the page, or change src):
+<iframe src="guide.html" title="Rotate an API key" width="100%" height="760" style="border:0" loading="lazy"></iframe>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; img-src data:; style-src &#x27;unsafe-inline&#x27;; script-src &#x27;sha256-lkJefMmXPFf8vylDs1iPMD3MfHff730es08FaHj3SLY=&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="GuideRecorder">
+<title>Rotate an API key</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --accent: #2563eb;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #59636e;
+  --border: #d8dee4;
+  --code-bg: #eff2f5;
+  --tip: #1a7f37;
+  --warning: #9a6700;
+  --note: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --code-bg: #262c36;
+    --tip: #3fb950;
+    --warning: #d29922;
+    --note: #4493f8;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.guide { max-width: 52rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+.guide-header { margin-bottom: 2rem; border-bottom: 3px solid var(--accent); padding-bottom: 1rem; }
+.logo { display: block; max-height: 3rem; max-width: 12rem; margin-bottom: 1rem; }
+h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+h2 { font-size: 1.4rem; line-height: 1.3; margin: 2.5rem 0 1rem; overflow-wrap: anywhere; }
+.summary { color: var(--muted); font-size: 1.125rem; margin: 0; }
+.details { color: var(--muted); font-size: .875rem; margin: .5rem 0 0; }
+p { margin: 0 0 .75rem; }
+p:last-child { margin-bottom: 0; }
+ul, ol { margin: 0 0 .75rem; padding-left: 1.5rem; }
+li > ul, li > ol { margin-bottom: 0; }
+a { color: var(--accent); }
+code {
+  font: .9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: .1em .3em;
+  overflow-wrap: anywhere;
+}
+.intro, .prerequisites { margin-bottom: 1.5rem; }
+.step {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.step-title { display: flex; align-items: flex-start; gap: .75rem; font-size: 1.1rem; line-height: 1.4; margin: 0 0 1rem; }
+.step-number {
+  flex: none;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 .5rem;
+  border-radius: 1rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 2rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.step-text { padding-top: .2rem; overflow-wrap: anywhere; }
+.step-image { margin: 0 0 1rem; }
+.step-image:last-child { margin-bottom: 0; }
+.step-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.hotspot-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.step-image .hotspot-frame img { border: 0; border-radius: 5px; }
+.hotspot, .hotspot-legend li { --hs: #007aff; }
+.hotspot {
+  position: absolute;
+  border: 2px solid var(--hs);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .8);
+  cursor: pointer;
+}
+.hotspot-untitled { border-style: dashed; }
+.hotspot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hs);
+  opacity: .12;
+}
+.hotspot:hover::before, .hotspot:focus::before { opacity: .24; }
+.hotspot:hover, .hotspot:focus, .hotspot:focus-within { z-index: 2; }
+.hotspot:focus { outline: none; }
+.hotspot:focus-visible { outline: 3px solid var(--hs); outline-offset: 2px; }
+.hotspot-badge, .hotspot-number {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 .35rem;
+  border-radius: .75rem;
+  background: var(--hs);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 700;
+  line-height: 1.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.hotspot-badge {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.hotspot-popover {
+  display: none;
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + .5rem);
+  left: -2px;
+  width: max-content;
+  max-width: min(22rem, 64vw);
+  padding: .6rem .8rem;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--hs);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .2);
+  font-size: .9rem;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: auto;
+}
+/* Keeps the popover open while the pointer crosses the gap. */
+.hotspot-popover::before { content: ""; position: absolute; left: 0; right: 0; top: -.6rem; height: .6rem; }
+.hotspot-above .hotspot-popover { top: auto; bottom: calc(100% + .5rem); }
+.hotspot-above .hotspot-popover::before { top: auto; bottom: -.6rem; }
+.hotspot-center .hotspot-popover { left: 50%; transform: translateX(-50%); }
+.hotspot-end .hotspot-popover { left: auto; right: -2px; }
+.hotspot:hover .hotspot-popover, .hotspot:focus .hotspot-popover, .hotspot:focus-within .hotspot-popover { display: block; }
+.hotspot-popover strong, .hotspot-entry strong { display: block; }
+.hotspot-legend { list-style: none; padding: 0; margin: 0 0 1rem; }
+.hotspot-legend:last-child { margin-bottom: 0; }
+.hotspot-legend li { display: flex; align-items: flex-start; gap: .6rem; margin: 0 0 .5rem; }
+.hotspot-number { flex: none; margin-top: .05rem; }
+.hotspot-entry { overflow-wrap: anywhere; }
+.note {
+  border-left: 4px solid var(--note);
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+  padding: .75rem 1rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.note-tip { border-left-color: var(--tip); }
+.note-warning { border-left-color: var(--warning); }
+.note-label { font-weight: 600; margin-bottom: .25rem; }
+.note-tip .note-label { color: var(--tip); }
+.note-warning .note-label { color: var(--warning); }
+.note-note .note-label { color: var(--note); }
+@media print {
+  :root { --bg: #fff; --card: #fff; --text: #000; --muted: #444; --border: #bbb; --code-bg: #f0f0f0; }
+  body { font-size: 11pt; }
+  .guide { max-width: none; padding: 0; }
+  .step { border-color: #bbb; }
+  a { color: inherit; }
+  h2 { break-after: avoid; page-break-after: avoid; }
+  .hotspot-popover { display: none !important; }
+  .hotspot, .hotspot-badge, .hotspot-number { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .hotspot-legend li { break-inside: avoid; page-break-inside: avoid; }
+}
+/* Interactive walkthrough, over the document stylesheet. Without script
+   (no .wt-js), every slide shows and the controls are hidden. */
+.wt { max-width: 76rem; }
+.wt-layout { display: grid; grid-template-columns: minmax(0, 1fr) 16rem; gap: 1.5rem; align-items: start; }
+.wt-main { min-width: 0; }
+.wt-progress, .wt-controls, .wt-hint, .wt-actions { display: none; }
+.wt-js .wt-progress { display: block; height: 6px; margin: 0 0 1rem; background: var(--border); border-radius: 3px; overflow: hidden; }
+.wt-progress-bar { width: 0; height: 100%; background: var(--accent); transition: width .25s ease; }
+.wt-js .wt-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .5rem; }
+.wt-js .wt-hint { display: block; margin: 0 0 1rem; color: var(--muted); font-size: .9rem; }
+.wt-js .wt-actions { display: block; margin: 1rem 0 0; }
+.wt-status { flex: 1 1 12rem; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.wt-button {
+  font: inherit;
+  padding: .45rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+}
+.wt-button:hover { border-color: var(--accent); }
+.wt-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wt-button[aria-disabled="true"] { opacity: .45; cursor: default; }
+.wt-button:focus-visible, .wt-list a:focus-visible, .wt-target:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wt-heading:focus { outline: none; }
+.wt-slide {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 0 0 1.25rem;
+}
+.wt-slide[hidden] { display: none; }
+.wt-slide > h2 { margin-top: 0; }
+.wt-slide .note { border: 1px solid var(--border); border-left: 4px solid var(--note); }
+.wt-slide .note-tip { border-left-color: var(--tip); }
+.wt-slide .note-warning { border-left-color: var(--warning); }
+.wt-section { margin: 0 0 .35rem; color: var(--muted); font-size: .85rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-figure .hotspot-frame { display: block; width: fit-content; }
+.wt-target {
+  position: absolute;
+  z-index: 4;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: -1.375rem 0 0 -1.375rem;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(0, 0, 0, .25);
+  cursor: pointer;
+}
+.wt-target::before, .wt-target::after { content: ""; position: absolute; border-radius: 50%; }
+.wt-target::before { inset: 0; background: var(--accent); opacity: .2; }
+.wt-target::after { inset: -3px; border: 3px solid var(--accent); animation: wt-pulse 1.6s ease-out infinite; }
+.wt-target:hover::before, .wt-target:focus::before { opacity: .35; }
+@keyframes wt-pulse {
+  from { transform: scale(1); opacity: .9; }
+  to { transform: scale(2.2); opacity: 0; }
+}
+.wt-nav { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; }
+.wt-list { list-style: none; margin: 0; padding: 0; }
+.wt-list-section { margin: .75rem 0 .25rem; padding: 0 .5rem; color: var(--muted); font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-list a { display: flex; gap: .5rem; padding: .3rem .5rem; border-radius: 6px; color: var(--text); text-decoration: none; line-height: 1.4; }
+.wt-list a:hover { background: var(--code-bg); }
+.wt-list a[aria-current] { background: var(--accent); color: #fff; }
+.wt-list-number { flex: none; min-width: 1.25rem; font-variant-numeric: tabular-nums; opacity: .75; }
+.wt-list-text { overflow-wrap: anywhere; }
+@media (max-width: 52rem) {
+  .wt-layout { grid-template-columns: minmax(0, 1fr); }
+  .wt-nav { position: static; max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wt-progress-bar { transition: none; }
+  .wt-target::after { animation: none; transform: scale(1.4); opacity: .5; }
+}
+@media print {
+  .wt-layout { display: block; }
+  .wt-progress, .wt-controls, .wt-hint, .wt-actions, .wt-nav, .wt-target { display: none !important; }
+  .wt-slide[hidden] { display: block; }
+}
+</style>
+</head>
+<body>
+<main class="guide wt" id="wt">
+<header class="guide-header">
+<h1>Rotate an API key</h1>
+<p class="summary">Replace a leaked or expiring API key without downtime.</p>
+</header>
+<div class="wt-layout">
+<div class="wt-main">
+<div class="wt-progress" aria-hidden="true"><div class="wt-progress-bar" id="wt-bar"></div></div>
+<div class="wt-controls">
+<button type="button" class="wt-button" data-back><span aria-hidden="true">← </span>Back</button>
+<p class="wt-status" id="wt-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<button type="button" class="wt-button wt-primary" data-next>Next<span aria-hidden="true"> →</span></button>
+<button type="button" class="wt-button" data-restart>Restart</button>
+</div>
+<p class="wt-hint">Click the highlighted spot, or press → or Enter, to continue; ← goes back.</p>
+<section class="wt-slide wt-intro" id="wt-slide-0" aria-labelledby="wt-slide-0-title" data-status="Before you start">
+<h2 class="wt-heading" id="wt-slide-0-title" tabindex="-1">Before you start</h2>
+<div class="intro">
+<p>Rotate keys every <em>90 days</em>, or right away if one leaks.</p>
+</div>
+<div class="prerequisites">
+<h3>Prerequisites</h3>
+<p>Admin access to the console.</p>
+</div>
+<p class="wt-actions"><button type="button" class="wt-button wt-primary" data-next>Start<span aria-hidden="true"> →</span></button></p>
+</section>
+<section class="wt-slide wt-step" id="wt-slide-1" aria-labelledby="wt-slide-1-title" data-status="Step 1 of 5: Open Settings → API keys">
+<h2 class="step-title wt-heading" id="wt-slide-1-title" tabindex="-1"><span class="step-number" aria-label="Step 1">1</span><span class="step-text">Open <strong>Settings → API keys</strong></span></h2>
+<aside class="note note-warning" role="note">
+<p class="note-label">Warning</p>
+<p>Creating a new key <strong>revokes</strong> the old one immediately. Update these first:</p>
+<ol>
+<li>The CI secret</li>
+<li>Local <code>.env</code> files</li>
+</ol>
+</aside>
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="32" height="20" alt="Open Settings → API keys">
+</div>
+</figure>
+</section>
+<section class="wt-slide wt-step" id="wt-slide-2" aria-labelledby="wt-slide-2-title" data-status="Step 2 of 5: Enter your password to confirm">
+<h2 class="step-title wt-heading" id="wt-slide-2-title" tabindex="-1"><span class="step-number" aria-label="Step 2">2</span><span class="step-text">Enter your password to confirm</span></h2>
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="64" height="40" alt="Enter your password to confirm">
+<a class="wt-target" href="#wt-slide-3" style="left:25%;top:25%" data-next aria-label="Click here to continue"></a>
+</div>
+</figure>
+<div class="step-description">
+<p>Password input is masked while recording.</p>
+</div>
+</section>
+<section class="wt-slide wt-step" id="wt-slide-3" aria-labelledby="wt-slide-3-title" data-status="Step 3 of 5: Click Create key and copy the new key">
+<h2 class="step-title wt-heading" id="wt-slide-3-title" tabindex="-1"><span class="step-number" aria-label="Step 3">3</span><span class="step-text">Click <strong>Create key</strong> and copy the new key</span></h2>
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="64" height="20" alt="Click Create key and copy the new key">
+</div>
+</figure>
+<div class="step-description">
+<p>The key is shown <strong>once</strong>. Store it in your password manager; see <a href="https://example.com/docs/keys" rel="noopener noreferrer">Managing keys</a>.</p>
+</div>
+</section>
+<section class="wt-slide wt-step" id="wt-slide-4" aria-labelledby="wt-slide-4-title" data-status="Step 4 of 5: Drag the new key to Production">
+<h2 class="step-title wt-heading" id="wt-slide-4-title" tabindex="-1"><span class="step-number" aria-label="Step 4">4</span><span class="step-text">Drag the new key to <strong>Production</strong></span></h2>
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="64" height="40" alt="Drag the new key to Production">
+<a class="wt-target" href="#wt-slide-5" style="left:15.625%;top:25%" data-next aria-label="Click here to continue"></a>
+</div>
+</figure>
+</section>
+<section class="wt-slide wt-step" id="wt-slide-5" aria-labelledby="wt-slide-5-title" data-status="Step 5 of 5: Check that the key works">
+<h2 class="step-title wt-heading" id="wt-slide-5-title" tabindex="-1"><span class="step-number" aria-label="Step 5">5</span><span class="step-text">Check that the key works</span></h2>
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="data:image/png;base64,…" width="64" height="40" alt="Check that the key works">
+</div>
+</figure>
+<div class="step-description">
+<p>Run this in Terminal:</p>
+<p><code>curl -H &quot;x-api-key: $KEY&quot; https://api.example.com/v1/ping</code></p>
+<p>It should print <em>pong</em>.</p>
+</div>
+</section>
+<section class="wt-slide wt-done" id="wt-slide-6" aria-labelledby="wt-slide-6-title" data-status="Done">
+<h2 class="wt-heading" id="wt-slide-6-title" tabindex="-1">Done</h2>
+<p>You have reached the end of this guide.</p>
+<p class="wt-actions"><button type="button" class="wt-button wt-primary" data-restart>Restart</button></p>
+</section>
+</div>
+<nav class="wt-nav" aria-label="Steps">
+<ol class="wt-list">
+<li><a href="#wt-slide-0" data-slide="0"><span class="wt-list-text">Before you start</span></a></li>
+<li><a href="#wt-slide-1" data-slide="1"><span class="wt-list-number">1</span><span class="wt-list-text">Open Settings → API keys</span></a></li>
+<li><a href="#wt-slide-2" data-slide="2"><span class="wt-list-number">2</span><span class="wt-list-text">Enter your password to confirm</span></a></li>
+<li><a href="#wt-slide-3" data-slide="3"><span class="wt-list-number">3</span><span class="wt-list-text">Click Create key and copy the new key</span></a></li>
+<li><a href="#wt-slide-4" data-slide="4"><span class="wt-list-number">4</span><span class="wt-list-text">Drag the new key to Production</span></a></li>
+<li><a href="#wt-slide-5" data-slide="5"><span class="wt-list-number">5</span><span class="wt-list-text">Check that the key works</span></a></li>
+<li><a href="#wt-slide-6" data-slide="6"><span class="wt-list-text">Done</span></a></li>
+</ol>
+</nav>
+</div>
+</main>
+<script>(function () {
+  "use strict";
+  var root = document.getElementById("wt");
+  if (!root) return;
+  var slides = Array.prototype.slice.call(root.querySelectorAll(".wt-slide"));
+  var links = Array.prototype.slice.call(root.querySelectorAll(".wt-list a[data-slide]"));
+  var bar = document.getElementById("wt-bar");
+  var status = document.getElementById("wt-status");
+  var backs = root.querySelectorAll(".wt-controls [data-back]");
+  var nexts = root.querySelectorAll(".wt-controls [data-next]");
+  var current = 0;
+  if (!slides.length) return;
+  document.documentElement.classList.add("wt-js");
+
+  function setDisabled(buttons, disabled) {
+    for (var i = 0; i < buttons.length; i++) {
+      if (disabled) buttons[i].setAttribute("aria-disabled", "true");
+      else buttons[i].removeAttribute("aria-disabled");
+    }
+  }
+
+  // Shows slide `index`. Focus moves to its heading when `focus` is
+  // "content", or when it is "keep" and the focused element was hidden
+  // with the old slide; "none" leaves it (on load).
+  function show(index, focus) {
+    index = Math.max(0, Math.min(slides.length - 1, index));
+    var active = document.activeElement;
+    slides.forEach(function (slide, i) {
+      slide.hidden = i !== index;
+    });
+    links.forEach(function (link) {
+      if (Number(link.getAttribute("data-slide")) === index) link.setAttribute("aria-current", "step");
+      else link.removeAttribute("aria-current");
+    });
+    current = index;
+    var last = slides.length - 1;
+    bar.style.width = (last > 0 ? (index / last) * 100 : 100) + "%";
+    setDisabled(backs, index === 0);
+    setDisabled(nexts, index === last);
+    status.textContent = slides[index].getAttribute("data-status") || "";
+    var lost = !active || active === document.body || !active.offsetParent;
+    if (focus === "content" || (focus === "keep" && lost)) {
+      var heading = slides[index].querySelector(".wt-heading");
+      if (heading) heading.focus();
+    }
+    try {
+      history.replaceState(null, "", "#" + slides[index].id);
+    } catch (e) {
+      // Not allowed here (e.g. a sandboxed frame); the hash only helps reloads.
+    }
+  }
+
+  root.addEventListener("click", function (event) {
+    var el = event.target.closest("[data-next], [data-back], [data-restart], a[data-slide]");
+    if (!el || !root.contains(el)) return;
+    event.preventDefault();
+    if (el.getAttribute("aria-disabled") === "true") return;
+    if (el.hasAttribute("data-slide")) show(Number(el.getAttribute("data-slide")), "content");
+    else if (el.hasAttribute("data-restart")) show(0, "content");
+    else if (el.hasAttribute("data-back")) show(current - 1, "keep");
+    // Back and Next keep focus, so they can be pressed again; a target goes.
+    else show(current + 1, "keep");
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    var target = event.target;
+    // Enter activates focused controls and hotspots on its own.
+    var control = target.closest && target.closest("a, button, input, select, textarea, [role=button], [contenteditable]");
+    if (event.key === "ArrowRight" || (event.key === "Enter" && !control)) {
+      event.preventDefault();
+      if (current < slides.length - 1) show(current + 1, "keep");
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (current > 0) show(current - 1, "keep");
+    }
+  });
+
+  var start = slides.findIndex(function (slide) {
+    return "#" + slide.id === location.hash;
+  });
+  show(start < 0 ? 0 : start, "none");
+})();
+</script>
+</body>
+</html>
+<!-- warnings
+01M4WZCE2000000000000002R4 crop position unknown; showing the full screenshot
+-->

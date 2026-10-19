@@ -5,6 +5,11 @@ import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperS
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
   { format: "html", label: "HTML", detail: "A folder with one self-contained guide.html" },
+  {
+    format: "walkthrough",
+    label: "Interactive walkthrough",
+    detail: "A click-through guide.html, one step at a time",
+  },
   { format: "docx", label: "Word", detail: "One .docx file" },
   { format: "pdf", label: "PDF", detail: "One .pdf file" },
 ];
@@ -61,9 +66,30 @@ export function rememberPaper(paper: PaperSize, storage: Pick<Storage, "setItem"
   }
 }
 
-/** Markdown and HTML export into a folder; DOCX and PDF into one file. */
+/** Whether the Export dialog last showed the review details (on this Mac). */
+const REVIEW_DETAILS_KEY = "guiderecorder.exportReviewDetails";
+
+/** Whether to show the version, owner and review day, as chosen last time; off at first. */
+export function initialReviewDetails(storage: Pick<Storage, "getItem"> = localStorage): boolean {
+  try {
+    return storage.getItem(REVIEW_DETAILS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers the review details choice, also after a restart. */
+export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(REVIEW_DETAILS_KEY, String(on));
+  } catch {
+    // Not remembered; off next time.
+  }
+}
+
+/** Markdown and HTML (either kind) export into a folder; DOCX and PDF into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
-  return format === "md" || format === "html";
+  return format === "md" || format === "html" || format === "walkthrough";
 }
 
 /**
@@ -138,6 +164,7 @@ export async function runExport(
     overwrite: boolean;
     branding: ExportBranding;
     paper: PaperSize;
+    reviewDetails: boolean;
   },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
@@ -148,9 +175,17 @@ export async function runExport(
     };
   }
   try {
-    const { guideId, format, out, overwrite, branding, paper } = request;
+    const { guideId, format, out, overwrite, branding, paper, reviewDetails } = request;
     const accent = branding.accent?.trim() || null;
-    const result = await deps.api.exportGuide(guideId, format, out, overwrite, { logo: branding.logo, accent }, paper);
+    const result = await deps.api.exportGuide(
+      guideId,
+      format,
+      out,
+      overwrite,
+      { logo: branding.logo, accent },
+      paper,
+      reviewDetails,
+    );
     return { ok: true, result };
   } catch (error) {
     const exists = !!error && typeof error === "object" && (error as AppError).kind === "exists";

@@ -1,4 +1,4 @@
-import type { GuideListItem } from "@/lib/types";
+import type { GuideListItem, GuideStatus, ReviewFields } from "@/lib/types";
 
 /** How the library sidebar orders guides (a search orders by best match instead). */
 export type GuideSort = "updated" | "created" | "title";
@@ -40,6 +40,77 @@ export function libraryTags(guides: GuideListItem[]): string[] {
 export function hasTag(guide: GuideListItem, tag: string): boolean {
   const key = tag.trim().toLowerCase();
   return guide.tags.some((t) => t.trim().toLowerCase() === key);
+}
+
+export const GUIDE_STATUSES: { value: GuideStatus; label: string }[] = [
+  { value: "draft", label: "Draft" },
+  { value: "inReview", label: "In review" },
+  { value: "published", label: "Published" },
+  { value: "needsUpdate", label: "Needs update" },
+];
+
+/** The sidebar's status filter: a status, or guides whose review is overdue. */
+export type StatusFilter = GuideStatus | "overdue";
+
+/** Today in local time, `YYYY-MM-DD` (what "Mark reviewed" records). */
+export function localToday(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** `YYYY-MM-DD` plus `months`, on the same day or the month's last day (as core does); null if `day` is not a date. */
+export function addMonths(day: string, months: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  const total = Number(m[1]) * 12 + Number(m[2]) - 1 + months;
+  const year = Math.floor(total / 12);
+  const month = (total % 12) + 1;
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${pad(year, 4)}-${pad(month)}-${pad(Math.min(Number(m[3]), last))}`;
+}
+
+/**
+ * When the next review is due (core `ReviewInfo::review_due`): the last
+ * review day, or the day the guide was made (UTC) if it never was, plus
+ * the interval. Null without an interval.
+ */
+export function reviewDue(guide: ReviewFields & { createdAt: string }): string | null {
+  const months = guide.reviewIntervalMonths ?? 0;
+  if (!(months > 0)) return null;
+  let since = guide.lastReviewed ?? null;
+  if (!since) {
+    const created = Date.parse(guide.createdAt);
+    if (Number.isNaN(created)) return null;
+    since = new Date(created).toISOString().slice(0, 10);
+  }
+  return addMonths(since, months);
+}
+
+/** Whether the review is past its due day on `today` (`YYYY-MM-DD`); due today is not overdue yet. */
+export function isReviewOverdue(guide: ReviewFields & { createdAt: string }, today: string): boolean {
+  const due = reviewDue(guide);
+  return due !== null && today > due;
+}
+
+/** Whether a guide passes the status filter on `today`. */
+export function matchesStatus(guide: GuideListItem, filter: StatusFilter, today: string): boolean {
+  return filter === "overdue" ? isReviewOverdue(guide, today) : guide.status === filter;
+}
+
+/** Every owner in `guides`, once each ignoring case (first spelling wins), A–Z. */
+export function libraryOwners(guides: GuideListItem[]): string[] {
+  const owners = new Map<string, string>();
+  for (const guide of guides) {
+    const owner = guide.owner?.trim();
+    if (owner && !owners.has(owner.toLowerCase())) owners.set(owner.toLowerCase(), owner);
+  }
+  return [...owners.values()].sort(collator.compare);
+}
+
+/** Whether `owner` owns a guide, ignoring case. */
+export function hasOwner(guide: GuideListItem, owner: string): boolean {
+  return guide.owner?.trim().toLowerCase() === owner.trim().toLowerCase();
 }
 
 /** The last part of a folder path (`Work/Team` → `Team`). */

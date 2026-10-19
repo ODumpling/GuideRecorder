@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundleIdError, formatHotkey, hotkeyFromEvent, inRange, isBundleId, isHotkey, isLanguage, isModelId, TYPING_IDLE_MS } from "@/settings/validate";
+import { bundleIdError, formatHotkey, hotkeyFromEvent, inRange, isBaseUrl, isBundleId, isHotkey, isLanguage, isModelId, TYPING_IDLE_MS } from "@/settings/validate";
 
 const key = (code: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) => ({
   code,
@@ -19,6 +19,13 @@ describe("settings checks (mirroring settings.rs)", () => {
   it("other values", () => {
     expect(isModelId("claude-sonnet-5-5")).toBe(true);
     expect(isModelId("a b")).toBe(false);
+    expect(isModelId("qwen3-vl:8b") && isModelId("lmstudio-community/gemma-3-12b")).toBe(true);
+    for (const ok of ["", "https://api.openai.com/v1", "http://localhost:11434/v1", "http://192.168.1.5:8080"]) {
+      expect(isBaseUrl(ok), ok).toBe(true);
+    }
+    for (const bad of ["localhost:11434", "ftp://x", "https://", "https:///v1", "https://a b", "https://x/v1?key=1"]) {
+      expect(isBaseUrl(bad), bad).toBe(false);
+    }
     expect(isLanguage("") && isLanguage("de-CH") && isLanguage("zh-Hant-TW")).toBe(true);
     expect(isLanguage("en_US") || isLanguage("-en")).toBe(false);
     expect(isBundleId("com.1password.1password")).toBe(true);

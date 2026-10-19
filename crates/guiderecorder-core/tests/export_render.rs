@@ -362,6 +362,47 @@ fn hotspots_through_a_click_crop_and_on_placeholders() {
 }
 
 #[test]
+fn click_point_is_placed_through_crop_and_scaling() {
+    let bundle = Bundle::new();
+    let full = screenshot();
+    // A 64×40 crop with its top-left at (53, 30); the click is at its
+    // centre (85, 50), and nothing is drawn on it.
+    let crop = imageops::crop_imm(&full, 53, 30, 64, 40).to_image();
+    let mut step = bundle.step(&full, Some(&crop), Some(point(69.0, 40.0)), Vec::new());
+    // The default skips the lookup: the crop shows, the point does not.
+    let rendered = bundle.render(&step);
+    assert_eq!(rendered.width, 64);
+    assert_eq!(rendered.point, None);
+
+    let locate = ImageOptions {
+        locate_point: true,
+        max_width: Some(32),
+        ..ImageOptions::default()
+    };
+    // Off-centre point: only the stored rect places the crop.
+    step.image.crop_rect = Some(rect(53.0, 30.0, 64.0, 40.0));
+    let rendered = render_step_image(&bundle.handle, &step, &locate);
+    assert_eq!((rendered.width, rendered.height), (32, 20));
+    assert_eq!(rendered.warnings, []);
+    assert_eq!(rendered.point, Some(point(0.25, 0.25)));
+    // Without it, the crop is located around the point.
+    step.image.crop_rect = None;
+    step.point = Some(point(85.0, 50.0));
+    let rendered = render_step_image(&bundle.handle, &step, &locate);
+    assert_eq!(rendered.point, Some(point(0.5, 0.5)));
+
+    // On the full screenshot; outside the view or on a placeholder, none.
+    step.image.show = ImageShow::Full;
+    let rendered = render_step_image(&bundle.handle, &step, &ImageOptions::default());
+    assert_eq!(rendered.point, Some(point(85.0 / 160.0, 0.5)));
+    step.point = Some(point(400.0, 50.0));
+    assert_eq!(bundle.render(&step).point, None);
+    step.point = Some(point(85.0, 50.0));
+    step.image.full = "steps/missing.webp".into();
+    assert_eq!(bundle.render(&step).point, None);
+}
+
+#[test]
 fn unusable_hotspots_warn_with_or_without_markers() {
     let bundle = Bundle::new();
     let empty = hotspot(rect(10.0, 10.0, 0.0, 5.0), "Empty");

@@ -191,6 +191,10 @@
   if data.date != none {
     text(fill: muted, data.date)
   }
+  if data.details != none {
+    if data.date != none { linebreak() }
+    text(size: 9.5pt, fill: muted, data.details)
+  }
   pagebreak()
 }
 

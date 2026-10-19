@@ -1,8 +1,15 @@
 import { lazy, Suspense, useId, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { editedGuideFields, setGuideField, type GuideTextField } from "@/editor/commands";
+import {
+  editedGuideFields,
+  setGuideField,
+  setReviewField,
+  type GuideTextField,
+  type ReviewField,
+} from "@/editor/commands";
 import { editorStore, useEditor } from "@/editor/editor";
-import type { Guide } from "@/lib/types";
+import { GUIDE_STATUSES, isReviewOverdue, localToday, reviewDue } from "@/editor/library";
+import type { Guide, GuideStatus, ReviewFields } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
 import { addTags, removeTag } from "@/text/tags";
@@ -147,6 +154,7 @@ function TagsField({ id, tags, readOnly }: { id: string; tags: string[]; readOnl
  * The centre pane when no item is selected: the guide's intro,
  * prerequisites, summary and tags, written by hand. Each edit is undoable
  * and autosaved, and marks the field edited, so Write with AI keeps it.
+ * Below them: owner, status, version and review schedule.
  */
 export function GuideDetails() {
   const guide = useEditor((s) => s.doc?.guide);
@@ -193,6 +201,120 @@ export function GuideDetails() {
         <FieldLabel id={`${id}-tags`} label="Tags" edited={edited.has("tags")} hint="Press Enter or comma to add" />
         <TagsField id={`${id}-tags`} tags={guide.tags} readOnly={readOnly} />
       </Field>
+      <ReviewSection id={`${id}-review`} guide={guide} readOnly={readOnly} />
     </div>
+  );
+}
+
+/** Sets an owner, status, version or review field through the store (undoable, autosaved). */
+function setReview<K extends ReviewField>(key: K, value: ReviewFields[K]): boolean {
+  const { doc, dispatch } = editorStore.getState();
+  return !!doc && dispatch(setReviewField(doc.guide, key, value));
+}
+
+const INPUT =
+  "h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
+
+/** Who owns the guide, its status and version, and when it is reviewed. */
+function ReviewSection({ id, guide, readOnly }: { id: string; guide: Guide; readOnly: boolean }) {
+  const today = localToday();
+  const due = reviewDue(guide);
+  const overdue = isReviewOverdue(guide, today);
+  const small = (label: string, field: string) => (
+    <label htmlFor={`${id}-${field}`} className="text-xs text-muted-foreground">
+      {label}
+    </label>
+  );
+  return (
+    <Field>
+      <FieldLabel
+        label="Ownership and review"
+        edited={false}
+        hint={
+          due ? (overdue ? `Review overdue since ${due}` : `Next review due ${due}`) : "Shown in the library and exports"
+        }
+      />
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 sm:grid-cols-3">
+        <div className="flex flex-col gap-1">
+          {small("Owner", "owner")}
+          <input
+            id={`${id}-owner`}
+            className={INPUT}
+            placeholder="Who keeps it current"
+            value={guide.owner ?? ""}
+            disabled={readOnly}
+            onChange={(e) => setReview("owner", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          {small("Status", "status")}
+          <select
+            id={`${id}-status`}
+            className={INPUT}
+            value={guide.status ?? ""}
+            disabled={readOnly}
+            onChange={(e) => setReview("status", (e.target.value || null) as GuideStatus | null)}
+          >
+            <option value="">Not set</option>
+            {GUIDE_STATUSES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          {small("Version", "version")}
+          <input
+            id={`${id}-version`}
+            className={INPUT}
+            placeholder="e.g. 1.2"
+            value={guide.version ?? ""}
+            disabled={readOnly}
+            onChange={(e) => setReview("version", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          {small("Last reviewed", "reviewed")}
+          <div className="flex gap-1.5">
+            <input
+              id={`${id}-reviewed`}
+              type="date"
+              className={INPUT}
+              value={guide.lastReviewed ?? ""}
+              disabled={readOnly}
+              onChange={(e) => setReview("lastReviewed", e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={readOnly || guide.lastReviewed === today}
+              title="Mark the guide reviewed today"
+              className="h-8 shrink-0 rounded-md border border-input px-2 text-xs hover:bg-accent disabled:opacity-50"
+              onClick={() => setReview("lastReviewed", today)}
+            >
+              Today
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          {small("Review every (months)", "interval")}
+          <input
+            id={`${id}-interval`}
+            type="number"
+            min={0}
+            max={120}
+            step={1}
+            className={INPUT}
+            placeholder="No schedule"
+            value={guide.reviewIntervalMonths ?? ""}
+            disabled={readOnly}
+            onChange={(e) => {
+              const months = Math.trunc(Number(e.target.value));
+              setReview("reviewIntervalMonths", e.target.value && months > 0 ? Math.min(months, 120) : null);
+            }}
+          />
+        </div>
+      </div>
+    </Field>
   );
 }

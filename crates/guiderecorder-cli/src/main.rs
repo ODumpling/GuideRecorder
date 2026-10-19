@@ -34,6 +34,7 @@ use guiderecorder_core::index::{
     IndexedGuide, ListFilter, Source, StepHit, SyncReport,
 };
 use guiderecorder_core::library::{Library, LoadedGuide};
+use guiderecorder_core::model::{local_today, GuideStatus, NaiveDate};
 use guiderecorder_core::{Ulid, SCHEMA_VERSION};
 use serde_json::{json, Value};
 
@@ -69,6 +70,10 @@ enum Command {
         /// Only guides matching these words, best match first.
         #[arg(long, value_name = "Q")]
         query: Option<String>,
+        /// Only guides whose review is overdue: past `lastReviewed` (or
+        /// creation) plus `reviewIntervalMonths`, in local time.
+        #[arg(long)]
+        overdue: bool,
         #[command(flatten)]
         output: Output,
     },
@@ -113,11 +118,13 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Export a guide as Markdown, HTML, DOCX or PDF.
+    /// Export a guide as Markdown, HTML, an interactive HTML walkthrough,
+    /// DOCX or PDF.
     ///
     /// Reads the guide without changing the library. Markdown and HTML
     /// write into the `--out` folder (`guide.md` plus `images/`, or
-    /// `guide.html`); DOCX and PDF write the `--out` file. Image problems
+    /// `guide.html`; a walkthrough is also one `guide.html`); DOCX and PDF
+    /// write the `--out` file. Image problems
     /// become placeholders and warnings, not errors.
     Export(ExportArgs),
 }
@@ -129,7 +136,7 @@ struct ExportArgs {
     guide: String,
     #[arg(long, value_enum)]
     format: Format,
-    /// Output folder (md, html) or file (docx, pdf).
+    /// Output folder (md, html, walkthrough) or file (docx, pdf).
     #[arg(long, value_name = "PATH")]
     out: PathBuf,
     /// Replace an earlier export at `--out`.
@@ -144,6 +151,10 @@ struct ExportArgs {
     /// Paper size of a DOCX or PDF export.
     #[arg(long, value_enum, default_value_t = Paper::A4)]
     paper: Paper,
+    /// Show the guide's version, owner and last review day (those set)
+    /// under the summary, or on the PDF cover.
+    #[arg(long)]
+    review_details: bool,
     /// Exit with 1 when the export has warnings or notes (the export is
     /// still written).
     #[arg(long)]
@@ -156,6 +167,8 @@ struct ExportArgs {
 enum Format {
     Md,
     Html,
+    /// Interactive click-through HTML, one step at a time.
+    Walkthrough,
     Docx,
     Pdf,
 }
@@ -180,6 +193,7 @@ impl Format {
         match self {
             Self::Md => "md",
             Self::Html => "html",
+            Self::Walkthrough => "walkthrough",
             Self::Docx => "docx",
             Self::Pdf => "pdf",
         }
@@ -219,18 +233,27 @@ fn is_broken_pipe(e: &anyhow::Error) -> bool {
 
 fn run(cli: Cli, out: &mut impl Write) -> Result<ExitCode> {
     match &cli.command {
-        Command::List { tag, query, output } => {
+        Command::List {
+            tag,
+            query,
+            overdue,
+            output,
+        } => {
             let library = open_library(&cli)?;
             let filter = ListFilter {
                 tag: tag.clone(),
                 query: query.clone(),
                 limit: None,
             };
-            let (guides, source) = match index_path(&cli) {
+            let (mut guides, source) = match index_path(&cli) {
                 Some(path) => list_with_fallback(path, &library, &filter)?,
                 None => (list_library(&library, &filter)?, Source::Scan),
             };
-            print_list(out, &guides, source, output.json)?;
+            let today = local_today();
+            if *overdue {
+                guides.retain(|g| g.is_review_overdue(today));
+            }
+            print_list(out, &guides, source, today, output.json)?;
         }
         Command::Search {
             query,
@@ -368,7 +391,8 @@ fn path_str(path: &Path) -> String {
 // ---------------------------------------------------------------------------
 // list / search
 
-fn guide_json(guide: &IndexedGuide) -> Value {
+fn guide_json(guide: &IndexedGuide, today: NaiveDate) -> Value {
+    let review = &guide.review;
     json!({
         "id": guide.id.to_string(),
         "path": path_str(&guide.path),
@@ -379,6 +403,13 @@ fn guide_json(guide: &IndexedGuide) -> Value {
         "createdAt": guide.created_at.to_rfc3339(),
         "updatedAt": guide.updated_at.to_rfc3339(),
         "folder": guide.folder,
+        "owner": review.owner,
+        "status": review.status.map(GuideStatus::as_str),
+        "version": review.version,
+        "lastReviewed": review.last_reviewed.map(|d| d.to_string()),
+        "reviewIntervalMonths": review.review_interval_months,
+        "reviewDue": guide.review_due().map(|d| d.to_string()),
+        "reviewOverdue": guide.is_review_overdue(today),
         "readOnly": guide.read_only,
         "duplicateOf": guide.duplicate_of.as_deref().map(path_str),
     })
@@ -388,12 +419,13 @@ fn print_list(
     out: &mut impl Write,
     guides: &[IndexedGuide],
     source: Source,
+    today: NaiveDate,
     as_json: bool,
 ) -> io::Result<()> {
     if as_json {
         let value = json!({
             "source": source_str(source),
-            "guides": guides.iter().map(guide_json).collect::<Vec<_>>(),
+            "guides": guides.iter().map(|g| guide_json(g, today)).collect::<Vec<_>>(),
         });
         writeln!(out, "{value:#}")?;
         return Ok(());
@@ -413,6 +445,15 @@ fn print_list(
         }
         if guide.duplicate_of.is_some() {
             line.push_str("  [duplicate]");
+        }
+        if guide.review.status == Some(GuideStatus::NeedsUpdate) {
+            line.push_str("  [needs update]");
+        }
+        if let Some(due) = guide
+            .review_due()
+            .filter(|_| guide.is_review_overdue(today))
+        {
+            line.push_str(&format!("  [review overdue since {due}]"));
         }
         writeln!(out, "{line}")?;
         writeln!(out, "    {}  {}", guide.id, guide.path.display())?;
@@ -670,6 +711,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     let overwrite = args.overwrite;
     let timestamp = Some(guide.updated_at);
     let paper = args.paper.into();
+    let review_details = args.review_details;
     // The md and html writers create their folder; match that for files.
     if matches!(args.format, Format::Docx | Format::Pdf) {
         if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -682,14 +724,22 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             let opts = md::MdOptions {
                 overwrite,
                 branding,
+                review_details,
                 ..md::MdOptions::default()
             };
             md::export(&render, &handle, out, &opts)?
         }
-        Format::Html => {
+        Format::Html | Format::Walkthrough => {
+            let mode = if args.format == Format::Walkthrough {
+                html::HtmlMode::Walkthrough
+            } else {
+                html::HtmlMode::Document
+            };
             let opts = html::HtmlOptions {
+                mode,
                 overwrite,
                 branding,
+                review_details,
                 ..html::HtmlOptions::default()
             };
             html::export(&render, &handle, out, &opts)?
@@ -700,6 +750,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 timestamp,
                 paper,
                 branding,
+                review_details,
                 ..docx::DocxOptions::default()
             };
             docx::export(&render, &handle, out, &opts)?
@@ -710,6 +761,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 timestamp,
                 paper,
                 branding,
+                review_details,
                 ..pdf::PdfOptions::default()
             };
             pdf::export(&render, &handle, out, &opts)?

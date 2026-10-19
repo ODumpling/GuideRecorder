@@ -236,15 +236,24 @@ fn list_json_shape() {
             "duplicateOf",
             "folder",
             "id",
+            "lastReviewed",
+            "owner",
             "path",
             "readOnly",
+            "reviewDue",
+            "reviewIntervalMonths",
+            "reviewOverdue",
+            "status",
             "stepCount",
             "summary",
             "tags",
             "title",
-            "updatedAt"
+            "updatedAt",
+            "version"
         ]
     );
+    assert_eq!(rotate["owner"], Value::Null);
+    assert_eq!(rotate["reviewOverdue"], false);
     assert_eq!(rotate["id"], "01M4WZCE2000000000000002R0");
     assert_eq!(
         rotate["tags"],
@@ -255,6 +264,74 @@ fn list_json_shape() {
     assert!(rotate["stepCount"].as_u64().unwrap() > 0);
     assert!(rotate["path"].as_str().unwrap().ends_with(ROTATE));
     assert_eq!(rotate["folder"], "");
+}
+
+/// Sets top-level `guide.json` fields of a fixture bundle.
+fn set_fields(bundle: &Path, fields: Value) {
+    let path = bundle.join("guide.json");
+    let mut guide: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for (key, value) in fields.as_object().unwrap() {
+        guide[key] = value.clone();
+    }
+    fs::write(&path, serde_json::to_vec_pretty(&guide).unwrap()).unwrap();
+}
+
+#[test]
+fn list_shows_review_fields_and_filters_overdue() {
+    let fx = Fixture::new();
+    set_fields(
+        &fx.bundle(ROTATE),
+        serde_json::json!({
+            "owner": "Security team",
+            "status": "needsUpdate",
+            "version": "2.1",
+            "lastReviewed": "2000-01-31",
+            "reviewIntervalMonths": 1,
+        }),
+    );
+    // Reviewed "in the future": never overdue whatever today is.
+    set_fields(
+        &fx.bundle(CALENDAR),
+        serde_json::json!({ "lastReviewed": "2999-01-01", "reviewIntervalMonths": 12 }),
+    );
+    for _ in 0..2 {
+        let value = fx.json(&["list", "--overdue", "--json"]);
+        assert_eq!(titles(&value["guides"]), ["Rotate an API key"]);
+        let rotate = &value["guides"][0];
+        assert_eq!(rotate["owner"], "Security team");
+        assert_eq!(rotate["status"], "needsUpdate");
+        assert_eq!(rotate["version"], "2.1");
+        assert_eq!(rotate["lastReviewed"], "2000-01-31");
+        assert_eq!(rotate["reviewIntervalMonths"], 1);
+        assert_eq!(rotate["reviewDue"], "2000-02-29");
+        assert_eq!(rotate["reviewOverdue"], true);
+
+        let text = stdout(&fx.run(&["list", "--overdue"]));
+        assert!(
+            text.contains("[needs update]  [review overdue since 2000-02-29]"),
+            "{text}"
+        );
+        let all = fx.json(&["list", "--json"]);
+        assert_eq!(all["guides"].as_array().unwrap().len(), 4);
+        // Then again through the index.
+        assert_success(&fx.run(&["reindex"]));
+    }
+}
+
+#[test]
+fn export_review_details_flag() {
+    let fx = Fixture::new();
+    set_fields(
+        &fx.bundle(ROTATE),
+        serde_json::json!({ "owner": "IT", "version": "3" }),
+    );
+    let plain = fx.out("plain");
+    let detailed = fx.out("detailed");
+    fx.export_json(ROTATE, "md", &plain, &[]);
+    fx.export_json(ROTATE, "md", &detailed, &["--review-details"]);
+    let read = |dir: &Path| fs::read_to_string(dir.join("guide.md")).unwrap();
+    assert!(!read(&plain).contains("Owner: IT"));
+    assert!(read(&detailed).contains("*Version: 3 · Owner: IT*"));
 }
 
 #[test]
@@ -678,6 +755,7 @@ fn export_each_format() {
     let cases = [
         ("md", "md", "guide.md"),
         ("html", "html", "guide.html"),
+        ("walkthrough", "walkthrough", "guide.html"),
         ("docx", "drucker.docx", ""),
         ("pdf", "drucker.pdf", ""),
     ];
@@ -705,6 +783,10 @@ fn export_each_format() {
             assert!(files.len() > 1, "md writes step images");
         }
     }
+    let document = fs::read_to_string(fx.out("html").join("guide.html")).unwrap();
+    assert!(!document.contains("<script>"));
+    let walkthrough = fs::read_to_string(fx.out("walkthrough").join("guide.html")).unwrap();
+    assert!(walkthrough.contains("<script>") && walkthrough.contains("script-src &#x27;sha256-"));
     let pdf = fs::read(fx.out("drucker.pdf")).unwrap();
     assert!(pdf.starts_with(b"%PDF-"));
     let docx = fs::read(fx.out("drucker.docx")).unwrap();

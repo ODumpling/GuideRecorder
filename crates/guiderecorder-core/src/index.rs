@@ -80,12 +80,12 @@ use crate::library::{
     bundle_paths, is_bundle_extension, GuideHandle, Library, LibraryError, GUIDE_FILE,
 };
 use crate::markdown;
-use crate::model::{Guide, Item, Shape};
+use crate::model::{Guide, Item, ReviewInfo, Shape};
 
 /// Version of the index layout. Bump it whenever the tables or what goes
 /// into them change; an index at another version is rebuilt by the writer
 /// and reported stale to readers.
-pub const FORMAT_VERSION: i64 = 5;
+pub const FORMAT_VERSION: i64 = 6;
 
 /// `PRAGMA application_id` of a GuideRecorder index ("GYix"). The writer only
 /// recreates files that carry it.
@@ -146,6 +146,7 @@ CREATE TABLE guides (
     step_count     INTEGER,
     updated_us     INTEGER,          -- microseconds since the Unix epoch
     created_us     INTEGER,
+    review         TEXT,             -- JSON ReviewInfo; NULL if no field is set
     duplicate_of   TEXT              -- canonical bundle holding the same id
 );
 CREATE INDEX guides_updated ON guides (updated_us);
@@ -213,6 +214,8 @@ pub struct IndexedGuide {
     /// The library folder holding the bundle (see
     /// [`crate::library::GuideSummary::folder`]).
     pub folder: String,
+    /// Owner, status, version and review schedule.
+    pub review: ReviewInfo,
     /// The guide is from a newer app or not yet migrated (see
     /// [`crate::library::LoadedGuide::read_only`]).
     pub read_only: bool,
@@ -227,6 +230,18 @@ impl IndexedGuide {
             id: self.id,
             path: self.path.clone(),
         }
+    }
+
+    /// When the next review is due (see [`ReviewInfo::review_due`]).
+    pub fn review_due(&self) -> Option<chrono::NaiveDate> {
+        self.review.review_due(self.created_at.date_naive())
+    }
+
+    /// Whether the review is overdue on `today` (see
+    /// [`ReviewInfo::is_review_overdue`]).
+    pub fn is_review_overdue(&self, today: chrono::NaiveDate) -> bool {
+        self.review
+            .is_review_overdue(self.created_at.date_naive(), today)
     }
 }
 
@@ -609,7 +624,7 @@ impl Index {
         let tag = filter.tag.as_deref().map(str::to_lowercase);
         let limit = sql_limit(filter.limit);
         let columns = "g.bundle, g.id, g.title, g.summary, g.tags, g.step_count, g.updated_us, \
-                       g.read_only, g.duplicate_of, g.created_us";
+                       g.read_only, g.duplicate_of, g.created_us, g.review";
         let tag_clause = "(?1 IS NULL OR EXISTS \
                           (SELECT 1 FROM json_each(g.tags_folded) WHERE value = ?1))";
         let match_query = filter.query.as_deref().map(fts_queries);
@@ -630,6 +645,7 @@ impl Index {
                     None => updated_at,
                 },
                 updated_at,
+                review: parse_review(row, 10)?,
                 read_only: row.get(7)?,
                 duplicate_of: row.get::<_, Option<String>>(8)?.map(|b| root.join(b)),
             });
@@ -1034,6 +1050,7 @@ pub fn list_library(library: &Library, filter: &ListFilter) -> Result<Vec<Indexe
                 created_at: summary.created_at,
                 updated_at: summary.updated_at,
                 folder: summary.folder,
+                review: summary.review,
                 read_only,
                 duplicate_of: summary.duplicate_of,
             },
@@ -1346,8 +1363,9 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
     let folded: Vec<String> = guide.tags.iter().map(|t| t.to_lowercase()).collect();
     tx.execute(
         "INSERT INTO guides (bundle, mtime_ns, size, id, schema_version, read_only, title,
-                             summary, tags, tags_folded, step_count, updated_us, created_us)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                             summary, tags, tags_folded, step_count, updated_us, created_us,
+                             review)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             bundle,
             mtime_ns,
@@ -1362,6 +1380,8 @@ fn insert(tx: &Transaction<'_>, bundle: &str, stamp: Option<Stamp>, entry: &Entr
             guide.steps().count() as i64,
             guide.updated_at.timestamp_micros(),
             guide.created_at.timestamp_micros(),
+            (guide.review != ReviewInfo::default())
+                .then(|| serde_json::to_string(&guide.review).expect("review serializes")),
         ],
     )?;
     let mut insert = tx.prepare_cached(
@@ -1688,6 +1708,13 @@ fn parse_ulid(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Ulid> {
 
 fn parse_tags(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<String>> {
     serde_json::from_str(&row.get::<_, String>(idx)?).map_err(|e| conversion_error(idx, e))
+}
+
+fn parse_review(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<ReviewInfo> {
+    match row.get::<_, Option<String>>(idx)? {
+        Some(json) => serde_json::from_str(&json).map_err(|e| conversion_error(idx, e)),
+        None => Ok(ReviewInfo::default()),
+    }
 }
 
 fn parse_micros(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<DateTime<Utc>> {

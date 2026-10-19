@@ -18,6 +18,7 @@
     "allow-create-folder",
     "allow-duplicate-guide",
     "allow-rename-guide",
+    "allow-mark-guide-reviewed",
     "allow-move-guide",
     "allow-reveal-in-library",
     "allow-step-image",

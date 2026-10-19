@@ -10,11 +10,19 @@ import {
   folderName,
   folderPaths,
   GUIDE_SORTS,
+  GUIDE_STATUSES,
+  hasOwner,
   hasTag,
+  isReviewOverdue,
+  libraryOwners,
   libraryTags,
+  localToday,
+  matchesStatus,
+  reviewDue,
   sortGuides,
   type FolderNode,
   type GuideSort,
+  type StatusFilter,
 } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -51,6 +59,12 @@ async function showGuideMenu(
           text: "Duplicate",
           enabled,
           action: () => void editorStore.getState().duplicateGuide(guide),
+        },
+        {
+          id: "mark-guide-reviewed",
+          text: "Mark Reviewed",
+          enabled: enabled && guide.lastReviewed !== localToday(),
+          action: () => void editorStore.getState().markReviewed(guide),
         },
         {
           id: "move-guide",
@@ -181,6 +195,10 @@ function GuideRow({
   onRename(guide: GuideListItem): void;
 }) {
   const opening = useEditor((s) => s.opening);
+  const today = localToday();
+  const overdue = isReviewOverdue(guide, today);
+  const needsUpdate = guide.status === "needsUpdate";
+  const badge = "shrink-0 rounded px-1 py-px text-[10px] leading-tight font-medium";
   return (
     <li>
       <button
@@ -198,9 +216,22 @@ function GuideRow({
           <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">{guide.title || "Untitled"}</span>
           {guide.readOnly && <Lock className="size-3 shrink-0 text-muted-foreground" />}
+          {needsUpdate && (
+            <span className={cn(badge, "bg-[var(--status-warning)]/15 text-[var(--status-warning)]")}>Needs update</span>
+          )}
+          {overdue && (
+            <span
+              className={cn(badge, "bg-[var(--status-danger)]/15 text-[var(--status-danger)]")}
+              title={`Review was due ${reviewDue(guide)}`}
+            >
+              Review overdue
+            </span>
+          )}
         </span>
         <span className="truncate pl-5 text-xs text-muted-foreground">
           {guide.stepCount} {guide.stepCount === 1 ? "step" : "steps"}
+          {guide.version && ` · v${guide.version}`}
+          {guide.owner && ` · ${guide.owner}`}
           {guide.tags.length > 0 && ` · ${guide.tags.join(", ")}`}
           {guide.summary && ` · ${guide.summary}`}
         </span>
@@ -284,6 +315,8 @@ export function LibrarySidebar() {
   const folders = useEditor((s) => s.folders);
   const sort = useEditor((s) => s.sort);
   const tag = useEditor((s) => s.tag);
+  const statusFilter = useEditor((s) => s.statusFilter);
+  const owner = useEditor((s) => s.owner);
   const listError = useEditor((s) => s.listError);
   const openError = useEditor((s) => s.openError);
   const [query, setQuery] = useState(() => editorStore.getState().query);
@@ -296,16 +329,25 @@ export function LibrarySidebar() {
   }, [query]);
 
   const tags = useMemo(() => libraryTags(guides), [guides]);
-  // A tag that no listed guide has any more (deleted, retagged) filters nothing out.
+  const owners = useMemo(() => libraryOwners(guides), [guides]);
+  // A tag or owner that no listed guide has any more (deleted, retagged) filters nothing out.
   const activeTag = tag && tags.some((t) => t.toLowerCase() === tag.toLowerCase()) ? tag : null;
+  const activeOwner = owner && owners.some((o) => o.toLowerCase() === owner.toLowerCase()) ? owner : null;
+  const today = localToday();
   // The query the list was made for (the input is debounced).
   const searching = useEditor((s) => s.query.trim() !== "");
+  const filtering = !!(activeTag || activeOwner || statusFilter);
   const tree = useMemo(() => {
-    const shown = activeTag ? guides.filter((g) => hasTag(g, activeTag)) : guides;
+    const shown = guides.filter(
+      (g) =>
+        (!activeTag || hasTag(g, activeTag)) &&
+        (!activeOwner || hasOwner(g, activeOwner)) &&
+        (!statusFilter || matchesStatus(g, statusFilter, today)),
+    );
     // A search lists best matches first; the sort applies to browsing.
     const ordered = searching ? shown : sortGuides(shown, sort);
-    return buildTree(ordered, folders, !searching && !activeTag);
-  }, [guides, folders, sort, activeTag, searching]);
+    return buildTree(ordered, folders, !searching && !filtering);
+  }, [guides, folders, sort, activeTag, activeOwner, statusFilter, today, filtering, searching]);
   const moveTargets = useMemo(() => folderPaths(folders, guides), [folders, guides]);
   const empty = tree.guides.length === 0 && tree.folders.length === 0;
 
@@ -370,6 +412,37 @@ export function LibrarySidebar() {
             </select>
           )}
         </div>
+        <div className="flex items-center gap-1.5">
+          <select
+            aria-label="Filter by status"
+            value={statusFilter ?? ""}
+            onChange={(e) => editorStore.getState().setStatusFilter((e.target.value || null) as StatusFilter | null)}
+            className={selectClass}
+          >
+            <option value="">Any status</option>
+            {GUIDE_STATUSES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+            <option value="overdue">Review overdue</option>
+          </select>
+          {owners.length > 0 && (
+            <select
+              aria-label="Filter by owner"
+              value={activeOwner ?? ""}
+              onChange={(e) => editorStore.getState().setOwner(e.target.value || null)}
+              className={selectClass}
+            >
+              <option value="">Any owner</option>
+              {owners.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
       {(listError || openError) && (
         <p className="px-3 pb-2 text-xs text-[var(--status-danger)]">{listError ?? openError}</p>
@@ -386,7 +459,7 @@ export function LibrarySidebar() {
         />
         {empty && !listError && (
           <li className="px-2 py-6 text-center text-sm text-muted-foreground">
-            {searching || activeTag ? "No matching guides" : "No guides yet"}
+            {searching || filtering ? "No matching guides" : "No guides yet"}
           </li>
         )}
       </ul>

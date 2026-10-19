@@ -1045,3 +1045,41 @@ fn guides_in_folders_are_indexed_listed_and_searched() {
     index.remove(&moved.path).unwrap();
     assert!(index.list(&tagged).unwrap().is_empty());
 }
+
+#[test]
+fn review_fields_are_indexed_and_listed() {
+    let fx = Fixture::new();
+    let mut index = fx.built_index();
+    let mut guide = Guide::new("Audit the firewall", "en");
+    guide.tags = vec!["Compliance".into()];
+    guide.review = ReviewInfo {
+        owner: Some("Security".into()),
+        status: Some(GuideStatus::Published),
+        version: Some("3".into()),
+        last_reviewed: chrono::NaiveDate::from_ymd_opt(2026, 1, 31),
+        review_interval_months: Some(1),
+    };
+    let handle = fx.library.create(&guide).unwrap();
+    index.update(&fx.library, &handle.path).unwrap();
+
+    let tagged = ListFilter {
+        tag: Some("compliance".into()),
+        ..ListFilter::default()
+    };
+    let due = chrono::NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+    for listed in [
+        index.list(&tagged).unwrap(),
+        list_library(&fx.library, &tagged).unwrap(),
+    ] {
+        assert_eq!(listed[0].review, guide.review);
+        assert_eq!(listed[0].review_due(), Some(due));
+        assert!(!listed[0].is_review_overdue(due));
+        assert!(listed[0].is_review_overdue(due.succ_opt().unwrap()));
+    }
+    // Guides without the fields list them unset.
+    let all = index.list(&ListFilter::default()).unwrap();
+    assert!(all
+        .iter()
+        .filter(|g| g.id != guide.id)
+        .all(|g| g.review == ReviewInfo::default() && g.review_due().is_none()));
+}

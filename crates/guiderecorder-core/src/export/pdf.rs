@@ -7,7 +7,8 @@
 //!
 //! - A cover page with the title ("Untitled" / "Unbenannt" when blank),
 //!   summary and date (the [`PdfOptions::timestamp`] day; no date without
-//!   one), and the optional [`CheckedBranding`] logo (top of the cover; the
+//!   one), the review details line when [`PdfOptions::review_details`] is
+//!   on (under the date), and the optional [`CheckedBranding`] logo (top of the cover; the
 //!   checked, upright PNG) and accent colour (cover rule and section
 //!   headings).
 //! - Every later page has the guide title as a header and "page / total" as
@@ -136,6 +137,9 @@ pub struct PdfOptions {
     /// language.
     pub labels: Option<Labels>,
     pub branding: CheckedBranding,
+    /// Show the version, owner and last review day on the cover (see
+    /// [`Labels::review_details`]); off by default.
+    pub review_details: bool,
 }
 
 impl Default for PdfOptions {
@@ -150,6 +154,7 @@ impl Default for PdfOptions {
             paper: Paper::default(),
             labels: None,
             branding: CheckedBranding::default(),
+            review_details: false,
         }
     }
 }
@@ -422,6 +427,11 @@ fn guide_data(
         "summary": clean(guide.summary.trim()),
         "lang": typst_lang(&guide.language),
         "date": date,
+        "details": opts
+            .review_details
+            .then(|| labels.review_details(&guide.review))
+            .flatten()
+            .map(|details| clean(&details)),
         "paper": match opts.paper {
             Paper::A4 => "a4",
             Paper::Letter => "us-letter",

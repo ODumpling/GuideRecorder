@@ -10,8 +10,10 @@ import {
   type AiApi,
 } from "@/lib/ipc";
 import type {
+  AiEndpoint,
   AiFinishedEvent,
   AiGuideEvent,
+  AiProviderKind,
   AiRewriteResult,
   AiStartedEvent,
   AiState,
@@ -653,19 +655,48 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
   return store;
 }
 
+/** The selected OpenAI-compatible provider's settings; null for Anthropic. */
+export function aiEndpoint(ai: Settings["ai"]): AiEndpoint | null {
+  switch (ai.provider) {
+    case "openAiCompatible":
+      return ai.openAiCompatible;
+    case "ollama":
+      return ai.ollama;
+    case "lmStudio":
+      return ai.lmStudio;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Whether the provider in `ai` is set up: Anthropic with a stored key; an
+ * OpenAI-compatible one with both models (and a base URL for a custom API),
+ * its key being optional.
+ */
+export async function aiReady(
+  ai: Settings["ai"],
+  apiKeyStored: (provider?: AiProviderKind) => Promise<boolean>,
+): Promise<boolean> {
+  const endpoint = aiEndpoint(ai);
+  if (!endpoint) return apiKeyStored("anthropic");
+  if (ai.provider === "openAiCompatible" && !endpoint.baseUrl.trim()) return false;
+  return !!endpoint.stepModel.trim() && !!endpoint.guideModel.trim();
+}
+
 /**
  * Writes the newly recorded guide `guideId` when the settings ask for it (AI on, auto
- * run on) and a key is set; otherwise does nothing, silently.
+ * run on) and the provider is set up (see `aiReady`); otherwise does nothing, silently.
  */
 export async function autoRun(
   store: AiStore,
   guideId: string,
   settings: Settings | null,
-  apiKeyStored: () => Promise<boolean>,
+  apiKeyStored: (provider?: AiProviderKind) => Promise<boolean>,
 ): Promise<boolean> {
   if (!settings?.ai.enabled || !settings.ai.autoRun) return false;
   try {
-    if (!(await apiKeyStored())) return false;
+    if (!(await aiReady(settings.ai, apiKeyStored))) return false;
   } catch {
     return false;
   }

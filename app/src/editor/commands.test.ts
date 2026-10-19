@@ -16,6 +16,7 @@ import {
   PatchError,
   renameGuide,
   setGuideField,
+  setReviewField,
   editedGuideFields,
   setImageShow,
   setItemText,
@@ -342,6 +343,25 @@ describe("guide-level fields", () => {
     const g2 = applyPatches(g0, merged.forward);
     expect(g2).toMatchObject({ intro: "Hi", aiState: { status: "edited" } });
     expect(applyPatches(g2, merged.inverse)).toEqual(g0);
+  });
+
+  it("set review fields without marking anything edited, and unset empty ones", () => {
+    const after = roundTrip(setReviewField(guide(), "owner", "IT"));
+    expect(after.owner).toBe("IT");
+    expect(after.aiState).toEqual(guide().aiState);
+    expect(after.editedFields).toEqual(guide().editedFields);
+    expect(roundTrip(setReviewField(guide(), "status", "needsUpdate")).status).toBe("needsUpdate");
+    expect(roundTrip(setReviewField(guide(), "reviewIntervalMonths", 6)).reviewIntervalMonths).toBe(6);
+    const g1 = { ...guide(), owner: "IT", reviewIntervalMonths: 6 };
+    for (const [key, value] of [
+      ["owner", ""],
+      ["reviewIntervalMonths", 0],
+    ] as const) {
+      const command = setReviewField(g1, key, value);
+      const g2 = applyPatches(g1, command.forward);
+      expect(key in JSON.parse(JSON.stringify(g2))).toBe(false);
+      expect(applyPatches(g2, command.inverse)).toEqual(g1);
+    }
   });
 
   it("add each edited field to the others, in field order", () => {

@@ -18,7 +18,7 @@ use crate::editor::{self, AppError, ErrorKind, Result, Session, SessionCell};
 use crate::export::ChosenPaths;
 use crate::hotkeys::{self, HotkeyErrors, HotkeyState};
 use crate::recording;
-use crate::settings::{self, Settings, SettingsStore, SettingsView};
+use crate::settings::{self, Provider, Settings, SettingsStore, SettingsView};
 
 /// The library folder the app opened (or tried to open) last.
 #[derive(Default)]
@@ -336,25 +336,46 @@ fn key_error(e: guiderecorder_core::ai::AiError) -> AppError {
     AppError::new(ErrorKind::Io, e.to_string())
 }
 
-/// Whether an API key is stored. The key itself never leaves Rust.
-#[tauri::command]
-pub async fn api_key_status() -> Result<bool> {
-    blocking(|| Ok(keychain::get_api_key().map_err(key_error)?.is_some())).await
+/// The Keychain entry of `provider`'s key (Anthropic when not given);
+/// `None` for the local providers, which take none.
+pub fn key_account(provider: Option<Provider>) -> Option<&'static str> {
+    match provider.unwrap_or_default() {
+        Provider::Anthropic => Some(keychain::ACCOUNT),
+        Provider::OpenAiCompatible => Some(keychain::OPENAI_COMPATIBLE_ACCOUNT),
+        Provider::Ollama | Provider::LmStudio => None,
+    }
 }
 
-/// Stores the API key in the Keychain, replacing any earlier one.
+fn account_or_error(provider: Option<Provider>) -> Result<&'static str> {
+    key_account(provider)
+        .ok_or_else(|| AppError::new(ErrorKind::Invalid, "local providers take no API key"))
+}
+
+/// Whether an API key is stored for `provider` (Anthropic when not given;
+/// never for a local one). The key itself never leaves Rust.
 #[tauri::command]
-pub async fn set_api_key(key: String) -> Result<()> {
+pub async fn api_key_status(provider: Option<Provider>) -> Result<bool> {
+    let Some(account) = key_account(provider) else {
+        return Ok(false);
+    };
+    blocking(move || Ok(keychain::get_key(account).map_err(key_error)?.is_some())).await
+}
+
+/// Stores `provider`'s API key in the Keychain, replacing any earlier one.
+#[tauri::command]
+pub async fn set_api_key(key: String, provider: Option<Provider>) -> Result<()> {
+    let account = account_or_error(provider)?;
     blocking(move || {
         let key = ApiKey::new(key).map_err(|e| AppError::new(ErrorKind::Invalid, e.to_string()))?;
-        keychain::set_api_key(&key).map_err(key_error)
+        keychain::set_key(account, &key).map_err(key_error)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn delete_api_key() -> Result<()> {
-    blocking(|| keychain::delete_api_key().map_err(key_error)).await
+pub async fn delete_api_key(provider: Option<Provider>) -> Result<()> {
+    let account = account_or_error(provider)?;
+    blocking(move || keychain::delete_key(account).map_err(key_error)).await
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -503,6 +524,22 @@ pub fn mcp_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_provider_has_its_own_key() {
+        assert_eq!(key_account(None), Some(keychain::ACCOUNT));
+        assert_eq!(
+            key_account(Some(Provider::Anthropic)),
+            Some(keychain::ACCOUNT)
+        );
+        assert_eq!(
+            key_account(Some(Provider::OpenAiCompatible)),
+            Some(keychain::OPENAI_COMPATIBLE_ACCOUNT)
+        );
+        assert_eq!(key_account(Some(Provider::Ollama)), None);
+        assert_eq!(key_account(Some(Provider::LmStudio)), None);
+        assert!(account_or_error(Some(Provider::Ollama)).is_err());
+    }
 
     #[test]
     fn startup_library_order() {

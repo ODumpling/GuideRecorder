@@ -114,6 +114,10 @@ pub struct PipelineOptions {
     /// Send the downscaled full screenshot alongside the crop. Steps without
     /// a crop always get the full screenshot.
     pub include_full: bool,
+    /// Send step images at all. Off for text-only models: the per-step pass
+    /// then gets the element, keystrokes and step kind only, and no image
+    /// is read.
+    pub images: bool,
     /// Run the guide-level pass after the per-step pass.
     pub guide_pass: bool,
 }
@@ -123,6 +127,7 @@ impl Default for PipelineOptions {
         Self {
             concurrency: DEFAULT_STEP_CONCURRENCY,
             include_full: true,
+            images: true,
             guide_pass: true,
         }
     }
@@ -582,6 +587,7 @@ pub async fn run(
     });
 
     let include_full = options.include_full;
+    let send_images = options.images;
     for_each_bounded(
         jobs,
         options.concurrency,
@@ -593,27 +599,32 @@ pub async fn run(
                 if cancel.is_cancelled() {
                     return (TaskResult::Cancelled, Vec::new());
                 }
-                let prepared = tokio::task::spawn_blocking({
-                    let cancel = cancel.clone();
-                    move || {
-                        let warnings = attach_images_until(
-                            &mut input,
-                            &step,
-                            &*images,
-                            include_full,
-                            Some(&cancel),
-                        );
-                        (input, warnings)
+                // Text-only: no image is read or sent.
+                let (input, warnings) = if !send_images {
+                    (input, Vec::new())
+                } else {
+                    let prepared = tokio::task::spawn_blocking({
+                        let cancel = cancel.clone();
+                        move || {
+                            let warnings = attach_images_until(
+                                &mut input,
+                                &step,
+                                &*images,
+                                include_full,
+                                Some(&cancel),
+                            );
+                            (input, warnings)
+                        }
+                    });
+                    // Biased so a cancel wins over a result that is ready too.
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return (TaskResult::Cancelled, Vec::new()),
+                        joined = prepared => match joined {
+                            Ok(prepared) => prepared,
+                            Err(err) => std::panic::resume_unwind(err.into_panic()),
+                        },
                     }
-                });
-                // Biased so a cancel wins over a result that is ready too.
-                let (input, warnings) = tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => return (TaskResult::Cancelled, Vec::new()),
-                    joined = prepared => match joined {
-                        Ok(prepared) => prepared,
-                        Err(err) => std::panic::resume_unwind(err.into_panic()),
-                    },
                 };
                 let result = tokio::select! {
                     biased;
@@ -1259,6 +1270,36 @@ mod tests {
         let crop = input.crop.as_ref().unwrap();
         assert_eq!((crop.width, crop.height), (400, 200));
         assert_eq!(crop.source_rect, crop_rect);
+    }
+
+    #[tokio::test]
+    async fn text_only_models_get_no_images() {
+        let mut first = step("Type your name", AiStatus::Template);
+        first.kind = StepKind::Type;
+        first.keystrokes = Some("Ada".into());
+        let mut g = guide(vec![first]);
+        let read = Arc::new(AtomicUsize::new(0));
+        let counted: Arc<dyn ImageSource> = Arc::new({
+            let read = Arc::clone(&read);
+            move |_: &str| {
+                read.fetch_add(1, Ordering::SeqCst);
+                Ok(RgbaImage::new(400, 200))
+            }
+        });
+        let mock = Arc::new(MockProvider::new());
+        let options = PipelineOptions {
+            images: false,
+            ..PipelineOptions::default()
+        };
+        let (summary, _) = run_mock(mock.clone(), &mut g, counted, &options).await;
+        assert_eq!(summary.steps_applied, 1);
+        assert_eq!(read.load(Ordering::SeqCst), 0);
+        let input = &mock.seen_steps()[0];
+        assert!(input.crop.is_none() && input.full.is_none());
+        // The text the model works from instead.
+        assert_eq!(input.kind, StepKind::Type);
+        assert_eq!(input.keystrokes.as_deref(), Some("Ada"));
+        assert!(input.element.is_some());
     }
 
     #[test]

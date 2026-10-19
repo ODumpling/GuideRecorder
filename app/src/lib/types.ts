@@ -147,7 +147,25 @@ export type Item = Step | Section | Note;
  */
 export type GuideKind = "walkthrough" | "annotated";
 
-export interface Guide {
+/** Where a guide stands in its review cycle (core `GuideStatus`). */
+export type GuideStatus = "draft" | "inReview" | "published" | "needsUpdate";
+
+/**
+ * Owner, status, version and review schedule (core `ReviewInfo`), at the
+ * top level of `guide.json`. All optional; absent when unset.
+ */
+export interface ReviewFields {
+  owner?: string | null;
+  status?: GuideStatus | null;
+  /** Free text, e.g. `1.2`. */
+  version?: string | null;
+  /** `YYYY-MM-DD`. */
+  lastReviewed?: string | null;
+  /** Review every N months; unset or 0: no schedule. */
+  reviewIntervalMonths?: number | null;
+}
+
+export interface Guide extends ReviewFields {
   schemaVersion: number;
   id: Ulid;
   title: string;
@@ -180,7 +198,7 @@ export interface Guide {
 /** The guide-level fields the AI guide pass writes. */
 export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
 
-export interface GuideListItem {
+export interface GuideListItem extends ReviewFields {
   id: Ulid;
   path: string;
   title: string;
@@ -193,6 +211,12 @@ export interface GuideListItem {
   folder: string;
   readOnly: boolean;
   duplicateOf: string | null;
+}
+
+/** `mark_guide_reviewed`'s result. */
+export interface ReviewedGuide {
+  lastReviewed: string;
+  updatedAt: string;
 }
 
 /** `rename_guide`'s result. */
@@ -218,7 +242,7 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "docx" | "pdf";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf";
 
 /** Paper size of a DOCX or PDF export (core `export::docx::Paper`). */
 export type PaperSize = "a4" | "letter";
@@ -280,6 +304,21 @@ export interface RegionPick {
   rect: Rect;
 }
 
+/** Who writes the guide text (see `Provider` in settings.rs). */
+export type AiProviderKind = "anthropic" | "openAiCompatible" | "ollama" | "lmStudio";
+
+/** An OpenAI-compatible provider's settings. */
+export interface AiEndpoint {
+  /** Empty: the local preset's default (required for a custom API). */
+  baseUrl: string;
+  /** Writes each step, and rewrites; empty until chosen. */
+  stepModel: string;
+  /** Writes the guide fields; empty until chosen. */
+  guideModel: string;
+  /** The step model takes images; off: steps are written from their text only. */
+  images: boolean;
+}
+
 /** App settings, as stored in Application Support (see settings.rs). */
 export interface Settings {
   version: number;
@@ -304,8 +343,14 @@ export interface Settings {
   ai: {
     enabled: boolean;
     autoRun: boolean;
+    provider: AiProviderKind;
+    /** Anthropic's step model. */
     stepModel: string;
+    /** Anthropic's guide model. */
     guideModel: string;
+    openAiCompatible: AiEndpoint;
+    ollama: AiEndpoint;
+    lmStudio: AiEndpoint;
     /** BCP 47 tag; empty: the guide's own language. */
     language: string;
     audience: "beginner" | "expert";

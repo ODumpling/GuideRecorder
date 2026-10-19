@@ -5,9 +5,16 @@ import {
   copyTitle,
   folderName,
   folderPaths,
+  addMonths,
+  hasOwner,
   hasTag,
+  isReviewOverdue,
+  libraryOwners,
   libraryTags,
+  localToday,
+  matchesStatus,
   parentFolder,
+  reviewDue,
   sortGuides,
 } from "@/editor/library";
 
@@ -103,5 +110,39 @@ describe("copy titles", () => {
     expect(copyTitle("Guide", ["Guide", "guide copy"])).toBe("Guide copy 2");
     expect(copyTitle("Guide", ["Guide copy", "Guide copy 2"])).toBe("Guide copy 3");
     expect(copyTitle("  ", [])).toBe("Untitled copy");
+  });
+});
+
+describe("review", () => {
+  it("is due an interval after the last review, or after creation", () => {
+    expect(reviewDue(item("A"))).toBeNull();
+    expect(reviewDue(item("A", { reviewIntervalMonths: 0, lastReviewed: "2026-01-01" }))).toBeNull();
+    expect(reviewDue(item("A", { reviewIntervalMonths: 3 }))).toBe("2026-04-01");
+    expect(reviewDue(item("A", { reviewIntervalMonths: 3, lastReviewed: "2026-08-31" }))).toBe("2026-11-30");
+    expect(reviewDue(item("A", { reviewIntervalMonths: 1, lastReviewed: "2000-01-31" }))).toBe("2000-02-29");
+    expect(reviewDue(item("A", { reviewIntervalMonths: 12, lastReviewed: "2026-12-15" }))).toBe("2027-12-15");
+    expect(reviewDue(item("A", { reviewIntervalMonths: 1, createdAt: "garbage" }))).toBeNull();
+    expect(addMonths("not a day", 1)).toBeNull();
+  });
+
+  it("is overdue only after its due day", () => {
+    const guide = item("A", { reviewIntervalMonths: 6, lastReviewed: "2026-04-19" });
+    expect(isReviewOverdue(guide, "2026-10-19")).toBe(false);
+    expect(isReviewOverdue(guide, "2026-10-20")).toBe(true);
+    expect(isReviewOverdue(item("B"), "2999-01-01")).toBe(false);
+    expect(matchesStatus(guide, "overdue", "2026-10-20")).toBe(true);
+    expect(matchesStatus(item("C", { status: "needsUpdate" }), "needsUpdate", "2026-10-20")).toBe(true);
+    expect(matchesStatus(item("D"), "published", "2026-10-20")).toBe(false);
+  });
+
+  it("formats today in local time", () => {
+    expect(localToday(new Date(2026, 0, 5, 23, 59))).toBe("2026-01-05");
+  });
+
+  it("collects owners once each, ignoring case", () => {
+    const guides = [item("A", { owner: "IT" }), item("B", { owner: " it " }), item("C", { owner: "Finance" }), item("D")];
+    expect(libraryOwners(guides)).toEqual(["Finance", "IT"]);
+    expect(hasOwner(guides[1], "IT")).toBe(true);
+    expect(hasOwner(guides[3], "IT")).toBe(false);
   });
 });

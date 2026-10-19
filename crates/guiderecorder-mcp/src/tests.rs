@@ -304,6 +304,7 @@ fn rendered(png: &[u8]) -> RenderedImage {
         height: 0,
         warnings: Vec::new(),
         hotspots: Vec::new(),
+        point: None,
     }
 }
 
@@ -443,6 +444,52 @@ async fn guides_in_folders_are_listed_and_read_with_and_without_the_index() {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+}
+
+#[tokio::test]
+async fn review_fields_are_listed_and_in_the_guide_markdown() {
+    let fx = Fixture::new();
+    let path = fx.bundle("Rotate an API key").join("guide.json");
+    let mut guide: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    guide["owner"] = "Security *team*".into();
+    guide["status"] = "needsUpdate".into();
+    guide["version"] = "2.1".into();
+    guide["lastReviewed"] = "2000-01-31".into();
+    guide["reviewIntervalMonths"] = 1.into();
+    fs::write(&path, serde_json::to_vec(&guide).unwrap()).unwrap();
+    let fx = fx.with_index();
+    for index in [Some(fx.index.clone()), None] {
+        let config = Config {
+            index,
+            ..fx.config()
+        };
+        let mut client = Client::start(config).await;
+        let all = client.ok("list_guides", json!({})).await;
+        let guides = all["structuredContent"]["guides"].as_array().unwrap();
+        let rotate = guides.iter().find(|g| g["id"] == ROTATE).unwrap();
+        assert_eq!(rotate["owner"], "Security *team*");
+        assert_eq!(rotate["status"], "needsUpdate");
+        assert_eq!(rotate["version"], "2.1");
+        assert_eq!(rotate["last_reviewed"], "2000-01-31");
+        assert_eq!(rotate["review_interval_months"], 1);
+        assert_eq!(rotate["review_due"], "2000-02-29");
+        assert_eq!(rotate["review_overdue"], true);
+        let calendar = guides.iter().find(|g| g["id"] == CALENDAR).unwrap();
+        assert_eq!(calendar["owner"], Value::Null);
+        assert_eq!(calendar["review_overdue"], false);
+
+        let md = client.ok("get_guide", json!({ "id": ROTATE })).await;
+        let md = text(&md, 0);
+        for fact in [
+            "Owner: Security \\*team\\*",
+            "Status: needsUpdate",
+            "Version: 2\\.1",
+            "Last reviewed: 2000-01-31",
+            "Review due: 2000-02-29 (overdue)",
+        ] {
+            assert!(md.contains(fact), "{fact} in {md}");
+        }
     }
 }
 

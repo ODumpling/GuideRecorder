@@ -10,7 +10,7 @@ use ulid::Ulid;
 use super::ast::{parse_blocks, parse_inlines, Block, Inline};
 use super::raster::{render_step_image, ImageOptions, RenderedImage};
 use crate::library::GuideHandle;
-use crate::model::{Guide, GuideKind, HotspotGeometry, Item, NoteKind, Shape, Step};
+use crate::model::{Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo, Shape, Step};
 
 /// A guide ready for export.
 #[derive(Debug, Clone)]
@@ -30,6 +30,9 @@ pub struct RenderGuide {
     pub intro: Vec<Block>,
     pub prerequisites: Vec<Block>,
     pub items: Vec<RenderItem>,
+    /// Owner, status, version and review schedule, as stored. Writers show
+    /// some of it only when asked (their `review_details` option).
+    pub review: ReviewInfo,
 }
 
 /// One resolved entry of [`Guide::items`].
@@ -121,6 +124,7 @@ impl RenderGuide {
             intro: parse_blocks(&guide.intro),
             prerequisites: parse_blocks(&guide.prerequisites),
             items,
+            review: guide.review.clone(),
         }
     }
 
