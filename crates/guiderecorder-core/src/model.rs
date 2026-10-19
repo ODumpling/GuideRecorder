@@ -7,6 +7,7 @@
 //! screenshot (annotations: of the image they are drawn on).
 
 use chrono::{DateTime, Local, Months, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -16,10 +17,11 @@ pub use chrono::NaiveDate;
 use crate::SCHEMA_VERSION;
 
 /// A whole guide: the contents of `guide.json`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Guide {
     pub schema_version: u32,
+    #[schemars(with = "String")]
     pub id: Ulid,
     pub title: String,
     #[serde(default)]
@@ -123,7 +125,7 @@ impl Guide {
 }
 
 /// A guide-level field the AI guide pass writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum GuideField {
     Title,
@@ -146,7 +148,7 @@ impl GuideField {
 /// Who owns a guide, where it stands, which version it is and how often it
 /// is reviewed. Every field is optional and set by hand; see
 /// [`Guide::review`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewInfo {
     /// Who keeps the guide current, as free text.
@@ -185,7 +187,7 @@ impl ReviewInfo {
 }
 
 /// Where a guide stands in its review cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum GuideStatus {
     Draft,
@@ -213,7 +215,7 @@ pub fn local_today() -> NaiveDate {
     Local::now().date_naive()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Audience {
     #[default]
@@ -222,7 +224,7 @@ pub enum Audience {
 }
 
 /// What a guide is made of.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum GuideKind {
     /// Recorded (or hand-made) steps.
@@ -234,7 +236,7 @@ pub enum GuideKind {
 }
 
 /// Environment the guide was recorded in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingInfo {
     /// GuideRecorder version that made the recording.
@@ -248,7 +250,7 @@ pub struct RecordingInfo {
     pub displays: Vec<DisplayInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub name: String,
@@ -258,7 +260,7 @@ pub struct AppInfo {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {
     pub id: u32,
@@ -274,7 +276,7 @@ pub struct DisplayInfo {
 /// One entry of [`Guide::items`], tagged by `type`.
 // Most items are steps, so boxing them would only add indirection.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Item {
     Step(Step),
@@ -292,9 +294,10 @@ impl Item {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
+    #[schemars(with = "String")]
     pub id: Ulid,
     /// Markdown.
     pub title: String,
@@ -320,7 +323,7 @@ pub struct Step {
     pub ai_state: AiState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StepKind {
     Click,
@@ -333,7 +336,7 @@ pub enum StepKind {
 }
 
 /// Accessibility info for the element a step acted on.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,7 +352,7 @@ pub struct ElementInfo {
 }
 
 /// Bundle-relative image paths for a step.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StepImage {
     /// Full screenshot, e.g. `steps/<id>.webp`.
@@ -371,7 +374,7 @@ pub struct StepImage {
 }
 
 /// Which image the step displays.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ImageShow {
     #[default]
@@ -379,7 +382,7 @@ pub enum ImageShow {
     Full,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AiState {
     #[serde(default)]
@@ -403,7 +406,7 @@ pub struct AiState {
 }
 
 /// A suggested blur region.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactionSuggestion {
     /// In full-screenshot pixels.
@@ -417,7 +420,7 @@ pub struct RedactionSuggestion {
 }
 
 /// Where a [`RedactionSuggestion`] came from.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum SuggestionSource {
     /// The AI step pass.
@@ -431,7 +434,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AiStatus {
     /// Template text only; no AI pass yet.
@@ -444,23 +447,25 @@ pub enum AiStatus {
     Edited,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Section {
+    #[schemars(with = "String")]
     pub id: Ulid,
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
+    #[schemars(with = "String")]
     pub id: Ulid,
     pub kind: NoteKind,
     /// Markdown.
     pub body: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum NoteKind {
     Tip,
@@ -471,9 +476,10 @@ pub enum NoteKind {
 /// An SVG-compatible overlay shape; never baked into source images.
 ///
 /// Serializes as `{ id, type, geometry, style }`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
+    #[schemars(with = "String")]
     pub id: Ulid,
     #[serde(flatten)]
     pub shape: Shape,
@@ -482,7 +488,7 @@ pub struct Annotation {
 }
 
 /// Annotation type and its geometry in image pixels.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "geometry", rename_all = "camelCase")]
 pub enum Shape {
     Arrow(ArrowGeometry),
@@ -494,13 +500,13 @@ pub enum Shape {
     Hotspot(HotspotGeometry),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
@@ -508,13 +514,13 @@ pub struct Rect {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ArrowGeometry {
     pub from: Point,
     pub to: Point,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CalloutGeometry {
     /// Box holding the text.
     #[serde(flatten)]
@@ -529,7 +535,7 @@ pub struct CalloutGeometry {
 /// A region the reader can hover or click to see its title and
 /// description. Numbered 1, 2, 3, ... in annotation order among the step's
 /// hotspots.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HotspotGeometry {
     #[serde(flatten)]
     pub rect: Rect,
@@ -542,7 +548,7 @@ pub struct HotspotGeometry {
 }
 
 /// Visual style; unset fields use the app's defaults.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotationStyle {
     /// CSS colour, e.g. `#ff3b30`.
@@ -564,7 +570,7 @@ pub struct AnnotationStyle {
     pub blur_amount: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum BlurMode {
     Blur,

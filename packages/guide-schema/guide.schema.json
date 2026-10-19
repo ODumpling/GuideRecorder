@@ -1,0 +1,987 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Guide",
+  "description": "A whole guide: the contents of `guide.json`.",
+  "type": "object",
+  "properties": {
+    "aiState": {
+      "description": "Provenance of the guide-level fields (`title`, `intro`,\n`prerequisites`, `summary`, `tags`). The editor sets `edited` when the\nuser changes any of them, and keeps it while any is in\n[`Guide::edited_fields`].",
+      "$ref": "#/$defs/AiState"
+    },
+    "audience": {
+      "$ref": "#/$defs/Audience",
+      "default": "beginner"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "editedFields": {
+      "description": "The guide-level fields the user wrote by hand; the AI guide pass\nleaves them alone and may still write the others. Empty in guides\nsaved before it existed: there an `edited` [`Guide::ai_state`] means\nevery field is the user's (see [`Guide::is_field_edited`]).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GuideField"
+      }
+    },
+    "id": {
+      "type": "string"
+    },
+    "intro": {
+      "description": "Markdown.",
+      "type": "string",
+      "default": ""
+    },
+    "items": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Item"
+      }
+    },
+    "kind": {
+      "description": "What the guide is: recorded steps, or uploaded pages with hotspots.",
+      "$ref": "#/$defs/GuideKind"
+    },
+    "language": {
+      "description": "BCP 47 language tag of the guide text, e.g. `en`.",
+      "type": "string"
+    },
+    "lastReviewed": {
+      "description": "The day the guide was last reviewed, `YYYY-MM-DD`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "owner": {
+      "description": "Who keeps the guide current, as free text.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "prerequisites": {
+      "description": "Markdown.",
+      "type": "string",
+      "default": ""
+    },
+    "recording": {
+      "description": "Absent for guides built by hand rather than recorded.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RecordingInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reviewIntervalMonths": {
+      "description": "Review every N months; unset or 0: no schedule.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GuideStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "default": ""
+    },
+    "tags": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "title": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "version": {
+      "description": "Free text, e.g. `1.2`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "id",
+    "title",
+    "language",
+    "createdAt",
+    "updatedAt"
+  ],
+  "$defs": {
+    "AiState": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Short message from the last failed AI pass; cleared when a later\npass succeeds. The text and `status` are left as they were.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model that produced the current text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promptVersion": {
+          "description": "Prompt file version, e.g. `step.v1`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "redactionSuggestions": {
+          "description": "Blur regions suggested for the step's screenshot, by the AI or found\non the device ([`crate::redact`]). Suggestions only (Q9): never\napplied as annotations without the user. Each successful per-step AI\npass replaces the AI's own; on-device ones stay until reviewed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RedactionSuggestion"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/AiStatus",
+          "default": "template"
+        }
+      }
+    },
+    "AiStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "generating"
+          ]
+        },
+        {
+          "description": "Template text only; no AI pass yet.",
+          "type": "string",
+          "const": "template"
+        },
+        {
+          "description": "Text from the AI pass.",
+          "type": "string",
+          "const": "ai"
+        },
+        {
+          "description": "Edited by the user; never overwritten by AI.",
+          "type": "string",
+          "const": "edited"
+        }
+      ]
+    },
+    "Annotation": {
+      "description": "An SVG-compatible overlay shape; never baked into source images.\n\nSerializes as `{ id, type, geometry, style }`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "style": {
+          "$ref": "#/$defs/AnnotationStyle",
+          "default": {}
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/ArrowGeometry"
+            },
+            "type": {
+              "type": "string",
+              "const": "arrow"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/Rect"
+            },
+            "type": {
+              "type": "string",
+              "const": "box"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/Rect"
+            },
+            "type": {
+              "type": "string",
+              "const": "highlight"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/CalloutGeometry"
+            },
+            "type": {
+              "type": "string",
+              "const": "callout"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/Rect"
+            },
+            "type": {
+              "type": "string",
+              "const": "blur"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/Rect"
+            },
+            "type": {
+              "type": "string",
+              "const": "crop"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/HotspotGeometry"
+            },
+            "type": {
+              "type": "string",
+              "const": "hotspot"
+            }
+          },
+          "required": [
+            "type",
+            "geometry"
+          ]
+        }
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    "AnnotationStyle": {
+      "description": "Visual style; unset fields use the app's defaults.",
+      "type": "object",
+      "properties": {
+        "blurAmount": {
+          "description": "Blur radius or pixel block size, in image pixels.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "blurMode": {
+          "description": "Blur annotations only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlurMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "description": "CSS colour, e.g. `#ff3b30`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSize": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "strokeWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "AppInfo": {
+      "type": "object",
+      "properties": {
+        "bundleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ArrowGeometry": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Point"
+        },
+        "to": {
+          "$ref": "#/$defs/Point"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "Audience": {
+      "type": "string",
+      "enum": [
+        "beginner",
+        "expert"
+      ]
+    },
+    "BlurMode": {
+      "type": "string",
+      "enum": [
+        "blur",
+        "pixelate"
+      ]
+    },
+    "CalloutGeometry": {
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "Point the callout's pointer targets, if any.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
+          "type": "number",
+          "format": "double"
+        },
+        "text": {
+          "description": "Plain text.",
+          "type": "string"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        },
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height",
+        "text"
+      ]
+    },
+    "DisplayInfo": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scale": {
+          "description": "Backing scale factor (physical / logical pixels).",
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "description": "Size in physical pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "width",
+        "height",
+        "scale"
+      ]
+    },
+    "ElementInfo": {
+      "description": "Accessibility info for the element a step acted on.",
+      "type": "object",
+      "properties": {
+        "app": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bundleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "GuideField": {
+      "description": "A guide-level field the AI guide pass writes.",
+      "type": "string",
+      "enum": [
+        "title",
+        "intro",
+        "prerequisites",
+        "summary",
+        "tags"
+      ]
+    },
+    "GuideKind": {
+      "description": "What a guide is made of.",
+      "oneOf": [
+        {
+          "description": "Recorded (or hand-made) steps.",
+          "type": "string",
+          "const": "walkthrough"
+        },
+        {
+          "description": "Uploaded pages (images, PDF pages), each a `manual` step showing its\nfull image, explained by [`Shape::Hotspot`] annotations.",
+          "type": "string",
+          "const": "annotated"
+        }
+      ]
+    },
+    "GuideStatus": {
+      "description": "Where a guide stands in its review cycle.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "draft",
+            "inReview",
+            "published"
+          ]
+        },
+        {
+          "description": "Known to be out of date.",
+          "type": "string",
+          "const": "needsUpdate"
+        }
+      ]
+    },
+    "HotspotGeometry": {
+      "description": "A region the reader can hover or click to see its title and\ndescription. Numbered 1, 2, 3, ... in annotation order among the step's\nhotspots.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Plain text; may hold line breaks.",
+          "type": "string",
+          "default": ""
+        },
+        "height": {
+          "type": "number",
+          "format": "double"
+        },
+        "title": {
+          "description": "Plain text.",
+          "type": "string",
+          "default": ""
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        },
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ]
+    },
+    "ImageShow": {
+      "description": "Which image the step displays.",
+      "type": "string",
+      "enum": [
+        "crop",
+        "full"
+      ]
+    },
+    "Item": {
+      "description": "One entry of [`Guide::items`], tagged by `type`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "step"
+            }
+          },
+          "$ref": "#/$defs/Step",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "section"
+            }
+          },
+          "$ref": "#/$defs/Section",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "note"
+            }
+          },
+          "$ref": "#/$defs/Note",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Note": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "Markdown.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoteKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "body"
+      ]
+    },
+    "NoteKind": {
+      "type": "string",
+      "enum": [
+        "tip",
+        "warning",
+        "note"
+      ]
+    },
+    "Point": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "RecordingInfo": {
+      "description": "Environment the guide was recorded in.",
+      "type": "object",
+      "properties": {
+        "appVersion": {
+          "description": "GuideRecorder version that made the recording.",
+          "type": "string"
+        },
+        "apps": {
+          "description": "Applications seen during the recording.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AppInfo"
+          }
+        },
+        "displays": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DisplayInfo"
+          }
+        },
+        "osVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "appVersion"
+      ]
+    },
+    "Rect": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "type": "number",
+          "format": "double"
+        },
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ]
+    },
+    "RedactionSuggestion": {
+      "description": "A suggested blur region.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why it looks sensitive, e.g. `email address`.",
+          "type": "string"
+        },
+        "rect": {
+          "description": "In full-screenshot pixels.",
+          "$ref": "#/$defs/Rect"
+        },
+        "source": {
+          "description": "Who suggested it. Absent (the AI) in guides saved before on-device\nredaction.",
+          "$ref": "#/$defs/SuggestionSource"
+        }
+      },
+      "required": [
+        "rect",
+        "reason"
+      ]
+    },
+    "Section": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "Step": {
+      "type": "object",
+      "properties": {
+        "aiState": {
+          "$ref": "#/$defs/AiState",
+          "default": {
+            "status": "template"
+          }
+        },
+        "annotations": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Annotation"
+          }
+        },
+        "description": {
+          "description": "Markdown.",
+          "type": "string",
+          "default": ""
+        },
+        "element": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElementInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endPoint": {
+          "description": "Where a `drag` step ends, in full-screenshot pixels; `point` is its start.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "image": {
+          "$ref": "#/$defs/StepImage"
+        },
+        "keystrokes": {
+          "description": "Keystrokes with secure-field input already masked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/StepKind"
+        },
+        "point": {
+          "description": "Interaction point in full-screenshot pixels.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "Markdown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind",
+        "image"
+      ]
+    },
+    "StepImage": {
+      "description": "Bundle-relative image paths for a step.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Optional frame captured after the action.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crop": {
+          "description": "Click crop, e.g. `steps/<id>.crop.webp`. Absent for manual steps\ninserted from an image file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cropRect": {
+          "description": "Where the crop sits inside the full screenshot, in full-screenshot\npixels. Annotation geometry is in full-screenshot pixels, so this is\nwhat maps it into the crop. Absent for older guides or no crop.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "full": {
+          "description": "Full screenshot, e.g. `steps/<id>.webp`.",
+          "type": "string"
+        },
+        "show": {
+          "$ref": "#/$defs/ImageShow",
+          "default": "crop"
+        }
+      },
+      "required": [
+        "full"
+      ]
+    },
+    "StepKind": {
+      "type": "string",
+      "enum": [
+        "click",
+        "doubleClick",
+        "rightClick",
+        "type",
+        "shortcut",
+        "drag",
+        "manual"
+      ]
+    },
+    "SuggestionSource": {
+      "description": "Where a [`RedactionSuggestion`] came from.",
+      "oneOf": [
+        {
+          "description": "The AI step pass.",
+          "type": "string",
+          "const": "ai"
+        },
+        {
+          "description": "Text recognised and matched on this device ([`crate::redact`]).",
+          "type": "string",
+          "const": "onDevice"
+        }
+      ]
+    }
+  }
+}
