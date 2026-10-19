@@ -14,7 +14,18 @@ const DEFAULTS: Settings = {
     excludedApps: [],
     typingIdleMs: 1500,
   },
-  ai: { enabled: true, autoRun: true, stepModel: "claude-haiku-5-5", guideModel: "claude-sonnet-5-5", language: "", audience: "beginner" },
+  ai: {
+    enabled: true,
+    autoRun: true,
+    provider: "anthropic",
+    stepModel: "claude-haiku-5-5",
+    guideModel: "claude-sonnet-5-5",
+    openAiCompatible: { baseUrl: "", stepModel: "", guideModel: "", images: true },
+    ollama: { baseUrl: "", stepModel: "", guideModel: "", images: true },
+    lmStudio: { baseUrl: "", stepModel: "", guideModel: "", images: true },
+    language: "",
+    audience: "beginner",
+  },
   export: { format: "pdf", folder: null, logo: null, accent: null },
 };
 

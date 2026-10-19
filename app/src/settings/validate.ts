@@ -22,8 +22,16 @@ export function isHotkey(value: string): boolean {
   return keyOk && modsOk;
 }
 
+/** A model id such as `claude-haiku-5-5`, `qwen3-vl:8b` or `lmstudio-community/gemma-3-12b`. */
 export function isModelId(value: string): boolean {
-  return value.length >= 1 && value.length <= 100 && /^[A-Za-z0-9\-._:@]+$/.test(value);
+  return value.length >= 1 && value.length <= 200 && /^[A-Za-z0-9\-._:@/]+$/.test(value);
+}
+
+/** Empty, or an `http` or `https` URL without spaces or a query. */
+export function isBaseUrl(value: string): boolean {
+  if (value === "") return true;
+  const rest = /^https?:\/\/(.*)$/.exec(value)?.[1];
+  return value.length <= 2048 && !!rest && !rest.startsWith("/") && /^[\x21-\x7e]+$/.test(rest) && !/[?#]/.test(rest);
 }
 
 /** Empty, or a BCP 47-looking tag. */

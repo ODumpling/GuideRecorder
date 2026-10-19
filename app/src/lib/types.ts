@@ -280,6 +280,21 @@ export interface RegionPick {
   rect: Rect;
 }
 
+/** Who writes the guide text (see `Provider` in settings.rs). */
+export type AiProviderKind = "anthropic" | "openAiCompatible" | "ollama" | "lmStudio";
+
+/** An OpenAI-compatible provider's settings. */
+export interface AiEndpoint {
+  /** Empty: the local preset's default (required for a custom API). */
+  baseUrl: string;
+  /** Writes each step, and rewrites; empty until chosen. */
+  stepModel: string;
+  /** Writes the guide fields; empty until chosen. */
+  guideModel: string;
+  /** The step model takes images; off: steps are written from their text only. */
+  images: boolean;
+}
+
 /** App settings, as stored in Application Support (see settings.rs). */
 export interface Settings {
   version: number;
@@ -304,8 +319,14 @@ export interface Settings {
   ai: {
     enabled: boolean;
     autoRun: boolean;
+    provider: AiProviderKind;
+    /** Anthropic's step model. */
     stepModel: string;
+    /** Anthropic's guide model. */
     guideModel: string;
+    openAiCompatible: AiEndpoint;
+    ollama: AiEndpoint;
+    lmStudio: AiEndpoint;
     /** BCP 47 tag; empty: the guide's own language. */
     language: string;
     audience: "beginner" | "expert";

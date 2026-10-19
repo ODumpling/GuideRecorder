@@ -8,7 +8,8 @@ it. You then tidy the guide up in a built-in editor and export it as PDF, Word,
 Markdown or HTML to share with your team, customers or future self.
 
 Everything stays on your machine. AI writing is optional and uses your own
-Anthropic API key.
+Anthropic API key, any OpenAI-compatible API, or a local model in Ollama or
+LM Studio, in which case nothing leaves your Mac.
 
 > **Status:** early and in active development. macOS only for now (Windows is
 > planned). Download the latest version from
@@ -81,8 +82,9 @@ GuideRecorder is built to be safe to leave running:
 - Permissions, granted on first launch: **Screen Recording** (screenshots),
   **Accessibility** (which button you clicked) and **Input Monitoring**
   (clicks and keys).
-- Optional: an [Anthropic API key](https://console.anthropic.com/) for AI
-  writing.
+- Optional, for AI writing: an [Anthropic API key](https://console.anthropic.com/),
+  an OpenAI-compatible API, or [Ollama](https://ollama.com/) or
+  [LM Studio](https://lmstudio.ai/) with a model that supports tool calls.
 
 ## Keyboard shortcuts
 

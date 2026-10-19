@@ -1,5 +1,6 @@
-//! Anthropic API key storage in the macOS Keychain (Windows Credential
-//! Manager / Secret Service elsewhere, via `keyring`).
+//! API key storage in the macOS Keychain (Windows Credential Manager /
+//! Secret Service elsewhere, via `keyring`): one entry per provider that
+//! takes a key ([`ACCOUNT`] for Anthropic, [`OPENAI_COMPATIBLE_ACCOUNT`]).
 //!
 //! The key is wrapped in [`ApiKey`], whose `Debug` and `Display` never show
 //! it, so it cannot end up in logs by accident.
@@ -7,7 +8,10 @@
 use super::AiError;
 
 pub const SERVICE: &str = "dev.dufflebear.guiderecorder";
+/// The Anthropic key's entry.
 pub const ACCOUNT: &str = "anthropic-api-key";
+/// The key for a custom OpenAI-compatible API.
+pub const OPENAI_COMPATIBLE_ACCOUNT: &str = "openai-compatible-api-key";
 
 /// An API key. Formatting it prints `ApiKey(<redacted>)`.
 #[derive(Clone, PartialEq, Eq)]
@@ -45,8 +49,8 @@ impl std::fmt::Display for ApiKey {
     }
 }
 
-fn entry() -> Result<keyring::Entry, AiError> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(keychain_error)
+fn entry(account: &str) -> Result<keyring::Entry, AiError> {
+    keyring::Entry::new(SERVICE, account).map_err(keychain_error)
 }
 
 // keyring errors describe the store, not the secret, so they are safe to show.
@@ -54,26 +58,43 @@ fn keychain_error(err: keyring::Error) -> AiError {
     AiError::Keychain(err.to_string())
 }
 
-/// The stored key, or `None` when none is set.
-pub fn get_api_key() -> Result<Option<ApiKey>, AiError> {
-    match entry()?.get_password() {
+/// The key stored under `account`, or `None` when none is set.
+pub fn get_key(account: &str) -> Result<Option<ApiKey>, AiError> {
+    match entry(account)?.get_password() {
         Ok(key) => ApiKey::new(key).map(Some).or(Ok(None)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(err) => Err(keychain_error(err)),
     }
 }
 
-/// Store `key`, replacing any existing one.
-pub fn set_api_key(key: &ApiKey) -> Result<(), AiError> {
-    entry()?.set_password(key.expose()).map_err(keychain_error)
+/// Store `key` under `account`, replacing any existing one.
+pub fn set_key(account: &str, key: &ApiKey) -> Result<(), AiError> {
+    entry(account)?
+        .set_password(key.expose())
+        .map_err(keychain_error)
 }
 
-/// Remove the stored key. Succeeds when none is set.
-pub fn delete_api_key() -> Result<(), AiError> {
-    match entry()?.delete_credential() {
+/// Remove the key stored under `account`. Succeeds when none is set.
+pub fn delete_key(account: &str) -> Result<(), AiError> {
+    match entry(account)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(keychain_error(err)),
     }
+}
+
+/// The stored Anthropic key, or `None` when none is set.
+pub fn get_api_key() -> Result<Option<ApiKey>, AiError> {
+    get_key(ACCOUNT)
+}
+
+/// Store the Anthropic key, replacing any existing one.
+pub fn set_api_key(key: &ApiKey) -> Result<(), AiError> {
+    set_key(ACCOUNT, key)
+}
+
+/// Remove the stored Anthropic key. Succeeds when none is set.
+pub fn delete_api_key() -> Result<(), AiError> {
+    delete_key(ACCOUNT)
 }
 
 #[cfg(test)]
