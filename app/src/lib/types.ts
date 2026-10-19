@@ -247,7 +247,21 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif";
+
+/** Frame shape of an MP4 or GIF export (core `export::motion::Aspect`). */
+export type MotionAspect = "wide" | "square" | "vertical";
+
+/** MP4 and GIF options (core `export::motion::MotionOptions`). */
+export interface MotionOptions {
+  /** 1 to 30. */
+  secondsPerStep: number;
+  aspect: MotionAspect;
+  /** Zoom into each step's click. */
+  zoom: boolean;
+  /** Title cards and a caption with each step's number and title. */
+  captions: boolean;
+}
 
 /** Paper size of a DOCX or PDF export (core `export::docx::Paper`). */
 export type PaperSize = "a4" | "letter";

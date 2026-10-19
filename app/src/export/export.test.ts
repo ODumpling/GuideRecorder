@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   baseName,
+  DEFAULT_MOTION,
   exportName,
+  initialMotion,
+  isDocumentFormat,
+  isMotionFormat,
+  isPaperFormat,
+  isSecondsPerStep,
+  rememberMotion,
   initialPaper,
   initialReviewDetails,
   isAccent,
@@ -38,6 +45,7 @@ const request = {
   branding: { logo: null, accent: "  #abc " },
   paper: "letter" as const,
   reviewDetails: true,
+  motion: DEFAULT_MOTION,
 };
 
 describe("export names and paths", () => {
@@ -132,6 +140,38 @@ describe("review details", () => {
   });
 });
 
+describe("video, GIF and slides", () => {
+  it("groups the formats", () => {
+    expect(["mp4", "gif"].every((f) => isMotionFormat(f as "mp4"))).toBe(true);
+    expect(isMotionFormat("pptx")).toBe(false);
+    expect(isPaperFormat("pdf") && isPaperFormat("docx")).toBe(true);
+    expect(isPaperFormat("pptx") || isPaperFormat("gif")).toBe(false);
+    expect(isDocumentFormat("md") && isDocumentFormat("pdf")).toBe(true);
+    expect(isDocumentFormat("pptx") || isDocumentFormat("mp4")).toBe(false);
+    expect(isFolderFormat("gif")).toBe(false);
+    expect(outPath("mp4", { folder: null, name: "x", file: "/out/Guide.mp4" })).toBe("/out/Guide.mp4");
+    expect(outPath("gif", { folder: null, name: "x", file: "/out/Guide.mp4" })).toBeNull();
+  });
+
+  it("accepts 1 to 30 seconds per step", () => {
+    expect([1, 2.5, 30].every(isSecondsPerStep)).toBe(true);
+    expect([0.5, 31, Number.NaN, "3", null].some(isSecondsPerStep)).toBe(false);
+  });
+
+  it("remembers the options and ignores bad stored values", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    expect(initialMotion(storage)).toEqual(DEFAULT_MOTION);
+    const chosen = { secondsPerStep: 5, aspect: "vertical" as const, zoom: false, captions: false };
+    rememberMotion(chosen, storage);
+    expect(initialMotion(storage)).toEqual(chosen);
+    store.set("guiderecorder.exportMotion", JSON.stringify({ secondsPerStep: 99, aspect: "tall", zoom: "yes" }));
+    expect(initialMotion(storage)).toEqual(DEFAULT_MOTION);
+    store.set("guiderecorder.exportMotion", "{not json");
+    expect(initialMotion(storage)).toEqual(DEFAULT_MOTION);
+  });
+});
+
 describe("runExport", () => {
   it("saves first, then exports with a trimmed accent", async () => {
     const order: string[] = [];
@@ -150,7 +190,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true);
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

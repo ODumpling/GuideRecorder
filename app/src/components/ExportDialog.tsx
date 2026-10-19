@@ -15,15 +15,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
+  ASPECTS,
   baseName,
   exportName,
   FORMATS,
+  initialMotion,
   initialPaper,
   initialReviewDetails,
   isAccent,
+  isDocumentFormat,
   isFolderFormat,
+  isMotionFormat,
+  isPaperFormat,
+  isSecondsPerStep,
+  MAX_SECONDS_PER_STEP,
+  MIN_SECONDS_PER_STEP,
   outPath,
   PAPERS,
+  rememberMotion,
   rememberPaper,
   rememberReviewDetails,
   runExport,
@@ -34,7 +43,7 @@ import {
   type ExportOutcome,
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
-import type { ExportFormat, PaperSize } from "@/lib/types";
+import type { ExportFormat, MotionOptions, PaperSize } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
@@ -99,6 +108,9 @@ const FORMAT_BADGES: Record<ExportFormat, string> = {
   walkthrough: "TOUR",
   docx: "DOCX",
   pdf: "PDF",
+  pptx: "PPTX",
+  mp4: "MP4",
+  gif: "GIF",
 };
 const FORMAT_COLORS: Record<ExportFormat, string> = {
   md: "#4a4740",
@@ -106,6 +118,9 @@ const FORMAT_COLORS: Record<ExportFormat, string> = {
   walkthrough: "#6b5be6",
   docx: "#2f6bff",
   pdf: "#e8543a",
+  pptx: "#d35230",
+  mp4: "#1d1c1a",
+  gif: "#c2398f",
 };
 
 /** The export dialog for the open guide. */
@@ -133,6 +148,9 @@ export function ExportDialog({
   const [accent, setAccent] = useState(() => initialChoices().accent);
   const [paper, setPaper] = useState<PaperSize>(() => initialChoices().paper);
   const [reviewDetails, setReviewDetails] = useState(() => initialReviewDetails());
+  const [motion, setMotion] = useState<MotionOptions>(() => initialMotion());
+  // The seconds field as typed, so it can be cleared while editing.
+  const [seconds, setSeconds] = useState(() => String(motion.secondsPerStep));
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -155,6 +173,9 @@ export function ExportDialog({
       setAccent(start.accent);
       setPaper(start.paper);
       setReviewDetails(initialReviewDetails());
+      const startMotion = initialMotion();
+      setMotion(startMotion);
+      setSeconds(String(startMotion.secondsPerStep));
       setOutcome(null);
       setRevealError(null);
       setSkipReview(false);
@@ -168,10 +189,13 @@ export function ExportDialog({
     setOverwrite(false);
   }, [open, guideId, out]);
 
-  const accentOk = isAccent(accent);
+  const isDocument = isDocumentFormat(format);
+  // Branding only shows in the document formats.
+  const accentOk = !isDocument || isAccent(accent);
+  const secondsOk = !isMotionFormat(format) || isSecondsPerStep(Number(seconds));
   const unreviewed = unreviewedBlurs(doc?.guide.items ?? []);
   const reviewText = unreviewedBlursText(unreviewed);
-  const canExport = !!guideId && !!out && accentOk && !busy && (!reviewText || skipReview);
+  const canExport = !!guideId && !!out && accentOk && secondsOk && !busy && (!reviewText || skipReview);
 
   /** Closes the dialog on the first step with suggestions left. */
   const review = () => {
@@ -205,12 +229,23 @@ export function ExportDialog({
     Object.assign(remembered, { format, folder: destination.folder, logo, accent, paper });
     rememberPaper(paper);
     rememberReviewDetails(reviewDetails);
+    const motionChoice = { ...motion, secondsPerStep: Number(seconds) };
+    if (isMotionFormat(format)) rememberMotion(motionChoice);
     setBusy(true);
     setOutcome(null);
     setRevealError(null);
     const result = await runExport(
       { flush: () => editorStore.getState().flush(), api },
-      { guideId, format, out, overwrite, branding: { logo, accent }, paper, reviewDetails },
+      {
+        guideId,
+        format,
+        out,
+        overwrite,
+        branding: isDocument ? { logo, accent } : { logo: null, accent: "" },
+        paper,
+        reviewDetails: isDocument && reviewDetails,
+        motion: motionChoice,
+      },
     );
     setBusy(false);
     setOutcome(result);
@@ -353,7 +388,75 @@ export function ExportDialog({
                   </Field>
                 )}
 
-                {!isFolderFormat(format) && (
+                {isMotionFormat(format) && (
+                  <>
+                    <Field label="Frame">
+                      <div role="radiogroup" aria-label="Frame" className="grid grid-cols-3 gap-2">
+                        {ASPECTS.map((a) => (
+                          <button
+                            key={a.aspect}
+                            type="button"
+                            role="radio"
+                            aria-checked={motion.aspect === a.aspect}
+                            disabled={busy}
+                            onClick={() => setMotion((m) => ({ ...m, aspect: a.aspect }))}
+                            className={cn(
+                              "flex items-baseline justify-between gap-2 rounded-xl border border-border px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              motion.aspect === a.aspect
+                                ? "border-foreground ring-1 ring-foreground"
+                                : "hover:bg-foreground/[0.04]",
+                            )}
+                          >
+                            <span className="text-sm font-medium">{a.label}</span>
+                            <span className="text-xs text-muted-foreground">{a.detail}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </Field>
+                    <Field label="Seconds per step">
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min={MIN_SECONDS_PER_STEP}
+                        max={MAX_SECONDS_PER_STEP}
+                        step={0.5}
+                        value={seconds}
+                        disabled={busy}
+                        aria-invalid={!secondsOk}
+                        className={cn("w-28", !secondsOk && "border-[var(--status-danger)]")}
+                        onChange={(e) => setSeconds(e.target.value)}
+                      />
+                      {!secondsOk && (
+                        <span className="text-xs text-[var(--status-danger)]">
+                          From {MIN_SECONDS_PER_STEP} to {MAX_SECONDS_PER_STEP} seconds.
+                        </span>
+                      )}
+                    </Field>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={motion.zoom}
+                        disabled={busy}
+                        onChange={(e) => setMotion((m) => ({ ...m, zoom: e.target.checked }))}
+                      />
+                      Zoom in on each click
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={motion.captions}
+                        disabled={busy}
+                        onChange={(e) => setMotion((m) => ({ ...m, captions: e.target.checked }))}
+                      />
+                      Show a title card and step captions
+                    </label>
+                    {format === "mp4" && busy && (
+                      <span className="text-xs text-muted-foreground">Encoding the video can take a little while.</span>
+                    )}
+                  </>
+                )}
+
+                {isPaperFormat(format) && (
                   <Field label="Paper size">
                     <div role="radiogroup" aria-label="Paper size" className="grid grid-cols-2 gap-2">
                       {PAPERS.map((p) => (
@@ -389,61 +492,65 @@ export function ExportDialog({
                   Replace an earlier export there
                 </label>
 
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={reviewDetails}
-                    disabled={busy}
-                    onChange={(e) => setReviewDetails(e.target.checked)}
-                  />
-                  Show the version, owner and last review date
-                </label>
-
-                <Field label="Branding (optional)">
-                  <div className="flex items-center gap-2">
-                    <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
-                    <PathLabel path={logo} empty="No logo" />
-                    {logo && (
-                      <Button variant="ghost" size="sm" disabled={busy} onClick={() => setLogo(null)}>
-                        Remove
-                      </Button>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => void choose(api.chooseLogo, setLogo)}
-                    >
-                      Choose logo…
-                    </Button>
-                  </div>
-                  <div className="flex items-center gap-2">
+                {isDocument && (
+                  <label className="flex items-center gap-2 text-sm">
                     <input
-                      type="color"
-                      aria-label="Accent colour"
-                      className="h-8 w-10 shrink-0 cursor-pointer rounded-md border border-input bg-transparent p-0.5"
-                      value={wellColor(accent)}
+                      type="checkbox"
+                      checked={reviewDetails}
                       disabled={busy}
-                      onChange={(e) => setAccent(e.target.value)}
+                      onChange={(e) => setReviewDetails(e.target.checked)}
                     />
-                    <Input
-                      placeholder="Accent colour, e.g. #3b82f6"
-                      value={accent}
-                      disabled={busy}
-                      aria-invalid={!accentOk}
-                      className={cn(!accentOk && "border-[var(--status-danger)]")}
-                      onChange={(e) => setAccent(e.target.value)}
-                    />
-                    {accent && (
-                      <Button variant="ghost" size="sm" disabled={busy} onClick={() => setAccent("")}>
-                        Clear
+                    Show the version, owner and last review date
+                  </label>
+                )}
+
+                {isDocument && (
+                  <Field label="Branding (optional)">
+                    <div className="flex items-center gap-2">
+                      <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <PathLabel path={logo} empty="No logo" />
+                      {logo && (
+                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setLogo(null)}>
+                          Remove
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void choose(api.chooseLogo, setLogo)}
+                      >
+                        Choose logo…
                       </Button>
-                    )}
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    PNG or JPEG logo, up to 2 MB. Markdown shows the logo but not the accent colour.
-                  </span>
-                </Field>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        aria-label="Accent colour"
+                        className="h-8 w-10 shrink-0 cursor-pointer rounded-md border border-input bg-transparent p-0.5"
+                        value={wellColor(accent)}
+                        disabled={busy}
+                        onChange={(e) => setAccent(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Accent colour, e.g. #3b82f6"
+                        value={accent}
+                        disabled={busy}
+                        aria-invalid={!accentOk}
+                        className={cn(!accentOk && "border-[var(--status-danger)]")}
+                        onChange={(e) => setAccent(e.target.value)}
+                      />
+                      {accent && (
+                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setAccent("")}>
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      PNG or JPEG logo, up to 2 MB. Markdown shows the logo but not the accent colour.
+                    </span>
+                  </Field>
+                )}
 
                 {reviewText && (
                   <div
@@ -510,6 +617,8 @@ export function ExportDialog({
                 logo={logo}
                 accent={accent}
                 reviewDetails={reviewDetails}
+                aspect={motion.aspect}
+                captions={motion.captions}
               />
             </div>
           )}

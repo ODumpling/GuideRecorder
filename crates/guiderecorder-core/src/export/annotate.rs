@@ -35,7 +35,7 @@ use crate::model::{
 /// `assets/fonts/Lato-OFL.txt`).
 const LATO: &[u8] = include_bytes!("../../assets/fonts/Lato-Regular.ttf");
 const LATO_BOLD: &[u8] = include_bytes!("../../assets/fonts/Lato-Bold.ttf");
-const FONT_FAMILY: &str = "Lato";
+pub(super) const FONT_FAMILY: &str = "Lato";
 
 pub const DEFAULT_COLOR: &str = "#ff3b30";
 pub const DEFAULT_HIGHLIGHT: &str = "#ffcc00";
@@ -68,7 +68,7 @@ fn fontdb() -> Arc<fontdb::Database> {
     .clone()
 }
 
-fn options() -> usvg::Options<'static> {
+pub(super) fn options() -> usvg::Options<'static> {
     usvg::Options {
         font_family: FONT_FAMILY.to_owned(),
         fontdb: fontdb(),
@@ -407,7 +407,7 @@ fn hotspot(
 
 /// Greedy word wrap into lines no wider than `max_width`; a word wider
 /// than that gets a line of its own. Newlines in `text` start new lines.
-fn wrap(text: &str, font_size: f64, max_width: f64) -> Vec<String> {
+pub(super) fn wrap(text: &str, font_size: f64, max_width: f64) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.lines() {
         let mut line = String::new();
@@ -431,7 +431,7 @@ fn wrap(text: &str, font_size: f64, max_width: f64) -> Vec<String> {
 }
 
 /// Advance width of `text` in the bundled font, in pixels.
-fn measure(text: &str, font_size: f64) -> f64 {
+pub(super) fn measure(text: &str, font_size: f64) -> f64 {
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><text x="0" y="{}" font-family="{FONT_FAMILY}" font-size="{}">{}</text></svg>"#,
         num(font_size),
@@ -662,7 +662,7 @@ const CSS_COLOR_NAMES: [&str; 148] = [
 ];
 
 /// A coordinate for SVG: finite, rounded to 1/1000 px.
-fn num(v: f64) -> String {
+pub(super) fn num(v: f64) -> String {
     let v = (v * 1000.0).round() / 1000.0;
     if v == 0.0 {
         "0".into()
@@ -673,7 +673,7 @@ fn num(v: f64) -> String {
 
 /// Escapes text for XML content and attributes, dropping characters XML
 /// cannot contain.
-fn escape(text: &str) -> String {
+pub(super) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {

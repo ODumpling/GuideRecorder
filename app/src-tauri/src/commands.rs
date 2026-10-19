@@ -20,7 +20,9 @@ use crate::editor::{
     parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, RenamedGuide, Result,
     ReviewedGuide, Session, SessionCell, MAX_PNG_BYTES,
 };
-use crate::export::{self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format};
+use crate::export::{
+    self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format, MotionRequest,
+};
 
 /// Runs `f` with the session on the blocking pool.
 async fn with_session<T, F>(cell: State<'_, Arc<SessionCell>>, f: F) -> Result<T>
@@ -458,8 +460,10 @@ pub async fn export_guide(
     branding: BrandingRequest,
     paper: Paper,
     review_details: bool,
+    motion: Option<MotionRequest>,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
+    let motion = motion.unwrap_or_default();
     with_session(cell, move |s| {
         export::export_guide(
             s,
@@ -471,6 +475,7 @@ pub async fn export_guide(
             &branding,
             paper,
             review_details,
+            &motion,
         )
     })
     .await

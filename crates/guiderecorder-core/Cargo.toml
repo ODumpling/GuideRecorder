@@ -15,7 +15,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1.13.1"
 ulid = { version = "1", features = ["serde"] }
 schemars = { version = "1.2.3", features = ["chrono04"] }
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 keyring = "4.2.0"
@@ -29,10 +29,47 @@ docx-rs = "0.4.22"
 typst = "0.15.1"
 typst-pdf = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
+# PPTX packages (`export/pptx.rs`); docx-rs uses the same version.
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 # The editor lock's liveness check (`edit.rs`).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# MP4 export with AVFoundation (`export/motion/mp4.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-core-media",
+    "objc2-core-video",
+    "AVAssetWriter",
+    "AVAssetWriterInput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVReturn",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSDictionary",
+    "NSError",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
+
 [dev-dependencies]
 lopdf = "0.45.0"
+# Checks that PPTX parts are well-formed XML.
+roxmltree = "0.21.1"

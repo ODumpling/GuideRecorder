@@ -26,8 +26,8 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, pdf, render_step_image, ExportReport, ImageOptions, OutPathError, RenderGuide,
-    RenderWarning,
+    docx, html, md, motion, pdf, pptx, render_step_image, ExportReport, ImageOptions, OutPathError,
+    RenderGuide, RenderWarning,
 };
 use guiderecorder_core::index::{
     list_library, list_with_fallback, search_library, search_with_fallback, Index, IndexError,
@@ -119,13 +119,13 @@ enum Command {
         output: Output,
     },
     /// Export a guide as Markdown, HTML, an interactive HTML walkthrough,
-    /// DOCX or PDF.
+    /// DOCX, PDF, PPTX slides, an MP4 video or an animated GIF.
     ///
     /// Reads the guide without changing the library. Markdown and HTML
     /// write into the `--out` folder (`guide.md` plus `images/`, or
-    /// `guide.html`; a walkthrough is also one `guide.html`); DOCX and PDF
-    /// write the `--out` file. Image problems
-    /// become placeholders and warnings, not errors.
+    /// `guide.html`; a walkthrough is also one `guide.html`); the other
+    /// formats write the `--out` file. Image problems
+    /// become placeholders and warnings, not errors. MP4 needs macOS.
     Export(ExportArgs),
 }
 
@@ -136,7 +136,7 @@ struct ExportArgs {
     guide: String,
     #[arg(long, value_enum)]
     format: Format,
-    /// Output folder (md, html, walkthrough) or file (docx, pdf).
+    /// Output folder (md, html, walkthrough) or file (the other formats).
     #[arg(long, value_name = "PATH")]
     out: PathBuf,
     /// Replace an earlier export at `--out`.
@@ -151,6 +151,18 @@ struct ExportArgs {
     /// Paper size of a DOCX or PDF export.
     #[arg(long, value_enum, default_value_t = Paper::A4)]
     paper: Paper,
+    /// Seconds each step is shown in an MP4 or GIF (1 to 30).
+    #[arg(long, default_value_t = motion::DEFAULT_SECONDS_PER_STEP, value_name = "S")]
+    seconds_per_step: f64,
+    /// Frame shape of an MP4 or GIF.
+    #[arg(long, value_enum, default_value_t = Size::Wide)]
+    size: Size,
+    /// Show each MP4 or GIF step whole, without zooming into the click.
+    #[arg(long)]
+    no_zoom: bool,
+    /// Leave out the title cards and step captions of an MP4 or GIF.
+    #[arg(long)]
+    no_captions: bool,
     /// Show the guide's version, owner and last review day (those set)
     /// under the summary, or on the PDF cover.
     #[arg(long)]
@@ -171,6 +183,32 @@ enum Format {
     Walkthrough,
     Docx,
     Pdf,
+    /// Slides, one per step, with speaker notes.
+    Pptx,
+    /// A video zooming in on each click (macOS only).
+    Mp4,
+    /// An animated GIF zooming in on each click.
+    Gif,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Size {
+    /// 16:9 landscape.
+    Wide,
+    /// 1:1.
+    Square,
+    /// 9:16 portrait.
+    Vertical,
+}
+
+impl From<Size> for motion::Aspect {
+    fn from(size: Size) -> Self {
+        match size {
+            Size::Wide => Self::Wide,
+            Size::Square => Self::Square,
+            Size::Vertical => Self::Vertical,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -196,6 +234,9 @@ impl Format {
             Self::Walkthrough => "walkthrough",
             Self::Docx => "docx",
             Self::Pdf => "pdf",
+            Self::Pptx => "pptx",
+            Self::Mp4 => "mp4",
+            Self::Gif => "gif",
         }
     }
 }
@@ -713,7 +754,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     let paper = args.paper.into();
     let review_details = args.review_details;
     // The md and html writers create their folder; match that for files.
-    if matches!(args.format, Format::Docx | Format::Pdf) {
+    if !matches!(args.format, Format::Md | Format::Html | Format::Walkthrough) {
         if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -774,6 +815,40 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
                 ..pdf::PdfOptions::default()
             };
             pdf::export(&render, &handle, out, &opts)?
+        }
+        Format::Pptx => {
+            let opts = pptx::PptxOptions {
+                overwrite,
+                timestamp,
+                image: unreviewed(&pptx::PptxOptions::default().image),
+                ..pptx::PptxOptions::default()
+            };
+            pptx::export(&render, out, &opts)?
+        }
+        Format::Mp4 | Format::Gif => {
+            if !(motion::MIN_SECONDS_PER_STEP..=motion::MAX_SECONDS_PER_STEP)
+                .contains(&args.seconds_per_step)
+            {
+                bail!(
+                    "--seconds-per-step must be from {} to {}",
+                    motion::MIN_SECONDS_PER_STEP,
+                    motion::MAX_SECONDS_PER_STEP
+                );
+            }
+            let opts = motion::MotionOptions {
+                overwrite,
+                seconds_per_step: args.seconds_per_step,
+                aspect: args.size.into(),
+                zoom: !args.no_zoom,
+                captions: !args.no_captions,
+                image: unreviewed(&motion::MotionOptions::default().image),
+                ..motion::MotionOptions::default()
+            };
+            if args.format == Format::Mp4 {
+                motion::mp4::export(&render, out, &opts)?
+            } else {
+                motion::gif::export(&render, out, &opts)?
+            }
         }
     };
     Ok(Export {
