@@ -8,7 +8,9 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await expect(dialog.getByTitle("/Users/me/Documents/GuideRecorder")).toHaveText("GuideRecorder");
 
   // Recording: a shortcut is recorded from a key press; a bad pause is refused.
+  backend.hotkeyErrors.record = "This shortcut can't be used: another app or macOS may have it.";
   await dialog.getByRole("button", { name: "Recording" }).click();
+  await expect(dialog.getByText("This shortcut can't be used")).toBeVisible();
   await dialog.getByRole("button", { name: "Pause shortcut" }).click();
   await page.keyboard.press("Control+Alt+KeyK");
   await expect(dialog.getByRole("button", { name: "Pause shortcut" })).toHaveText("⌃⌥K");

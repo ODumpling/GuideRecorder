@@ -17,7 +17,7 @@ Anthropic API key.
 
 ## How it works
 
-1. **Record.** Press Record (or ⌃⌥R) and do the task as you normally would.
+1. **Record.** Press Record (or the record shortcut, ⌃⌥R by default) and do the task as you normally would.
    GuideRecorder notes each click, typed text and shortcut, and takes a
    screenshot of each one. A small floating toolbar shows the elapsed time and
    the number of screenshots, with Pause, Stop and a button to add a manual
@@ -85,6 +85,8 @@ GuideRecorder is built to be safe to leave running:
   writing.
 
 ## Keyboard shortcuts
+
+The defaults; change them in Settings → Recording.
 
 | Shortcut | Action |
 | --- | --- |

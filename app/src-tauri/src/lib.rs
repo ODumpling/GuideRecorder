@@ -121,11 +121,12 @@ pub fn run() {
             if let Err(e) = tray::create(app.handle()) {
                 eprintln!("guiderecorder: cannot create the tray icon: {e}");
             }
-            hotkeys::register(app.handle());
             toolbar::sync(app.handle());
             // A few kB, read once before the library is chosen.
             let store = settings::SettingsStore::load(settings::default_path());
             let stored = store.get();
+            app.manage(hotkeys::HotkeyState::default());
+            hotkeys::apply(app.handle(), &stored.recording.hotkeys);
             let chosen = export::ChosenPaths::default();
             // Stored paths were chosen in a dialog when they were set.
             if let Some(folder) = stored.export.folder.clone() {
@@ -209,6 +210,7 @@ pub fn run() {
             settings_commands::api_key_status,
             settings_commands::set_api_key,
             settings_commands::delete_api_key,
+            settings_commands::hotkey_errors,
             settings_commands::permission_status,
             settings_commands::open_permission_settings,
             settings_commands::request_permission,

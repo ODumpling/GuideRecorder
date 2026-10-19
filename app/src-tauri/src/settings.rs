@@ -4,9 +4,9 @@
 //!
 //! The API key is not here: it lives in the Keychain (core's
 //! `ai::keychain`). Each recording reads the recording settings when it
-//! starts (`recording::session_config`); the record and pause shortcuts,
-//! window and region capture, and after-frames are stored but not used
-//! yet.
+//! starts (`recording::session_config`); the record and pause shortcuts
+//! are registered at startup and again on every change
+//! (`hotkeys::apply`).
 //!
 //! Paths in settings (the library, the default export folder and the logo)
 //! are trusted later without another dialog, so the webview may only set
@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::editor::{AppError, ErrorKind, Result};
 use crate::export::{ChosenPaths, Format};
 
-/// The settings format this app writes.
-pub const SETTINGS_VERSION: u32 = 1;
+/// The settings format this app writes. Version 2 changed the default
+/// shortcuts (see [`migrate`]).
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// File name inside the app's Application Support folder.
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -120,9 +121,9 @@ pub struct Hotkeys {
 impl Default for Hotkeys {
     fn default() -> Self {
         Self {
-            record: "CmdOrCtrl+Shift+R".into(),
-            pause: "CmdOrCtrl+Shift+P".into(),
-            manual_step: "CmdOrCtrl+Shift+M".into(),
+            record: "Ctrl+Alt+R".into(),
+            pause: "Ctrl+Alt+P".into(),
+            manual_step: "Ctrl+Alt+S".into(),
         }
     }
 }
@@ -247,6 +248,28 @@ pub fn is_hotkey(value: &str) -> bool {
     key_ok && mods_ok
 }
 
+/// Whether `a` and `b` are the same shortcut (neither empty), with
+/// modifier aliases and order ignored: `Alt+Ctrl+R` and `Control+Option+R`
+/// are both `Ctrl+Alt+R`.
+fn same_hotkey(a: &str, b: &str) -> bool {
+    fn canonical(value: &str) -> Option<(Vec<&'static str>, String)> {
+        let mut parts = value.split('+');
+        let key = parts.next_back()?.to_ascii_uppercase();
+        let mut mods: Vec<&'static str> = parts
+            .map(|m| match m {
+                "CmdOrCtrl" | "CommandOrControl" | "Cmd" | "Command" | "Super" => "Cmd",
+                "Ctrl" | "Control" => "Ctrl",
+                "Alt" | "Option" => "Alt",
+                _ => "Shift",
+            })
+            .collect();
+        mods.sort_unstable();
+        mods.dedup();
+        Some((mods, key))
+    }
+    !a.is_empty() && !b.is_empty() && canonical(a) == canonical(b)
+}
+
 /// A model id such as `claude-haiku-5-5`.
 pub fn is_model_id(value: &str) -> bool {
     (1..=100).contains(&value.len())
@@ -324,7 +347,7 @@ impl Settings {
             }
         }
         for (i, (_, a)) in keys.iter().enumerate() {
-            if !a.is_empty() && keys[..i].iter().any(|(_, b)| b == a) {
+            if keys[..i].iter().any(|(_, b)| same_hotkey(a, b)) {
                 return Err(invalid(format!("the shortcut {a} is used twice")));
             }
         }
@@ -532,6 +555,9 @@ fn read(path: &Path) -> (Settings, LoadState) {
         .unwrap_or(u64::from(SETTINGS_VERSION));
     let read_only = version > u64::from(SETTINGS_VERSION);
     let decoded = serde_json::from_value::<Settings>(value).map(|mut settings| {
+        if !read_only {
+            migrate(&mut settings, version);
+        }
         let dropped = drop_invalid_excluded_apps(&mut settings);
         (settings, dropped)
     });
@@ -569,6 +595,36 @@ fn read(path: &Path) -> (Settings, LoadState) {
             ),
         ),
         Err(e) => set_aside(path, format!("{}: {e}", path.display())),
+    }
+}
+
+/// Brings settings saved by an older version up to date, in memory; the
+/// next save writes them as [`SETTINGS_VERSION`].
+///
+/// Version 1 saved ⇧⌘R and ⇧⌘P as the default record and pause
+/// shortcuts, but the app always registered ⌃⌥R and ⌃⌥P. Now that the
+/// saved shortcuts are used, one still at its old default becomes the one
+/// that actually worked, rather than taking over ⇧⌘P (the command palette
+/// in many apps), unless another shortcut already has it. The manual-step
+/// shortcut was always read from the settings, so it is kept.
+fn migrate(settings: &mut Settings, version: u64) {
+    if version < 2 {
+        let defaults = Hotkeys::default();
+        let h = &mut settings.recording.hotkeys;
+        if h.record == "CmdOrCtrl+Shift+R"
+            && ![&h.pause, &h.manual_step]
+                .iter()
+                .any(|o| same_hotkey(o, &defaults.record))
+        {
+            h.record = defaults.record;
+        }
+        if h.pause == "CmdOrCtrl+Shift+P"
+            && ![&h.record, &h.manual_step]
+                .iter()
+                .any(|o| same_hotkey(o, &defaults.pause))
+        {
+            h.pause = defaults.pause;
+        }
     }
 }
 
@@ -718,7 +774,7 @@ mod tests {
         let settings = Settings::default();
         settings.validate().unwrap();
         let json = serde_json::to_value(&settings).unwrap();
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], SETTINGS_VERSION);
         assert_eq!(json["recording"]["typingIdleMs"], 1500);
         assert_eq!(json["ai"]["stepModel"], DEFAULT_STEP_MODEL);
         assert_eq!(json["export"]["format"], "pdf");
@@ -785,6 +841,10 @@ mod tests {
         }
         assert!(is_model_id("claude-sonnet-5-5"));
         assert!(!is_model_id("") && !is_model_id("a b"));
+        assert!(same_hotkey("Ctrl+Alt+R", "Option+Control+R"));
+        assert!(same_hotkey("CmdOrCtrl+Shift+R", "Shift+Cmd+R"));
+        assert!(!same_hotkey("Ctrl+Alt+R", "Ctrl+Alt+Shift+R"));
+        assert!(!same_hotkey("", ""));
         assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));
         assert!(!is_language("en_US") && !is_language("-en"));
         for ok in [
@@ -812,6 +872,9 @@ mod tests {
 
         let mut s = Settings::default();
         s.recording.hotkeys.pause = s.recording.hotkeys.record.clone();
+        assert!(s.validate().unwrap_err().message.contains("used twice"));
+        let mut s = Settings::default();
+        s.recording.hotkeys.pause = "Alt+Ctrl+R".into();
         assert!(s.validate().unwrap_err().message.contains("used twice"));
         let mut s = Settings::default();
         s.recording.typing_idle_ms = 50;
@@ -893,7 +956,7 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 
-        fs::write(&path, br#"{"version":2,"ai":{"language":"fr"}}"#).unwrap();
+        fs::write(&path, br#"{"version":3,"ai":{"language":"fr"}}"#).unwrap();
         let store = SettingsStore::load(Some(path.clone()));
         assert!(store.view().read_only);
         assert_eq!(store.get().ai.language, "fr");
@@ -902,11 +965,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, ErrorKind::ReadOnly);
         assert!(store.modify(|_| {}).is_err());
-        assert!(fs::read_to_string(&path).unwrap().contains("\"version\":2"));
+        assert!(fs::read_to_string(&path).unwrap().contains("\"version\":3"));
 
         // A newer file this version can't decode: defaults, read-only, and
         // the file is neither renamed nor saved over.
-        let newer = br#"{"version":2,"export":{"format":"pptx"}}"#;
+        let newer = br#"{"version":3,"export":{"format":"pptx"}}"#;
         fs::write(&path, newer).unwrap();
         let store = SettingsStore::load(Some(path.clone()));
         let view = store.view();
@@ -979,13 +1042,61 @@ mod tests {
         );
 
         // A newer, read-only file is left alone on disk but not applied.
-        let newer = br#"{"version":2,"recording":{"excludedApps":["com.apple"]}}"#;
+        let newer = br#"{"version":3,"recording":{"excludedApps":["com.apple"]}}"#;
         fs::write(&path, newer).unwrap();
         let view = SettingsStore::load(Some(path.clone())).view();
         assert!(view.read_only);
         assert!(view.settings.recording.excluded_apps.is_empty());
         assert!(view.load_error.unwrap().contains("too broad"));
         assert_eq!(fs::read(&path).unwrap(), newer);
+    }
+
+    #[test]
+    fn old_default_shortcuts_are_migrated() {
+        let dir = scratch();
+        let path = dir.join("settings.json");
+        // Version 1 defaults for record and manual step, a custom pause.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"hotkeys":{"record":"CmdOrCtrl+Shift+R",
+                "pause":"Ctrl+Alt+K","manualStep":"CmdOrCtrl+Shift+M"}}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let view = store.view();
+        assert!(view.load_error.is_none());
+        let hotkeys = &view.settings.recording.hotkeys;
+        assert_eq!(hotkeys.record, "Ctrl+Alt+R");
+        assert_eq!(hotkeys.pause, "Ctrl+Alt+K");
+        // It always worked as stored.
+        assert_eq!(hotkeys.manual_step, "CmdOrCtrl+Shift+M");
+        store.update(store.get(), &ChosenPaths::default()).unwrap();
+        let saved: Settings = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.version, 2);
+        assert_eq!(saved.recording.hotkeys, store.get().recording.hotkeys);
+
+        // A new default another shortcut already has is not taken, so
+        // nothing is reset as a duplicate.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"hotkeys":{"record":"CmdOrCtrl+Shift+R",
+                "pause":"Alt+Ctrl+R","manualStep":"CmdOrCtrl+Shift+M"}}}"#,
+        )
+        .unwrap();
+        let view = SettingsStore::load(Some(path.clone())).view();
+        assert!(view.load_error.is_none());
+        let hotkeys = &view.settings.recording.hotkeys;
+        assert_eq!(hotkeys.record, "CmdOrCtrl+Shift+R");
+        assert_eq!(hotkeys.pause, "Alt+Ctrl+R");
+
+        // Chosen in version 2: kept.
+        fs::write(
+            &path,
+            br#"{"version":2,"recording":{"hotkeys":{"pause":"CmdOrCtrl+Shift+P"}}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path));
+        assert_eq!(store.get().recording.hotkeys.pause, "CmdOrCtrl+Shift+P");
     }
 
     #[test]

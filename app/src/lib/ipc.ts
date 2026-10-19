@@ -23,6 +23,7 @@ import type {
   Rect,
   RegionPick,
   RewriteStyleArg,
+  HotkeyErrors,
   Settings,
   SettingsView,
   StampedStatus,
@@ -192,6 +193,8 @@ export interface SettingsApi {
   get(): Promise<SettingsView>;
   /** Validates and stores; returns the settings as stored. */
   update(settings: Settings): Promise<Settings>;
+  /** As of the last change (record and pause are registered on every change). */
+  hotkeyErrors(): Promise<HotkeyErrors>;
   libraryInfo(): Promise<LibraryInfo>;
   /** A library folder from the native dialog; null if cancelled. */
   chooseLibrary(): Promise<string | null>;
@@ -217,6 +220,7 @@ export interface SettingsApi {
 export const tauriSettingsApi: SettingsApi = {
   get: () => invoke("get_settings"),
   update: (settings) => invoke("update_settings", { settings }),
+  hotkeyErrors: () => invoke("hotkey_errors"),
   libraryInfo: () => invoke("library_info"),
   chooseLibrary: () => invoke("choose_library_folder"),
   switchLibrary: (path) => invoke("switch_library", { path }),

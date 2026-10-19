@@ -44,6 +44,7 @@ const COMMANDS: &[&str] = &[
     "verify_crop",
     "get_settings",
     "update_settings",
+    "hotkey_errors",
     "library_info",
     "choose_library_folder",
     "switch_library",

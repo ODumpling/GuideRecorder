@@ -10,6 +10,7 @@ import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
 import type {
   CaptureArea,
+  HotkeyErrors,
   LibraryInfo,
   McpSetup,
   Permission,
@@ -226,16 +227,33 @@ const CAPTURE_AREAS: { value: CaptureArea; label: string }[] = [
   { value: "region", label: "A region" },
 ];
 
-export function RecordingSection() {
+/** A shortcut that could not be registered, in a row's note. */
+function HotkeyError({ children }: { children: string }) {
+  return <span className="text-[var(--status-danger)]">{children}</span>;
+}
+
+export function RecordingSection({ api }: { api: SettingsApi }) {
   const settings = useSettings((s) => s.settings)!;
   const readOnly = useSettings((s) => s.readOnly);
   const change = useChange();
   const r = settings.recording;
   const [app, setApp] = useState("");
+  const [hotkeyErrors, setHotkeyErrors] = useState<HotkeyErrors>({ record: null, pause: null });
+  const refreshHotkeyErrors = useCallback(() => {
+    api.hotkeyErrors().then(setHotkeyErrors, (e) => setHotkeyErrors({ record: errorMessage(e), pause: null }));
+  }, [api]);
+  useEffect(refreshHotkeyErrors, [refreshHotkeyErrors]);
   const setRecording = (patch: Partial<Settings["recording"]>) =>
     change((s) => ({ ...s, recording: { ...s.recording, ...patch } }));
-  const setHotkey = (name: keyof Settings["recording"]["hotkeys"], value: string) =>
-    isHotkey(value) && setRecording({ hotkeys: { ...r.hotkeys, [name]: value } });
+  // Record and pause are registered as the change is saved: check them after.
+  const setHotkey = (name: keyof Settings["recording"]["hotkeys"], value: string) => {
+    if (!isHotkey(value)) return;
+    const hotkeys = (s: Settings) => ({ ...s.recording.hotkeys, [name]: value });
+    void settingsStore
+      .getState()
+      .change((s) => ({ ...s, recording: { ...s.recording, hotkeys: hotkeys(s) } }))
+      .then(refreshHotkeyErrors);
+  };
   const addApp = () => {
     const id = app.trim();
     if (!isBundleId(id) || r.excludedApps.includes(id) || r.excludedApps.length >= MAX_EXCLUDED_APPS) return;
@@ -248,14 +266,14 @@ export function RecordingSection() {
   const appError = bundleIdError(app.trim());
 
   return (
-    <Section title="Recording" intro="The next recording uses these. With One display, Application or Region as the capture area, you pick the display or window, or draw the region, each time you record.">
-      <Row label="Start or stop recording">
+    <Section title="Recording" intro="The next recording uses these. With One display, Application or Region as the capture area, you pick the display or window, or draw the region, each time you record. The record and pause shortcuts work from any app and change right away.">
+      <Row label="Start or stop recording" note={hotkeyErrors.record && <HotkeyError>{hotkeyErrors.record}</HotkeyError>}>
         <HotkeyField label="Record shortcut" value={r.hotkeys.record} disabled={readOnly} onChange={(v) => setHotkey("record", v)} />
       </Row>
-      <Row label="Pause recording">
+      <Row label="Pause recording" note={hotkeyErrors.pause && <HotkeyError>{hotkeyErrors.pause}</HotkeyError>}>
         <HotkeyField label="Pause shortcut" value={r.hotkeys.pause} disabled={readOnly} onChange={(v) => setHotkey("pause", v)} />
       </Row>
-      <Row label="Add a manual step">
+      <Row label="Add a manual step" note="Works only while recording; the next recording uses a change.">
         <HotkeyField
           label="Manual step shortcut"
           value={r.hotkeys.manualStep}
