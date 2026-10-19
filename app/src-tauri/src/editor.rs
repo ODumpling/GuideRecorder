@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
 use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
-    StepImageVariant, MAX_WEBP_DIMENSION, STEPS_DIR,
+    StepImageVariant, GUIDE_FILE, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
 use guiderecorder_core::model::{Guide, NaiveDate, ReviewInfo, Step, StepImage};
 use guiderecorder_core::pages::{self, PageError};
@@ -427,6 +427,24 @@ impl Session {
         std::fs::read(&path).map_err(|e| file_error(&path, e))
     }
 
+    /// The first step's screenshot of a guide in the library, for its card
+    /// in the library; empty if no step has one. Reads `guide.json` only:
+    /// the guide needn't be open, and nothing is migrated or written.
+    pub fn guide_cover(&self, guide_id: &str) -> Result<Vec<u8>> {
+        let id = parse_id(guide_id)?;
+        let handle = self.library.find(id)?.ok_or(LibraryError::NotFound(id))?;
+        let json = handle.resolve(GUIDE_FILE)?;
+        let bytes = std::fs::read(&json).map_err(|e| file_error(&json, e))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::new(ErrorKind::Conflict, format!("{}: {e}", json.display())))?;
+        let Some(path) = cover_image(&value) else {
+            return Ok(Vec::new());
+        };
+        check_image_path(path)?;
+        let path = handle.resolve(path)?;
+        std::fs::read(&path).map_err(|e| file_error(&path, e))
+    }
+
     /// Stores a PNG (made by the webview from whatever file the user chose)
     /// as the full image of a new manual step and returns the step. The
     /// guide itself is not changed: the editor inserts the step as an
@@ -682,6 +700,19 @@ impl Session {
 
 /// Step image paths the editor may name: WebP files under `steps/` or
 /// `assets/` (then resolved inside the bundle).
+/// The full image of a `guide.json` value's first step that has one.
+fn cover_image(guide: &serde_json::Value) -> Option<&str> {
+    guide
+        .get("items")?
+        .as_array()?
+        .iter()
+        .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("step"))
+        .find_map(|step| {
+            let path = step.get("image")?.get("full")?.as_str()?;
+            (!path.is_empty()).then_some(path)
+        })
+}
+
 pub(crate) fn check_image_path(path: &str) -> Result<()> {
     let allowed =
         (path.starts_with("steps/") || path.starts_with("assets/")) && path.ends_with(".webp");
@@ -1373,6 +1404,43 @@ pub(crate) mod tests {
         let unopened = session.step_image(&Ulid::new().to_string(), &step.image.full);
         assert_eq!(unopened.unwrap_err().kind, ErrorKind::NotOpen);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guide_cover_is_the_first_screenshot_without_opening() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let cover = session.guide_cover(&id).unwrap();
+        // Not opened: nothing to close, and no editor lock.
+        assert!(session.open.lock().unwrap().is_empty());
+        let guide = session.open_guide(&id).unwrap().guide;
+        let first = &guide.steps().next().unwrap().image.full;
+        assert_eq!(cover, fs::read(root.join(FIXTURE).join(first)).unwrap());
+
+        assert_eq!(
+            session.guide_cover("nope").unwrap_err().kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(
+            session
+                .guide_cover(&Ulid::new().to_string())
+                .unwrap_err()
+                .kind,
+            ErrorKind::NotFound
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cover_image_skips_steps_without_one() {
+        let guide = serde_json::json!({"items": [
+            {"type": "section", "title": "A"},
+            {"type": "step", "image": {"full": ""}},
+            {"type": "step", "image": {"full": "steps/b.webp"}},
+        ]});
+        assert_eq!(cover_image(&guide), Some("steps/b.webp"));
+        assert_eq!(cover_image(&serde_json::json!({"items": []})), None);
     }
 
     fn pixels(width: u32, height: u32) -> Vec<u8> {

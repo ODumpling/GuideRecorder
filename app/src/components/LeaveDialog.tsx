@@ -19,8 +19,8 @@ export function LeaveDialog() {
   return (
     <AlertDialog.Root open={leave !== null} onOpenChange={(open) => !open && choose("cancel")}>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-        <AlertDialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[26rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-lg border border-border bg-background p-5 text-foreground shadow-lg">
+        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
+        <AlertDialog.Content className="fixed top-1/2 left-1/2 z-50 flex w-[26rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl">
           <AlertDialog.Title className="text-base font-semibold">Changes not saved</AlertDialog.Title>
           <AlertDialog.Description className="text-sm text-muted-foreground">
             Your latest changes could not be saved before {leave ? ACTIONS[leave.kind] : "leaving"}

@@ -34,9 +34,11 @@ export interface StartFlowState {
    * Starts a recording as the capture area says: every display at once, or
    * after picking a display or a window or drawing a region. With one
    * display connected, One display starts on it at once. The New Guide dialog and
-   * `recording://pick-area` both come here. Ignored unless idle.
+   * `recording://pick-area` both come here. `area` overrides the stored
+   * capture area for this recording (the library's Record buttons). Ignored
+   * unless idle.
    */
-  begin(): Promise<void>;
+  begin(area?: CaptureArea): Promise<void>;
   /** Re-reads the windows into the open picker. */
   reloadWindows(): Promise<void>;
   /** Starts recording the window; the picker closes once it started. */
@@ -74,10 +76,10 @@ export function createStartFlow({ recording, picker, captureArea }: StartFlowOpt
       windowPicker: null,
       displayPicker: null,
 
-      async begin() {
+      async begin(area) {
         const { status, pending } = recording.getState();
         if (status.state !== "idle" || pending || get().displayPicker) return;
-        switch (startChoice(captureArea())) {
+        switch (startChoice(area ?? captureArea())) {
           case "display":
             await recording.getState().start();
             return;

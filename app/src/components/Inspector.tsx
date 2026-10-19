@@ -8,7 +8,7 @@ import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from 
 import type { AiState, ImageShow, Step, StepKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const KIND_LABELS: Record<StepKind, string> = {
+export const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",
   doubleClick: "Double click",
   rightClick: "Right click",
@@ -27,14 +27,15 @@ const AI_LABELS: Record<AiState["status"], string> = {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-sm break-words">{children}</dd>
-    </div>
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </>
   );
 }
 
-const HEADING = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
+const HEADING = "text-[11px] font-semibold tracking-wide text-muted-foreground uppercase";
+const FIELDS = "grid grid-cols-[5rem_1fr] gap-x-3 gap-y-2 text-[13px]";
 
 /** The step's hotspots by number; a click selects one in the annotation editor. */
 function HotspotList({ step, readOnly }: { step: Step; readOnly: boolean }) {
@@ -102,15 +103,20 @@ export function Inspector() {
     editorStore.getState().dispatch(setImageShow(editorStore.getState().doc!.guide, item.id, value));
 
   return (
-    <div className="flex flex-col gap-5 p-4">
+    <div className="flex flex-col gap-6 p-4 pt-5">
       <section className="flex flex-col gap-2">
         <h2 className={HEADING}>Image</h2>
-        <div className="flex gap-1" role="group" aria-label="Image">
+        <div className="flex gap-0.5 rounded-lg bg-foreground/[0.06] p-0.5" role="group" aria-label="Image">
           {(["crop", "full"] as const).map((value) => (
             <Button
               key={value}
               size="sm"
-              variant={image.show === value ? "default" : "outline"}
+              variant="ghost"
+              aria-pressed={image.show === value}
+              className={cn(
+                "h-7 flex-1 rounded-md",
+                image.show === value && "bg-card text-card-foreground shadow-sm hover:bg-card",
+              )}
               disabled={readOnly || (value === "crop" && !image.crop)}
               title={IMAGE_SHOW_HINTS[value]}
               onClick={() => show(value)}
@@ -122,11 +128,11 @@ export function Inspector() {
       </section>
       <section className="flex flex-col gap-2">
         <h2 className={HEADING}>Step</h2>
-        <dl className="flex flex-col gap-2">
+        <dl className={FIELDS}>
           <Field label="Action">{KIND_LABELS[item.kind]}</Field>
           {item.keystrokes && (
             <Field label="Keystrokes">
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{item.keystrokes}</code>
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{item.keystrokes}</code>
             </Field>
           )}
           {item.point && (
@@ -135,14 +141,16 @@ export function Inspector() {
               {item.endPoint && ` → ${Math.round(item.endPoint.x)}, ${Math.round(item.endPoint.y)}`}
             </Field>
           )}
-          <Field label="Text">{AI_LABELS[item.aiState.status]}</Field>
+          <Field label="Text">
+            <span className={cn(item.aiState.status === "ai" && "font-medium text-ai")}>{AI_LABELS[item.aiState.status]}</span>
+          </Field>
         </dl>
       </section>
       {item.annotations.some((a) => a.type === "hotspot") && <HotspotList step={item} readOnly={readOnly} />}
       {element && (
         <section className="flex flex-col gap-2">
           <h2 className={HEADING}>Element</h2>
-          <dl className="flex flex-col gap-2">
+          <dl className={FIELDS}>
             {element.label && <Field label="Label">{element.label}</Field>}
             {element.role && <Field label="Role">{element.role}</Field>}
             {element.app && <Field label="App">{element.app}</Field>}

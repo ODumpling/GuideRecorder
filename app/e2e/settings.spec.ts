@@ -88,3 +88,23 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await expect(exportDialog.getByRole("radio", { name: /HTML/ })).toHaveAttribute("aria-checked", "true");
   await expect(exportDialog.getByText("Exports", { exact: true })).toBeVisible();
 });
+
+test("switches the theme, starting from Arctic", async ({ page, backend }) => {
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-theme", "arctic");
+  await expect(html).not.toHaveClass(/\bdark\b/);
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Appearance" }).click();
+  await expect(dialog.getByRole("radio", { name: "Arctic" })).toHaveAttribute("aria-checked", "true");
+
+  await dialog.getByRole("radio", { name: "Nebula" }).click();
+  await expect.poll(() => backend.settings.general.theme).toBe("nebula");
+  await expect(html).toHaveAttribute("data-theme", "nebula");
+  await expect(html).toHaveClass(/\bdark\b/);
+
+  await dialog.getByRole("radio", { name: "Sage & Linen" }).click();
+  await expect.poll(() => backend.settings.general.theme).toBe("sage");
+  await expect(html).toHaveAttribute("data-theme", "sage");
+  await expect(html).not.toHaveClass(/\bdark\b/);
+});

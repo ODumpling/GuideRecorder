@@ -68,6 +68,14 @@ describe("start flow", () => {
     expect(store.getState().status.state).toBe("recording");
   });
 
+  it("an area passed to begin overrides the stored one", async () => {
+    const { api, picker, flow } = setup("display");
+    await flow.getState().begin("window");
+    expect(api.start).not.toHaveBeenCalled();
+    expect(picker.listCaptureWindows).toHaveBeenCalled();
+    expect(flow.getState().windowPicker).toEqual({ windows: WINDOWS, loadError: null, startError: null });
+  });
+
   it("settings not loaded: starts like display", async () => {
     const { api, flow } = setup(null);
     await flow.getState().begin();

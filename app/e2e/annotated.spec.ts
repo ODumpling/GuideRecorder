@@ -56,7 +56,7 @@ test("makes an annotation guide and explains a page with a hotspot, undoably", a
   await expect(page.getByRole("toolbar", { name: "page actions" })).toBeVisible();
   // Walkthrough-only controls are left out.
   await expect(page.getByRole("button", { name: "Write with AI" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "AI actions" })).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "AI actions" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Regenerate guide details" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Split" })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Image" })).toHaveCount(0);

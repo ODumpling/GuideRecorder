@@ -13,9 +13,10 @@ const status = (page: Page, id: string) => outlineItem(page, id).getByTestId("st
 const stepTitle = (page: Page) => page.getByRole("textbox", { name: "Step title" });
 const undo = (page: Page) => page.getByRole("button", { name: "Undo" }).click();
 
+const aiActions = (page: Page) => page.getByRole("toolbar", { name: "AI actions" });
+
 async function aiAction(page: Page, name: string) {
-  await page.getByRole("button", { name: "AI actions" }).click();
-  await page.getByRole("menuitem", { name }).click();
+  await aiActions(page).getByRole("button", { name, exact: true }).click();
 }
 
 test.beforeEach(async ({ page, backend }) => {
@@ -151,11 +152,9 @@ test("explicit actions wait for a background run", async ({ page, backend }) => 
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Regenerate guide details" })).toBeDisabled();
   await outlineItem(page, STEP_1).click();
-  await page.getByRole("button", { name: "AI actions" }).click();
-  await expect(page.getByRole("menu")).toContainText("AI is writing this guide. Wait for it to finish, or stop it.");
-  await expect(page.getByRole("menuitem", { name: "Regenerate" })).toBeDisabled();
-  await expect(page.getByRole("menuitem", { name: "Shorter" })).toBeDisabled();
-  await page.keyboard.press("Escape");
+  await expect(aiActions(page)).toContainText("AI is writing this guide. Wait for it to finish, or stop it.");
+  await expect(aiActions(page).getByRole("button", { name: "Regenerate", exact: true })).toBeDisabled();
+  await expect(aiActions(page).getByRole("button", { name: "Shorter", exact: true })).toBeDisabled();
 
   await emitEvents(page, backend.aiRelease());
   await expect(page.getByRole("button", { name: "Write with AI" })).toBeVisible();

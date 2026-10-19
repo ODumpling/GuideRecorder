@@ -5,7 +5,7 @@ import { createSettingsStore } from "@/settings/store";
 
 const DEFAULTS: Settings = {
   version: 2,
-  general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
+  general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic" },
   recording: {
     hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },
     captureArea: "display",

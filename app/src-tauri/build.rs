@@ -32,6 +32,7 @@ const COMMANDS: &[&str] = &[
     "move_guide",
     "reveal_in_library",
     "step_image",
+    "guide_cover",
     "add_image_step",
     "new_annotated_guide",
     "add_annotated_pages",

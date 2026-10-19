@@ -35,6 +35,8 @@ export interface MarkdownEditorProps {
   placeholder?: string;
   label: string;
   className?: string;
+  /** No border until hovered or focused: text that reads like the page (step titles, descriptions). */
+  bare?: boolean;
 }
 
 function ToolbarButton({
@@ -203,6 +205,7 @@ export default function MarkdownEditor({
   placeholder,
   label,
   className,
+  bare = false,
 }: MarkdownEditorProps) {
   // The Markdown the editor content stands for, to tell our own edits from
   // outside changes (undo, redo, AI).
@@ -303,7 +306,10 @@ export default function MarkdownEditor({
   return (
     <div
       className={cn(
-        "group flex flex-col gap-1 rounded-md border border-input focus-within:ring-2 focus-within:ring-ring",
+        "group flex flex-col gap-1 rounded-md border",
+        bare
+          ? "-mx-2.5 border-transparent transition-colors hover:bg-foreground/[0.03] focus-within:border-border focus-within:bg-card focus-within:shadow-sm"
+          : "border-input focus-within:ring-2 focus-within:ring-ring",
         readOnly && "opacity-60",
         className,
       )}

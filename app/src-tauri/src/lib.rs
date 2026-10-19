@@ -191,6 +191,7 @@ pub fn run() {
             commands::move_guide,
             commands::reveal_in_library,
             commands::step_image,
+            commands::guide_cover,
             commands::add_image_step,
             commands::new_annotated_guide,
             commands::add_annotated_pages,

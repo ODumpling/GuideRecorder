@@ -149,7 +149,7 @@ export class Backend {
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 2,
-    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
+    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic" },
     recording: {
       hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },
       captureArea: "display",
@@ -708,6 +708,12 @@ export class Backend {
         // A JSON number array, as over Tauri's postMessage fallback.
         return [...bytes];
       }
+      case "guide_cover": {
+        const { guide, files } = this.bundle(String(args.guideId));
+        const step = guide.items.find((item) => item.type === "step" && item.image.full);
+        const bytes = step?.type === "step" ? files.get(step.image.full) : undefined;
+        return bytes ? [...bytes] : [];
+      }
       case "copy_step_images": {
         const bundle = this.bundle(String(args.guideId));
         const image = args.image as StepImage;
@@ -940,6 +946,9 @@ export class Backend {
         this.setUpdate({ state: "ready", version: status.version }, "after");
         return null;
       }
+      // The main window's title bar follows the theme.
+      case "plugin:window|set_theme":
+        return null;
       case "restart_to_update":
         if (this.updateStatus.state !== "ready") return fail("invalid", "no update is installed yet");
         this.restartedToUpdate = true;

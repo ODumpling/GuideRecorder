@@ -38,6 +38,8 @@ export interface EditorState {
   statusFilter: StatusFilter | null;
   /** The sidebar's owner filter (case-insensitive); null shows every guide. */
   owner: string | null;
+  /** The library folder shown, with its subfolders; null shows every guide. */
+  folder: string | null;
   sort: GuideSort;
   listError: string | null;
 
@@ -70,6 +72,7 @@ export interface EditorState {
   setTag(tag: string | null): void;
   setStatusFilter(filter: StatusFilter | null): void;
   setOwner(owner: string | null): void;
+  setFolder(folder: string | null): void;
   setSort(sort: GuideSort): void;
   /** Makes a folder in `parent` (`""`: the top). False if it failed (in `notice`). */
   createFolder(parent: string, name: string): Promise<boolean>;
@@ -435,6 +438,7 @@ export function createEditorStore({
       tag: null,
       statusFilter: null,
       owner: null,
+      folder: null,
       sort: "updated",
       listError: null,
       doc: null,
@@ -482,6 +486,10 @@ export function createEditorStore({
 
       setOwner(owner) {
         set({ owner });
+      },
+
+      setFolder(folder) {
+        set({ folder });
       },
 
       setSort(sort) {

@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GuideRecorder — redesign mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+<style>
+  /* ---------- page chrome (outside the mock window) ---------- */
+  .wrap { font-family: Inter, -apple-system, system-ui, sans-serif; }
+  .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: color-mix(in oklab, var(--foreground, #888) 8%, transparent); }
+  .seg button { all: unset; cursor: pointer; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 7px; color: var(--muted-foreground, #777); }
+  .seg button.on { background: var(--card, #fff); color: var(--foreground, #111); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .seg button { display: inline-flex; align-items: center; gap: 6px; }
+  .tdot { width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg, var(--a) 50%, var(--b) 50%); box-shadow: inset 0 0 0 1px rgba(127,127,127,.35); }
+  .hint { font-size: 12px; color: var(--muted-foreground, #777); margin-left: auto; }
+  #fit { position: relative; width: 100%; }
+
+  /* ---------- design tokens ---------- */
+  .app {
+    --serif: "Instrument Serif", "New York", ui-serif, Georgia, serif;
+    --sans: Inter, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --draft: #8A857B; --review: #D4931A; --pub: #3A9A68; --stale: #E8543A;
+  }
+  .app.light {
+    --bg: #F5F3EE; --panel: #FBFAF7; --surface: #FFFFFF; --side: #EEEBE4;
+    --ink: #1D1C1A; --ink2: #4A4740; --muted: #8A857B; --line: #E3DFD6; --line2: #ECE9E2;
+    --hover: rgba(29,28,26,.05); --sel: #FFFFFF; --accent: #E8543A; --accent-soft: #FCE8E2;
+    --ai: #6B5BE6; --ai-soft: #EEEBFD; --btn: #1D1C1A; --btn-ink: #FFFFFF;
+    --shadow: 0 1px 2px rgba(30,25,15,.06), 0 6px 20px rgba(30,25,15,.07);
+    --shadow-lg: 0 2px 6px rgba(30,25,15,.08), 0 24px 60px rgba(30,25,15,.18);
+  }
+  .app.dark {
+    --bg: #161615; --panel: #1B1A19; --surface: #222120; --side: #121211;
+    --ink: #EEECE7; --ink2: #C4C0B7; --muted: #8D887F; --line: #2E2C29; --line2: #262422;
+    --hover: rgba(255,255,255,.05); --sel: #2A2826; --accent: #F0644A; --accent-soft: rgba(240,100,74,.16);
+    --ai: #A397FF; --ai-soft: rgba(163,151,255,.15); --btn: #EEECE7; --btn-ink: #1B1A19;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+    --shadow-lg: 0 2px 6px rgba(0,0,0,.4), 0 24px 60px rgba(0,0,0,.55);
+  }
+
+  /* ---------- theme 1: Nebula — deep space violet, magenta + cyan, starfield ---------- */
+  .app.nebula {
+    --bg: #0B0918; --panel: rgba(22,17,48,.72); --surface: rgba(32,25,68,.82); --side: rgba(14,10,34,.66);
+    --ink: #EEEAFF; --ink2: #C6BFEE; --muted: #8E86BC; --line: rgba(170,150,255,.16); --line2: rgba(170,150,255,.09);
+    --hover: rgba(170,150,255,.09); --sel: rgba(126,92,255,.22); --accent: #FF4FB8; --accent-ink: #fff; --accent-soft: rgba(255,79,184,.16);
+    --ai: #6FE3FF; --ai-soft: rgba(111,227,255,.12); --btn: linear-gradient(135deg, #7B5CFF, #D14BFF); --btn-ink: #fff;
+    --draft: #8E86BC; --review: #FFC857; --pub: #4BE3A8; --stale: #FF5E8A;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(8,0,40,.55);
+    --shadow-lg: 0 0 0 1px rgba(170,150,255,.14), 0 24px 60px rgba(8,0,40,.7), 0 0 60px rgba(123,92,255,.18);
+    --bg-img: radial-gradient(900px 520px at 12% -8%, rgba(140,70,255,.42), transparent 62%),
+              radial-gradient(760px 520px at 104% 104%, rgba(0,190,255,.22), transparent 60%),
+              radial-gradient(620px 420px at 68% 34%, rgba(255,60,170,.16), transparent 60%);
+    --desk: radial-gradient(900px 600px at 20% 10%, #6A3CFF 0%, transparent 60%), radial-gradient(800px 700px at 90% 85%, #00B8E6 0%, transparent 55%),
+            radial-gradient(700px 500px at 60% 45%, #E040A0 0%, transparent 65%), #0B0918;
+  }
+  .app.nebula::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .55;
+    background-image: radial-gradient(1px 1px at 12px 18px, #fff, transparent), radial-gradient(1px 1px at 88px 64px, #cfe8ff, transparent),
+      radial-gradient(1.5px 1.5px at 150px 120px, #fff, transparent), radial-gradient(1px 1px at 40px 150px, #e6d8ff, transparent),
+      radial-gradient(1px 1px at 190px 30px, #fff, transparent);
+    background-size: 220px 180px; }
+
+  /* ---------- theme 2: Blue Steel & Brass — gunmetal blues, polished brass ---------- */
+  .app.steel {
+    --bg: #1A2129; --panel: #1F2731; --surface: #26303B; --side: #161C23;
+    --ink: #E6EAEE; --ink2: #B5C0CB; --muted: #7D8A97; --line: #33404D; --line2: #2A3540;
+    --hover: rgba(180,200,220,.06); --sel: #2D3947; --accent: #C9A35B; --accent-ink: #1A1F26; --accent-soft: rgba(201,163,91,.16);
+    --ai: #8FB3D9; --ai-soft: rgba(143,179,217,.14); --btn: linear-gradient(180deg, #E0BF78, #A9843F); --btn-ink: #1A1F26;
+    --draft: #7D8A97; --review: #D9A441; --pub: #6FB58E; --stale: #D96B4E;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 6px 20px rgba(0,0,0,.35);
+    --shadow-lg: 0 0 0 1px rgba(201,163,91,.12), 0 24px 60px rgba(0,0,0,.6);
+    --bg-img: radial-gradient(1000px 400px at 50% -10%, rgba(143,179,217,.12), transparent 70%),
+              repeating-linear-gradient(90deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px);
+    --desk: radial-gradient(900px 500px at 25% 15%, rgba(201,163,91,.45), transparent 60%), linear-gradient(160deg, #3D4E62, #18202A);
+  }
+  .app.steel .tb { box-shadow: inset 0 -1px 0 rgba(201,163,91,.18); }
+
+  /* ---------- theme 3: Sage & Linen — calm natural light theme ---------- */
+  .app.sage {
+    --bg: #F1F0E8; --panel: #F8F7F1; --surface: #FFFFFF; --side: #E6E8DC;
+    --ink: #1F2A22; --ink2: #44524A; --muted: #7E8A80; --line: #D8DCCE; --line2: #E3E6DA;
+    --hover: rgba(31,42,34,.05); --sel: #FFFFFF; --accent: #3F7D5C; --accent-ink: #fff; --accent-soft: #DCEBE2;
+    --ai: #B0643C; --ai-soft: #F5E5DB; --btn: #2C4A3A; --btn-ink: #F4F3EC;
+    --draft: #8B958C; --review: #C4902B; --pub: #3F7D5C; --stale: #C0533A;
+    --shadow: 0 1px 2px rgba(30,45,35,.06), 0 6px 20px rgba(30,45,35,.07);
+    --shadow-lg: 0 2px 6px rgba(30,45,35,.08), 0 24px 60px rgba(30,45,35,.16);
+    --desk: radial-gradient(1000px 600px at 20% 10%, #C9DCC0 0%, transparent 60%), radial-gradient(800px 600px at 90% 90%, #E7C9A8 0%, transparent 60%), #8FAE97;
+  }
+
+  /* ---------- theme 4: Arctic — crisp cool whites, cobalt + glacier teal ---------- */
+  .app.arctic {
+    --bg: #EEF3F8; --panel: #F8FAFD; --surface: #FFFFFF; --side: #E2E9F2;
+    --ink: #0F1B2D; --ink2: #3B4B60; --muted: #7A889B; --line: #D4DDE8; --line2: #E2E8F0;
+    --hover: rgba(15,27,45,.05); --sel: #FFFFFF; --accent: #2563EB; --accent-ink: #fff; --accent-soft: #DCE7FD;
+    --ai: #0E9FB3; --ai-soft: #D8F2F5; --btn: #0F1B2D; --btn-ink: #FFFFFF;
+    --draft: #7A889B; --review: #D99A16; --pub: #13976B; --stale: #E04848;
+    --shadow: 0 1px 2px rgba(15,27,45,.06), 0 6px 20px rgba(15,27,45,.07);
+    --shadow-lg: 0 2px 6px rgba(15,27,45,.08), 0 24px 60px rgba(15,27,45,.16);
+    --bg-img: radial-gradient(900px 400px at 80% -10%, rgba(37,99,235,.08), transparent 70%);
+    --desk: radial-gradient(1000px 600px at 15% 10%, #B9D6FF 0%, transparent 60%), radial-gradient(800px 600px at 90% 90%, #9FE3EC 0%, transparent 60%), #5D7FA8;
+  }
+
+  /* ---------- theme 5: Graphite & Lime — near-black, electric lime ---------- */
+  .app.lime {
+    --bg: #121314; --panel: #17181A; --surface: #1D1F21; --side: #0E0F10;
+    --ink: #ECEDEE; --ink2: #B9BCBF; --muted: #7E8286; --line: #2A2C2F; --line2: #222426;
+    --hover: rgba(255,255,255,.05); --sel: #25272A; --accent: #C6F432; --accent-ink: #121314; --accent-soft: rgba(198,244,50,.12);
+    --ai: #B69CFF; --ai-soft: rgba(182,156,255,.14); --btn: #C6F432; --btn-ink: #121314;
+    --draft: #7E8286; --review: #F5B83D; --pub: #4FD18B; --stale: #FF6B5A;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 6px 20px rgba(0,0,0,.4);
+    --shadow-lg: 0 2px 6px rgba(0,0,0,.5), 0 24px 60px rgba(0,0,0,.6);
+    --desk: radial-gradient(900px 600px at 80% 20%, rgba(198,244,50,.28), transparent 60%), linear-gradient(160deg, #2A2D31, #0E0F10);
+  }
+
+  /* ---------- stage ---------- */
+  .stage {
+    width: 1280px; height: 800px; position: absolute; top: 0; left: 0; transform-origin: top left;
+    border-radius: 14px; overflow: hidden; background-color: var(--bg); background-image: var(--bg-img, none); color: var(--ink);
+    font-family: var(--sans); font-size: 13px; line-height: 1.4; -webkit-font-smoothing: antialiased;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 30px 80px rgba(0,0,0,.25);
+  }
+  .screen { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .screen.on { display: flex; }
+  svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  button { font: inherit; color: inherit; }
+  kbd { font-family: var(--sans); font-size: 11px; color: var(--muted); background: var(--hover); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  .serif { font-family: var(--serif); font-weight: 400; letter-spacing: -.01em; }
+
+  /* titlebar */
+  .tb { height: 52px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); position: relative; }
+  .lights { display: flex; gap: 8px; margin-right: 10px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; }
+  .lights i:nth-child(2) { background: #FEBC2E; } .lights i:nth-child(3) { background: #28C840; }
+  .ib { all: unset; box-sizing: border-box; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--ink2); cursor: pointer; }
+  .ib:hover { background: var(--hover); }
+  .ib.dis { opacity: .35; }
+  .btn { all: unset; box-sizing: border-box; height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 7px; border-radius: 8px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .btn.ink { background: var(--btn); color: var(--btn-ink); }
+  .btn.ghost { color: var(--ink2); } .btn.ghost:hover { background: var(--hover); }
+  .btn.line { border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  .btn.ai { color: var(--ai); background: var(--ai-soft); }
+  .btn.rec { background: var(--accent); color: var(--accent-ink, #fff); padding: 0 12px 0 10px; box-shadow: 0 1px 0 rgba(255,255,255,.2) inset, 0 2px 8px color-mix(in oklab, var(--accent) 40%, transparent); }
+  .btn.rec kbd { background: rgba(127,127,127,.22); border-color: transparent; color: inherit; }
+  .btn.rec .recdot { background: currentColor; }
+  .recdot { width: 9px; height: 9px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,.3); }
+  .search { position: absolute; left: 50%; transform: translateX(-50%); width: 420px; height: 32px; border-radius: 9px; background: var(--hover); border: 1px solid var(--line2); display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--muted); }
+  .search kbd { margin-left: auto; }
+  .sp { flex: 1; }
+  .vsep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
+  /* pills */
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 2px 8px 2px 7px; border-radius: 99px; background: var(--hover); color: var(--ink2); white-space: nowrap; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c, var(--muted)); }
+  .pill.draft { --c: var(--draft); } .pill.review { --c: var(--review); } .pill.pub { --c: var(--pub); } .pill.stale { --c: var(--stale); }
+  .pill.plain::before { display: none; }
+  .avatar { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 9.5px; font-weight: 600; color: #fff; background: var(--a, #7a6); flex: none; }
+
+  /* ---------- sidebar (library) ---------- */
+  .body { flex: 1; display: flex; min-height: 0; }
+  .side { width: 232px; flex: none; background: var(--side); border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
+  .grp h6 { margin: 0 0 4px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .nav { display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border-radius: 7px; color: var(--ink2); cursor: pointer; }
+  .nav:hover { background: var(--hover); }
+  .nav.on { background: var(--sel); color: var(--ink); font-weight: 500; box-shadow: var(--shadow); }
+  .nav .n { margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .nav .n.warn { color: var(--stale); font-weight: 600; }
+  .nav .sw { width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin: 0 4px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 8px; }
+  .tag { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: var(--hover); color: var(--ink2); border: 1px solid var(--line2); }
+  .side-foot { margin-top: auto; padding: 10px; border-radius: 10px; background: var(--hover); font-size: 11.5px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
+  .side-foot b { color: var(--ink2); font-weight: 500; display: block; }
+
+  /* ---------- library main ---------- */
+  .lib { flex: 1; overflow: hidden; padding: 30px 36px; }
+  .lib-head { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 22px; }
+  .lib-head h1 { font-size: 40px; line-height: 1; margin: 0; }
+  .lib-head p { margin: 6px 0 0; color: var(--muted); }
+  .lib-head p b { color: var(--stale); font-weight: 500; }
+  .vseg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--hover); }
+  .vseg span { width: 28px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: var(--muted); }
+  .vseg span.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .quick { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 28px; }
+  .qt { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; gap: 12px; align-items: center; cursor: pointer; transition: transform .15s, box-shadow .15s; }
+  .qt:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+  .qt .qi { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: var(--hover); color: var(--ink2); flex: none; }
+  .qt .qi svg { width: 18px; height: 18px; }
+  .qt b { display: block; font-weight: 600; font-size: 13px; }
+  .qt small { color: var(--muted); font-size: 12px; }
+  .qt.main { background: var(--btn); border-color: transparent; color: var(--btn-ink); }
+  .qt.main small { color: color-mix(in oklab, var(--btn-ink) 60%, transparent); }
+  .qt.main .qi { background: var(--accent); color: var(--accent-ink, #fff); }
+  .qt.main kbd { margin-left: auto; background: rgba(127,127,127,.2); border-color: transparent; color: inherit; opacity: .8; }
+  .row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+  .row-head h2 { margin: 0 10px 0 0; font-size: 15px; font-weight: 600; }
+  .chip { font-size: 12px; padding: 4px 10px; border-radius: 99px; color: var(--ink2); cursor: pointer; }
+  .chip.on { background: var(--btn); color: var(--btn-ink); }
+  .chip:not(.on):hover { background: var(--hover); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { cursor: pointer; }
+  .card .thumb { position: relative; aspect-ratio: 16/10; border-radius: 12px; overflow: hidden; background: var(--side); border: 1px solid var(--line); transition: box-shadow .2s, transform .2s; }
+  .card:hover .thumb { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+  .card .thumb .shot { position: absolute; left: 9%; top: 12%; width: 100%; border-radius: 8px 0 0 0; box-shadow: var(--shadow); }
+  .badge { position: absolute; left: 10px; bottom: 10px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(20,20,18,.78); color: #fff; backdrop-filter: blur(6px); display: flex; gap: 5px; align-items: center; }
+  .badge svg { width: 12px; height: 12px; }
+  .due { position: absolute; right: 10px; top: 10px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: var(--stale); color: #fff; }
+  .ring { position: absolute; width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid var(--accent); box-shadow: 0 0 0 5px color-mix(in oklab, var(--accent) 22%, transparent); transform: translate(-50%,-50%); }
+  .c-title { font-weight: 600; font-size: 14px; margin: 11px 2px 5px; letter-spacing: -.005em; }
+  .c-meta { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin: 0 2px; }
+  .c-meta .avatar { margin-left: auto; }
+
+  /* ---------- fake screenshots (always light; they're pictures) ---------- */
+  .shot { container-type: inline-size; background: #fff; overflow: hidden; display: flex; flex-direction: column; }
+  .s-bar { height: 6cqw; background: #F1F1F3; border-bottom: 1px solid #E4E4E8; display: flex; align-items: center; gap: 1.2cqw; padding: 0 2.4cqw; flex: none; }
+  .s-bar i { width: 1.6cqw; height: 1.6cqw; border-radius: 50%; background: #D5D5DA; }
+  .s-body { flex: 1; display: flex; height: 56cqw; }
+  .s-nav { width: 20%; background: #F7F7F9; border-right: 1px solid #ECECEF; padding: 3cqw 2.4cqw; display: flex; flex-direction: column; gap: 2.4cqw; }
+  .s-nav i { height: 1.6cqw; border-radius: 1cqw; background: #DEDEE3; }
+  .s-nav i.on { background: var(--h); opacity: .8; }
+  .s-main { flex: 1; padding: 4cqw; display: flex; flex-direction: column; gap: 2.6cqw; }
+  .s-h { height: 3cqw; width: 40%; border-radius: 1cqw; background: #2B2B33; opacity: .85; }
+  .s-row { display: flex; gap: 2cqw; align-items: center; }
+  .s-row i { height: 1.8cqw; border-radius: 1cqw; background: #E3E3E8; flex: 1; }
+  .s-row i.k { flex: .4; background: #C9C9D1; }
+  .s-field { height: 5cqw; border: 1px solid #E1E1E6; border-radius: 1.2cqw; flex: 1; }
+  .s-btn { height: 5cqw; width: 18cqw; border-radius: 1.2cqw; background: var(--h); margin-left: auto; }
+  .s-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 2cqw; }
+  .s-cards i { height: 11cqw; border-radius: 1.6cqw; background: #F2F2F5; border: 1px solid #E8E8EC; }
+  .s-chart { flex: 1; display: flex; align-items: flex-end; gap: 1.6cqw; padding-top: 2cqw; }
+  .s-chart i { flex: 1; background: var(--h); opacity: .55; border-radius: .8cqw .8cqw 0 0; }
+  .s-plan { height: 44cqw; flex: none; display: grid; grid-template-columns: 2fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 1cqw; background: #CFC8BA; padding: 1cqw; border-radius: 1cqw; }
+  .s-plan i { background: #F5F1E8; border-radius: .5cqw; position: relative; }
+  .s-plan i:first-child { grid-row: span 2; }
+  .s-plan b { position: absolute; width: 4cqw; height: 4cqw; border-radius: 50%; background: var(--h); color: #fff; font-size: 2.4cqw; display: grid; place-items: center; }
+
+  /* ---------- editor ---------- */
+  .crumb { display: flex; align-items: center; gap: 6px; color: var(--muted); min-width: 0; }
+  .crumb b { color: var(--ink); font-weight: 600; }
+  .saved { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-right: 6px; }
+  .saved svg { width: 14px; height: 14px; color: var(--pub); }
+  .outline { width: 264px; flex: none; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .ol-top { padding: 12px 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .ol-scroll { flex: 1; overflow: hidden; padding: 0 10px; }
+  .sec { display: flex; align-items: center; gap: 6px; padding: 14px 8px 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .sec::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .st { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 9px; cursor: pointer; position: relative; }
+  .st:hover { background: var(--hover); }
+  .st.on { background: var(--sel); box-shadow: var(--shadow); }
+  .st .num { width: 18px; text-align: right; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+  .st.on .num { color: var(--accent); font-weight: 600; }
+  .st .mini { width: 54px; flex: none; border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+  .st .lbl { font-size: 12.5px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--ink2); }
+  .st.on .lbl { color: var(--ink); }
+  .st .lbl b { font-weight: 600; color: var(--ink); }
+  .st .ai-mark { position: absolute; right: 8px; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--ai); }
+  .st .ai-mark.ed { background: transparent; border: 1.5px solid var(--muted); width: 5px; height: 5px; }
+  .note-row { display: flex; gap: 8px; align-items: flex-start; margin: 4px 6px; padding: 8px 10px; border-radius: 9px; background: color-mix(in oklab, var(--review) 12%, transparent); color: var(--ink2); font-size: 12px; }
+  .note-row svg { color: var(--review); width: 14px; height: 14px; margin-top: 1px; }
+  .ol-foot { padding: 10px; border-top: 1px solid var(--line); display: flex; gap: 6px; }
+  .ol-foot .btn { padding: 0 6px; gap: 4px; font-size: 12px; flex: 1; justify-content: center; border: 1px dashed var(--line); color: var(--muted); }
+
+  .canvas { flex: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; padding: 22px 40px 0; }
+  .canvas-inner { width: 648px; }
+  .st-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .eyebrow span { color: var(--muted); }
+  .st-head .pill { font-size: 11px; }
+  .tools { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); width: max-content; margin: 0 auto -20px; position: relative; z-index: 3; }
+  .tool { width: 32px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--ink2); cursor: pointer; }
+  .tool:hover { background: var(--hover); }
+  .tool.on { background: var(--btn); color: var(--btn-ink); }
+  .swatch { width: 16px; height: 16px; border-radius: 50%; margin: 0 4px; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--ink); }
+  .frame { position: relative; width: 648px; height: 380px; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-lg); border: 1px solid var(--line); }
+
+  /* the big screenshot: a pretend expenses app */
+  .ex { position: absolute; inset: 0; background: #fff; color: #1f2430; font-family: -apple-system, "SF Pro Text", Inter, sans-serif; font-size: 11px; }
+  .ex-bar { height: 28px; background: #F2F2F4; border-bottom: 1px solid #E3E3E8; display: flex; align-items: center; padding: 0 10px; gap: 6px; }
+  .ex-bar i { width: 9px; height: 9px; border-radius: 50%; background: #D3D3D8; }
+  .ex-bar span { margin: 0 auto; color: #6b6f7a; font-size: 10.5px; }
+  .ex-nav { position: absolute; left: 0; top: 28px; bottom: 0; width: 130px; background: #F7F8FA; border-right: 1px solid #ECEDF1; padding: 12px 8px; }
+  .ex-nav div { padding: 5px 8px; border-radius: 6px; color: #5a6070; margin-bottom: 2px; }
+  .ex-nav div.on { background: #E5EDFF; color: #2F6BFF; font-weight: 600; }
+  .ex-main { position: absolute; left: 130px; right: 0; top: 28px; padding: 16px 18px; }
+  .ex-main h3 { margin: 0; font-size: 15px; }
+  .ex-main .amt { position: absolute; right: 18px; top: 14px; font-size: 18px; font-weight: 700; }
+  .ex-main .sub { color: #8a8f9b; margin: 2px 0 12px; }
+  .ex table { width: 100%; border-collapse: collapse; }
+  .ex th { text-align: left; font-weight: 500; color: #8a8f9b; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 6px 4px; border-bottom: 1px solid #ECEDF1; }
+  .ex td { padding: 7px 4px; border-bottom: 1px solid #F1F2F5; }
+  .ex td:last-child, .ex th:last-child { text-align: right; }
+  .ex .rc { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #E8F5EE; color: #2E9A62; text-align: center; line-height: 14px; font-size: 9px; }
+  .ex-foot { position: absolute; left: 130px; right: 0; bottom: 0; height: 52px; border-top: 1px solid #ECEDF1; background: #FAFBFC; }
+  .ex-email { position: absolute; left: 18px; top: 18px; color: #4a5060; }
+  .ex-b { position: absolute; top: 12px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-weight: 600; padding: 0 12px; }
+  .ex-b.s { right: 140px; border: 1px solid #DADCE3; background: #fff; color: #3a4050; }
+  .ex-b.p { right: 18px; background: #2F6BFF; color: #fff; }
+
+  /* annotations */
+  .an-box { position: absolute; border: 2.5px solid var(--accent); border-radius: 10px; box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 18%, transparent); }
+  .an-num { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-ink, #fff); font-weight: 700; font-size: 11.5px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+  .an-call { position: absolute; background: #1D1C1A; color: #fff; padding: 7px 10px; border-radius: 9px; font-size: 12px; font-weight: 500; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+  .an-blur { position: absolute; border-radius: 6px; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); background: rgba(255,255,255,.15); outline: 1.5px dashed var(--review); outline-offset: 2px; }
+  .an-sugg { position: absolute; display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 9px; border-radius: 8px; background: #fff; color: #1D1C1A; font-size: 11px; font-weight: 500; box-shadow: 0 4px 14px rgba(0,0,0,.18); border: 1px solid #eee; }
+  .an-sugg svg { width: 12px; height: 12px; }
+  .an-sugg .mb { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; background: #F2F1EE; }
+  .an-sugg .mb.y { background: #1D1C1A; color: #fff; }
+  .handle { position: absolute; width: 8px; height: 8px; background: #fff; border: 1.5px solid var(--accent); border-radius: 2px; transform: translate(-50%,-50%); }
+
+  .st-title { font-size: 30px; line-height: 1.15; margin: 22px 0 8px; outline: none; }
+  .st-title b { font-weight: 400; font-style: italic; }
+  .st-desc { color: var(--ink2); font-size: 14px; line-height: 1.6; margin: 0 0 16px; }
+  .st-desc b { color: var(--ink); font-weight: 600; }
+  .ai-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .ai-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--ink2); font-size: 12px; cursor: pointer; }
+  .ai-chip:hover { border-color: var(--ai); color: var(--ai); }
+  .ai-chip svg { width: 14px; height: 14px; }
+  .ai-chip.lead { background: var(--ai-soft); color: var(--ai); border-color: transparent; font-weight: 500; }
+  .stepnav { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  .insp { width: 288px; flex: none; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .tabs { display: flex; gap: 2px; padding: 10px 12px 0; border-bottom: 1px solid var(--line); }
+  .tab { padding: 8px 10px 10px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: flex; gap: 6px; align-items: center; }
+  .tab.on { color: var(--ink); border-color: var(--ink); }
+  .tab .ct { font-size: 10.5px; font-weight: 600; background: var(--review); color: #fff; border-radius: 99px; padding: 0 6px; line-height: 16px; }
+  .pane { padding: 16px; display: none; flex-direction: column; gap: 18px; overflow: hidden; }
+  .pane.on { display: flex; }
+  .blk h5 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: 78px 1fr; gap: 7px 10px; font-size: 12.5px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kv code { font-family: var(--mono); font-size: 11.5px; background: var(--hover); padding: 1px 5px; border-radius: 4px; }
+  .segc { display: flex; padding: 2px; border-radius: 9px; background: var(--hover); }
+  .segc > span { flex: 1; text-align: center; padding: 5px 0; border-radius: 7px; color: var(--muted); font-weight: 500; font-size: 12px; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 6px; }
+  .segc > span svg { width: 14px; height: 14px; }
+  .segc > span.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .src { display: flex; gap: 10px; padding: 11px; border-radius: 10px; background: var(--ai-soft); color: var(--ink2); font-size: 12px; }
+  .src svg { color: var(--ai); }
+  .src b { color: var(--ink); font-weight: 600; display: block; }
+  .find { display: flex; gap: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); }
+  .find .fi { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in oklab, var(--review) 16%, transparent); color: var(--review); flex: none; }
+  .find .fi.ok { background: color-mix(in oklab, var(--pub) 16%, transparent); color: var(--pub); }
+  .find b { font-weight: 600; font-size: 12.5px; display: block; }
+  .find small { color: var(--muted); font-size: 11.5px; }
+  .find .acts { display: flex; gap: 6px; margin-top: 8px; }
+  .find .acts .btn { height: 26px; font-size: 12px; padding: 0 10px; }
+  .scan-note { font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; align-items: flex-start; }
+  .scan-note svg { width: 14px; height: 14px; margin-top: 1px; }
+
+  /* ---------- recording ---------- */
+  .desk { position: absolute; inset: 0; background: var(--desk,
+      radial-gradient(1200px 600px at 20% 10%, #F6B48F 0%, transparent 60%),
+      radial-gradient(900px 700px at 90% 80%, #7C6FD8 0%, transparent 60%),
+      radial-gradient(800px 600px at 60% 40%, #E8746A 0%, transparent 70%), #3B2F5C); }
+  .menubar { position: absolute; left: 0; right: 0; top: 0; height: 26px; background: rgba(255,255,255,.22); backdrop-filter: blur(20px); display: flex; align-items: center; gap: 16px; padding: 0 14px; color: #fff; font-size: 12.5px; font-weight: 500; }
+  .menubar .r { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  .tray { display: flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 5px; background: rgba(255,255,255,.2); }
+  .tray i { width: 8px; height: 8px; border-radius: 50%; background: #FF4D3A; animation: pulse 1.4s infinite; }
+  .deskwin { position: absolute; left: 90px; top: 110px; width: 860px; height: 504px; border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px rgba(20,10,40,.45); transform-origin: top left; }
+  .deskwin .ex { transform: scale(1.327); transform-origin: top left; width: 648px; height: 380px; }
+  .hud { position: absolute; left: 50%; top: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 16px; background: rgba(24,22,20,.86); backdrop-filter: blur(20px); color: #fff; box-shadow: 0 12px 40px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.08) inset; z-index: 5; }
+  .hud .live { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .hud .live i { width: 10px; height: 10px; border-radius: 50%; background: #FF4D3A; box-shadow: 0 0 0 4px rgba(255,77,58,.25); animation: pulse 1.4s infinite; }
+  .hud .cnt { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: rgba(255,255,255,.75); font-size: 12.5px; border-left: 1px solid rgba(255,255,255,.12); height: 22px; }
+  .hud .hb { width: 34px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: rgba(255,255,255,.85); cursor: pointer; }
+  .hud .hb:hover { background: rgba(255,255,255,.1); }
+  .hud .stop { display: flex; align-items: center; gap: 7px; padding: 0 14px; height: 32px; border-radius: 10px; background: #FF4D3A; font-weight: 600; font-size: 12.5px; margin-left: 4px; }
+  .hud .stop svg { fill: #fff; stroke: none; width: 12px; height: 12px; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .ripple { position: absolute; width: 34px; height: 34px; border-radius: 50%; border: 3px solid #FF4D3A; transform: translate(-50%,-50%); animation: rip 1.6s infinite; }
+  @keyframes rip { 0% { opacity: 1; transform: translate(-50%,-50%) scale(.5); } 100% { opacity: 0; transform: translate(-50%,-50%) scale(1.8); } }
+  .feed { position: absolute; right: 26px; bottom: 26px; width: 260px; display: flex; flex-direction: column; gap: 8px; }
+  .feed .fh { color: rgba(255,255,255,.85); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding-left: 2px; }
+  .fc { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 12px; background: rgba(28,26,24,.82); backdrop-filter: blur(16px); color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+  .fc .mini { width: 64px; border-radius: 5px; overflow: hidden; flex: none; }
+  .fc b { font-size: 12px; font-weight: 500; display: block; } .fc small { color: rgba(255,255,255,.55); font-size: 11px; }
+  .fc.old { opacity: .55; transform: scale(.96); }
+  .cursor { position: absolute; width: 18px; height: 18px; }
+
+  /* ---------- export ---------- */
+  .ghost-bg { position: absolute; inset: 0; filter: blur(2px) saturate(.8); opacity: .6; pointer-events: none; }
+  .scrim { position: absolute; inset: 0; background: rgba(20,18,16,.32); }
+  .sheet { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 900px; height: 580px; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-lg); border: 1px solid var(--line); display: flex; overflow: hidden; backdrop-filter: blur(24px); }
+  .sh-l { width: 380px; padding: 24px; display: flex; flex-direction: column; gap: 18px; border-right: 1px solid var(--line); }
+  .sh-l h3 { font-size: 30px; margin: 0; line-height: 1; }
+  .sh-l p.sub { margin: -10px 0 0; color: var(--muted); }
+  .fmts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .fmt { border: 1px solid var(--line); border-radius: 11px; padding: 11px; display: flex; gap: 10px; align-items: center; cursor: pointer; }
+  .fmt .fx { width: 32px; height: 38px; border-radius: 5px; display: grid; place-items: end center; padding-bottom: 5px; box-sizing: border-box; font-size: 8.5px; font-weight: 700; color: #fff; background: var(--c); flex: none; position: relative; }
+  .fmt .fx::after { content: ""; position: absolute; right: 0; top: 0; width: 9px; height: 9px; background: linear-gradient(225deg, var(--surface) 50%, rgba(0,0,0,.2) 50%); }
+  .fmt b { display: block; font-weight: 600; font-size: 13px; } .fmt small { color: var(--muted); font-size: 11.5px; }
+  .fmt.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+  .opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .opt > span { color: var(--ink2); font-weight: 500; }
+  .opt .segc { width: 170px; }
+  .tog { width: 34px; height: 20px; border-radius: 99px; background: var(--pub); position: relative; }
+  .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .lockrow { display: flex; gap: 10px; padding: 11px; border-radius: 10px; background: var(--hover); font-size: 12px; color: var(--muted); }
+  .lockrow b { color: var(--ink); font-weight: 600; display: block; }
+  .lockrow svg { color: var(--pub); }
+  .sh-foot { margin-top: auto; display: flex; gap: 8px; justify-content: flex-end; }
+  .sh-r { flex: 1; background: var(--side); position: relative; overflow: hidden; display: flex; justify-content: center; padding-top: 28px; }
+  .sh-r .ptag { position: absolute; left: 16px; top: 12px; font-size: 11px; color: var(--muted); font-weight: 500; }
+  .page { width: 400px; height: 620px; background: #fff; color: #1d1c1a; border-radius: 3px; box-shadow: 0 2px 4px rgba(0,0,0,.06), 0 12px 40px rgba(0,0,0,.14); padding: 34px 36px; box-sizing: border-box; font-size: 9.5px; line-height: 1.5; }
+  .page .logo { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 10px; margin-bottom: 18px; color: #333; }
+  .page .logo i { width: 14px; height: 14px; border-radius: 4px; background: #2F6BFF; }
+  .page h1 { font-family: var(--serif); font-weight: 400; font-size: 26px; line-height: 1.05; margin: 0 0 6px; }
+  .page .lead { color: #555; margin: 0 0 12px; }
+  .page .pre { background: #F6F4EF; border-radius: 5px; padding: 8px 10px; margin-bottom: 14px; }
+  .page .pre b { display: block; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; color: #8a857b; margin-bottom: 2px; }
+  .page .ps { display: flex; gap: 10px; margin-bottom: 12px; }
+  .page .ps .n { width: 18px; height: 18px; border-radius: 50%; background: #1d1c1a; color: #fff; font-weight: 700; display: grid; place-items: center; font-size: 9px; flex: none; }
+  .page .ps .t { font-weight: 600; font-size: 10.5px; margin-bottom: 2px; }
+  .page .ps .shot { width: 260px; border-radius: 4px; border: 1px solid #e6e3dc; margin-top: 6px; position: relative; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="controls">
+    <div class="seg" id="tabs">
+      <button data-s="library" class="on">Library</button>
+      <button data-s="editor">Editor</button>
+      <button data-s="recording">Recording</button>
+      <button data-s="export">Export</button>
+    </div>
+    <div class="seg" id="theme">
+      <button data-t="light" class="on"><i class="tdot" style="--a:#F5F3EE;--b:#E8543A"></i>Original</button>
+      <button data-t="dark"><i class="tdot" style="--a:#161615;--b:#F0644A"></i>Original dark</button>
+      <button data-t="nebula"><i class="tdot" style="--a:#7B5CFF;--b:#FF4FB8"></i>Nebula</button>
+      <button data-t="steel"><i class="tdot" style="--a:#26303B;--b:#C9A35B"></i>Steel &amp; Brass</button>
+      <button data-t="sage"><i class="tdot" style="--a:#E6E8DC;--b:#3F7D5C"></i>Sage &amp; Linen</button>
+      <button data-t="arctic"><i class="tdot" style="--a:#E2E9F2;--b:#2563EB"></i>Arctic</button>
+      <button data-t="lime"><i class="tdot" style="--a:#121314;--b:#C6F432"></i>Graphite &amp; Lime</button>
+    </div>
+    <span class="hint">Clickable: cards, outline steps, tools, inspector tabs</span>
+  </div>
+
+  <div id="fit">
+  <div class="stage app light" id="stage">
+
+    <!-- ================= LIBRARY ================= -->
+    <section class="screen on" data-screen="library">
+      <div class="tb">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <span class="ib" data-i="sidebar"></span>
+        <div class="search"><span data-i="search"></span>Search guides, steps and tags<kbd>⌘K</kbd></div>
+        <div class="sp"></div>
+        <span class="ib" data-i="sliders" title="Settings"></span>
+        <button class="btn rec" data-go="recording"><span class="recdot"></span>Record<kbd>⌃⌥R</kbd></button>
+      </div>
+      <div class="body">
+        <aside class="side">
+          <div class="grp">
+            <div class="nav on"><span data-i="book"></span>All guides<span class="n">24</span></div>
+            <div class="nav"><span data-i="clock"></span>Recent<span class="n">6</span></div>
+            <div class="nav"><span data-i="alert"></span>Review overdue<span class="n warn">3</span></div>
+          </div>
+          <div class="grp">
+            <h6>Status</h6>
+            <div class="nav"><span class="sw" style="--c:var(--draft)"></span>Draft<span class="n">7</span></div>
+            <div class="nav"><span class="sw" style="--c:var(--review)"></span>In review<span class="n">4</span></div>
+            <div class="nav"><span class="sw" style="--c:var(--pub)"></span>Published<span class="n">10</span></div>
+            <div class="nav"><span class="sw" style="--c:var(--stale)"></span>Needs update<span class="n">3</span></div>
+          </div>
+          <div class="grp">
+            <h6>Folders</h6>
+            <div class="nav"><span data-i="folder"></span>Finance<span class="n">8</span></div>
+            <div class="nav"><span data-i="folder"></span>IT &amp; Accounts<span class="n">9</span></div>
+            <div class="nav"><span data-i="folder"></span>People<span class="n">5</span></div>
+            <div class="nav"><span data-i="folder"></span>Facilities<span class="n">2</span></div>
+          </div>
+          <div class="grp">
+            <h6>Tags</h6>
+            <div class="tags"><span class="tag">onboarding</span><span class="tag">expenses</span><span class="tag">okta</span><span class="tag">macOS</span><span class="tag">payroll</span></div>
+          </div>
+          <div class="side-foot"><span data-i="lock"></span><div><b>Stored on this Mac</b>~/Documents/Guides</div></div>
+        </aside>
+
+        <main class="lib">
+          <div class="lib-head">
+            <div>
+              <h1 class="serif">All guides</h1>
+              <p>24 guides · <b>3 due for review</b></p>
+            </div>
+            <div class="sp"></div>
+            <div class="vseg"><span class="on" data-i="grid"></span><span data-i="list"></span></div>
+            <button class="btn ghost">Last updated<span data-i="chevD"></span></button>
+          </div>
+
+          <div class="quick">
+            <div class="qt main" data-go="recording"><span class="qi" data-i="monitor"></span><div><b>Record screen</b><small>Do the task once</small></div><kbd>⌃⌥R</kbd></div>
+            <div class="qt" data-go="recording"><span class="qi" data-i="appwin"></span><div><b>Record a window</b><small>Just one app</small></div></div>
+            <div class="qt" data-go="recording"><span class="qi" data-i="region"></span><div><b>Record a region</b><small>Draw an area</small></div></div>
+            <div class="qt"><span class="qi" data-i="hotspot"></span><div><b>Annotation guide</b><small>From images or PDF</small></div></div>
+          </div>
+
+          <div class="row-head">
+            <h2>Recent</h2>
+            <span class="chip on">All</span><span class="chip">Draft</span><span class="chip">In review</span><span class="chip">Published</span><span class="chip">Needs update</span>
+          </div>
+          <div class="grid" id="cards"></div>
+        </main>
+      </div>
+    </section>
+
+    <!-- ================= EDITOR ================= -->
+    <section class="screen" data-screen="editor">
+      <div class="tb">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <button class="btn ghost" data-go="library" style="padding:0 8px"><span data-i="chevL"></span>Library</button>
+        <div class="vsep"></div>
+        <div class="crumb">Finance <span data-i="chevR" style="opacity:.5"></span><b>Submit an expense report</b></div>
+        <span class="pill pub" style="margin-left:6px">Published</span>
+        <div class="sp"></div>
+        <span class="saved"><span data-i="check"></span>Saved</span>
+        <span class="ib" data-i="undo" title="Undo ⌘Z"></span>
+        <span class="ib dis" data-i="redo" title="Redo ⇧⌘Z"></span>
+        <div class="vsep"></div>
+        <button class="btn ai"><span data-i="sparkles"></span>Write with AI</button>
+        <button class="btn ink" data-go="export"><span data-i="share"></span>Export</button>
+      </div>
+      <div class="body">
+        <aside class="outline">
+          <div class="ol-top">
+            <div class="nav"><span data-i="file"></span>Guide details<span class="n">Intro · 3 tags</span></div>
+          </div>
+          <div class="ol-scroll" id="outline"></div>
+          <div class="ol-foot">
+            <button class="btn"><span data-i="plus"></span>Step</button>
+            <button class="btn"><span data-i="plus"></span>Section</button>
+            <button class="btn"><span data-i="plus"></span>Note</button>
+          </div>
+        </aside>
+
+        <main class="canvas">
+          <div class="canvas-inner">
+            <div class="st-head">
+              <span class="eyebrow" id="eyebrow">Step 6 <span>of 7</span></span>
+              <span class="pill plain" id="kind">Click</span>
+              <span class="pill plain">Expensify</span>
+              <div class="stepnav">
+                <span class="ib" data-i="chevL" id="prev"></span>
+                <span class="ib" data-i="chevR" id="next"></span>
+                <span class="ib" data-i="more"></span>
+              </div>
+            </div>
+
+            <div class="tools" id="tools">
+              <span class="tool on" data-i="pointer" title="Select"></span>
+              <span class="tool" data-i="arrow" title="Arrow"></span>
+              <span class="tool" data-i="square" title="Box"></span>
+              <span class="tool" data-i="highlight" title="Highlight"></span>
+              <span class="tool" data-i="callout" title="Callout"></span>
+              <span class="tool" data-i="eyeoff" title="Blur"></span>
+              <span class="tool" data-i="hotspot" title="Hotspot"></span>
+              <div class="vsep"></div>
+              <span class="swatch on" style="background:var(--accent)"></span>
+              <span class="swatch" style="background:#F2B418"></span>
+              <span class="swatch" style="background:#2F6BFF"></span>
+              <span class="swatch" style="background:#1D1C1A"></span>
+            </div>
+
+            <div class="frame" id="frame">
+              <div class="ex">
+                <div class="ex-bar"><i></i><i></i><i></i><span>Expensify — Report #4821</span></div>
+                <div class="ex-nav"><div>Home</div><div class="on">Reports</div><div>Expenses</div><div>Approvals</div><div>Cards</div><div>Settings</div></div>
+                <div class="ex-main">
+                  <h3>Q3 Client Travel</h3><div class="amt">$1,284.60</div>
+                  <div class="sub">4 expenses · Approver: Dana Ortiz</div>
+                  <table>
+                    <tr><th>Date</th><th>Merchant</th><th>Category</th><th>Receipt</th><th>Amount</th></tr>
+                    <tr><td>Sep 12</td><td>United Airlines</td><td>Airfare</td><td><span class="rc">✓</span></td><td>$642.20</td></tr>
+                    <tr><td>Sep 12</td><td>Hilton Chicago</td><td>Lodging</td><td><span class="rc">✓</span></td><td>$418.00</td></tr>
+                    <tr><td>Sep 13</td><td>Lyft</td><td>Ground</td><td><span class="rc">✓</span></td><td>$38.40</td></tr>
+                    <tr><td>Sep 13</td><td>Au Cheval</td><td>Meals</td><td><span class="rc">✓</span></td><td>$186.00</td></tr>
+                  </table>
+                </div>
+                <div class="ex-foot">
+                  <span class="ex-email">Submitting as jordan.miles@acme.co</span>
+                  <span class="ex-b s">Save draft</span>
+                  <span class="ex-b p">Submit report</span>
+                </div>
+              </div>
+              <!-- annotations -->
+              <div class="an-box" style="left:508px; top:333px; width:126px; height:38px"></div>
+              <span class="handle" style="left:508px; top:333px"></span><span class="handle" style="left:634px; top:333px"></span>
+              <span class="handle" style="left:508px; top:371px"></span><span class="handle" style="left:634px; top:371px"></span>
+              <div class="an-num" style="left:497px; top:322px">1</div>
+              <svg style="position:absolute; left:0; top:0; width:648px; height:380px; pointer-events:none" viewBox="0 0 648 380">
+                <defs><marker id="ah" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 10 5 0 10z" style="fill:var(--accent)"/></marker></defs>
+                <path d="M470 268 C 500 280, 520 300, 540 324" style="stroke:var(--accent)" stroke-width="3" fill="none" stroke-linecap="round" marker-end="url(#ah)"/>
+              </svg>
+              <div class="an-call" style="left:338px; top:244px">Check the total first</div>
+              <div class="an-blur" style="left:222px; top:343px; width:120px; height:20px"></div>
+              <div class="an-sugg" style="left:148px; top:306px">Email · suggested blur
+                <span class="mb y" data-i="check"></span><span class="mb" data-i="x"></span>
+              </div>
+            </div>
+
+            <h2 class="serif st-title" id="title" contenteditable spellcheck="false">Click <b>Submit report</b></h2>
+            <p class="st-desc" id="desc">When every line item has a green receipt tick, click <b>Submit report</b> in the bottom-right corner. Your approver gets an email straight away.</p>
+            <div class="ai-row">
+              <span class="ai-chip lead"><span data-i="sparkles"></span>Regenerate</span>
+              <span class="ai-chip">Shorter</span>
+              <span class="ai-chip">For beginners</span>
+              <span class="ai-chip">For experts</span>
+              <span class="ai-chip">Custom…</span>
+              <span class="stepnav"><kbd>↑</kbd><kbd>↓</kbd> to move between steps</span>
+            </div>
+          </div>
+        </main>
+
+        <aside class="insp">
+          <div class="tabs" id="itabs">
+            <span class="tab on" data-p="step">Step</span>
+            <span class="tab" data-p="privacy">Privacy <span class="ct">1</span></span>
+            <span class="tab" data-p="hot">Hotspots</span>
+          </div>
+          <div class="pane on" data-pane="step">
+            <div class="blk">
+              <h5>Image</h5>
+              <div class="segc"><span class="on"><span data-i="crop"></span>Close-up</span><span><span data-i="full"></span>Full screen</span></div>
+            </div>
+            <div class="blk">
+              <h5>Action</h5>
+              <dl class="kv">
+                <dt>Type</dt><dd>Click</dd>
+                <dt>Point</dt><dd>1184, 642</dd>
+              </dl>
+            </div>
+            <div class="blk">
+              <h5>Element</h5>
+              <dl class="kv">
+                <dt>Label</dt><dd>Submit report</dd>
+                <dt>Role</dt><dd><code>AXButton</code></dd>
+                <dt>App</dt><dd>Expensify</dd>
+                <dt>Window</dt><dd>Report #4821</dd>
+                <dt>Bundle</dt><dd><code>com.expensify.mac</code></dd>
+              </dl>
+            </div>
+            <div class="src"><span data-i="sparkles"></span><div><b>Written by AI</b>Edit the text and AI won't overwrite it.</div></div>
+          </div>
+          <div class="pane" data-pane="privacy">
+            <div class="blk">
+              <h5>This step</h5>
+              <div class="find">
+                <span class="fi" data-i="eyeoff"></span>
+                <div><b>Email address</b><small>jordan.m•••@acme.co · on-device</small>
+                  <div class="acts"><button class="btn ink">Blur it</button><button class="btn line">Keep</button></div></div>
+              </div>
+            </div>
+            <div class="blk">
+              <h5>Whole guide</h5>
+              <div class="find" style="margin-bottom:8px">
+                <span class="fi ok" data-i="check"></span>
+                <div><b>Card number •••• 4417</b><small>Step 4 · blurred</small></div>
+              </div>
+              <div class="find">
+                <span class="fi ok" data-i="check"></span>
+                <div><b>Phone number</b><small>Step 2 · kept</small></div>
+              </div>
+            </div>
+            <div class="scan-note"><span data-i="info"></span>Scanned on this Mac. Step 7 has no screenshot and wasn't scanned.</div>
+          </div>
+          <div class="pane" data-pane="hot">
+            <div class="scan-note"><span data-i="hotspot"></span>Pick the hotspot tool and drag over the image to add an area the reader can point at.</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= RECORDING ================= -->
+    <section class="screen" data-screen="recording">
+      <div class="desk"></div>
+      <div class="menubar"><b></b>Expensify<span style="opacity:.8">File</span><span style="opacity:.8">Edit</span><span style="opacity:.8">View</span><span style="opacity:.8">Window</span>
+        <div class="r"><span class="tray"><i></i>02:14</span><span>Mon 19 Oct  9:41</span></div></div>
+      <div class="deskwin" id="deskwin"></div>
+      <div class="ripple" style="left:872px; top:576px"></div>
+      <svg class="cursor" style="left:870px; top:574px" viewBox="0 0 24 24"><path d="M4 3l7 18 2.6-7.4L21 11z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <div class="hud">
+        <span class="live"><i></i>02:14</span>
+        <span class="cnt"><span data-i="camera"></span>6 steps</span>
+        <span class="hb" data-i="pause" title="Pause"></span>
+        <span class="hb" data-i="plus" title="Add manual step"></span>
+        <span class="stop" data-go="editor"><span data-i="stopsq"></span>Done</span>
+      </div>
+      <div class="feed" id="feed"><div class="fh">Captured</div></div>
+    </section>
+
+    <!-- ================= EXPORT ================= -->
+    <section class="screen" data-screen="export">
+      <div class="ghost-bg" id="ghost"></div>
+      <div class="scrim" data-go="editor"></div>
+      <div class="sheet">
+        <div class="sh-l">
+          <h3 class="serif">Export guide</h3>
+          <p class="sub">7 steps · 2 blurs · 1 note</p>
+          <div class="fmts" id="fmts">
+            <div class="fmt on"><span class="fx" style="--c:#E8543A">PDF</span><div><b>PDF</b><small>Print &amp; share</small></div></div>
+            <div class="fmt"><span class="fx" style="--c:#2F6BFF">DOCX</span><div><b>Word</b><small>Keep editing</small></div></div>
+            <div class="fmt"><span class="fx" style="--c:#4A4740">MD</span><div><b>Markdown</b><small>Docs &amp; wikis</small></div></div>
+            <div class="fmt"><span class="fx" style="--c:#3A9A68">HTML</span><div><b>HTML</b><small>Interactive hotspots</small></div></div>
+          </div>
+          <div class="opt"><span>Paper</span><div class="segc"><span class="on">A4</span><span>Letter</span></div></div>
+          <div class="opt"><span>Images</span><div class="segc"><span class="on">Close-up</span><span>Full</span></div></div>
+          <div class="opt"><span>Company logo</span><div style="display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12px">acme.svg<span class="tog"></span></div></div>
+          <div class="lockrow"><span data-i="shield"></span><div><b>Blurs are burned in</b>Hidden pixels are removed from the file, not just covered.</div></div>
+          <div class="sh-foot"><button class="btn ghost" data-go="editor">Cancel</button><button class="btn ink" id="exbtn">Export PDF…</button></div>
+        </div>
+        <div class="sh-r">
+          <span class="ptag">Preview · page 1 of 3</span>
+          <div class="page">
+            <div class="logo"><i></i>ACME</div>
+            <h1>Submit an expense report</h1>
+            <p class="lead">Send a finished trip report to your approver in Expensify. Takes about two minutes.</p>
+            <div class="pre"><b>Before you start</b>Receipts uploaded for every expense over $75.</div>
+            <div id="pagesteps"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  </div>
+</div>
+
+<script>
+const ICONS = {
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M17 5h4"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  appwin: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
+  region: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  chevL: '<path d="m15 18-6-6 6-6"/>', chevR: '<path d="m9 18 6-6-6-6"/>', chevD: '<path d="m6 9 6 6 6-6"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-4"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h4"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
+  pointer: '<path d="M5 3l6 17 2.5-7.5L21 10z"/>',
+  arrow: '<path d="M5 19 19 5M9 5h10v10"/>',
+  square: '<rect x="4" y="5" width="16" height="14" rx="2.5"/>',
+  highlight: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
+  callout: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  eyeoff: '<path d="M9.9 4.2A10 10 0 0 1 12 4c7 0 10 8 10 8a13 13 0 0 1-1.7 2.7M6.6 6.6A13.5 13.5 0 0 0 2 12s3 8 10 8a9.7 9.7 0 0 0 5.4-1.6"/><path d="m2 2 20 20"/><path d="M14.1 14.1a3 3 0 0 1-4.2-4.2"/>',
+  hotspot: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  full: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  stopsq: '<rect x="5" y="5" width="14" height="14" rx="3"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+};
+const icon = (n) => `<svg class="i" viewBox="0 0 24 24">${ICONS[n] || ""}</svg>`;
+const hydrate = (root) => root.querySelectorAll("[data-i]").forEach((el) => { if (!el.querySelector("svg")) el.insertAdjacentHTML("afterbegin", icon(el.dataset.i)); });
+
+/** A tiny pretend screenshot; scales to any width. */
+function shot(variant, hue) {
+  const nav = `<div class="s-nav"><i></i><i class="on"></i><i></i><i></i><i style="width:70%"></i></div>`;
+  const row = (w = 1) => `<div class="s-row"><i class="k"></i><div class="s-field" style="flex:${w}"></div></div>`;
+  const body = {
+    form: `<div class="s-h"></div>${row()}${row()}${row(.6)}<div class="s-row" style="margin-top:auto"><div class="s-btn"></div></div>`,
+    table: `<div class="s-h" style="width:30%"></div>${'<div class="s-row"><i></i><i></i><i class="k"></i><i class="k"></i></div>'.repeat(6)}<div class="s-row" style="margin-top:auto"><div class="s-btn"></div></div>`,
+    dash: `<div class="s-h" style="width:25%"></div><div class="s-cards"><i></i><i></i><i></i></div><div class="s-chart">${[40,65,50,80,58,90,72,60].map(h=>`<i style="height:${h}%"></i>`).join("")}</div>`,
+    plan: `<div class="s-plan"><i><b style="left:30%;top:40%">1</b></i><i><b style="left:40%;top:30%">2</b></i><i></i><i></i><i><b style="left:35%;top:45%">3</b></i></div>`,
+  }[variant];
+  return `<div class="shot" style="--h:${hue}"><div class="s-bar"><i></i><i></i><i></i></div><div class="s-body">${variant === "plan" ? "" : nav}<div class="s-main">${body}</div></div></div>`;
+}
+
+// ---------- library cards ----------
+const GUIDES = [
+  { t: "Submit an expense report", f: "Finance", n: "7 steps", s: "pub", sl: "Published", when: "2h ago", v: "table", h: "#2F6BFF", r: [88, 86], who: "JM", a: "#C0704A" },
+  { t: "Reset a user's password in Okta", f: "IT & Accounts", n: "8 steps", s: "review", sl: "In review", when: "Yesterday", v: "form", h: "#1A73E8", r: [78, 66], who: "DO", a: "#5B7FC9" },
+  { t: "Set up the VPN on macOS", f: "IT & Accounts", n: "14 steps", s: "stale", sl: "Needs update", when: "3 mo ago", v: "form", h: "#3A9A68", r: [70, 40], who: "PK", a: "#6E9B5B", due: "Review overdue" },
+  { t: "Office floor plan — 4th floor", f: "Facilities", n: "4 pages", s: "pub", sl: "Published", when: "Last week", v: "plan", h: "#E8543A", who: "AR", a: "#A06BB8", ann: true },
+  { t: "Create a new Jira project", f: "Engineering", n: "9 steps", s: "draft", sl: "Draft", when: "Mon", v: "dash", h: "#0C66E4", r: [32, 30], who: "JM", a: "#C0704A" },
+  { t: "Run the monthly payroll export", f: "Finance", n: "11 steps", s: "review", sl: "In review", when: "Sep 30", v: "table", h: "#7A5AF8", r: [60, 52], who: "SL", a: "#4A9A95" },
+];
+document.getElementById("cards").innerHTML = GUIDES.map((g) => `
+  <div class="card" data-go="editor">
+    <div class="thumb">${shot(g.v, g.h)}
+      ${g.r ? `<span class="ring" style="left:${g.r[0]}%;top:${g.r[1]}%"></span>` : ""}
+      <span class="badge">${icon(g.ann ? "hotspot" : "camera")}${g.n}</span>
+      ${g.due ? `<span class="due">${g.due}</span>` : ""}
+    </div>
+    <div class="c-title">${g.t}</div>
+    <div class="c-meta"><span class="pill ${g.s}">${g.sl}</span>${g.f} · ${g.when}<span class="avatar" style="--a:${g.a}">${g.who}</span></div>
+  </div>`).join("");
+
+// ---------- editor outline ----------
+const STEPS = [
+  { sec: "Open the report" },
+  { t: "Open <b>Expensify</b> from the Dock", d: "Click the <b>Expensify</b> icon in the Dock. If it isn't there, open it from <b>Applications</b>.", k: "Click", v: "dash", ai: 1 },
+  { t: "Click <b>Reports</b>", d: "In the sidebar, click <b>Reports</b> to see every report you've started.", k: "Click", v: "table", ai: 1 },
+  { t: "Open <b>Q3 Client Travel</b>", d: "Double-click the report you want to send. Drafts show a grey <b>Draft</b> label.", k: "Double click", v: "table", ai: 0 },
+  { sec: "Review &amp; submit" },
+  { t: "Check each line has a receipt", d: "Every expense over $75 needs a receipt. Look for the green tick in the <b>Receipt</b> column.", k: "Click", v: "table", ai: 1 },
+  { note: "Receipts over $75 must be attached, or the approver will reject the report." },
+  { t: "Type a note for your approver", d: "In <b>Comment</b>, type a short summary, e.g. <b>Chicago client visit, Sep 12–13</b>.", k: "Type", v: "form", ai: 1 },
+  { t: "Click <b>Submit report</b>", d: "When every line item has a green receipt tick, click <b>Submit report</b> in the bottom-right corner. Your approver gets an email straight away.", k: "Click", v: "table", ai: 1 },
+  { t: "Press <b>⌘W</b> to close the report", d: "Press <b>⌘W</b>. The report now shows <b>Submitted</b> in your list.", k: "Shortcut", v: "table", ai: 0 },
+];
+const stepIdx = STEPS.map((s, i) => (s.t ? i : -1)).filter((i) => i >= 0);
+let current = stepIdx[5];
+function renderOutline() {
+  document.getElementById("outline").innerHTML = STEPS.map((s, i) => {
+    if (s.sec) return `<div class="sec">${s.sec}</div>`;
+    if (s.note) return `<div class="note-row">${icon("bulb")}<span>${s.note}</span></div>`;
+    const n = stepIdx.indexOf(i) + 1;
+    return `<div class="st ${i === current ? "on" : ""}" data-step="${i}">
+      <span class="num">${n}</span><span class="mini">${shot(s.v, "#2F6BFF")}</span>
+      <span class="lbl">${s.t}</span><span class="ai-mark ${s.ai ? "" : "ed"}" title="${s.ai ? "Written by AI" : "Edited"}"></span></div>`;
+  }).join("");
+}
+function select(i) {
+  current = i;
+  const s = STEPS[i], n = stepIdx.indexOf(i) + 1;
+  document.getElementById("eyebrow").innerHTML = `Step ${n} <span>of ${stepIdx.length}</span>`;
+  document.getElementById("kind").textContent = s.k;
+  document.getElementById("title").innerHTML = s.t.replace(/<b>(.*?)<\/b>/g, "<b>$1</b>");
+  document.getElementById("desc").innerHTML = s.d;
+  renderOutline();
+}
+renderOutline();
+document.getElementById("outline").addEventListener("click", (e) => {
+  const st = e.target.closest("[data-step]"); if (st) select(+st.dataset.step);
+});
+const step = (d) => { const k = stepIdx.indexOf(current) + d; if (k >= 0 && k < stepIdx.length) select(stepIdx[k]); };
+document.getElementById("prev").onclick = () => step(-1);
+document.getElementById("next").onclick = () => step(1);
+
+document.getElementById("tools").addEventListener("click", (e) => {
+  const t = e.target.closest(".tool, .swatch"); if (!t) return;
+  const cls = t.classList.contains("tool") ? ".tool" : ".swatch";
+  document.querySelectorAll("#tools " + cls).forEach((x) => x.classList.toggle("on", x === t));
+});
+document.getElementById("itabs").addEventListener("click", (e) => {
+  const t = e.target.closest(".tab"); if (!t) return;
+  document.querySelectorAll("#itabs .tab").forEach((x) => x.classList.toggle("on", x === t));
+  document.querySelectorAll(".insp .pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === t.dataset.p));
+});
+document.querySelectorAll(".segc").forEach((sg) => sg.addEventListener("click", (e) => {
+  const t = e.target.closest(".segc > span"); if (!t) return;
+  sg.querySelectorAll(":scope > span").forEach((x) => x.classList.toggle("on", x === t));
+}));
+document.getElementById("fmts").addEventListener("click", (e) => {
+  const f = e.target.closest(".fmt"); if (!f) return;
+  document.querySelectorAll("#fmts .fmt").forEach((x) => x.classList.toggle("on", x === f));
+  document.getElementById("exbtn").textContent = `Export ${f.querySelector("b").textContent}…`;
+});
+
+// ---------- recording ----------
+document.getElementById("deskwin").innerHTML = document.querySelector("#frame .ex").outerHTML;
+const feed = document.getElementById("feed");
+[[4, "Check each line has a receipt", "0:58", true], [5, "Type a note for your approver", "1:41", true], [6, "Click “Submit report”", "just now", false]].forEach(([n, t, w, old]) => {
+  feed.insertAdjacentHTML("beforeend", `<div class="fc ${old ? "old" : ""}"><span class="mini">${shot("table", "#2F6BFF")}</span><div><b>${n}. ${t}</b><small>${w}</small></div></div>`);
+});
+
+// ---------- export preview ----------
+document.getElementById("pagesteps").innerHTML = stepIdx.slice(0, 3).map((i, k) => `
+  <div class="ps"><span class="n">${k + 1}</span><div><div class="t">${STEPS[i].t}</div>${STEPS[i].d}
+  ${k < 2 ? `<div class="shot">${shot(STEPS[i].v, "#2F6BFF")}</div>` : ""}</div></div>`).join("");
+
+// ---------- navigation, theme, fit ----------
+const stage = document.getElementById("stage");
+function go(name) {
+  document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.dataset.screen === name));
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.s === name));
+  if (name === "export") {
+    const ghost = document.getElementById("ghost");
+    const ed = document.querySelector('[data-screen="editor"]').cloneNode(true);
+    ed.classList.add("on"); ed.removeAttribute("data-screen");
+    ed.querySelectorAll("[id]").forEach((x) => x.removeAttribute("id"));
+    ghost.replaceChildren(ed);
+  }
+}
+document.getElementById("tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) go(b.dataset.s); });
+stage.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) go(g.dataset.go); });
+const THEMES = [...document.querySelectorAll("#theme button")].map((b) => b.dataset.t);
+function setTheme(t) {
+  document.querySelectorAll("#theme button").forEach((x) => x.classList.toggle("on", x.dataset.t === t));
+  stage.classList.remove(...THEMES); stage.classList.add(t);
+}
+document.getElementById("theme").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (b) setTheme(b.dataset.t);
+});
+const initialTheme = new URLSearchParams(location.search).get("theme"); if (THEMES.includes(initialTheme)) setTheme(initialTheme);
+hydrate(document);
+const fit = document.getElementById("fit");
+const doFit = () => { const s = Math.min(1, fit.clientWidth / 1280); stage.style.transform = `scale(${s})`; fit.style.height = 800 * s + "px"; };
+new ResizeObserver(doFit).observe(fit); doFit();
+const initial = new URLSearchParams(location.search).get("screen"); if (initial) go(initial);
+</script>
+</body>
+</html>

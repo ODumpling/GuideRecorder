@@ -1,88 +1,303 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource-variable/inter";
+@import "@fontsource/instrument-serif";
+@import "@fontsource/instrument-serif/400-italic.css";
 
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  --radius: 0.5rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --status-success: oklch(0.508 0.118 165.612);
-  --status-warning: oklch(0.555 0.163 48.998);
-  --status-info: oklch(0.5 0.134 242.749);
-  --status-danger: oklch(0.577 0.245 27.325);
-  --status-neutral: oklch(0.442 0.017 285.786);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+/*
+ * Colour themes (Settings → Appearance; settings/theme.ts sets `data-theme`
+ * on <html>). :root is Arctic, the default, so a window shows it before the
+ * settings load. Dark themes also get `.dark` for Tailwind's `dark:` variant.
+ */
+:root,
+[data-theme="arctic"] {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --background: #f3f6fa;
+  --foreground: #0f1b2d;
+  --card: #ffffff;
+  --card-foreground: #0f1b2d;
+  --popover: #ffffff;
+  --popover-foreground: #0f1b2d;
+  --primary: #0f1b2d;
+  --primary-foreground: #ffffff;
+  --secondary: #e6ecf3;
+  --secondary-foreground: #0f1b2d;
+  --muted: #e9eef4;
+  --muted-foreground: #5f6f84;
+  --accent: #e1e8f1;
+  --accent-foreground: #0f1b2d;
+  --destructive: #d93b3b;
+  --status-success: #11885f;
+  --status-warning: #b7790c;
+  --status-info: #2563eb;
+  --status-danger: #d93b3b;
+  --status-neutral: #5b6b80;
+  --border: #d4dde8;
+  --input: #cbd5e2;
+  --ring: #2563eb;
+  --chart-1: #2563eb;
+  --chart-2: #0e9fb3;
+  --chart-3: #13976b;
+  --chart-4: #d99a16;
+  --chart-5: #e04848;
+  --sidebar: #e8eef5;
+  --sidebar-foreground: #0f1b2d;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #0f1b2d;
+  --sidebar-border: #d4dde8;
+  --sidebar-ring: #2563eb;
+  --brand: #2563eb;
+  --brand-foreground: #ffffff;
+  --ai: #0e9fb3;
+  --backdrop: radial-gradient(900px 420px at 85% -10%, rgb(37 99 235 / 0.07), transparent 70%);
 }
 
-.dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --status-success: oklch(0.765 0.177 163.223);
-  --status-warning: oklch(0.828 0.189 84.429);
-  --status-info: oklch(0.746 0.16 232.661);
-  --status-danger: oklch(0.704 0.191 22.216);
-  --status-neutral: oklch(0.705 0.015 286.067);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.18 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
+/* Paper: warm off-white and ink, with a vermilion accent. */
+[data-theme="paper"] {
+  color-scheme: light;
+  --background: #f5f3ee;
+  --foreground: #1d1c1a;
+  --card: #ffffff;
+  --card-foreground: #1d1c1a;
+  --popover: #ffffff;
+  --popover-foreground: #1d1c1a;
+  --primary: #1d1c1a;
+  --primary-foreground: #ffffff;
+  --secondary: #ece9e2;
+  --secondary-foreground: #1d1c1a;
+  --muted: #ece9e2;
+  --muted-foreground: #74706a;
+  --accent: #e7e3da;
+  --accent-foreground: #1d1c1a;
+  --destructive: #c4321f;
+  --status-success: #2f8457;
+  --status-warning: #b0740c;
+  --status-info: #d9482c;
+  --status-danger: #c4321f;
+  --status-neutral: #6b675f;
+  --border: #e3dfd6;
+  --input: #d9d4c9;
+  --ring: #e8543a;
+  --chart-1: #e8543a;
+  --chart-2: #6b5be6;
+  --chart-3: #3a9a68;
+  --chart-4: #d4931a;
+  --chart-5: #4a4740;
+  --sidebar: #eeebe4;
+  --sidebar-foreground: #1d1c1a;
+  --sidebar-primary: #e8543a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #1d1c1a;
+  --sidebar-border: #e3dfd6;
+  --sidebar-ring: #e8543a;
+  --brand: #e8543a;
+  --brand-foreground: #ffffff;
+  --ai: #6b5be6;
+  --backdrop: none;
+}
+
+/* Sage & Linen: linen and deep sage, terracotta for contrast. */
+[data-theme="sage"] {
+  color-scheme: light;
+  --background: #f1f0e8;
+  --foreground: #1f2a22;
+  --card: #ffffff;
+  --card-foreground: #1f2a22;
+  --popover: #ffffff;
+  --popover-foreground: #1f2a22;
+  --primary: #2c4a3a;
+  --primary-foreground: #f4f3ec;
+  --secondary: #e4e6da;
+  --secondary-foreground: #1f2a22;
+  --muted: #e6e8dd;
+  --muted-foreground: #66726a;
+  --accent: #e1e4d6;
+  --accent-foreground: #1f2a22;
+  --destructive: #b84a31;
+  --status-success: #3f7d5c;
+  --status-warning: #a3741a;
+  --status-info: #3f7d5c;
+  --status-danger: #b84a31;
+  --status-neutral: #5e6a60;
+  --border: #d8dcce;
+  --input: #cdd2c2;
+  --ring: #3f7d5c;
+  --chart-1: #3f7d5c;
+  --chart-2: #b0643c;
+  --chart-3: #c4902b;
+  --chart-4: #6f8f7c;
+  --chart-5: #44524a;
+  --sidebar: #e6e8dc;
+  --sidebar-foreground: #1f2a22;
+  --sidebar-primary: #3f7d5c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #1f2a22;
+  --sidebar-border: #d8dcce;
+  --sidebar-ring: #3f7d5c;
+  --brand: #3f7d5c;
+  --brand-foreground: #ffffff;
+  --ai: #b0643c;
+  --backdrop: none;
+}
+
+/* Paper Dark: warm charcoal, with a vermilion accent. */
+[data-theme="paperDark"] {
+  color-scheme: dark;
+  --background: #161615;
+  --foreground: #eeece7;
+  --card: #222120;
+  --card-foreground: #eeece7;
+  --popover: #222120;
+  --popover-foreground: #eeece7;
+  --primary: #eeece7;
+  --primary-foreground: #1b1a19;
+  --secondary: #2a2826;
+  --secondary-foreground: #eeece7;
+  --muted: #2a2826;
+  --muted-foreground: #9a958c;
+  --accent: #2c2a27;
+  --accent-foreground: #eeece7;
+  --destructive: #ff6b57;
+  --status-success: #5cc48e;
+  --status-warning: #e9b44c;
+  --status-info: #f0644a;
+  --status-danger: #ff6b57;
+  --status-neutral: #9a958c;
+  --border: #2e2c29;
+  --input: #3a3835;
+  --ring: #f0644a;
+  --chart-1: #f0644a;
+  --chart-2: #a397ff;
+  --chart-3: #5cc48e;
+  --chart-4: #e9b44c;
+  --chart-5: #c4c0b7;
+  --sidebar: #121211;
+  --sidebar-foreground: #eeece7;
+  --sidebar-primary: #f0644a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2a2826;
+  --sidebar-accent-foreground: #eeece7;
+  --sidebar-border: #262422;
+  --sidebar-ring: #f0644a;
+  --brand: #f0644a;
+  --brand-foreground: #ffffff;
+  --ai: #a397ff;
+  --backdrop: none;
+}
+
+/* Steel & Brass: gunmetal blues with polished brass. */
+[data-theme="steel"] {
+  color-scheme: dark;
+  --background: #1a2129;
+  --foreground: #e6eaee;
+  --card: #232c36;
+  --card-foreground: #e6eaee;
+  --popover: #232c36;
+  --popover-foreground: #e6eaee;
+  --primary: #c9a35b;
+  --primary-foreground: #1a1f26;
+  --secondary: #2a3440;
+  --secondary-foreground: #e6eaee;
+  --muted: #26303b;
+  --muted-foreground: #8c99a6;
+  --accent: #2d3947;
+  --accent-foreground: #e6eaee;
+  --destructive: #e07a5f;
+  --status-success: #6fb58e;
+  --status-warning: #d9a441;
+  --status-info: #c9a35b;
+  --status-danger: #e07a5f;
+  --status-neutral: #8c99a6;
+  --border: #33404d;
+  --input: #3c4a58;
+  --ring: #c9a35b;
+  --chart-1: #c9a35b;
+  --chart-2: #8fb3d9;
+  --chart-3: #6fb58e;
+  --chart-4: #d96b4e;
+  --chart-5: #b5c0cb;
+  --sidebar: #161c23;
+  --sidebar-foreground: #e6eaee;
+  --sidebar-primary: #c9a35b;
+  --sidebar-primary-foreground: #1a1f26;
+  --sidebar-accent: #2d3947;
+  --sidebar-accent-foreground: #e6eaee;
+  --sidebar-border: #2a3540;
+  --sidebar-ring: #c9a35b;
+  --brand: #c9a35b;
+  --brand-foreground: #1a1f26;
+  --ai: #8fb3d9;
+  --backdrop:
+    radial-gradient(1000px 400px at 50% -10%, rgb(143 179 217 / 0.1), transparent 70%),
+    repeating-linear-gradient(90deg, rgb(255 255 255 / 0.014) 0 1px, transparent 1px 3px);
+}
+
+/* Nebula: deep-space violet with magenta and cyan, and a few stars. */
+[data-theme="nebula"] {
+  color-scheme: dark;
+  --background: #0d0b1c;
+  --foreground: #eeeaff;
+  --card: #1a1538;
+  --card-foreground: #eeeaff;
+  --popover: #1a1538;
+  --popover-foreground: #eeeaff;
+  --primary: #8b6cff;
+  --primary-foreground: #ffffff;
+  --secondary: #221c47;
+  --secondary-foreground: #eeeaff;
+  --muted: #1e1840;
+  --muted-foreground: #9a92c8;
+  --accent: #2a2257;
+  --accent-foreground: #eeeaff;
+  --destructive: #ff5e8a;
+  --status-success: #4be3a8;
+  --status-warning: #ffc857;
+  --status-info: #6fe3ff;
+  --status-danger: #ff5e8a;
+  --status-neutral: #9a92c8;
+  --border: rgb(170 150 255 / 0.16);
+  --input: rgb(170 150 255 / 0.24);
+  --ring: #8b6cff;
+  --chart-1: #8b6cff;
+  --chart-2: #ff4fb8;
+  --chart-3: #6fe3ff;
+  --chart-4: #ffc857;
+  --chart-5: #4be3a8;
+  --sidebar: rgb(13 10 32 / 0.72);
+  --sidebar-foreground: #eeeaff;
+  --sidebar-primary: #ff4fb8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(126 92 255 / 0.22);
+  --sidebar-accent-foreground: #eeeaff;
+  --sidebar-border: rgb(170 150 255 / 0.12);
+  --sidebar-ring: #8b6cff;
+  --brand: #ff4fb8;
+  --brand-foreground: #ffffff;
+  --ai: #6fe3ff;
+  --backdrop:
+    radial-gradient(1px 1px at 12% 18%, rgb(255 255 255 / 0.7), transparent),
+    radial-gradient(1px 1px at 38% 72%, rgb(207 232 255 / 0.6), transparent),
+    radial-gradient(1.5px 1.5px at 64% 24%, rgb(255 255 255 / 0.6), transparent),
+    radial-gradient(1px 1px at 82% 58%, rgb(230 216 255 / 0.6), transparent),
+    radial-gradient(1px 1px at 22% 88%, rgb(255 255 255 / 0.5), transparent),
+    radial-gradient(900px 520px at 12% -8%, rgb(140 70 255 / 0.4), transparent 62%),
+    radial-gradient(760px 520px at 104% 104%, rgb(0 190 255 / 0.2), transparent 60%),
+    radial-gradient(620px 420px at 68% 34%, rgb(255 60 170 / 0.14), transparent 60%);
 }
 
 @theme inline {
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", "New York", ui-serif, Georgia, serif;
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-ai: var(--ai);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -132,6 +347,11 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
+}
+
+/* The main window's backdrop: a theme's glow or texture behind the panes. */
+.app-backdrop {
+  background-image: var(--backdrop, none);
 }
 
 /* Guide text in the TipTap editors (components/MarkdownEditor.tsx). */
