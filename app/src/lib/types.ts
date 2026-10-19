@@ -165,11 +165,20 @@ export interface Guide {
   items: Item[];
   /**
    * Provenance of the guide-level fields (title, intro, prerequisites,
-   * summary, tags). `edited` once the user changes one; AI then leaves them.
-   * Absent in older guides (as `template`).
+   * summary, tags). `edited` once the user changes one, and while any is in
+   * `editedFields`. Absent in older guides (as `template`).
    */
   aiState?: AiState;
+  /**
+   * The guide-level fields the user wrote by hand; AI leaves them and may
+   * still write the others. Absent in older guides: there an `edited`
+   * `aiState` means every field is the user's.
+   */
+  editedFields?: GuideTextField[];
 }
+
+/** The guide-level fields the AI guide pass writes. */
+export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
 
 export interface GuideListItem {
   id: Ulid;
@@ -444,6 +453,8 @@ export interface AiGuideEvent {
   runId: number;
   guideId: Ulid;
   fields: AiGuideFields | null;
+  /** The fields the pass wrote (not ones the user edited); the rest of `fields` is as it was. Absent: all. */
+  written?: GuideTextField[];
   aiState: AiState;
   error: string | null;
 }

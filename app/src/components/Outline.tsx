@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  FileText,
   Heading,
   ImageIcon,
   Info,
@@ -149,6 +150,18 @@ export function Outline() {
           />
           {!annotated && <RegenerateGuide readOnly={readOnly} />}
         </div>
+        <button
+          type="button"
+          aria-current={selectedId === null || undefined}
+          title="Edit the guide's introduction, prerequisites, summary and tags"
+          onClick={() => select(null)}
+          className={cn(
+            "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
+            selectedId === null && "bg-sidebar-accent text-sidebar-accent-foreground",
+          )}
+        >
+          <FileText className="size-3.5 text-muted-foreground" /> Guide details
+        </button>
       </div>
       <ol className="min-h-0 flex-1 overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
         {guide.items.map((item, index) => (
