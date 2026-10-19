@@ -5,6 +5,11 @@ import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperS
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
   { format: "html", label: "HTML", detail: "A folder with one self-contained guide.html" },
+  {
+    format: "walkthrough",
+    label: "Interactive walkthrough",
+    detail: "A click-through guide.html, one step at a time",
+  },
   { format: "docx", label: "Word", detail: "One .docx file" },
   { format: "pdf", label: "PDF", detail: "One .pdf file" },
 ];
@@ -82,9 +87,9 @@ export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setIt
   }
 }
 
-/** Markdown and HTML export into a folder; DOCX and PDF into one file. */
+/** Markdown and HTML (either kind) export into a folder; DOCX and PDF into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
-  return format === "md" || format === "html";
+  return format === "md" || format === "html" || format === "walkthrough";
 }
 
 /**

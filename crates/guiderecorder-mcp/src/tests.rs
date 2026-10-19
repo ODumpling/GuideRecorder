@@ -278,6 +278,7 @@ fn rendered(png: &[u8]) -> RenderedImage {
         height: 0,
         warnings: Vec::new(),
         hotspots: Vec::new(),
+        point: None,
     }
 }
 

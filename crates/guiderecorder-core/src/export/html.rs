@@ -6,6 +6,10 @@
 //! (only `data:` images and the inline style may load). Link hrefs are the
 //! only URLs; they are followed only when clicked.
 //!
+//! That is the default [`HtmlMode::Document`]. [`HtmlMode::Walkthrough`]
+//! writes an interactive click-through of the same guide instead, with one
+//! inline script allowed by its hash; see [`walkthrough`](super::walkthrough).
+//!
 //! # Escaping
 //!
 //! The template is rendered with HTML auto-escaping on, so every plain
@@ -71,9 +75,22 @@ pub const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inli
 const TEMPLATE: &str = include_str!("templates/guide.html.j2");
 const STYLE: &str = include_str!("templates/style.css");
 
+/// What kind of page [`export`] writes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HtmlMode {
+    /// Every step on one page, with no script.
+    #[default]
+    Document,
+    /// One step at a time with a pulsing click target, a progress bar and a
+    /// step list, driven by a small inline script; see
+    /// [`walkthrough`](super::walkthrough).
+    Walkthrough,
+}
+
 /// Options for [`export`] and [`render_string`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct HtmlOptions {
+    pub mode: HtmlMode,
     /// How step images are rendered. The default caps the width at 1600 px
     /// (about 2× the content column), which keeps Retina sharpness and the
     /// file size reasonable. `hotspot_markers` is ignored: the page draws
@@ -92,6 +109,7 @@ pub struct HtmlOptions {
 impl Default for HtmlOptions {
     fn default() -> Self {
         Self {
+            mode: HtmlMode::default(),
             image: ImageOptions {
                 max_width: Some(1600),
                 ..ImageOptions::default()
@@ -129,6 +147,9 @@ pub fn render_string(
     handle: &GuideHandle,
     opts: &HtmlOptions,
 ) -> Result<(String, ExportReport)> {
+    if opts.mode == HtmlMode::Walkthrough {
+        return super::walkthrough::render_string(guide, handle, opts);
+    }
     let branding = &opts.branding;
     let labels = opts
         .labels
@@ -210,23 +231,38 @@ pub fn render_string(
         items => items,
     };
 
+    let env = environment("guide.html", TEMPLATE)?;
+    Ok((render_template(&env, "guide.html", ctx)?, report))
+}
+
+/// A template environment with HTML auto-escaping and `template` added as
+/// `name`.
+pub(super) fn environment(
+    name: &'static str,
+    template: &'static str,
+) -> Result<Environment<'static>> {
     let mut env = Environment::new();
     env.set_auto_escape_callback(|_| AutoEscape::Html);
-    env.add_template("guide.html", TEMPLATE)
+    env.add_template(name, template)
         .map_err(|e| ExportError::Html(e.to_string()))?;
+    Ok(env)
+}
+
+/// Renders the template `name` of `env` with `ctx`, ending in a newline.
+pub(super) fn render_template(env: &Environment, name: &str, ctx: Value) -> Result<String> {
     let mut html = env
-        .get_template("guide.html")
+        .get_template(name)
         .and_then(|t| t.render(ctx))
         .map_err(|e| ExportError::Html(e.to_string()))?;
     // minijinja drops the template's final newline.
     html.push('\n');
-    Ok((html, report))
+    Ok(html)
 }
 
 /// Template values of one hotspot of step `step`. `style` (position and
 /// colour) and `class` (popover side) are unset for a hotspot outside the
 /// view, which then only shows in the legend.
-fn hotspot_context(step: u32, hotspot: &PlacedHotspot) -> Value {
+pub(super) fn hotspot_context(step: u32, hotspot: &PlacedHotspot) -> Value {
     let title = hotspot.title.trim();
     let label = if title.is_empty() {
         hotspot.number.to_string()
@@ -307,14 +343,14 @@ fn popover_class(r: Rect) -> &'static str {
 }
 
 /// A fraction as a CSS percentage, rounded to 1/1000 %, e.g. `12.5%`.
-fn percent(fraction: f64) -> String {
+pub(super) fn percent(fraction: f64) -> String {
     let value = (fraction.clamp(0.0, 1.0) * 100_000.0).round() / 1000.0;
     format!("{value}%")
 }
 
 /// The default stylesheet plus the accent override, if any. The accent is
 /// the checked RGB value, written as `#rrggbb`.
-fn stylesheet(branding: &CheckedBranding) -> String {
+pub(super) fn stylesheet(branding: &CheckedBranding) -> String {
     let mut css = STYLE.to_owned();
     if let Some(accent) = branding.accent_hex() {
         let _ = writeln!(css, ":root {{ --accent: {accent}; }}");
@@ -324,7 +360,7 @@ fn stylesheet(branding: &CheckedBranding) -> String {
 
 /// The language tag if it looks like BCP 47 (letters, digits, `-`), else
 /// empty.
-fn language_tag(language: &str) -> &str {
+pub(super) fn language_tag(language: &str) -> &str {
     let ok = !language.is_empty()
         && language.len() <= 35
         && language
@@ -337,7 +373,7 @@ fn language_tag(language: &str) -> &str {
     }
 }
 
-fn note_kind_class(kind: NoteKind) -> &'static str {
+pub(super) fn note_kind_class(kind: NoteKind) -> &'static str {
     match kind {
         NoteKind::Tip => "tip",
         NoteKind::Warning => "warning",
@@ -469,14 +505,14 @@ fn push_inlines(inlines: &[Inline], out: &mut String) {
 // Data URIs
 
 /// `data:<mime>;base64,<bytes>`.
-fn data_uri(mime: &str, bytes: &[u8]) -> String {
+pub(super) fn data_uri(mime: &str, bytes: &[u8]) -> String {
     let mut out = format!("data:{mime};base64,");
     base64_into(bytes, &mut out);
     out
 }
 
 /// Standard base64 with padding.
-fn base64_into(bytes: &[u8], out: &mut String) {
+pub(super) fn base64_into(bytes: &[u8], out: &mut String) {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     out.reserve(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

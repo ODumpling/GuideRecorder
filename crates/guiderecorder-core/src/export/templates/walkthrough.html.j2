@@ -1,0 +1,119 @@
+<!doctype html>
+<!-- Embed this walkthrough in a web page (keep the file next to the page, or change src):
+<iframe src="guide.html" title="{{ title }}" width="100%" height="760" style="border:0" loading="lazy"></iframe>
+-->
+<html lang="{{ language }}">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="GuideRecorder">
+<title>{{ title }}</title>
+<style>
+{{ css }}</style>
+</head>
+<body>
+{%- macro notes(list) %}
+{%- for note in list %}
+<aside class="note note-{{ note.note_kind }}" role="note">
+<p class="note-label">{{ note.label }}</p>
+{{ note.body }}
+</aside>
+{%- endfor %}
+{%- endmacro %}
+<main class="guide wt" id="wt">
+<header class="guide-header">
+{%- if logo %}
+<img class="logo" src="{{ logo }}" alt="">
+{%- endif %}
+<h1>{{ title }}</h1>
+{%- if summary %}
+<p class="summary">{{ summary }}</p>
+{%- endif %}
+{%- if details %}
+<p class="details">{{ details }}</p>
+{%- endif %}
+</header>
+<div class="wt-layout">
+<div class="wt-main">
+<div class="wt-progress" aria-hidden="true"><div class="wt-progress-bar" id="wt-bar"></div></div>
+<div class="wt-controls">
+<button type="button" class="wt-button" data-back><span aria-hidden="true">← </span>{{ labels.back }}</button>
+<p class="wt-status" id="wt-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<button type="button" class="wt-button wt-primary" data-next>{{ labels.next }}<span aria-hidden="true"> →</span></button>
+<button type="button" class="wt-button" data-restart>{{ labels.restart }}</button>
+</div>
+<p class="wt-hint">{{ labels.hint }}</p>
+{%- for slide in slides %}
+<section class="wt-slide wt-{{ slide.kind }}" id="wt-slide-{{ slide.index }}" aria-labelledby="wt-slide-{{ slide.index }}-title" data-status="{{ slide.status }}">
+{%- if slide.kind == "intro" %}
+<h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1">{{ labels.start }}</h2>
+{%- if intro %}
+<div class="intro">
+{{ intro }}
+</div>
+{%- endif %}
+{%- if prerequisites %}
+<div class="prerequisites">
+<h3>{{ labels.prerequisites }}</h3>
+{{ prerequisites }}
+</div>
+{%- endif %}
+<p class="wt-actions"><button type="button" class="wt-button wt-primary" data-next>{{ labels.begin }}<span aria-hidden="true"> →</span></button></p>
+{%- elif slide.kind == "done" %}
+<h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1">{{ labels.done }}</h2>
+<p>{{ labels.done_text }}</p>
+{{- notes(slide.notes) }}
+<p class="wt-actions"><button type="button" class="wt-button wt-primary" data-restart>{{ labels.restart }}</button></p>
+{%- else %}
+{%- if slide.section %}
+<p class="wt-section">{{ slide.section }}</p>
+{%- endif %}
+<h2 class="step-title wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1"><span class="step-number" aria-label="{{ labels.step }} {{ slide.number }}">{{ slide.number }}</span><span class="step-text">{{ slide.title }}</span></h2>
+{{- notes(slide.notes) }}
+<figure class="step-image wt-figure">
+<div class="hotspot-frame">
+<img src="{{ slide.image.src }}" width="{{ slide.image.width }}" height="{{ slide.image.height }}" alt="{{ slide.image.alt }}">
+{%- for h in slide.hotspots %}
+{%- if h.style %}
+<div class="hotspot {{ h.class }}" style="{{ h.style }}" tabindex="0" role="button" aria-label="{{ h.label }}"{% if h.description %} aria-describedby="{{ h.id }}-text"{% endif %}><span class="hotspot-badge" aria-hidden="true">{{ h.number }}</span><span class="hotspot-popover" role="tooltip">{% if h.title %}<strong>{{ h.title }}</strong>{% endif %}{% if h.description %}<span class="hotspot-text" id="{{ h.id }}-text">{{ h.description }}</span>{% endif %}</span></div>
+{%- endif %}
+{%- endfor %}
+{%- if slide.target %}
+<a class="wt-target" href="#wt-slide-{{ slide.index + 1 }}" style="{{ slide.target }}" data-next aria-label="{{ labels.target }}"></a>
+{%- endif %}
+</div>
+</figure>
+{%- if slide.hotspots %}
+<ol class="hotspot-legend">
+{%- for h in slide.hotspots %}
+<li id="{{ h.id }}"{% if h.legend_style %} style="{{ h.legend_style }}"{% endif %}><span class="hotspot-number">{{ h.number }}</span><span class="hotspot-entry">{% if h.title %}<strong>{{ h.title }}</strong>{% endif %}{% if h.description %}<span class="hotspot-text">{{ h.description }}</span>{% endif %}</span></li>
+{%- endfor %}
+</ol>
+{%- endif %}
+{%- if slide.description %}
+<div class="step-description">
+{{ slide.description }}
+</div>
+{%- endif %}
+{%- endif %}
+</section>
+{%- endfor %}
+</div>
+<nav class="wt-nav" aria-label="{{ labels.steps }}">
+<ol class="wt-list">
+{%- for entry in list %}
+{%- if entry.kind == "section" %}
+<li class="wt-list-section">{{ entry.title }}</li>
+{%- else %}
+<li><a href="#wt-slide-{{ entry.index }}" data-slide="{{ entry.index }}">{% if entry.number %}<span class="wt-list-number">{{ entry.number }}</span>{% endif %}<span class="wt-list-text">{{ entry.title }}</span></a></li>
+{%- endif %}
+{%- endfor %}
+</ol>
+</nav>
+</div>
+</main>
+<script>{{ script }}</script>
+</body>
+</html>

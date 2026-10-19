@@ -1,0 +1,80 @@
+/* Interactive walkthrough, over the document stylesheet. Without script
+   (no .wt-js), every slide shows and the controls are hidden. */
+.wt { max-width: 76rem; }
+.wt-layout { display: grid; grid-template-columns: minmax(0, 1fr) 16rem; gap: 1.5rem; align-items: start; }
+.wt-main { min-width: 0; }
+.wt-progress, .wt-controls, .wt-hint, .wt-actions { display: none; }
+.wt-js .wt-progress { display: block; height: 6px; margin: 0 0 1rem; background: var(--border); border-radius: 3px; overflow: hidden; }
+.wt-progress-bar { width: 0; height: 100%; background: var(--accent); transition: width .25s ease; }
+.wt-js .wt-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .5rem; }
+.wt-js .wt-hint { display: block; margin: 0 0 1rem; color: var(--muted); font-size: .9rem; }
+.wt-js .wt-actions { display: block; margin: 1rem 0 0; }
+.wt-status { flex: 1 1 12rem; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.wt-button {
+  font: inherit;
+  padding: .45rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+}
+.wt-button:hover { border-color: var(--accent); }
+.wt-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wt-button[aria-disabled="true"] { opacity: .45; cursor: default; }
+.wt-button:focus-visible, .wt-list a:focus-visible, .wt-target:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wt-heading:focus { outline: none; }
+.wt-slide {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 0 0 1.25rem;
+}
+.wt-slide[hidden] { display: none; }
+.wt-slide > h2 { margin-top: 0; }
+.wt-slide .note { border: 1px solid var(--border); border-left: 4px solid var(--note); }
+.wt-slide .note-tip { border-left-color: var(--tip); }
+.wt-slide .note-warning { border-left-color: var(--warning); }
+.wt-section { margin: 0 0 .35rem; color: var(--muted); font-size: .85rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-figure .hotspot-frame { display: block; width: fit-content; }
+.wt-target {
+  position: absolute;
+  z-index: 4;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: -1.375rem 0 0 -1.375rem;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(0, 0, 0, .25);
+  cursor: pointer;
+}
+.wt-target::before, .wt-target::after { content: ""; position: absolute; border-radius: 50%; }
+.wt-target::before { inset: 0; background: var(--accent); opacity: .2; }
+.wt-target::after { inset: -3px; border: 3px solid var(--accent); animation: wt-pulse 1.6s ease-out infinite; }
+.wt-target:hover::before, .wt-target:focus::before { opacity: .35; }
+@keyframes wt-pulse {
+  from { transform: scale(1); opacity: .9; }
+  to { transform: scale(2.2); opacity: 0; }
+}
+.wt-nav { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; }
+.wt-list { list-style: none; margin: 0; padding: 0; }
+.wt-list-section { margin: .75rem 0 .25rem; padding: 0 .5rem; color: var(--muted); font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-list a { display: flex; gap: .5rem; padding: .3rem .5rem; border-radius: 6px; color: var(--text); text-decoration: none; line-height: 1.4; }
+.wt-list a:hover { background: var(--code-bg); }
+.wt-list a[aria-current] { background: var(--accent); color: #fff; }
+.wt-list-number { flex: none; min-width: 1.25rem; font-variant-numeric: tabular-nums; opacity: .75; }
+.wt-list-text { overflow-wrap: anywhere; }
+@media (max-width: 52rem) {
+  .wt-layout { grid-template-columns: minmax(0, 1fr); }
+  .wt-nav { position: static; max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wt-progress-bar { transition: none; }
+  .wt-target::after { animation: none; transform: scale(1.4); opacity: .5; }
+}
+@media print {
+  .wt-layout { display: block; }
+  .wt-progress, .wt-controls, .wt-hint, .wt-actions, .wt-nav, .wt-target { display: none !important; }
+  .wt-slide[hidden] { display: block; }
+}

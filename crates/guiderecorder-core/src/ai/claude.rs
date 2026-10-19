@@ -10,6 +10,9 @@
 //!
 //! Request building and response parsing are pure functions so they can be
 //! tested without the network; [`ClaudeProvider`] adds HTTP and retries.
+//! The context blocks, tool schemas and output parsing are shared with the
+//! other providers ([`super::openai`]), so every provider sees the same
+//! input and is held to the same output.
 
 use std::time::Duration;
 
@@ -147,39 +150,50 @@ impl ClaudeProvider {
         let url = format!("{}/v1/messages", self.config.base_url.trim_end_matches('/'));
         let headers = request_headers(&self.config, settings, &self.key)?;
         retry_missing_tool_call(|| async {
-            let value = with_retry(self.config.retry, || async {
-                let response = self
-                    .http
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(body)
-                    .send()
-                    .await
-                    .map_err(|err| AiError::Network(err.without_url().to_string()))?;
-                let status = response.status().as_u16();
-                let header = |name: &str| {
-                    response
-                        .headers()
-                        .get(name)
-                        .and_then(|value| value.to_str().ok())
-                };
-                let retry_after =
-                    retry_after_from_headers(header("retry-after-ms"), header("retry-after"));
-                let text = response
-                    .text()
-                    .await
-                    .map_err(|err| AiError::Network(err.without_url().to_string()))?;
-                if !(200..300).contains(&status) {
-                    return Err(parse_error(status, &text, retry_after));
-                }
-                serde_json::from_str::<Value>(&text)
-                    .map_err(|err| AiError::InvalidOutput(format!("response is not JSON: {err}")))
-            })
-            .await?;
+            let value = post_json(&self.http, &url, &headers, body, self.config.retry).await?;
             parse_message(&value, tool)
         })
         .await
     }
+}
+
+/// POST `body` as JSON with retries ([`with_retry`]); the JSON body of the
+/// success. A non-success status becomes [`AiError::Api`] via
+/// [`parse_error`]. Shared by the providers.
+pub(crate) async fn post_json(
+    http: &reqwest::Client,
+    url: &str,
+    headers: &HeaderMap,
+    body: &Value,
+    retry: RetryPolicy,
+) -> Result<Value, AiError> {
+    with_retry(retry, || async {
+        let response = http
+            .post(url)
+            .headers(headers.clone())
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| AiError::Network(err.without_url().to_string()))?;
+        let status = response.status().as_u16();
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        let retry_after = retry_after_from_headers(header("retry-after-ms"), header("retry-after"));
+        let text = response
+            .text()
+            .await
+            .map_err(|err| AiError::Network(err.without_url().to_string()))?;
+        if !(200..300).contains(&status) {
+            return Err(parse_error(status, &text, retry_after));
+        }
+        serde_json::from_str::<Value>(&text)
+            .map_err(|err| AiError::InvalidOutput(format!("response is not JSON: {err}")))
+    })
+    .await
 }
 
 /// Run `op` again, once, if it fails with [`AiError::MissingToolCall`].
@@ -294,7 +308,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     })
 }
 
-fn step_tool() -> Value {
+pub(crate) fn step_tool() -> Value {
     tool(
         STEP_TOOL,
         "Record the generated text and redaction suggestions for this step.",
@@ -323,7 +337,7 @@ fn step_tool() -> Value {
     )
 }
 
-fn guide_tool() -> Value {
+pub(crate) fn guide_tool() -> Value {
     tool(
         GUIDE_TOOL,
         "Record the guide-level fields and any consistency edits.",
@@ -358,7 +372,7 @@ fn guide_tool() -> Value {
     )
 }
 
-fn rewrite_tool() -> Value {
+pub(crate) fn rewrite_tool() -> Value {
     tool(
         REWRITE_TOOL,
         "Record the rewritten step text.",
@@ -387,27 +401,31 @@ fn image_block(image: &ImageData) -> Value {
     })
 }
 
-fn to_json<T: Serialize>(value: &T) -> Value {
+pub(crate) fn to_json<T: Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("model types serialize")
 }
 
+/// A context object as the text the model reads.
+pub(crate) fn context_text(context: &Value) -> String {
+    serde_json::to_string_pretty(context).expect("JSON values serialize")
+}
+
 fn text_block(context: &Value) -> Value {
-    json!({
-        "type": "text",
-        "text": serde_json::to_string_pretty(context).expect("JSON values serialize"),
-    })
+    json!({ "type": "text", "text": context_text(context) })
 }
 
 /// The step's images in the order they are sent, with their names.
-fn step_images(input: &StepInput) -> Vec<(&'static str, &ImageData)> {
+pub(crate) fn step_images(input: &StepInput) -> Vec<(&'static str, &ImageData)> {
     [("crop", input.crop.as_ref()), ("full", input.full.as_ref())]
         .into_iter()
         .filter_map(|(name, image)| Some((name, image?)))
         .collect()
 }
 
-pub fn step_request(config: &ClaudeConfig, input: &StepInput) -> Value {
-    let settings = &config.step;
+/// The per-step context block: the step's metadata and which image is
+/// which. Without images (a text-only model), `images` is empty and the
+/// model works from the element, keystrokes and step kind alone.
+pub(crate) fn step_context(input: &StepInput) -> Value {
     let images = step_images(input);
     let image_info: Vec<Value> = images
         .iter()
@@ -422,7 +440,7 @@ pub fn step_request(config: &ClaudeConfig, input: &StepInput) -> Value {
             })
         })
         .collect();
-    let context = json!({
+    json!({
         "kind": to_json(&input.kind),
         "templateTitle": input.template_title,
         "templateDescription": input.template_description,
@@ -434,14 +452,21 @@ pub fn step_request(config: &ClaudeConfig, input: &StepInput) -> Value {
         "images": image_info,
         "language": input.language,
         "audience": to_json(&input.audience),
-    });
-    let mut content: Vec<Value> = images.iter().map(|(_, image)| image_block(image)).collect();
-    content.push(text_block(&context));
+    })
+}
+
+pub fn step_request(config: &ClaudeConfig, input: &StepInput) -> Value {
+    let settings = &config.step;
+    let mut content: Vec<Value> = step_images(input)
+        .iter()
+        .map(|(_, image)| image_block(image))
+        .collect();
+    content.push(text_block(&step_context(input)));
     build_request(config, settings, prompts::STEP, step_tool(), content)
 }
 
-pub fn guide_request(config: &ClaudeConfig, input: &GuideInput) -> Value {
-    let settings = &config.guide;
+/// The guide-level context block: the step texts and guide settings.
+pub(crate) fn guide_context(input: &GuideInput) -> Value {
     let steps: Vec<Value> = input
         .steps
         .iter()
@@ -457,19 +482,22 @@ pub fn guide_request(config: &ClaudeConfig, input: &GuideInput) -> Value {
             })
         })
         .collect();
-    let context = json!({
+    json!({
         "currentTitle": input.current_title,
         "steps": steps,
         "apps": input.apps,
         "language": input.language,
         "audience": to_json(&input.audience),
-    });
+    })
+}
+
+pub fn guide_request(config: &ClaudeConfig, input: &GuideInput) -> Value {
     build_request(
         config,
-        settings,
+        &config.guide,
         prompts::GUIDE,
         guide_tool(),
-        vec![text_block(&context)],
+        vec![text_block(&guide_context(input))],
     )
 }
 
@@ -488,22 +516,25 @@ fn rewrite_instruction(style: &RewriteStyle) -> String {
     }
 }
 
-pub fn rewrite_request(config: &ClaudeConfig, input: &RewriteInput) -> Value {
-    let settings = &config.rewrite;
-    let context = json!({
+/// The rewrite context block: the step text and the instruction.
+pub(crate) fn rewrite_context(input: &RewriteInput) -> Value {
+    json!({
         "kind": to_json(&input.kind),
         "title": input.title,
         "description": input.description,
         "element": input.element.as_ref().map(to_json),
         "language": input.language,
         "instruction": rewrite_instruction(&input.style),
-    });
+    })
+}
+
+pub fn rewrite_request(config: &ClaudeConfig, input: &RewriteInput) -> Value {
     build_request(
         config,
-        settings,
+        &config.rewrite,
         prompts::REWRITE,
         rewrite_tool(),
-        vec![text_block(&context)],
+        vec![text_block(&rewrite_context(input))],
     )
 }
 
@@ -561,7 +592,9 @@ pub fn parse_message(body: &Value, tool: &str) -> Result<Parsed, AiError> {
     })
 }
 
-/// Build an [`AiError::Api`] from a non-success response.
+/// Build an [`AiError::Api`] from a non-success response. Reads the
+/// Anthropic and OpenAI shape (`error.type`, `error.message`) and the bare
+/// `error` string some local servers send.
 pub fn parse_error(status: u16, body: &str, retry_after: Option<Duration>) -> AiError {
     let parsed: Option<Value> = serde_json::from_str(body).ok();
     let error = parsed.as_ref().map(|value| &value["error"]);
@@ -569,7 +602,7 @@ pub fn parse_error(status: u16, body: &str, retry_after: Option<Duration>) -> Ai
         .and_then(|e| e["type"].as_str())
         .unwrap_or("http_error")
         .to_owned();
-    let message = match error.and_then(|e| e["message"].as_str()) {
+    let message = match error.and_then(|e| e["message"].as_str().or(e.as_str())) {
         Some(message) => message.to_owned(),
         None => body.chars().take(200).collect(),
     };
