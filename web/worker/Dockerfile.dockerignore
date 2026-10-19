@@ -1,0 +1,16 @@
+# The build context is the repository root; send only what the image uses.
+*
+!rust-toolchain.toml
+!Cargo.toml
+!Cargo.lock
+!crates
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!app/package.json
+!packages
+!web
+**/node_modules
+**/target
+web/.output
+web/.env*

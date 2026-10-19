@@ -1,8 +1,9 @@
 import { and, eq, inArray, sum } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "@/db";
-import { asset } from "@/db/schema";
+import { asset, guide, revision, revisionAsset } from "@/db/schema";
 import type { ObjectStore, PresignedRequest } from "./storage";
+import { visibleTo } from "./sync";
 
 // Content-addressed image storage per workspace. Clients ask which hashes
 // are missing, PUT those to presigned URLs (S3 checks each body's SHA-256),
@@ -11,7 +12,7 @@ import type { ObjectStore, PresignedRequest } from "./storage";
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 export const MAX_BATCH = 500;
 const UPLOAD_TTL = 15 * 60;
-const DOWNLOAD_TTL = 5 * 60;
+export const DOWNLOAD_TTL = 5 * 60;
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/, "lowercase hex SHA-256");
 
@@ -120,4 +121,26 @@ export async function downloadUrl(db: Database, store: ObjectStore, organization
   const have = await existing(db, organizationId, [hash]);
   if (!have.has(hash)) return null;
   return store.presignGet(assetKey(organizationId, hash), DOWNLOAD_TTL);
+}
+
+/**
+ * Whether the user may download the asset: they uploaded it, or a revision
+ * of a guide they can see names it. Keeps a private guide's images to its
+ * owner, as its revisions are.
+ */
+export async function canDownload(db: Database, organizationId: string, userId: string, hash: string): Promise<boolean> {
+  if (!sha256.safeParse(hash).success) return false;
+  const [uploaded] = await db
+    .select({ sha256: asset.sha256 })
+    .from(asset)
+    .where(and(eq(asset.organizationId, organizationId), eq(asset.sha256, hash), eq(asset.uploadedBy, userId)));
+  if (uploaded) return true;
+  const [named] = await db
+    .select({ id: revisionAsset.revisionId })
+    .from(revisionAsset)
+    .innerJoin(revision, eq(revision.id, revisionAsset.revisionId))
+    .innerJoin(guide, and(eq(guide.organizationId, revision.organizationId), eq(guide.id, revision.guideId)))
+    .where(and(eq(revisionAsset.organizationId, organizationId), eq(revisionAsset.sha256, hash), visibleTo(userId)))
+    .limit(1);
+  return Boolean(named);
 }
