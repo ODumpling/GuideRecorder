@@ -1,8 +1,8 @@
 import { getSchema, type JSONContent } from "@tiptap/core";
 import { describe, expect, it } from "vitest";
-import { textExtensions } from "@/text/extensions";
-import golden from "../../../crates/guiderecorder-core/tests/golden/markdown_normalize.golden?raw";
-import { isAllowedUrl, linkFromInput, normalizeMarkdown, parseMarkdown, serializeMarkdown } from "@/text/markdown";
+import { textExtensions } from "./extensions.ts";
+import golden from "../../../../crates/guiderecorder-core/tests/golden/markdown_normalize.golden?raw";
+import { isAllowedUrl, linkFromInput, normalizeMarkdown, parseMarkdown, serializeMarkdown } from "./markdown.ts";
 
 const multiLine = getSchema(textExtensions());
 const singleLine = getSchema(textExtensions({ singleLine: true }));

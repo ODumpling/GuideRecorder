@@ -1,7 +1,7 @@
 import { getSchema } from "@tiptap/core";
 import type { TagParseRule } from "@tiptap/pm/model";
 import { describe, expect, it } from "vitest";
-import { textExtensions } from "@/text/extensions";
+import { textExtensions } from "./extensions.ts";
 
 const schema = getSchema(textExtensions());
 const linkRule = schema.marks.link.spec.parseDOM![0] as TagParseRule;

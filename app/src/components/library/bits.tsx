@@ -1,6 +1,6 @@
-import type { GuideStatus } from "@/lib/types";
+import type { GuideStatus } from "@guiderecorder/guide-schema";
 import { GUIDE_STATUSES, initials } from "@/editor/library";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** The colour of each status, as a CSS colour. */
 export const STATUS_COLORS: Record<GuideStatus, string> = {

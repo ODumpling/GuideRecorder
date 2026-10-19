@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { serializeMarkdown } from "@/text/markdown";
+import { serializeMarkdown } from "./markdown.ts";
 
 /**
  * Splits an editor document at a position into the Markdown before and

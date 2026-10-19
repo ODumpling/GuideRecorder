@@ -9,13 +9,14 @@ import {
 } from "@/editor/commands";
 import { editorStore, useEditor } from "@/editor/editor";
 import { GUIDE_STATUSES, isReviewOverdue, localToday, reviewDue } from "@/editor/library";
-import type { Guide, GuideStatus, ReviewFields } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { markdownToPlainText } from "@/text/markdown";
+import type { Guide, GuideStatus } from "@guiderecorder/guide-schema";
+import type { ReviewFields } from "@/lib/types";
+import { cn } from "@guiderecorder/ui/utils";
+import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 import { addTags, removeTag } from "@/text/tags";
 
 // TipTap is most of the bundle; load it with the first opened guide.
-const MarkdownEditor = lazy(() => import("@/components/MarkdownEditor"));
+const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
 
 /** Sets a guide field through the store (undoable, autosaved). */
 function set<K extends GuideTextField>(key: K, value: Guide[K]): boolean {

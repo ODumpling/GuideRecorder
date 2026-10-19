@@ -1,5 +1,5 @@
 import { AlertDialog } from "radix-ui";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import type { LeaveChoice, LeaveIntent } from "@/editor/store";
 

@@ -1,39 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  AiProviderKind,
-  AiRewriteResult,
-  AppError,
-  CaptureDisplay,
-  CaptureTargetArg,
-  CaptureWindow,
-  ExportBranding,
-  ExportFormat,
-  ExportResult,
-  Guide,
-  GuideListItem,
-  LibraryInfo,
-  McpSetup,
-  MotionOptions,
-  OpenedGuide,
-  PaperSize,
-  Permission,
-  RenamedGuide,
-  ReviewedGuide,
-  PermissionRow,
-  PermissionStatus,
-  RecordingReadiness,
-  RecordingSaved,
-  Rect,
-  RegionPick,
-  RewriteStyleArg,
-  HotkeyErrors,
-  Settings,
-  SettingsView,
-  StampedStatus,
-  Step,
-  StepImage,
-  UpdateStatus,
-} from "@/lib/types";
+import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, ExportBranding, ExportFormat, ExportResult, GuideListItem, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
 import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
