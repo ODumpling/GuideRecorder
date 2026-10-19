@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
@@ -37,6 +37,11 @@ function Dashboard() {
           <WorkspaceSwitcher workspaces={workspaces} activeId={active?.id ?? null} />
         </div>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          {can.manageWorkspace && (
+            <Link to="/admin" className="text-brand underline-offset-4 hover:underline">
+              Admin
+            </Link>
+          )}
           {user.email}
           <SignOutButton />
         </div>

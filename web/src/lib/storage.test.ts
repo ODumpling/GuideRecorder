@@ -27,3 +27,25 @@ it("presigns short-lived GETs", async () => {
   expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
   expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
 });
+
+it("signs server-side encryption into uploads when configured", async () => {
+  const kms = s3Store({
+    endpoint: "https://s3.example.com",
+    region: "eu-west-1",
+    bucket: "guides",
+    accessKeyId: "AKID",
+    secretAccessKey: "secret",
+    sse: { algorithm: "aws:kms", kmsKeyId: "alias/guiderecorder" },
+  });
+  const put = await kms.presignPut("orgs/o/assets/x", { size: 1, contentType: "image/webp", sha256: sha }, 900);
+  expect(put.headers).toMatchObject({
+    "x-amz-server-side-encryption": "aws:kms",
+    "x-amz-server-side-encryption-aws-kms-key-id": "alias/guiderecorder",
+  });
+  expect(new URL(put.url).searchParams.get("X-Amz-SignedHeaders")?.split(";")).toEqual(
+    expect.arrayContaining(["x-amz-server-side-encryption", "x-amz-server-side-encryption-aws-kms-key-id"]),
+  );
+  // Unset (R2, local storage): no SSE headers at all.
+  const plain = await store.presignPut("k", { size: 1, contentType: "image/webp", sha256: sha }, 900);
+  expect(Object.keys(plain.headers).some((h) => h.startsWith("x-amz-server-side"))).toBe(false);
+});

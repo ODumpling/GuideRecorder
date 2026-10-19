@@ -13,6 +13,16 @@ const schema = z.object({
   S3_BUCKET: z.string().min(1),
   S3_ACCESS_KEY_ID: z.string().min(1),
   S3_SECRET_ACCESS_KEY: z.string().min(1),
+  /** Server-side encryption for uploads: AES256 or aws:kms. Leave unset for R2 (always encrypted at rest). */
+  S3_SSE: z.enum(["AES256", "aws:kms"]).optional(),
+  S3_SSE_KMS_KEY_ID: z.string().optional(),
+
+  /** HMAC secret for SCIM bearer tokens; derived from BETTER_AUTH_SECRET when unset. */
+  SCIM_TOKEN_SECRET: z.string().min(32).optional(),
+  /** Bearer token for /api/jobs/* (the retention job). Jobs are off without it. */
+  JOBS_TOKEN: z.string().min(32).optional(),
+  /** Comma-separated proxy addresses or CIDRs whose X-Forwarded-For to trust. */
+  TRUSTED_PROXIES: z.string().optional(),
 
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),

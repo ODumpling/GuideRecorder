@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as SignInRouteImport } from './routes/sign-in'
@@ -18,6 +19,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiJobsRetentionRouteImport } from './routes/api/jobs/retention'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
 import { Route as ApiWorkspacesWorkspaceIdAssetsUploadsRouteImport } from './routes/api/workspaces/$workspaceId/assets/uploads'
@@ -30,6 +32,11 @@ import { Route as ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRouteImport } 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -70,6 +77,11 @@ const InvitationsIdRoute = InvitationsIdRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiJobsRetentionRoute = ApiJobsRetentionRouteImport.update({
+  id: '/api/jobs/retention',
+  path: '/api/jobs/retention',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiWorkspacesWorkspaceIdAssetsSha256Route =
@@ -123,6 +135,7 @@ const ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
@@ -131,6 +144,7 @@ export interface FileRoutesByFullPath {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -142,6 +156,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
@@ -150,6 +165,7 @@ export interface FileRoutesByTo {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -162,6 +178,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
@@ -170,6 +187,7 @@ export interface FileRoutesById {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -183,6 +201,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/device'
     | '/sign-in'
@@ -191,6 +210,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -202,6 +222,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/device'
     | '/sign-in'
@@ -210,6 +231,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -221,6 +243,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/device'
     | '/sign-in'
@@ -229,6 +252,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -241,6 +265,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRoute
   DashboardRoute: typeof DashboardRoute
   DeviceRoute: typeof DeviceRoute
   SignInRoute: typeof SignInRoute
@@ -249,6 +274,7 @@ export interface RootRouteChildren {
   GuidesGuideIdRoute: typeof GuidesGuideIdRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiJobsRetentionRoute: typeof ApiJobsRetentionRoute
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   ApiWorkspacesWorkspaceIdAssetsUploadsRoute: typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -266,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -322,6 +355,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/jobs/retention': {
+      id: '/api/jobs/retention'
+      path: '/api/jobs/retention'
+      fullPath: '/api/jobs/retention'
+      preLoaderRoute: typeof ApiJobsRetentionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/workspaces/$workspaceId/assets/$sha256': {
@@ -385,6 +425,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRoute,
   DashboardRoute: DashboardRoute,
   DeviceRoute: DeviceRoute,
   SignInRoute: SignInRoute,
@@ -393,6 +434,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuidesGuideIdRoute: GuidesGuideIdRoute,
   InvitationsIdRoute: InvitationsIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiJobsRetentionRoute: ApiJobsRetentionRoute,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
     ApiWorkspacesWorkspaceIdAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsCommitRoute:

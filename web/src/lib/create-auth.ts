@@ -1,5 +1,6 @@
+import { createHmac } from "node:crypto";
 import { stripe as stripePlugin } from "@better-auth/stripe";
-import { betterAuth } from "better-auth";
+import { betterAuth, getCurrentAdapter } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, deviceAuthorization, magicLink, organization } from "better-auth/plugins";
@@ -8,8 +9,11 @@ import type Stripe from "stripe";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
 import type { SendEmail } from "./email";
+import { enterprisePlugin } from "./enterprise";
 import { ac, roles } from "./permissions";
-import { ensureWorkspace, memberRole, seatsTaken, workspacePlan } from "./workspace";
+import { scimPlugin } from "./scim";
+import { ssoPlugin } from "./sso";
+import { memberRole, seatsTaken, workspacePlan } from "./workspace";
 
 /** The desktop app's client id for device authorization. */
 export const DESKTOP_CLIENT_ID = "guiderecorder-desktop";
@@ -29,6 +33,12 @@ export interface AuthDeps {
     webhookSecret: string;
     prices: { pro?: string; enterprise?: string };
   };
+  /** HMAC secret for SCIM bearer tokens (32+ characters); derived from `secret` when unset. */
+  scimTokenSecret?: string;
+  /** Better Auth's own rate limits; on in production when unset. */
+  rateLimit?: boolean;
+  /** Reverse proxies whose X-Forwarded-For to trust for client addresses. */
+  trustedProxies?: string[];
 }
 
 /**
@@ -36,7 +46,8 @@ export interface AuthDeps {
  * Microsoft, workspaces (organizations) with our roles, and Stripe
  * subscriptions owned by workspaces. Every user has a personal workspace,
  * made on first sign-in. The desktop app signs in with device authorization
- * and calls the API with a bearer token.
+ * and calls the API with a bearer token. Enterprise workspaces add SSO (OIDC
+ * and SAML) and SCIM provisioning.
  */
 export function createAuth(deps: AuthDeps) {
   const { db, sendEmail } = deps;
@@ -73,7 +84,9 @@ export function createAuth(deps: AuthDeps) {
   return betterAuth({
     baseURL: deps.baseURL,
     secret: deps.secret,
-    database: drizzleAdapter(db, { provider: "pg", schema }),
+    // Native transactions: the SCIM plugin needs them. Hooks that can run
+    // inside one read through Better Auth's adapter, not `db`.
+    database: drizzleAdapter(db, { provider: "pg", schema, transaction: true }),
     emailAndPassword: { enabled: true, minPasswordLength: 10 },
     emailVerification: {
       sendVerificationEmail: async ({ user, url }) => {
@@ -81,19 +94,53 @@ export function createAuth(deps: AuthDeps) {
       },
     },
     socialProviders,
+    // Per client address, in the database so every app instance shares the
+    // counts. The API outside /api/auth has its own limits (rate-limit.ts).
+    rateLimit: {
+      enabled: deps.rateLimit,
+      storage: "database",
+      window: 60,
+      max: 100,
+      customRules: {
+        "/sign-in/*": { window: 60, max: 10 },
+        "/sign-up/*": { window: 60, max: 5 },
+        "/magic-link/*": { window: 60, max: 10 },
+        "/request-password-reset": { window: 300, max: 5 },
+        "/device/code": { window: 60, max: 10 },
+        // The desktop app polls every few seconds while a code is pending.
+        "/device/token": { window: 60, max: 30 },
+        "/sso/verify-domain": { window: 60, max: 10 },
+        // Directory syncs come in bursts.
+        "/scim/v2/*": { window: 60, max: 600 },
+      },
+    },
+    advanced: { ipAddress: { trustedProxies: deps.trustedProxies } },
     databaseHooks: {
       session: {
         create: {
+          // Starts in the user's oldest workspace. This can run inside a
+          // transaction, so it reads through the adapter; new users get
+          // their personal workspace once it commits (enterprise.ts).
           before: async (session, ctx) => {
-            const user = await ctx?.context.internalAdapter.findUserById(session.userId);
-            const name = user?.name ?? "";
-            return { data: { ...session, activeOrganizationId: await ensureWorkspace(db, { id: session.userId, name }) } };
+            if (!ctx) return;
+            const adapter = await getCurrentAdapter(ctx.context.adapter);
+            const [first] = await adapter.findMany<{ organizationId: string }>({
+              model: "member",
+              where: [{ field: "userId", value: session.userId }],
+              sortBy: { field: "createdAt", direction: "asc" },
+              limit: 1,
+            });
+            return { data: { ...session, activeOrganizationId: first?.organizationId ?? null } };
           },
         },
       },
     },
     plugins: [
       workspaces,
+      // Before SCIM: refuses SCIM requests from workspaces without `sso`.
+      enterprisePlugin(db),
+      ssoPlugin(),
+      scimPlugin({ credentialHashSecret: deps.scimTokenSecret ?? deriveSecret(deps.secret, "scim-token") }),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           await sendEmail({ to: email, subject: "Sign in to GuideRecorder", text: `Sign in: ${url}` });
@@ -116,6 +163,11 @@ export function createAuth(deps: AuthDeps) {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/** A secret for one purpose, derived from the main one. */
+function deriveSecret(secret: string, purpose: string): string {
+  return createHmac("sha256", secret).update(purpose).digest("hex");
+}
 
 /** Stripe subscriptions owned by workspaces; only owners manage them. */
 function billingPlugin(db: Database, config: NonNullable<AuthDeps["stripe"]>) {

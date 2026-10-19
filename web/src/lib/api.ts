@@ -41,6 +41,7 @@ export function objectStore(): ObjectStore {
     bucket: e.S3_BUCKET,
     accessKeyId: e.S3_ACCESS_KEY_ID,
     secretAccessKey: e.S3_SECRET_ACCESS_KEY,
+    sse: e.S3_SSE === "aws:kms" ? { algorithm: "aws:kms", kmsKeyId: e.S3_SSE_KMS_KEY_ID } : e.S3_SSE ? { algorithm: e.S3_SSE } : undefined,
   });
   return store;
 }

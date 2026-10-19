@@ -22,6 +22,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
       invite: can({ invitation: ["create"] }),
       manageMembers: can({ member: ["update"] }),
       manageBilling: can({ billing: ["manage"] }),
+      manageWorkspace: can({ workspace: ["manage"] }),
     },
   };
 });
