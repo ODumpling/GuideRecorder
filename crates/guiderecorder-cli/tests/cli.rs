@@ -232,7 +232,9 @@ fn list_json_shape() {
     assert_eq!(
         keys,
         [
+            "createdAt",
             "duplicateOf",
+            "folder",
             "id",
             "path",
             "readOnly",
@@ -252,6 +254,24 @@ fn list_json_shape() {
     assert_eq!(rotate["duplicateOf"], Value::Null);
     assert!(rotate["stepCount"].as_u64().unwrap() > 0);
     assert!(rotate["path"].as_str().unwrap().ends_with(ROTATE));
+    assert_eq!(rotate["folder"], "");
+}
+
+#[test]
+fn list_and_search_find_guides_in_folders() {
+    let fx = Fixture::new();
+    let folder = fx.library().join("Work").join("Security");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(fx.bundle(ROTATE), folder.join(ROTATE)).unwrap();
+    for _ in 0..2 {
+        let value = fx.json(&["list", "--tag", "security", "--json"]);
+        assert_eq!(titles(&value["guides"]), ["Rotate an API key"]);
+        assert_eq!(value["guides"][0]["folder"], "Work/Security");
+        let hits = fx.json(&["search", "password", "--json"]);
+        assert!(!hits["hits"].as_array().unwrap().is_empty(), "{hits:#}");
+        // Then again through the index.
+        assert_success(&fx.run(&["reindex"]));
+    }
 }
 
 #[test]

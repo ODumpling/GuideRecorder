@@ -376,7 +376,9 @@ fn guide_json(guide: &IndexedGuide) -> Value {
         "summary": guide.summary,
         "tags": guide.tags,
         "stepCount": guide.step_count,
+        "createdAt": guide.created_at.to_rfc3339(),
         "updatedAt": guide.updated_at.to_rfc3339(),
+        "folder": guide.folder,
         "readOnly": guide.read_only,
         "duplicateOf": guide.duplicate_of.as_deref().map(path_str),
     })

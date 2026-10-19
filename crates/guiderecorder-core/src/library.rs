@@ -10,7 +10,17 @@
 //!     steps/      <ulid>.webp, <ulid>.crop.webp, <ulid>.after.webp
 //!     assets/     manually inserted images
 //!     .backup/    pre-migration copies of guide.json
+//!   Work/                 a folder: any plain directory
+//!     Onboarding/
+//!       Another Guide.guiderecorder/
 //! ```
+//!
+//! Folders are plain directories, so Finder and sync tools see what the app
+//! sees. Anything with a bundle extension is a guide; any other real,
+//! non-hidden directory is a folder. Bundles are never descended into, nor
+//! are symlinks, hidden directories (temp names) or folders deeper than
+//! [`MAX_FOLDER_DEPTH`]. A folder is named by its path relative to the root
+//! with `/` separators (`""` for the root itself), e.g. `Work/Onboarding`.
 //!
 //! Bundles are identified by the guide's `id`, not by folder name. Every
 //! operation on a [`GuideHandle`] re-checks that the bundle still holds that
@@ -75,6 +85,8 @@ pub const ASSETS_DIR: &str = "assets";
 pub const BACKUP_DIR: &str = ".backup";
 /// Largest WebP width or height.
 pub const MAX_WEBP_DIMENSION: u32 = 16383;
+/// Deepest folder nesting below the root that is listed.
+pub const MAX_FOLDER_DEPTH: usize = 8;
 
 /// Longest bundle stem, in bytes, before collision suffixes.
 const MAX_STEM_BYTES: usize = 100;
@@ -107,6 +119,10 @@ pub enum LibraryError {
     NotABundle(PathBuf),
     #[error("{0}: bundle is not inside the library")]
     OutsideLibrary(PathBuf),
+    /// Not a folder of the library (see the module docs): an absolute,
+    /// hidden or `..` path, a bundle, a symlink, too deep, or missing.
+    #[error("{0:?}: not a folder in the library")]
+    InvalidFolder(String),
     #[error("guide {0} not found in library")]
     NotFound(Ulid),
     /// The bundle (or the guide being saved) has a different id than the
@@ -275,7 +291,12 @@ pub struct GuideSummary {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    /// `createdAt`, or `updatedAt` if the file has none.
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The folder holding the bundle, relative to the root (`""` for the
+    /// root itself, `Work/Onboarding` below it).
+    pub folder: String,
     /// Set when another bundle holds the same id (e.g. a Finder copy): the
     /// path of the canonical bundle, which `find` and `save` use. The app
     /// should offer to give this copy a new id.
@@ -395,7 +416,10 @@ impl Library {
         }
         // After recovery, so restored bundles are swept too. Real folders
         // only: a symlinked bundle points outside the library.
-        for bundle in entries().filter(|p| is_bundle_path(p) && is_real_dir(p)) {
+        let bundles = walk_library(&self.root)
+            .map(|walk| walk.bundles)
+            .unwrap_or_default();
+        for bundle in bundles.into_iter().filter(|p| is_real_dir(p)) {
             let guide_temp = format!(".{GUIDE_FILE}.");
             sweep_temp_files(&bundle, min_age, &mut report, |name| {
                 name.starts_with(&guide_temp)
@@ -425,7 +449,9 @@ impl Library {
             .and_then(|(_, value, _)| RawSummary::deserialize(&value).ok())
             .map(|raw| raw.title)
             .unwrap_or_else(|| "Recovered".to_owned());
-        if let Ok(Claim::Fresh(target)) = self.claim_bundle_dir(&sanitize_title(&title), None) {
+        if let Ok(Claim::Fresh(target)) =
+            self.claim_bundle_dir(&self.root, &sanitize_title(&title), None)
+        {
             if fs::rename(path, &target).is_ok() {
                 return Some(target);
             }
@@ -452,8 +478,8 @@ impl Library {
         Ok(guides)
     }
 
-    /// Every `.guiderecorder` folder in the root, sorted by path, with its summary
-    /// or error. Read-only.
+    /// Every `.guiderecorder` folder in the root and its folders (see the
+    /// module docs), sorted by path, with its summary or error. Read-only.
     ///
     /// When several bundles share an id, one is canonical and the others get
     /// [`GuideSummary::duplicate_of`]. The canonical one is, in order: the
@@ -461,19 +487,17 @@ impl Library {
     /// folder is named after the title (`<stem>` or `<stem> N`); the oldest
     /// by creation time; the first by path.
     pub fn scan(&self) -> Result<Vec<(PathBuf, Result<GuideSummary>)>> {
-        let mut paths: Vec<PathBuf> = fs::read_dir(&self.root)
+        let paths = walk_library(&self.root)
             .map_err(io_err(&self.root))?
-            // One unreadable entry should not hide the rest of the library.
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| is_bundle_path(path) && path.is_dir())
-            .collect();
-        paths.sort();
+            .bundles;
 
         let mut out: Vec<_> = paths
             .into_iter()
             .map(|path| {
-                let entry = read_summary(&path, &self.schema);
+                let entry = read_summary(&path, &self.schema).map(|mut summary| {
+                    summary.folder = self.folder_of(&path);
+                    summary
+                });
                 (path, entry)
             })
             .collect();
@@ -564,7 +588,7 @@ impl Library {
             let _ = fs::remove_dir_all(&staging);
             return Err(e);
         }
-        let target = match self.claim_bundle_dir(&sanitize_title(&guide.title), None) {
+        let target = match self.claim_bundle_dir(&self.root, &sanitize_title(&guide.title), None) {
             Ok(Claim::Fresh(target)) => target,
             Ok(Claim::Same(_)) => unreachable!("no current bundle to match"),
             Err(e) => {
@@ -735,7 +759,7 @@ impl Library {
         write_guide(&handle.path, guide)
     }
 
-    /// Renames the bundle folder to match `title`.
+    /// Renames the bundle folder to match `title`, in the folder it is in.
     ///
     /// A no-op if the folder is already `<stem>` or `<stem> N` for the
     /// sanitized title. A change only in case or Unicode form (which APFS
@@ -748,7 +772,8 @@ impl Library {
         if bundle_stem(&handle.path).is_some_and(|current| has_stem(current, &stem)) {
             return Ok(handle.clone());
         }
-        let target = match self.claim_bundle_dir(&stem, Some(&handle.path))? {
+        let dir = parent_dir(&handle.path)?;
+        let target = match self.claim_bundle_dir(&dir, &stem, Some(&handle.path))? {
             Claim::Fresh(target) => {
                 // Replaces the empty folder that reserved the name.
                 if let Err(e) = fs::rename(&handle.path, &target) {
@@ -768,7 +793,7 @@ impl Library {
             }
         };
         // The rename happened; a failed fsync must not make it look failed.
-        let _ = sync_dir(&self.root);
+        let _ = sync_dir(&dir);
         let renamed = GuideHandle {
             id: handle.id,
             path: target,
@@ -778,8 +803,8 @@ impl Library {
     }
 
     /// Permanently removes a bundle. Refuses paths that are not a
-    /// `.guiderecorder` folder directly inside the library root, and bundles that
-    /// no longer hold `handle.id`. The folder is first renamed to a hidden
+    /// `.guiderecorder` folder in the library root or one of its folders, and
+    /// bundles that no longer hold `handle.id`. The folder is first renamed to a hidden
     /// temp name, so a failed removal never leaves a half-deleted bundle
     /// visible.
     pub fn delete(&self, handle: &GuideHandle) -> Result<()> {
@@ -790,8 +815,191 @@ impl Library {
         self.known.write().unwrap().remove(&handle.id);
         let removed = fs::remove_dir_all(&doomed).map_err(io_err(&doomed));
         // Best effort: the bundle is already gone from the library.
+        if let Some(dir) = handle.path.parent() {
+            let _ = sync_dir(dir);
+        }
         let _ = sync_dir(&self.root);
         removed
+    }
+
+    /// Changes a guide's title (and `updated_at`) in `guide.json`, then
+    /// renames its folder to match, as the user renaming it in the library
+    /// expects. The guide is opened with [`Library::load`], so an older one
+    /// is migrated first; one that loads read-only is refused as
+    /// [`Library::save_to`] refuses it. The title is kept even if the folder
+    /// rename then fails (the folder name is cosmetic): the old handle is
+    /// returned. Returns the bundle and the saved guide.
+    pub fn rename(&self, handle: &GuideHandle, title: &str) -> Result<(GuideHandle, Guide)> {
+        self.check_inside(&handle.path)?;
+        let loaded = self.load(&handle.path)?;
+        check_guide_id(handle, &loaded.guide)?;
+        let mut guide = loaded.guide;
+        guide.title = title.to_owned();
+        guide.updated_at = Utc::now();
+        self.save_to(&loaded.handle, &guide)?;
+        let renamed = self
+            .rename_bundle(&loaded.handle, title)
+            .unwrap_or(loaded.handle);
+        Ok((renamed, guide))
+    }
+
+    /// Copies a guide into a new bundle next to it: a new id, `title`, new
+    /// creation and update times, and copies of everything in `steps/` and
+    /// `assets/` (real files only; symlinks and hidden temp files are
+    /// skipped, `.backup/` is not copied). Reads the source like
+    /// [`Library::read`], so it is never written; a guide from a newer app
+    /// is refused with [`LibraryError::NewerSchema`].
+    ///
+    /// Built under a hidden temp name like [`Library::create`].
+    pub fn duplicate(&self, handle: &GuideHandle, title: &str) -> Result<GuideHandle> {
+        self.check_inside(&handle.path)?;
+        let loaded = self.read(&handle.path)?;
+        check_guide_id(handle, &loaded.guide)?;
+        let mut guide = loaded.guide;
+        self.check_writable_version(&handle.path, &guide)?;
+        let now = Utc::now();
+        guide.id = Ulid::new();
+        guide.title = title.to_owned();
+        guide.created_at = now;
+        guide.updated_at = now;
+        let dir = parent_dir(&loaded.handle.path)?;
+        let staging = self.temp_path("create");
+        let built = (|| {
+            fs::create_dir(&staging).map_err(io_err(&staging))?;
+            copy_tree(&loaded.handle.steps_dir(), &staging.join(STEPS_DIR))?;
+            copy_tree(&loaded.handle.assets_dir(), &staging.join(ASSETS_DIR))?;
+            write_guide(&staging, &guide)
+        })();
+        if let Err(e) = built {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+        let target = match self.claim_bundle_dir(&dir, &sanitize_title(title), None) {
+            Ok(Claim::Fresh(target)) => target,
+            Ok(Claim::Same(_)) => unreachable!("no current bundle to match"),
+            Err(e) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(e);
+            }
+        };
+        // Replaces the empty folder that reserved the name.
+        if let Err(e) = fs::rename(&staging, &target) {
+            let _ = fs::remove_dir(&target);
+            let _ = fs::remove_dir_all(&staging);
+            return Err(io_err(&target)(e));
+        }
+        // The copy is in place; a failed fsync must not make it look failed.
+        let _ = sync_dir(&dir);
+        let handle = GuideHandle {
+            id: guide.id,
+            path: target,
+        };
+        self.remember(&handle);
+        Ok(handle)
+    }
+
+    /// Moves a bundle into `folder` (see the module docs; `""` is the
+    /// root), keeping its folder name, with a collision suffix if the name
+    /// is taken there. A no-op if it is already in that folder.
+    pub fn move_to(&self, handle: &GuideHandle, folder: &str) -> Result<GuideHandle> {
+        self.check_inside(&handle.path)?;
+        verify_header(handle)?;
+        let dir = self.folder_path(folder)?;
+        let from = parent_dir(&handle.path)?;
+        if same_file(&from, &dir) {
+            return Ok(handle.clone());
+        }
+        let stem = bundle_stem(&handle.path).unwrap_or(UNTITLED);
+        let target = match self.claim_bundle_dir(&dir, stem, None)? {
+            Claim::Fresh(target) => target,
+            Claim::Same(_) => unreachable!("no current bundle to match"),
+        };
+        // Replaces the empty folder that reserved the name.
+        if let Err(e) = fs::rename(&handle.path, &target) {
+            let _ = fs::remove_dir(&target);
+            return Err(io_err(&handle.path)(e));
+        }
+        // The move happened; a failed fsync must not make it look failed.
+        let _ = sync_dir(&from);
+        let _ = sync_dir(&dir);
+        let moved = GuideHandle {
+            id: handle.id,
+            path: target,
+        };
+        self.remember(&moved);
+        Ok(moved)
+    }
+
+    /// Every folder in the library (not the root itself), as relative
+    /// paths with `/` separators, sorted. Includes empty folders. Names that
+    /// are not UTF-8 are left out. Read-only.
+    pub fn folders(&self) -> Result<Vec<String>> {
+        let walk = walk_library(&self.root).map_err(io_err(&self.root))?;
+        let mut folders: Vec<String> = walk
+            .folders
+            .iter()
+            .filter_map(|dir| relative_name(&self.root, dir))
+            .collect();
+        folders.sort();
+        Ok(folders)
+    }
+
+    /// Makes a folder named after `name` (sanitized like a title) inside
+    /// `parent` (`""` for the root) and returns its relative path. Fails
+    /// if it exists.
+    pub fn create_folder(&self, parent: &str, name: &str) -> Result<String> {
+        let dir = self.folder_path(parent)?;
+        let name = sanitize_title(name);
+        let relative = if parent.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent}/{name}")
+        };
+        if !is_folder_name(&name) || relative.split('/').count() > MAX_FOLDER_DEPTH {
+            return Err(LibraryError::InvalidFolder(relative));
+        }
+        let path = dir.join(&name);
+        fs::create_dir(&path).map_err(io_err(&path))?;
+        let _ = sync_dir(&dir);
+        Ok(relative)
+    }
+
+    /// The absolute path of `folder` (see the module docs; `""` is the
+    /// root), which must exist and be a folder of the library.
+    pub fn folder_path(&self, folder: &str) -> Result<PathBuf> {
+        let invalid = || LibraryError::InvalidFolder(folder.to_owned());
+        if folder.is_empty() {
+            return Ok(self.root.clone());
+        }
+        let parts: Vec<&str> = folder.split('/').collect();
+        if parts.len() > MAX_FOLDER_DEPTH {
+            return Err(invalid());
+        }
+        let mut path = self.root.clone();
+        for part in parts {
+            let mut components = Path::new(part).components();
+            let single = matches!(
+                (components.next(), components.next()),
+                (Some(Component::Normal(name)), None) if name == part
+            );
+            if !single || !is_folder_name(part) {
+                return Err(invalid());
+            }
+            path.push(part);
+            if !is_real_dir(&path) {
+                return Err(invalid());
+            }
+        }
+        Ok(path)
+    }
+
+    /// The folder of a bundle path in this library (see
+    /// [`GuideSummary::folder`]); `""` if it is not below the root.
+    pub fn folder_of(&self, bundle: &Path) -> String {
+        bundle
+            .parent()
+            .and_then(|dir| relative_name(&self.root, dir))
+            .unwrap_or_default()
     }
 
     /// Refuses to write a guide decoded from a newer schema: this app has
@@ -819,21 +1027,36 @@ impl Library {
         self.root.join(format!(".{purpose}-{}.tmp", Ulid::new()))
     }
 
+    /// Whether `path` names a bundle in the root or one of its folders (see
+    /// the module docs). Its folder must exist; the bundle need not.
+    pub fn contains(&self, path: &Path) -> bool {
+        self.check_inside(path).is_ok()
+    }
+
+    /// Checks that `path` is a bundle in the root or one of its folders
+    /// (not inside another bundle, a hidden folder or too deep).
     fn check_inside(&self, path: &Path) -> Result<()> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }
+        let outside = || LibraryError::OutsideLibrary(path.to_path_buf());
         let parent = path
             .parent()
             .and_then(|p| fs::canonicalize(p).ok())
-            .ok_or_else(|| LibraryError::OutsideLibrary(path.to_path_buf()))?;
-        if parent != self.root {
-            return Err(LibraryError::OutsideLibrary(path.to_path_buf()));
+            .ok_or_else(outside)?;
+        let relative = parent.strip_prefix(&self.root).map_err(|_| outside())?;
+        let folders_ok = relative.components().count() <= MAX_FOLDER_DEPTH
+            && relative.components().all(|c| match c {
+                Component::Normal(name) => name.to_str().is_some_and(is_folder_name),
+                _ => false,
+            });
+        if !folders_ok {
+            return Err(outside());
         }
         Ok(())
     }
 
-    /// Picks a bundle folder for `stem`: `Name.guiderecorder`, then
+    /// Picks a bundle folder for `stem` in `dir`: `Name.guiderecorder`, then
     /// `Name 2.guiderecorder`, `Name 3.guiderecorder`, ...
     ///
     /// A free name is reserved by creating an empty folder (`create_dir` is
@@ -841,14 +1064,14 @@ impl Library {
     /// [`Claim::Fresh`]. If a candidate is the `current` bundle itself under
     /// a name differing in case or Unicode form, it is returned as
     /// [`Claim::Same`] without creating anything.
-    fn claim_bundle_dir(&self, stem: &str, current: Option<&Path>) -> Result<Claim> {
+    fn claim_bundle_dir(&self, dir: &Path, stem: &str, current: Option<&Path>) -> Result<Claim> {
         for n in 1u32.. {
             let name = if n == 1 {
                 format!("{stem}.{BUNDLE_EXTENSION}")
             } else {
                 format!("{stem} {n}.{BUNDLE_EXTENSION}")
             };
-            let path = self.root.join(name);
+            let path = dir.join(name);
             if current.is_some_and(|c| same_file(c, &path)) {
                 return Ok(Claim::Same(path));
             }
@@ -890,6 +1113,113 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// A directory, not a symlink to one.
 fn is_real_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
+/// The canonical folder a bundle is in.
+fn parent_dir(bundle: &Path) -> Result<PathBuf> {
+    let parent = bundle
+        .parent()
+        .ok_or_else(|| LibraryError::NotABundle(bundle.to_path_buf()))?;
+    fs::canonicalize(parent).map_err(io_err(parent))
+}
+
+/// Whether a directory name can be a library folder: not hidden (temp
+/// names start with `.`) and not a bundle.
+fn is_folder_name(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && !is_bundle_path(Path::new(name))
+}
+
+/// `path` relative to `root` with `/` separators (`""` for the root
+/// itself), if it is below `root` and UTF-8.
+fn relative_name(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Option<Vec<&str>> = relative
+        .components()
+        .map(|c| match c {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    Some(parts?.join("/"))
+}
+
+/// What [`walk_library`] found.
+#[derive(Debug, Default)]
+struct Walk {
+    bundles: Vec<PathBuf>,
+    folders: Vec<PathBuf>,
+}
+
+/// The bundles and folders under `root` (see the module docs), each sorted
+/// by path. A bundle is anything with a bundle extension that is a
+/// directory (it may be a symlink to one, as before folders); it is never
+/// descended into. Other entries are folders if they are real, non-hidden
+/// directories at most [`MAX_FOLDER_DEPTH`] deep. Fails only if the root
+/// itself cannot be read: an unreadable folder should not hide the rest of
+/// the library.
+fn walk_library(root: &Path) -> io::Result<Walk> {
+    let mut walk = Walk::default();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = pending.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if depth == 0 => return Err(e),
+            Err(_) => continue,
+        };
+        // One unreadable entry should not hide the rest of the library.
+        for path in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+            if is_bundle_path(&path) {
+                if path.is_dir() {
+                    walk.bundles.push(path);
+                }
+            } else if depth < MAX_FOLDER_DEPTH
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(is_folder_name)
+                && is_real_dir(&path)
+            {
+                walk.folders.push(path.clone());
+                pending.push((path, depth + 1));
+            }
+        }
+    }
+    walk.bundles.sort();
+    walk.folders.sort();
+    Ok(walk)
+}
+
+/// Every bundle path under `root` and its folders, sorted (see
+/// [`Library::scan`]). For the search index, which keys bundles by path
+/// relative to the root.
+pub fn bundle_paths(root: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(walk_library(root)?.bundles)
+}
+
+/// Copies the real files and folders in `from` into a new folder `to`,
+/// skipping symlinks and hidden files (temp files of interrupted writes).
+/// A missing or symlinked `from` gives an empty `to`.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir(to).map_err(io_err(to))?;
+    if !is_real_dir(from) {
+        return Ok(());
+    }
+    for entry in fs::read_dir(from).map_err(io_err(from))? {
+        let entry = entry.map_err(io_err(from))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let source = entry.path();
+        let target = to.join(&name);
+        let meta = fs::symlink_metadata(&source).map_err(io_err(&source))?;
+        if meta.is_dir() {
+            copy_tree(&source, &target)?;
+        } else if meta.is_file() {
+            fs::copy(&source, &target).map_err(io_err(&source))?;
+        }
+    }
+    Ok(())
 }
 
 fn is_bundle_path(path: &Path) -> bool {
@@ -1182,6 +1512,8 @@ struct RawSummary {
     summary: String,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
     #[serde(default)]
     items: Vec<RawItem>,
@@ -1234,7 +1566,9 @@ fn read_summary(bundle: &Path, schema: &Schema) -> Result<GuideSummary> {
             .iter()
             .filter(|item| item.kind.as_deref() == Some("step"))
             .count(),
+        created_at: raw.created_at.unwrap_or(raw.updated_at),
         updated_at: raw.updated_at,
+        folder: String::new(),
         duplicate_of: None,
     })
 }
@@ -1266,6 +1600,10 @@ fn newer_placeholder(
                 .map(DateTime::<Utc>::from)
         })
         .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    let created_at = value
+        .get("createdAt")
+        .and_then(|v| DateTime::<Utc>::deserialize(v).ok())
+        .unwrap_or(updated_at);
     Ok(GuideSummary {
         id,
         path: bundle.to_path_buf(),
@@ -1274,7 +1612,9 @@ fn newer_placeholder(
         summary: String::new(),
         tags: Vec::new(),
         step_count: 0,
+        created_at,
         updated_at,
+        folder: String::new(),
         duplicate_of: None,
     })
 }
@@ -2795,6 +3135,222 @@ mod tests {
             lib.delete(&plain),
             Err(LibraryError::NotABundle(_))
         ));
+    }
+
+    fn write_image(handle: &GuideHandle, step: Ulid) -> String {
+        let pixels = [255u8; 4 * 4];
+        handle
+            .write_step_image(
+                step,
+                StepImageVariant::Full,
+                &PixelBuffer::rgba(2, 2, &pixels),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn folders_are_listed_but_bundles_and_hidden_folders_are_not_descended() {
+        let (_tmp, lib) = library();
+        let top = lib.create(&Guide::new("Top", "en")).unwrap();
+        assert_eq!(lib.create_folder("", "Work").unwrap(), "Work");
+        assert_eq!(lib.create_folder("Work", "Team").unwrap(), "Work/Team");
+        lib.create_folder("", "Empty").unwrap();
+        let deep = Guide::new("Deep", "en");
+        let deep_handle = lib
+            .move_to(&lib.create(&deep).unwrap(), "Work/Team")
+            .unwrap();
+        assert_eq!(
+            deep_handle.path,
+            lib.root().join("Work/Team/Deep.guiderecorder")
+        );
+
+        // A bundle-looking folder inside a bundle, a hidden folder and a
+        // folder that is only a bundle's own subfolder are not guides.
+        for dir in [
+            top.path.join("assets/Nested.guiderecorder"),
+            lib.root().join(".hidden/Secret.guiderecorder"),
+        ] {
+            fs::create_dir_all(&dir).unwrap();
+            let mut copy = Guide::new("Hidden", "en");
+            copy.schema_version = SCHEMA_VERSION;
+            write_guide(&dir, &copy).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            let elsewhere = Library::open(outside.path()).unwrap();
+            elsewhere.create(&Guide::new("Linked", "en")).unwrap();
+            std::os::unix::fs::symlink(outside.path(), lib.root().join("Link")).unwrap();
+            let guides = lib.list().unwrap();
+            assert!(guides.iter().all(|g| g.title != "Linked"));
+        }
+
+        let guides = lib.list().unwrap();
+        let mut found: Vec<_> = guides
+            .iter()
+            .map(|g| (g.title.as_str(), g.folder.as_str()))
+            .collect();
+        found.sort();
+        assert_eq!(found, [("Deep", "Work/Team"), ("Top", "")]);
+        assert_eq!(lib.folders().unwrap(), ["Empty", "Work", "Work/Team"]);
+        assert_eq!(lib.folder_of(&deep_handle.path), "Work/Team");
+
+        // Guides in folders are found, opened, saved and deleted.
+        lib.known.write().unwrap().clear();
+        assert_eq!(lib.find(deep.id).unwrap(), Some(deep_handle.clone()));
+        let mut loaded = lib.load(&deep_handle.path).unwrap();
+        loaded.guide.summary = "saved".into();
+        assert_eq!(lib.save(&loaded.guide).unwrap(), deep_handle);
+        let renamed = lib.rename_bundle(&deep_handle, "Deeper").unwrap();
+        assert_eq!(
+            renamed.path,
+            lib.root().join("Work/Team/Deeper.guiderecorder")
+        );
+        lib.delete(&renamed).unwrap();
+        assert!(files_in(&lib.root().join("Work/Team")).is_empty());
+
+        // Not inside another bundle or a hidden folder.
+        let nested = GuideHandle {
+            id: deep.id,
+            path: top.path.join("assets/Nested.guiderecorder"),
+        };
+        assert!(matches!(
+            lib.delete(&nested),
+            Err(LibraryError::OutsideLibrary(_))
+        ));
+    }
+
+    #[test]
+    fn folder_names_are_checked() {
+        let (_tmp, lib) = library();
+        let handle = lib.create(&Guide::new("Guide", "en")).unwrap();
+        lib.create_folder("", "Work").unwrap();
+        assert!(lib.create_folder("", "Work").is_err());
+        // Sanitized like a title: no separators, no leading dot.
+        assert_eq!(lib.create_folder("", "a/b").unwrap(), "a-b");
+        assert_eq!(lib.create_folder("", ".dot").unwrap(), "dot");
+        for bad in [
+            "..",
+            "../Work",
+            "/Work",
+            "Work/",
+            "Work//x",
+            ".hidden",
+            "Missing",
+            "Guide.guiderecorder",
+        ] {
+            assert!(
+                matches!(lib.folder_path(bad), Err(LibraryError::InvalidFolder(_))),
+                "{bad}"
+            );
+            assert!(lib.move_to(&handle, bad).is_err(), "{bad}");
+        }
+        assert!(matches!(
+            lib.create_folder("", "X.guiderecorder"),
+            Err(LibraryError::InvalidFolder(_))
+        ));
+        assert!(handle.path.exists());
+    }
+
+    #[test]
+    fn move_to_keeps_the_name_and_avoids_collisions() {
+        let (_tmp, lib) = library();
+        lib.create_folder("", "Work").unwrap();
+        // Another guide already has the name there.
+        let other = lib.create(&Guide::new("Guide", "en")).unwrap();
+        let other = lib.move_to(&other, "Work").unwrap();
+        assert_eq!(other.path, lib.root().join("Work/Guide.guiderecorder"));
+        let guide = Guide::new("Guide", "en");
+        let handle = lib.create(&guide).unwrap();
+        assert_eq!(handle.path, lib.root().join("Guide.guiderecorder"));
+
+        assert_eq!(lib.move_to(&handle, "").unwrap(), handle);
+        let moved = lib.move_to(&handle, "Work").unwrap();
+        assert_eq!(moved.path, lib.root().join("Work/Guide 2.guiderecorder"));
+        assert!(!handle.path.exists());
+        assert_eq!(lib.find(guide.id).unwrap(), Some(moved.clone()));
+        assert_eq!(
+            lib.read(&moved.path).unwrap().guide.id,
+            guide.id,
+            "same guide, same id"
+        );
+
+        let back = lib.move_to(&moved, "").unwrap();
+        assert_eq!(back.path, lib.root().join("Guide 2.guiderecorder"));
+        assert_eq!(files_in(lib.root()), ["Guide 2.guiderecorder", "Work"]);
+        assert_eq!(files_in(&lib.root().join("Work")), ["Guide.guiderecorder"]);
+
+        // A stale handle moves nothing.
+        assert!(lib.move_to(&moved, "Work").is_err());
+        assert!(back.path.exists());
+    }
+
+    #[test]
+    fn duplicate_copies_images_under_a_new_id() {
+        let (_tmp, lib) = library();
+        let mut guide = sample_guide();
+        guide.title = "Original".into();
+        lib.create_folder("", "Work").unwrap();
+        let handle = lib.move_to(&lib.create(&guide).unwrap(), "Work").unwrap();
+        let step = Ulid::new();
+        let image = write_image(&handle, step);
+        fs::write(handle.assets_dir().join("logo.webp"), b"asset").unwrap();
+        fs::write(handle.steps_dir().join(".x.webp.tmp"), b"temp").unwrap();
+        fs::create_dir_all(handle.backup_dir()).unwrap();
+        fs::write(handle.backup_dir().join("guide.v1.json"), b"{}").unwrap();
+
+        let copy = lib.duplicate(&handle, "Original copy").unwrap();
+        assert_ne!(copy.id, guide.id);
+        assert_eq!(
+            copy.path,
+            lib.root().join("Work/Original copy.guiderecorder")
+        );
+        let loaded = lib.read(&copy.path).unwrap().guide;
+        assert_eq!(loaded.id, copy.id);
+        assert_eq!(loaded.title, "Original copy");
+        assert_eq!(loaded.items.len(), guide.items.len());
+        assert!(loaded.created_at > guide.created_at);
+        assert_eq!(
+            fs::read(copy.resolve(&image).unwrap()).unwrap(),
+            fs::read(handle.resolve(&image).unwrap()).unwrap()
+        );
+        assert_eq!(files_in(&copy.assets_dir()), ["logo.webp"]);
+        assert_eq!(files_in(&copy.steps_dir()).len(), 1, "no temp files");
+        assert!(!copy.backup_dir().exists());
+
+        // Independent: both are canonical, and the copy's images are its own.
+        assert_eq!(lib.find(guide.id).unwrap(), Some(handle.clone()));
+        assert_eq!(lib.find(copy.id).unwrap(), Some(copy.clone()));
+        assert!(lib.list().unwrap().iter().all(|g| g.duplicate_of.is_none()));
+        fs::remove_file(copy.resolve(&image).unwrap()).unwrap();
+        assert!(handle.resolve(&image).unwrap().exists());
+
+        // Same title again gets a suffix; no temp folders are left.
+        let again = lib.duplicate(&handle, "Original copy").unwrap();
+        assert_eq!(
+            again.path,
+            lib.root().join("Work/Original copy 2.guiderecorder")
+        );
+        assert_eq!(files_in(lib.root()), ["Work"]);
+    }
+
+    #[test]
+    fn rename_changes_title_and_folder() {
+        let (_tmp, lib) = library();
+        let guide = Guide::new("Old", "en");
+        lib.create_folder("", "Work").unwrap();
+        let handle = lib.move_to(&lib.create(&guide).unwrap(), "Work").unwrap();
+
+        let (renamed, saved) = lib.rename(&handle, "New name").unwrap();
+        assert_eq!(renamed.path, lib.root().join("Work/New name.guiderecorder"));
+        assert_eq!(saved.title, "New name");
+        assert!(saved.updated_at >= guide.updated_at);
+        let on_disk = lib.read(&renamed.path).unwrap().guide;
+        assert_eq!(on_disk.title, "New name");
+        assert_eq!(on_disk.id, guide.id);
+
+        // A stale handle renames nothing.
+        assert!(lib.rename(&handle, "Other").is_err());
     }
 
     #[test]

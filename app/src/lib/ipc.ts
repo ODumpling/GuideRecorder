@@ -15,6 +15,7 @@ import type {
   OpenedGuide,
   PaperSize,
   Permission,
+  RenamedGuide,
   PermissionRow,
   PermissionStatus,
   RecordingReadiness,
@@ -45,6 +46,18 @@ export interface EditorApi {
    * images. False if the user cancelled.
    */
   deleteGuide(id: string, path: string, title: string): Promise<boolean>;
+  /** The library's folders: relative paths with `/` separators. */
+  listFolders(): Promise<string[]>;
+  /** Makes folder `name` in `parent` (`""`: the top). Returns its path. */
+  createFolder(parent: string, name: string): Promise<string>;
+  /** Copies the guide at `path` into a new guide (new id) titled `title`, next to it. Returns its id. */
+  duplicateGuide(id: string, path: string, title: string): Promise<string>;
+  /** Retitles the guide at `path`; its folder on disk is renamed to match. */
+  renameGuide(id: string, path: string, title: string): Promise<RenamedGuide>;
+  /** Moves the guide at `path` into `folder` (`""`: the top). Returns its new path. */
+  moveGuide(id: string, path: string, folder: string): Promise<string>;
+  /** Shows a guide's bundle, or a library folder, in Finder. */
+  reveal(target: { path: string } | { folder: string }): Promise<void>;
   /**
    * Asks (natively) for images or a PDF and saves them as a new annotation
    * guide (`kind: "annotated"`), one page per image or PDF page. Returns
@@ -65,6 +78,16 @@ export const tauriApi: EditorApi = {
   saveGuide: (guide) => invoke("save_guide", { guide }),
   closeGuide: (id) => invoke("close_guide", { id }),
   deleteGuide: (id, path, title) => invoke("delete_guide", { id, path, title }),
+  listFolders: () => invoke("list_folders"),
+  createFolder: (parent, name) => invoke("create_folder", { parent, name }),
+  duplicateGuide: (id, path, title) => invoke("duplicate_guide", { id, path, title }),
+  renameGuide: (id, path, title) => invoke("rename_guide", { id, path, title }),
+  moveGuide: (id, path, folder) => invoke("move_guide", { id, path, folder }),
+  reveal: (target) =>
+    invoke("reveal_in_library", {
+      path: "path" in target ? target.path : null,
+      folder: "folder" in target ? target.folder : null,
+    }),
   newAnnotatedGuide: () => invoke("new_annotated_guide"),
   stepImage: async (guideId, path) => toArrayBuffer(await invoke("step_image", { guideId, path })),
   quit: () => invoke("quit_app"),

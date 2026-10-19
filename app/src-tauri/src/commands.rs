@@ -17,8 +17,8 @@ use tauri_plugin_dialog::{
 use crate::annotated::PAGE_FILE_EXTENSIONS;
 use crate::blocking::blocking;
 use crate::editor::{
-    parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, Result, Session,
-    SessionCell, MAX_PNG_BYTES,
+    parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, RenamedGuide, Result,
+    Session, SessionCell, MAX_PNG_BYTES,
 };
 use crate::export::{self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format};
 
@@ -93,6 +93,80 @@ pub async fn delete_guide<R: Runtime>(
     }
     with_session(cell, move |s| s.delete_guide(&id, &path)).await?;
     Ok(true)
+}
+
+/// The library's folders, relative paths with `/` separators.
+#[tauri::command]
+pub async fn list_folders(cell: State<'_, Arc<SessionCell>>) -> Result<Vec<String>> {
+    with_session(cell, |s| s.list_folders()).await
+}
+
+/// Makes folder `name` inside `parent` (`""`: the top of the library).
+#[tauri::command]
+pub async fn create_folder(
+    cell: State<'_, Arc<SessionCell>>,
+    parent: String,
+    name: String,
+) -> Result<String> {
+    with_session(cell, move |s| s.create_folder(&parent, &name)).await
+}
+
+/// Copies the guide at `path` into a new guide titled `title`; returns its id.
+#[tauri::command]
+pub async fn duplicate_guide(
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    title: String,
+) -> Result<String> {
+    with_session(cell, move |s| s.duplicate_guide(&id, &path, &title)).await
+}
+
+/// Retitles the guide at `path`, renaming its folder to match.
+#[tauri::command]
+pub async fn rename_guide(
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    title: String,
+) -> Result<RenamedGuide> {
+    with_session(cell, move |s| s.rename_guide(&id, &path, &title)).await
+}
+
+/// Moves the guide at `path` into `folder`; returns its new path.
+#[tauri::command]
+pub async fn move_guide(
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    folder: String,
+) -> Result<PathBuf> {
+    with_session(cell, move |s| s.move_guide(&id, &path, &folder)).await
+}
+
+/// Shows a guide's bundle (or, with `folder` set, that library folder) in
+/// Finder.
+#[tauri::command]
+pub async fn reveal_in_library(
+    cell: State<'_, Arc<SessionCell>>,
+    path: Option<PathBuf>,
+    folder: Option<String>,
+) -> Result<()> {
+    let target = with_session(cell, move |s| match (path, folder) {
+        (Some(path), _) => s.check_bundle(&path).map(|()| path),
+        (None, Some(folder)) => Ok(s.library().folder_path(&folder)?),
+        (None, None) => Ok(s.root().to_path_buf()),
+    })
+    .await?;
+    blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(&target).map_err(|e| {
+            AppError::new(
+                ErrorKind::Io,
+                format!("cannot reveal {}: {e}", target.display()),
+            )
+        })
+    })
+    .await
 }
 
 /// Raw WebP bytes (an `ArrayBuffer` in JS) of an image in an opened

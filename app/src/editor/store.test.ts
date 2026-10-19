@@ -29,7 +29,9 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
               summary: "",
               tags: [],
               stepCount: 3,
+              createdAt: "",
               updatedAt: "",
+              folder: "",
               readOnly: false,
               duplicateOf: null,
             },
@@ -49,6 +51,16 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     }),
     closeGuide: vi.fn(async () => []),
     deleteGuide: vi.fn(async () => true),
+    listFolders: vi.fn(async () => ["Work"]),
+    createFolder: vi.fn(async (parent: string, name: string) => (parent ? `${parent}/${name}` : name)),
+    duplicateGuide: vi.fn(async () => "G3"),
+    renameGuide: vi.fn(async (_id: string, _path: string, title: string) => ({
+      path: `/lib/${title}.guiderecorder`,
+      title,
+      updatedAt: "2026-10-19T00:00:00Z",
+    })),
+    moveGuide: vi.fn(async () => "/lib/Work/Guide.guiderecorder"),
+    reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
     quit: vi.fn(async () => {}),
@@ -90,6 +102,104 @@ describe("library", () => {
     await store.getState().setQuery("none");
     expect(api.listGuides).toHaveBeenLastCalledWith("none");
     expect(store.getState().guides).toEqual([]);
+  });
+
+  it("lists folders too, keeping the last ones if that fails", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    await store.getState().loadGuides();
+    expect(store.getState().folders).toEqual(["Work"]);
+    api.listFolders = vi.fn(async () => Promise.reject({ kind: "io", message: "gone" }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await store.getState().loadGuides();
+    expect(store.getState().folders).toEqual(["Work"]);
+    expect(store.getState().listError).toBeNull();
+  });
+
+  it("makes folders and lists them again", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    expect(await store.getState().createFolder("Work", "Team")).toBe(true);
+    expect(api.createFolder).toHaveBeenCalledWith("Work", "Team");
+    expect(api.listFolders).toHaveBeenCalled();
+    api.createFolder = vi.fn(async () => Promise.reject({ kind: "exists", message: "exists" }));
+    expect(await store.getState().createFolder("", "Work")).toBe(false);
+    expect(store.getState().notice).toBe("Could not make the folder: exists");
+  });
+
+  it("duplicates under a free copy title", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    await store.getState().loadGuides();
+    expect(await store.getState().duplicateGuide(store.getState().guides[0])).toBe(true);
+    expect(api.duplicateGuide).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", "Guide copy");
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it("saves the open guide before duplicating it", async () => {
+    const { api, s, saved } = await opened();
+    await s().loadGuides();
+    s().dispatch(renameGuide(s().doc!.guide, "Edited"));
+    expect(await s().duplicateGuide(s().guides[0])).toBe(true);
+    expect(saved.at(-1)?.title).toBe("Edited");
+    expect(vi.mocked(api.saveGuide).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.duplicateGuide).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("renames the open guide: saved first, then its title and path follow", async () => {
+    const { api, s, saved } = await opened();
+    await s().loadGuides();
+    s().dispatch(renameGuide(s().doc!.guide, "Edited"));
+    expect(await s().renameGuide(s().guides[0], "  New name ")).toBe(true);
+    expect(saved.at(-1)?.title).toBe("Edited");
+    expect(api.renameGuide).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", "New name");
+    expect(s().doc?.guide.title).toBe("New name");
+    expect(s().doc?.path).toBe("/lib/New name.guiderecorder");
+    // Nothing left to save: the backend wrote the new title.
+    expect(s().saveStatus).toBe("saved");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(saved.at(-1)?.title).toBe("Edited");
+  });
+
+  it("moves the open guide and keeps saving to its new place", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    expect(await s().moveGuide(s().guides[0], "Work")).toBe(true);
+    expect(api.moveGuide).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", "Work");
+    expect(s().doc?.path).toBe("/lib/Work/Guide.guiderecorder");
+  });
+
+  it("reports failed moves and leaves the open guide alone", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    api.moveGuide = vi.fn(async () => Promise.reject({ kind: "invalid", message: "no such folder" }));
+    expect(await s().moveGuide(s().guides[0], "Nope")).toBe(false);
+    expect(s().notice).toBe("Could not move the guide: no such folder");
+    expect(s().doc?.path).toBe("/lib/Guide.guiderecorder");
+    expect(s().busy).toBe(false);
+  });
+
+  it("does not organize while busy", async () => {
+    const { api, s, block, unblock } = await opened();
+    await s().loadGuides();
+    s().dispatch(renameGuide(s().doc!.guide, "Edited"));
+    block();
+    const closing = s().closeGuide();
+    expect(await s().moveGuide(s().guides[0], "Work")).toBe(false);
+    unblock();
+    await closing;
+    expect(api.moveGuide).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sort and tag filter", () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    expect(store.getState().sort).toBe("updated");
+    store.getState().setSort("title");
+    store.getState().setTag("security");
+    expect(store.getState().sort).toBe("title");
+    expect(store.getState().tag).toBe("security");
   });
 });
 

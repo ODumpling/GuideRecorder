@@ -993,3 +993,55 @@ fn default_path_is_in_application_support() {
         assert_eq!(path, None);
     }
 }
+
+#[test]
+fn guides_in_folders_are_indexed_listed_and_searched() {
+    let fx = Fixture::new();
+    let mut index = fx.built_index();
+    fx.library.create_folder("", "Work").unwrap();
+    fx.library.create_folder("Work", "Team").unwrap();
+    let mut guide = Guide::new("Water the plants", "en");
+    guide.tags = vec!["Garden".into()];
+    guide
+        .items
+        .push(step("Fill the can", "Use the watering can"));
+    let handle = fx.library.create(&guide).unwrap();
+    let handle = fx.library.move_to(&handle, "Work/Team").unwrap();
+
+    assert!(index.is_stale(&fx.library).unwrap());
+    let report = index.sync(&fx.library).unwrap();
+    assert_eq!(report.added, ["Work/Team/Water the plants.guiderecorder"]);
+    assert!(!index.is_stale(&fx.library).unwrap());
+    let hits = index.search("watering", 10).unwrap();
+    assert_eq!(hits[0].guide_path, handle.path);
+
+    let tagged = ListFilter {
+        tag: Some("garden".into()),
+        ..ListFilter::default()
+    };
+    for listed in [
+        index.list(&tagged).unwrap(),
+        list_library(&fx.library, &tagged).unwrap(),
+    ] {
+        assert_eq!(titles(&listed), ["Water the plants"]);
+        assert_eq!(listed[0].folder, "Work/Team");
+        assert_eq!(listed[0].path, handle.path);
+        assert_eq!(listed[0].created_at, guide.created_at);
+    }
+    assert_eq!(
+        search_library(&fx.library, "watering", 10).unwrap().len(),
+        1
+    );
+
+    // Moving it back to the root is a remove plus an add; `update` takes
+    // either path.
+    let moved = fx.library.move_to(&handle, "").unwrap();
+    index.update(&fx.library, &handle.path).unwrap();
+    index.update(&fx.library, &moved.path).unwrap();
+    assert!(!index.is_stale(&fx.library).unwrap());
+    let listed = index.list(&tagged).unwrap();
+    assert_eq!(listed[0].folder, "");
+    assert_eq!(listed[0].path, moved.path);
+    index.remove(&moved.path).unwrap();
+    assert!(index.list(&tagged).unwrap().is_empty());
+}

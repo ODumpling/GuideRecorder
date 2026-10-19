@@ -378,6 +378,49 @@ async fn list_guides_reads_the_index_and_filters() {
 }
 
 #[tokio::test]
+async fn guides_in_folders_are_listed_and_read_with_and_without_the_index() {
+    let fx = Fixture::new();
+    let folder = fx.library.join("Work").join("Security");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(
+        fx.bundle("Rotate an API key"),
+        folder.join("Rotate an API key.guiderecorder"),
+    )
+    .unwrap();
+    let fx = fx.with_index();
+    for index in [Some(fx.index.clone()), None] {
+        let config = Config {
+            index,
+            ..fx.config()
+        };
+        let mut client = Client::start(config).await;
+        let all = client.ok("list_guides", json!({ "tag": "security" })).await;
+        let guides = all["structuredContent"]["guides"].as_array().unwrap();
+        assert_eq!(guides.len(), 1, "{all:#}");
+        assert_eq!(guides[0]["id"], ROTATE);
+        assert_eq!(guides[0]["folder"], "Work/Security");
+        let all = client.ok("list_guides", json!({})).await;
+        let calendar = all["structuredContent"]["guides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == CALENDAR)
+            .unwrap()
+            .clone();
+        assert_eq!(calendar["folder"], "");
+        let guide = client.ok("get_guide", json!({ "id": ROTATE })).await;
+        assert!(text(&guide, 0).contains("Rotate an API key"));
+        let hits = client
+            .ok("search_steps", json!({ "query": "password" }))
+            .await;
+        assert!(!hits["structuredContent"]["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[tokio::test]
 async fn duplicate_copies_are_hidden_with_and_without_the_index() {
     let fx = Fixture::new();
     copy_dir(
