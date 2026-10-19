@@ -1,11 +1,13 @@
 import { getAuthTables } from "better-auth/db";
-import { getTableColumns, getTableName, type Table } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { getTableColumns, getTableName, is, type Table } from "drizzle-orm";
+import { PgTable } from "drizzle-orm/pg-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testAuth } from "../../test/auth";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
 import { subscription } from "@/db/schema";
+import { DESKTOP_CLIENT_ID } from "./create-auth";
 import { memberRole } from "./workspace";
 
 let db: Database;
@@ -18,8 +20,14 @@ beforeEach(async () => {
 
 describe("schema", () => {
   it("has every table and field Better Auth expects", () => {
-    const tables = Object.values(schema) as Table[];
-    const byName = new Map<string, object>(tables.map((table) => [getTableName(table), getTableColumns(table)]));
+    // Better Auth finds a model by its table name or its export name.
+    const tables = Object.entries(schema).filter(([, value]) => is(value, PgTable)) as [string, Table][];
+    const byName = new Map<string, object>(
+      tables.flatMap(([key, table]) => [
+        [getTableName(table), getTableColumns(table)],
+        [key, getTableColumns(table)],
+      ]),
+    );
     for (const table of Object.values(getAuthTables(t.auth.options))) {
       const columns = byName.get(table.modelName);
       expect(columns, table.modelName).toBeDefined();
@@ -69,5 +77,44 @@ describe("invitations", () => {
 
     await t.auth.api.acceptInvitation({ headers: grace.headers, body: { invitationId: id } });
     expect(await memberRole(db, organizationId, grace.userId)).toBe("editor");
+  });
+});
+
+describe("desktop sign-in", () => {
+  const post = (path: string, body: object, headers?: Headers) =>
+    t.auth.handler(
+      new Request(`http://localhost:3000/api/auth${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...Object.fromEntries(headers ?? []) },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it("approves a device code on the web and calls the API with a bearer token", async () => {
+    const ada = await t.signUp("Ada");
+    const code = (await (await post("/device/code", { client_id: DESKTOP_CLIENT_ID })).json()) as {
+      device_code: string;
+      user_code: string;
+      verification_uri: string;
+    };
+    expect(code.verification_uri).toContain("/device");
+    const token = () => post("/device/token", { grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: code.device_code, client_id: DESKTOP_CLIENT_ID });
+    expect(((await (await token()).json()) as { error: string }).error).toBe("authorization_pending");
+
+    // Opening /device?user_code=… claims the code for the signed-in user; then they approve it.
+    await t.auth.handler(new Request(`http://localhost:3000/api/auth/device?user_code=${code.user_code}`, { headers: ada.headers }));
+    expect((await post("/device/approve", { userCode: code.user_code }, ada.headers)).status).toBe(200);
+
+    // Wait out the polling interval.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10_000);
+    const { access_token } = (await (await token()).json()) as { access_token: string };
+    vi.useRealTimers();
+    const session = await t.auth.api.getSession({ headers: new Headers({ authorization: `Bearer ${access_token}` }) });
+    expect(session?.user.id).toBe(ada.userId);
+  });
+
+  it("only issues codes to the desktop app", async () => {
+    expect((await post("/device/code", { client_id: "someone-else" })).status).toBe(400);
   });
 });

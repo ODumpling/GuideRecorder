@@ -35,6 +35,16 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 - Images are content-addressed per workspace (`src/lib/assets.ts`): clients
   ask which SHA-256s are missing, PUT them to presigned URLs that only accept
   the matching bytes, then commit them.
+- Synced guides (`src/lib/sync.ts`) are chains of immutable revisions, each the
+  whole `guide.json` plus a map from its image paths to committed assets. A
+  push names the revision it was made on; if that isn't the head, the server
+  answers 409 with the head, and the client merges (`packages/sync`) and pushes
+  again. Every change gives the guide a new `seq`; clients follow
+  `changes?since=<cursor>`. Deleted guides sit in the trash for 30 days, then
+  lose their revisions but stay in the feed as tombstones.
+- The desktop app signs in with device authorization: it shows a code, the
+  user approves it at `/device`, and the app calls the API with the session
+  token as a bearer token.
 
 ## API
 
@@ -44,6 +54,13 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 | `POST` | `/api/workspaces/:id/assets/uploads` | `{ assets: [{ sha256, size, contentType }] }` → `{ present, uploads: [{ sha256, url, method, headers }] }` |
 | `POST` | `/api/workspaces/:id/assets/commit` | `{ sha256: [...] }` → `{ committed, missing }` |
 | `GET` | `/api/workspaces/:id/assets/:sha256` | Redirects to a short-lived download URL |
+| `POST` | `/api/workspaces/:id/sync/push` | `{ guideId, baseRevision, guide, assets: { path: sha256 } }` → `{ revision }`; 409 `{ head }` when `baseRevision` isn't the head; 410 if trashed |
+| `GET` | `/api/workspaces/:id/sync/changes?since=<cursor>` | `{ changes: [{ type: "revision", revision } \| { type: "deleted", deletedAt, purgeAt }], cursor, hasMore }` |
+| `GET` | `/api/workspaces/:id/sync/events` | Server-sent `change` events when a guide changes |
+| `GET` / `DELETE` | `/api/workspaces/:id/sync/guides/:guideId` | The head revision / move to the trash |
+| `POST` | `/api/workspaces/:id/sync/guides/:guideId/restore` | Take out of the trash |
+
+API calls take the session cookie or `Authorization: Bearer <token>`.
 | `GET` | `/api/health` | Database check |
 
 ## Tests

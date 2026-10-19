@@ -2,7 +2,7 @@ import { stripe as stripePlugin } from "@better-auth/stripe";
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { magicLink, organization } from "better-auth/plugins";
+import { bearer, deviceAuthorization, magicLink, organization } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import type Stripe from "stripe";
 import type { Database } from "@/db";
@@ -10,6 +10,9 @@ import * as schema from "@/db/schema";
 import type { SendEmail } from "./email";
 import { ac, roles } from "./permissions";
 import { ensureWorkspace, memberRole, seatsTaken, workspacePlan } from "./workspace";
+
+/** The desktop app's client id for device authorization. */
+export const DESKTOP_CLIENT_ID = "guiderecorder-desktop";
 
 export interface AuthDeps {
   db: Database;
@@ -32,7 +35,8 @@ export interface AuthDeps {
  * Better Auth for the web app: email and password, magic links, Google and
  * Microsoft, workspaces (organizations) with our roles, and Stripe
  * subscriptions owned by workspaces. Every user has a personal workspace,
- * made on first sign-in.
+ * made on first sign-in. The desktop app signs in with device authorization
+ * and calls the API with a bearer token.
  */
 export function createAuth(deps: AuthDeps) {
   const { db, sendEmail } = deps;
@@ -95,6 +99,15 @@ export function createAuth(deps: AuthDeps) {
           await sendEmail({ to: email, subject: "Sign in to GuideRecorder", text: `Sign in: ${url}` });
         },
       }),
+      // The desktop app signs in with a code shown on /device and then sends
+      // the session token as a bearer token.
+      deviceAuthorization({
+        verificationUri: "/device",
+        expiresIn: "15m",
+        interval: "5s",
+        validateClient: (clientId) => clientId === DESKTOP_CLIENT_ID,
+      }),
+      bearer(),
       ...(billing ? [billing] : []),
       // Must stay last: sets cookies when server functions call auth.api.
       tanstackStartCookies(),

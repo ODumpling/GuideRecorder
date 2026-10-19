@@ -1,4 +1,18 @@
-import { bigint, boolean, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import {
+  bigint,
+  boolean,
+  foreignKey,
+  index,
+  integer,
+  jsonb,
+  pgSequence,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 // Better Auth tables (core, organization and stripe plugins). Field names
 // follow Better Auth's models; `auth.test.ts` checks them against the config.
@@ -147,6 +161,20 @@ export const subscription = pgTable(
   (t) => [index("subscription_reference_id_idx").on(t.referenceId)],
 );
 
+/** Device authorization (RFC 8628): how the desktop app signs in. */
+export const deviceCode = pgTable("device_code", {
+  id: text("id").primaryKey(),
+  deviceCode: text("device_code").notNull().unique(),
+  userCode: text("user_code").notNull().unique(),
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at").notNull(),
+  status: text("status").notNull(),
+  lastPolledAt: timestamp("last_polled_at"),
+  pollingInterval: integer("polling_interval"),
+  clientId: text("client_id"),
+  scope: text("scope"),
+});
+
 // GuideRecorder tables.
 
 /**
@@ -168,4 +196,72 @@ export const asset = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.organizationId, t.sha256] })],
+);
+
+/** Orders guide changes for the sync feed; a guide takes a new value on every change. */
+export const syncSeq = pgSequence("sync_seq");
+
+/**
+ * A synced guide. `id` is the guide's ULID from guide.json. The content is
+ * in its revisions; `headRevisionId` is the latest. Deleted guides stay as
+ * tombstones: in the trash for 30 days, then purged of their revisions.
+ */
+export const guide = pgTable(
+  "guide",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    id: text("id").notNull(),
+    ownerId: text("owner_id").references(() => user.id, { onDelete: "set null" }),
+    /** `workspace`: every member sees it; `private`: only its owner. */
+    visibility: text("visibility").notNull().default("workspace"),
+    headRevisionId: text("head_revision_id"),
+    publishedRevisionId: text("published_revision_id"),
+    /** Position in the workspace's change feed. */
+    seq: bigint("seq", { mode: "bigint" })
+      .notNull()
+      .default(sql`nextval('sync_seq')`),
+    deletedAt: timestamp("deleted_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.id] }), index("guide_organization_seq_idx").on(t.organizationId, t.seq)],
+);
+
+/** An immutable version of a guide: the whole guide.json. */
+export const revision = pgTable(
+  "revision",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    parentId: text("parent_id"),
+    guideJson: jsonb("guide_json").notNull(),
+    authorId: text("author_id").references(() => user.id, { onDelete: "set null" }),
+    /** Where the change was made: `app` or `web`. */
+    source: text("source").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.organizationId, t.guideId], foreignColumns: [guide.organizationId, guide.id] }).onDelete("cascade"),
+    index("revision_guide_idx").on(t.organizationId, t.guideId),
+  ],
+);
+
+/** The images a revision names: bundle-relative path → committed asset. */
+export const revisionAsset = pgTable(
+  "revision_asset",
+  {
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => revision.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    organizationId: text("organization_id").notNull(),
+    sha256: text("sha256").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.revisionId, t.path] }),
+    foreignKey({ columns: [t.organizationId, t.sha256], foreignColumns: [asset.organizationId, asset.sha256] }),
+  ],
 );
