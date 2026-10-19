@@ -754,15 +754,34 @@ export function McpSection({ api }: { api: SettingsApi }) {
   const [setup, setSetup] = useState<McpSetup | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
+  const writable = useSettings((s) => s.settings!.mcp.writable);
+  const readOnly = useSettings((s) => s.readOnly);
+  const refresh = useCallback(() => {
     api.mcpSetup().then(setSetup, (e) => setError(errorMessage(e)));
   }, [api]);
+  useEffect(refresh, [refresh]);
+
+  /** The command comes from the saved setting, so it is fetched again once stored. */
+  const allowEdits = async (on: boolean) => {
+    if (await settingsStore.getState().change((s) => ({ ...s, mcp: { ...s.mcp, writable: on } }))) refresh();
+  };
 
   return (
     <Section
       title="MCP"
       intro="Let Claude Code read and search your guides: run this command once in a terminal."
     >
+      <Row
+        label="Allow MCP to edit guides"
+        note="Adds --writable: Claude Code can then change guide text, tags and order, and create annotation guides from images. Guides open in the editor are never changed. If you added the server before, run claude mcp remove guiderecorder first."
+      >
+        <Toggle
+          label="Allow MCP to edit guides"
+          checked={writable}
+          disabled={readOnly}
+          onChange={(on) => void allowEdits(on)}
+        />
+      </Row>
       {setup && (
         <div className="mt-2 flex flex-col gap-2">
           <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all select-all">

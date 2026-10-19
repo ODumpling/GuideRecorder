@@ -2359,6 +2359,7 @@ dependencies = [
  "docx-rs",
  "image",
  "keyring",
+ "libc",
  "lopdf",
  "minijinja",
  "pulldown-cmark",

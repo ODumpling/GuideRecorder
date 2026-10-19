@@ -475,9 +475,12 @@ pub fn mcp_binary(exe: &Path) -> PathBuf {
 }
 
 /// The command that registers the MCP server with Claude Code for the
-/// current library.
+/// current library, with `--writable` if Settings → MCP allows edits.
 #[tauri::command]
-pub fn mcp_setup(target: State<'_, Arc<LibraryTarget>>) -> Result<McpSetup> {
+pub fn mcp_setup(
+    target: State<'_, Arc<LibraryTarget>>,
+    store: State<'_, Arc<SettingsStore>>,
+) -> Result<McpSetup> {
     let exe = std::env::current_exe()
         .map_err(|e| AppError::new(ErrorKind::Io, format!("cannot find the app: {e}")))?;
     let mcp_path = mcp_binary(&exe);
@@ -487,6 +490,7 @@ pub fn mcp_setup(target: State<'_, Arc<LibraryTarget>>) -> Result<McpSetup> {
         library
             .as_deref()
             .unwrap_or(Path::new("~/Documents/GuideRecorder")),
+        store.get().mcp.writable,
     );
     Ok(McpSetup {
         command,

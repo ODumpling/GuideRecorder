@@ -167,6 +167,7 @@ export class Backend {
       audience: "beginner",
     },
     export: { format: "pdf", folder: null, logo: null, accent: null },
+    mcp: { writable: false },
   };
   /** Whether an API key is "stored"; the key itself is never kept. */
   apiKeyStored = false;
@@ -809,7 +810,7 @@ export class Backend {
         return null;
       case "mcp_setup":
         return {
-          command: "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder",
+          command: `claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder${this.settings.mcp.writable ? " --writable" : ""}`,
           mcpPath: "/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp",
           found: true,
           library: "/Users/me/Documents/GuideRecorder",

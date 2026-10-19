@@ -1,34 +1,26 @@
 //! Annotated guides: pages made from images and PDFs the user chose, each
 //! a manual step showing its full image, on which the editor draws
-//! hotspots. Blocking file IO and decoding; the commands in `commands.rs`
-//! run it on the blocking pool after their file dialog.
+//! hotspots. Images become pages and guides as core's
+//! [`guiderecorder_core::pages`] makes them (which the MCP server uses too);
+//! PDFs are drawn here. Blocking file IO and decoding; the commands in
+//! `commands.rs` run it on the blocking pool after their file dialog.
 
 use std::path::{Path, PathBuf};
 
-use guiderecorder_core::model::{Guide, GuideKind, Item, Step};
-use image::imageops::{self, FilterType};
-use image::{ImageFormat, RgbaImage};
-
-use crate::editor::{
-    decode_image, image_step, parse_id, read_file, AppError, ErrorKind, Result, Session,
+use guiderecorder_core::model::Step;
+use guiderecorder_core::pages::{
+    self, create_annotated_guide, file_name, guide_title, read_page_image, stem_title,
 };
-use crate::pdf::{PdfDocument, MAX_PAGE_SIDE};
+use image::RgbaImage;
+
+use crate::editor::{image_step, parse_id, read_file, AppError, ErrorKind, Result, Session};
+use crate::pdf::PdfDocument;
 
 /// Files that can become pages, by extension (also the dialog's filter).
 pub const PAGE_FILE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "pdf"];
 
-/// Image formats a page may be in, told by the file's content.
-const PAGE_IMAGE_FORMATS: &[ImageFormat] =
-    &[ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::WebP];
-
-/// Largest image a page is made from: phone photos and scans go well past
-/// what a step image holds, so they are decoded at up to this size and
-/// scaled down to [`MAX_PAGE_SIDE`], as PDF pages are.
-const MAX_SOURCE_SIDE: u32 = 30_000;
-const MAX_SOURCE_PIXELS: u64 = 120_000_000;
-
 /// Most pages one import adds (all images plus all PDF pages).
-pub const MAX_IMPORT_PAGES: usize = 100;
+pub const MAX_IMPORT_PAGES: usize = pages::MAX_IMPORT_PAGES;
 
 /// A chosen file and how many pages it gives.
 struct PageFile {
@@ -44,28 +36,13 @@ impl Session {
     /// file fails.
     pub fn create_annotated_guide(&self, paths: &[PathBuf]) -> Result<String> {
         let files = count_pages(paths)?;
-        let mut guide = Guide::new(guide_title(&paths[0]), "en");
-        guide.kind = GuideKind::Annotated;
-        let library = self.library();
-        // Rendered pages are written one by one into the new bundle rather
-        // than held: a hundred pages would not fit in memory. The bundle is
-        // removed if any fails.
-        let handle = library.create(&guide)?;
-        let filled = import(&files, |title, image| {
-            let step = image_step(&handle, title, &image)?;
-            guide.items.push(Item::Step(step));
-            Ok(())
-        })
-        .and_then(|()| Ok(library.save_to(&handle, &guide)?));
-        if let Err(e) = filled {
-            if let Err(delete) = library.delete(&handle) {
-                eprintln!(
-                    "guiderecorder: cannot remove the unfinished guide {}: {delete}",
-                    handle.path.display()
-                );
-            }
-            return Err(e);
-        }
+        let (handle, guide) =
+            create_annotated_guide(self.library(), &guide_title(&paths[0]), |handle, steps| {
+                import(&files, |title, image| {
+                    steps.push(image_step(handle, title, &image)?);
+                    Ok(())
+                })
+            })?;
         self.index_bundle(&handle);
         Ok(guide.id.to_string())
     }
@@ -90,34 +67,6 @@ impl Session {
             Ok(())
         })?;
         Ok(steps)
-    }
-}
-
-/// The file name of `path`, for messages.
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// A title from a file name: its stem, whitespace and control characters
-/// run together into single spaces.
-fn stem_title(path: &Path) -> String {
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    stem.split(|c: char| c.is_whitespace() || c.is_control())
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// A new guide's title: the first file's (`Untitled` if it has none).
-fn guide_title(path: &Path) -> String {
-    let title = stem_title(path);
-    if title.is_empty() {
-        "Untitled".to_owned()
-    } else {
-        title
     }
 }
 
@@ -186,16 +135,8 @@ fn import(files: &[PageFile], mut page: impl FnMut(String, RgbaImage) -> Result<
             AppError::new(e.kind, format!("{}: {}", file_name(&file.path), e.message))
         };
         if !file.pdf {
-            let bytes = read_file(&file.path)?;
-            let image = decode_image(
-                &bytes,
-                PAGE_IMAGE_FORMATS,
-                "PNG, JPEG or WebP",
-                MAX_SOURCE_SIDE,
-                MAX_SOURCE_PIXELS,
-            )
-            .map_err(named)?;
-            page(stem_title(&file.path), fit_page(image))?;
+            let image = read_page_image(&file.path)?;
+            page(stem_title(&file.path), image)?;
             continue;
         }
         let pdf = open_pdf(&file.path)?;
@@ -222,28 +163,14 @@ fn import(files: &[PageFile], mut page: impl FnMut(String, RgbaImage) -> Result<
     Ok(())
 }
 
-/// `image` scaled down (never up) so its longer side is at most
-/// [`MAX_PAGE_SIDE`].
-fn fit_page(image: RgbaImage) -> RgbaImage {
-    let (width, height) = image.dimensions();
-    let longest = width.max(height);
-    if longest <= MAX_PAGE_SIDE {
-        return image;
-    }
-    let scale = |side: u32| {
-        ((u64::from(side) * u64::from(MAX_PAGE_SIDE) + u64::from(longest) / 2) / u64::from(longest))
-            .max(1) as u32
-    };
-    imageops::resize(&image, scale(width), scale(height), FilterType::Lanczos3)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::tests::{fixture_id, library, FIXTURE};
     use crate::pdf::tests::{pdf, top_left_square, TestPage};
     use guiderecorder_core::library::{read_webp, MAX_WEBP_DIMENSION};
-    use guiderecorder_core::model::{ImageShow, StepKind};
+    use guiderecorder_core::model::{GuideKind, ImageShow, StepKind};
+    use image::ImageFormat;
     use std::fs;
 
     /// A `width`×`height` image, red above blue, as `format` at `path`.
@@ -282,16 +209,6 @@ mod tests {
     #[test]
     fn large_images_are_scaled_down_not_refused() {
         // Past both the 40 MP and the per-side limit of a step image.
-        let wide = RgbaImage::new(MAX_WEBP_DIMENSION + 1, 3);
-        assert_eq!(fit_page(wide).dimensions(), (MAX_PAGE_SIDE, 1));
-        let photo = RgbaImage::new(MAX_PAGE_SIDE * 2, MAX_PAGE_SIDE * 3 / 2);
-        assert_eq!(
-            fit_page(photo).dimensions(),
-            (MAX_PAGE_SIDE, MAX_PAGE_SIDE * 3 / 4)
-        );
-        let small = RgbaImage::new(5, 7);
-        assert_eq!(fit_page(small).dimensions(), (5, 7));
-
         let root = library();
         let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
         let path = root.join("plan.png");
@@ -300,7 +217,7 @@ mod tests {
         let opened = session.open_guide(&id).unwrap();
         let page = opened.guide.steps().next().unwrap();
         let image = read_webp(&opened.path.join(&page.image.full)).unwrap();
-        assert_eq!(image.dimensions(), (MAX_PAGE_SIDE, 1));
+        assert_eq!(image.dimensions(), (pages::MAX_PAGE_SIDE, 1));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -389,14 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn titles_fall_back_to_untitled() {
-        assert_eq!(guide_title(Path::new("/x/ \t.png")), "Untitled");
-        assert_eq!(guide_title(Path::new("/x/a\nb  c.pdf")), "a b c");
-        assert_eq!(guide_title(Path::new("/x/.pdf")), ".pdf");
-        assert_eq!(stem_title(Path::new("Scan 2.final.jpg")), "Scan 2.final");
-    }
-
-    #[test]
     fn a_bad_file_leaves_no_guide() {
         let root = library();
         let session = Session::start(&root, None).unwrap();
@@ -416,7 +325,7 @@ mod tests {
         let big = files.join("big.png");
         fs::File::create(&big)
             .unwrap()
-            .set_len(crate::editor::MAX_IMAGE_FILE_BYTES + 1)
+            .set_len(pages::MAX_FILE_BYTES + 1)
             .unwrap();
         // Not an image despite its name: a PDF.
         let disguised = files.join("disguised.png");

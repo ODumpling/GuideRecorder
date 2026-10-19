@@ -59,6 +59,10 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await expect(dialog.getByText("Not allowed")).toBeVisible();
   await dialog.getByRole("button", { name: "MCP" }).click();
   await expect(dialog.getByText(/claude mcp add guiderecorder --/)).toBeVisible();
+  await expect(dialog.locator("pre")).not.toContainText("--writable");
+  await dialog.getByRole("switch", { name: "Allow MCP to edit guides" }).click();
+  await expect.poll(() => backend.settings.mcp.writable).toBe(true);
+  await expect(dialog.locator("pre")).toContainText("--library /Users/me/Documents/GuideRecorder --writable");
 
   await dialog.getByRole("button", { name: "Close settings" }).click();
   await openGuide(page, "Rotate an API key");

@@ -27,5 +27,9 @@ typst = "0.15.1"
 typst-pdf = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 
+# The editor lock's liveness check (`edit.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 lopdf = "0.45.0"

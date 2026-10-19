@@ -3,6 +3,7 @@
 //! See design scratchpads #444 (format), #443 (export) and #442 (AI).
 
 pub mod ai;
+pub mod edit;
 pub mod events;
 pub mod export;
 pub mod index;
@@ -10,6 +11,7 @@ pub mod library;
 pub mod markdown;
 pub mod migrate;
 pub mod model;
+pub mod pages;
 pub mod steps;
 
 pub use ulid::Ulid;
