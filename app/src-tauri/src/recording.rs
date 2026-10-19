@@ -676,6 +676,18 @@ fn start<R: Runtime>(
     Ok(status)
 }
 
+/// Gives a running session the record and pause shortcuts in `hotkeys`
+/// to drop (see [`session_config`]), when they change mid-recording.
+/// Waits for a start, pause, resume or stop in progress.
+pub fn set_control_hotkeys<R: Runtime>(app: &AppHandle<R>, hotkeys: &crate::settings::Hotkeys) {
+    let Some(recorder) = app.try_state::<Arc<Recorder>>() else {
+        return;
+    };
+    if let Some(session) = recorder.slot().as_ref() {
+        session.set_control_hotkeys(crate::hotkeys::capture_hotkeys(hotkeys));
+    };
+}
+
 /// Sets the status's `excludedApp` and `captureLost` to the session's,
 /// read inside the status lock; sends and returns the new status if that
 /// changed it.

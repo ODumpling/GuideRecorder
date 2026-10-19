@@ -248,6 +248,28 @@ pub fn is_hotkey(value: &str) -> bool {
     key_ok && mods_ok
 }
 
+/// Whether `a` and `b` are the same shortcut (neither empty), with
+/// modifier aliases and order ignored: `Alt+Ctrl+R` and `Control+Option+R`
+/// are both `Ctrl+Alt+R`.
+fn same_hotkey(a: &str, b: &str) -> bool {
+    fn canonical(value: &str) -> Option<(Vec<&'static str>, String)> {
+        let mut parts = value.split('+');
+        let key = parts.next_back()?.to_ascii_uppercase();
+        let mut mods: Vec<&'static str> = parts
+            .map(|m| match m {
+                "CmdOrCtrl" | "CommandOrControl" | "Cmd" | "Command" | "Super" => "Cmd",
+                "Ctrl" | "Control" => "Ctrl",
+                "Alt" | "Option" => "Alt",
+                _ => "Shift",
+            })
+            .collect();
+        mods.sort_unstable();
+        mods.dedup();
+        Some((mods, key))
+    }
+    !a.is_empty() && !b.is_empty() && canonical(a) == canonical(b)
+}
+
 /// A model id such as `claude-haiku-5-5`.
 pub fn is_model_id(value: &str) -> bool {
     (1..=100).contains(&value.len())
@@ -325,7 +347,7 @@ impl Settings {
             }
         }
         for (i, (_, a)) in keys.iter().enumerate() {
-            if !a.is_empty() && keys[..i].iter().any(|(_, b)| b == a) {
+            if keys[..i].iter().any(|(_, b)| same_hotkey(a, b)) {
                 return Err(invalid(format!("the shortcut {a} is used twice")));
             }
         }
@@ -579,26 +601,29 @@ fn read(path: &Path) -> (Settings, LoadState) {
 /// Brings settings saved by an older version up to date, in memory; the
 /// next save writes them as [`SETTINGS_VERSION`].
 ///
-/// Version 1 saved ⇧⌘R, ⇧⌘P and ⇧⌘M as the default shortcuts, but the app
-/// always registered ⌃⌥R, ⌃⌥P and ⌃⌥S. Now that the saved shortcuts are
-/// used, a shortcut still at its old default becomes the one that actually
-/// worked, rather than taking over ⇧⌘P (the command palette in many apps).
+/// Version 1 saved ⇧⌘R and ⇧⌘P as the default record and pause
+/// shortcuts, but the app always registered ⌃⌥R and ⌃⌥P. Now that the
+/// saved shortcuts are used, one still at its old default becomes the one
+/// that actually worked, rather than taking over ⇧⌘P (the command palette
+/// in many apps), unless another shortcut already has it. The manual-step
+/// shortcut was always read from the settings, so it is kept.
 fn migrate(settings: &mut Settings, version: u64) {
     if version < 2 {
-        let hotkeys = &mut settings.recording.hotkeys;
         let defaults = Hotkeys::default();
-        for (key, old, new) in [
-            (&mut hotkeys.record, "CmdOrCtrl+Shift+R", defaults.record),
-            (&mut hotkeys.pause, "CmdOrCtrl+Shift+P", defaults.pause),
-            (
-                &mut hotkeys.manual_step,
-                "CmdOrCtrl+Shift+M",
-                defaults.manual_step,
-            ),
-        ] {
-            if *key == old {
-                *key = new;
-            }
+        let h = &mut settings.recording.hotkeys;
+        if h.record == "CmdOrCtrl+Shift+R"
+            && ![&h.pause, &h.manual_step]
+                .iter()
+                .any(|o| same_hotkey(o, &defaults.record))
+        {
+            h.record = defaults.record;
+        }
+        if h.pause == "CmdOrCtrl+Shift+P"
+            && ![&h.record, &h.manual_step]
+                .iter()
+                .any(|o| same_hotkey(o, &defaults.pause))
+        {
+            h.pause = defaults.pause;
         }
     }
 }
@@ -816,6 +841,10 @@ mod tests {
         }
         assert!(is_model_id("claude-sonnet-5-5"));
         assert!(!is_model_id("") && !is_model_id("a b"));
+        assert!(same_hotkey("Ctrl+Alt+R", "Option+Control+R"));
+        assert!(same_hotkey("CmdOrCtrl+Shift+R", "Shift+Cmd+R"));
+        assert!(!same_hotkey("Ctrl+Alt+R", "Ctrl+Alt+Shift+R"));
+        assert!(!same_hotkey("", ""));
         assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));
         assert!(!is_language("en_US") && !is_language("-en"));
         for ok in [
@@ -843,6 +872,9 @@ mod tests {
 
         let mut s = Settings::default();
         s.recording.hotkeys.pause = s.recording.hotkeys.record.clone();
+        assert!(s.validate().unwrap_err().message.contains("used twice"));
+        let mut s = Settings::default();
+        s.recording.hotkeys.pause = "Alt+Ctrl+R".into();
         assert!(s.validate().unwrap_err().message.contains("used twice"));
         let mut s = Settings::default();
         s.recording.typing_idle_ms = 50;
@@ -1036,11 +1068,26 @@ mod tests {
         let hotkeys = &view.settings.recording.hotkeys;
         assert_eq!(hotkeys.record, "Ctrl+Alt+R");
         assert_eq!(hotkeys.pause, "Ctrl+Alt+K");
-        assert_eq!(hotkeys.manual_step, "Ctrl+Alt+S");
+        // It always worked as stored.
+        assert_eq!(hotkeys.manual_step, "CmdOrCtrl+Shift+M");
         store.update(store.get(), &ChosenPaths::default()).unwrap();
         let saved: Settings = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved.version, 2);
         assert_eq!(saved.recording.hotkeys, store.get().recording.hotkeys);
+
+        // A new default another shortcut already has is not taken, so
+        // nothing is reset as a duplicate.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"hotkeys":{"record":"CmdOrCtrl+Shift+R",
+                "pause":"Alt+Ctrl+R","manualStep":"CmdOrCtrl+Shift+M"}}}"#,
+        )
+        .unwrap();
+        let view = SettingsStore::load(Some(path.clone())).view();
+        assert!(view.load_error.is_none());
+        let hotkeys = &view.settings.recording.hotkeys;
+        assert_eq!(hotkeys.record, "CmdOrCtrl+Shift+R");
+        assert_eq!(hotkeys.pause, "Alt+Ctrl+R");
 
         // Chosen in version 2: kept.
         fs::write(

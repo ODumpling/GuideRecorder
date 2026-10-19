@@ -17,6 +17,7 @@ use crate::blocking::blocking;
 use crate::editor::{self, AppError, ErrorKind, Result, Session, SessionCell};
 use crate::export::ChosenPaths;
 use crate::hotkeys::{self, HotkeyErrors, HotkeyState};
+use crate::recording;
 use crate::settings::{self, Settings, SettingsStore, SettingsView};
 
 /// The library folder the app opened (or tried to open) last.
@@ -95,6 +96,7 @@ pub async fn update_settings<R: Runtime>(
         let saved = store.update(settings, &chosen)?;
         if saved.recording.hotkeys != before {
             hotkeys::apply(&app, &saved.recording.hotkeys);
+            recording::set_control_hotkeys(&app, &saved.recording.hotkeys);
         }
         Ok(saved)
     })
@@ -102,10 +104,19 @@ pub async fn update_settings<R: Runtime>(
 }
 
 /// Why the record or pause shortcut could not be registered (e.g. taken
-/// by another app or macOS), as of the last change.
+/// by another app or macOS). One that failed is tried again first, as its
+/// owner may have let it go.
 #[tauri::command]
-pub fn hotkey_errors(state: State<'_, HotkeyState>) -> HotkeyErrors {
-    state.errors()
+pub async fn hotkey_errors<R: Runtime>(
+    app: AppHandle<R>,
+    store: State<'_, Arc<SettingsStore>>,
+) -> Result<HotkeyErrors> {
+    let store = Arc::clone(&store);
+    blocking(move || {
+        hotkeys::retry_failed(&app, &store.get().recording.hotkeys);
+        Ok(app.state::<HotkeyState>().errors())
+    })
+    .await
 }
 
 /// The library as Settings shows it.

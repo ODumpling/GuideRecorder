@@ -708,6 +708,9 @@ pub struct RecordingSession {
     headless: bool,
     /// Shared with the router (see the module docs on pausing).
     pause: SharedPause,
+    /// The router's [`SessionConfig::control_hotkeys`], replaced by
+    /// [`RecordingSession::set_control_hotkeys`].
+    control_hotkeys: SharedHotkeys,
     /// When the current pause began.
     paused_at: Option<Timestamp>,
     /// Pauses over, in order.
@@ -789,6 +792,7 @@ impl RecordingSession {
             #[cfg(test)]
             headless: false,
             pause: SharedPause::default(),
+            control_hotkeys: Arc::new(Mutex::new(cfg.control_hotkeys.clone())),
             paused_at: None,
             pauses: Vec::new(),
             front: Arc::new(Frontmost::new(cfg)),
@@ -922,6 +926,7 @@ impl RecordingSession {
             Arc::clone(&self.pause),
             Arc::clone(&self.front),
         );
+        router.control_hotkeys = Arc::clone(&self.control_hotkeys);
         self.router = Some(spawn("guiderecorder-session-router", move || {
             router.run(tap_rx);
             router.finish()
@@ -1025,6 +1030,12 @@ impl RecordingSession {
             },
         })
         .is_ok()
+    }
+
+    /// Replaces [`SessionConfig::control_hotkeys`] from now on, e.g. when
+    /// the host's start/stop or pause hotkey changes mid-recording.
+    pub fn set_control_hotkeys(&self, hotkeys: Vec<Hotkey>) {
+        *lock(&self.control_hotkeys) = hotkeys;
     }
 
     /// Pauses recording: stops the tap (joining its thread, so every event
@@ -1979,7 +1990,7 @@ struct Router {
     own_pid: i32,
     excluded: Vec<String>,
     hotkey: Option<Hotkey>,
-    control_hotkeys: Vec<Hotkey>,
+    control_hotkeys: SharedHotkeys,
     filter: ExclusionFilter,
     runs: KeyRunTracker,
     apps: HashMap<i32, AppRef>,
@@ -2033,7 +2044,7 @@ impl Router {
             own_pid: i32::try_from(std::process::id()).unwrap_or(-1),
             excluded: cfg.excluded_bundle_ids.clone(),
             hotkey: cfg.manual_hotkey,
-            control_hotkeys: cfg.control_hotkeys.clone(),
+            control_hotkeys: Arc::new(Mutex::new(cfg.control_hotkeys.clone())),
             filter: ExclusionFilter::default(),
             runs: KeyRunTracker::new(cfg.steps.typing_idle_ms),
             apps: HashMap::new(),
@@ -2090,8 +2101,7 @@ impl Router {
         }
         // The host's own hotkeys (start/stop, pause) never become steps.
         if let CaptureEvent::KeyDown { key, modifiers, .. } = &event.event {
-            if self
-                .control_hotkeys
+            if lock(&self.control_hotkeys)
                 .iter()
                 .any(|h| h.matches(key, *modifiers))
             {
@@ -3878,6 +3888,10 @@ struct PauseState {
 }
 
 type SharedPause = Arc<Mutex<PauseState>>;
+
+/// [`SessionConfig::control_hotkeys`], shared by the session and the
+/// router so they can change mid-recording.
+type SharedHotkeys = Arc<Mutex<Vec<Hotkey>>>;
 
 /// Locks state shared between the session and the router; a panic while
 /// holding it cannot leave it unusable.
@@ -6517,6 +6531,36 @@ mod tests {
         );
         assert_eq!(rec.drafts.len(), 1, "{:?}", rec.drafts);
         assert_eq!(rec.snapshots.keys().copied().collect::<Vec<_>>(), [a]);
+    }
+
+    #[test]
+    fn control_hotkeys_change_mid_recording() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let (session, tx) = control_session(&scratch, reader.clone());
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        // ⌃⌥R is no longer the host's; ⌃⌥K (kVK_ANSI_K) is.
+        let k = Hotkey {
+            code: 40,
+            ..CONTROL_HOTKEYS[1]
+        };
+        session.set_control_hotkeys(vec![k]);
+        tx.send(control_key_at(
+            Timestamp(t0.0 + 1),
+            CONTROL_HOTKEYS[1],
+            false,
+        ))
+        .unwrap();
+        tx.send(control_key_at(Timestamp(t0.0 + 2), k, false))
+            .unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(rec.metrics.dropped_hotkeys, 1);
+        assert_eq!(
+            count(&rec, |ev| matches!(ev, CaptureEvent::KeyDown { .. })),
+            1
+        );
     }
 
     #[test]

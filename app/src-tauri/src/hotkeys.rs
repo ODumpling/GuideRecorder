@@ -75,16 +75,24 @@ impl HotkeyErrors {
 }
 
 /// The registered hotkeys and the errors of the last [`apply`].
+///
+/// The plugin's register and unregister wait for the main thread, where
+/// the shortcut handler runs and reads `registered`; so `registered` is
+/// never held across them, and `applying` (which the handler never takes)
+/// keeps two [`apply`]s from interleaving.
 #[derive(Default)]
-pub struct HotkeyState(Mutex<(Vec<(Shortcut, Control)>, HotkeyErrors)>);
+pub struct HotkeyState {
+    applying: Mutex<()>,
+    registered: Mutex<(Vec<(Shortcut, Control)>, HotkeyErrors)>,
+}
 
 impl HotkeyState {
     pub fn errors(&self) -> HotkeyErrors {
-        self.0.lock().unwrap().1.clone()
+        self.registered.lock().unwrap().1.clone()
     }
 
     fn control_for(&self, shortcut: &Shortcut, state: ShortcutState) -> Option<Control> {
-        control_for(&self.0.lock().unwrap().0, shortcut, state)
+        control_for(&self.registered.lock().unwrap().0, shortcut, state)
     }
 }
 
@@ -126,20 +134,25 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
 /// before (so an old shortcut stops working at once). One that cannot be
 /// registered (e.g. taken by another app or macOS) is skipped and its error
 /// kept for Settings ([`HotkeyState::errors`]).
+///
+/// Call it off the main thread: the plugin runs register and unregister
+/// there and waits for them.
 pub fn apply<R: Runtime>(app: &AppHandle<R>, hotkeys: &Hotkeys) {
     let Some(state) = app.try_state::<HotkeyState>() else {
         return;
     };
-    let mut state = state.0.lock().unwrap();
+    let _applying = state.applying.lock().unwrap();
+    let old = state.registered.lock().unwrap().0.clone();
     let shortcuts = app.global_shortcut();
-    for (shortcut, _) in state.0.drain(..) {
+    for (shortcut, _) in old {
         if let Err(e) = shortcuts.unregister(shortcut) {
             eprintln!("guiderecorder: cannot unregister the hotkey {shortcut}: {e}");
         }
     }
+    let mut registered = Vec::new();
     let mut errors = HotkeyErrors::default();
     for (control, shortcut) in bindings(hotkeys) {
-        let registered = shortcut.and_then(|shortcut| {
+        let registered_shortcut = shortcut.and_then(|shortcut| {
             shortcuts
                 .register(shortcut)
                 .map(|()| shortcut)
@@ -147,15 +160,26 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, hotkeys: &Hotkeys) {
                     format!("This shortcut can't be used: another app or macOS may have it ({e}).")
                 })
         });
-        match registered {
-            Ok(shortcut) => state.0.push((shortcut, control)),
+        match registered_shortcut {
+            Ok(shortcut) => registered.push((shortcut, control)),
             Err(e) => {
                 eprintln!("guiderecorder: hotkey: {e}");
                 errors.set(control, e);
             }
         }
     }
-    state.1 = errors;
+    *state.registered.lock().unwrap() = (registered, errors);
+}
+
+/// Registers the hotkeys again if one failed last time, as another app
+/// may have let it go since.
+pub fn retry_failed<R: Runtime>(app: &AppHandle<R>, hotkeys: &Hotkeys) {
+    let failed = app
+        .try_state::<HotkeyState>()
+        .is_some_and(|state| state.errors() != HotkeyErrors::default());
+    if failed {
+        apply(app, hotkeys);
+    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ import type {
   ExportBranding,
   ExportResult,
   Guide,
+  HotkeyErrors,
   GuideListItem,
   OpenedGuide,
   Rect,
@@ -142,12 +143,15 @@ export class Backend {
   restartedToUpdate = false;
   private updateVersion: string | undefined;
 
+  /** Why the record or pause shortcut could not be registered. */
+  hotkeyErrors: HotkeyErrors = { record: null, pause: null };
+
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 2,
     general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
     recording: {
-      hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
+      hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },
       captureArea: "display",
       afterFrames: true,
       afterFrameDelayMs: 400,
@@ -758,6 +762,8 @@ export class Backend {
         this.settings = structuredClone(next);
         return structuredClone(next);
       }
+      case "hotkey_errors":
+        return structuredClone(this.hotkeyErrors);
       case "library_info":
         return { ...this.library, starting: false, fromEnv: false, defaultPath: "/Users/me/Documents/GuideRecorder" };
       case "choose_library_folder":
