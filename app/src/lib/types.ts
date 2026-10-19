@@ -326,6 +326,12 @@ export interface SettingsView {
   loadError: string | null;
 }
 
+/** Why the record or pause shortcut could not be registered; null when it is (or is not set). */
+export interface HotkeyErrors {
+  record: string | null;
+  pause: string | null;
+}
+
 export interface LibraryInfo {
   path: string | null;
   error: string | null;

@@ -50,7 +50,7 @@
 //! `start_recording` takes an optional capture target (see
 //! [`crate::picker`]). Without one the area comes from the settings, where
 //! One display, Window and Region fall back to every display
-//! (`captureAreaFallback`). A start from the tray or ⌃⌥R with one of them
+//! (`captureAreaFallback`). A start from the tray or the record hotkey with one of them
 //! stored does not
 //! record: it shows the main window and sends [`PICK_AREA_EVENT`], and the
 //! main window picks the area and starts with it.
@@ -594,7 +594,7 @@ fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (Sessio
     });
     cfg.manual_hotkey = manual_hotkey(&recording.hotkeys.manual_step);
     // Handled by the app (start/stop, pause): never steps.
-    cfg.control_hotkeys = crate::hotkeys::capture_hotkeys();
+    cfg.control_hotkeys = crate::hotkeys::capture_hotkeys(&recording.hotkeys);
     cfg.work_dir = None;
     (cfg, fallback)
 }
@@ -1240,8 +1240,21 @@ mod tests {
         assert_eq!(cfg.excluded_bundle_ids, ["com.apple.keychainaccess"]);
         assert_eq!(cfg.steps.typing_idle_ms, 700);
         assert_eq!(cfg.manual_hotkey, Some(Hotkey::MANUAL_STEP));
-        assert_eq!(cfg.control_hotkeys, crate::hotkeys::capture_hotkeys());
+        assert_eq!(
+            cfg.control_hotkeys,
+            crate::hotkeys::capture_hotkeys(&settings.recording.hotkeys)
+        );
         assert_eq!(cfg.control_hotkeys.len(), 2);
+        // A changed shortcut is dropped in place of the old one.
+        settings.recording.hotkeys.record = "Cmd+Shift+F5".into();
+        let (cfg, _) = session_config(&settings, None);
+        assert_eq!(
+            cfg.control_hotkeys,
+            [
+                parse_hotkey("Cmd+Shift+F5").unwrap(),
+                parse_hotkey("Ctrl+Alt+P").unwrap()
+            ]
+        );
         assert_eq!(cfg.work_dir, None);
         assert_eq!(cfg.after_frames, Some(AfterFrames { settle_ms: 400 }));
 

@@ -107,7 +107,7 @@ export function SettingsDialog({
               ) : page === "general" ? (
                 <GeneralSection api={api} />
               ) : page === "recording" ? (
-                <RecordingSection />
+                <RecordingSection api={api} />
               ) : page === "ai" ? (
                 <AiSection api={api} />
               ) : page === "export" ? (

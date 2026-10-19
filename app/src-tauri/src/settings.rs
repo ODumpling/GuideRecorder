@@ -4,9 +4,9 @@
 //!
 //! The API key is not here: it lives in the Keychain (core's
 //! `ai::keychain`). Each recording reads the recording settings when it
-//! starts (`recording::session_config`); the record and pause shortcuts,
-//! window and region capture, and after-frames are stored but not used
-//! yet.
+//! starts (`recording::session_config`); the record and pause shortcuts
+//! are registered at startup and again on every change
+//! (`hotkeys::apply`).
 //!
 //! Paths in settings (the library, the default export folder and the logo)
 //! are trusted later without another dialog, so the webview may only set
@@ -120,9 +120,9 @@ pub struct Hotkeys {
 impl Default for Hotkeys {
     fn default() -> Self {
         Self {
-            record: "CmdOrCtrl+Shift+R".into(),
-            pause: "CmdOrCtrl+Shift+P".into(),
-            manual_step: "CmdOrCtrl+Shift+M".into(),
+            record: "Ctrl+Alt+R".into(),
+            pause: "Ctrl+Alt+P".into(),
+            manual_step: "Ctrl+Alt+S".into(),
         }
     }
 }

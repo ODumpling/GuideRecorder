@@ -16,6 +16,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::blocking::blocking;
 use crate::editor::{self, AppError, ErrorKind, Result, Session, SessionCell};
 use crate::export::ChosenPaths;
+use crate::hotkeys::{self, HotkeyErrors, HotkeyState};
 use crate::settings::{self, Settings, SettingsStore, SettingsView};
 
 /// The library folder the app opened (or tried to open) last.
@@ -79,15 +80,32 @@ pub fn get_settings(store: State<'_, Arc<SettingsStore>>) -> SettingsView {
 }
 
 /// Saves the settings the UI edited (validated; paths only as chosen in a
-/// dialog) and returns them as stored.
+/// dialog) and returns them as stored. Changed record or pause shortcuts
+/// are registered at once (see [`hotkey_errors`]).
 #[tauri::command]
-pub async fn update_settings(
+pub async fn update_settings<R: Runtime>(
+    app: AppHandle<R>,
     store: State<'_, Arc<SettingsStore>>,
     chosen: State<'_, Arc<ChosenPaths>>,
     settings: Settings,
 ) -> Result<Settings> {
     let (store, chosen) = (Arc::clone(&store), Arc::clone(&chosen));
-    blocking(move || store.update(settings, &chosen)).await
+    blocking(move || {
+        let before = store.get().recording.hotkeys;
+        let saved = store.update(settings, &chosen)?;
+        if saved.recording.hotkeys != before {
+            hotkeys::apply(&app, &saved.recording.hotkeys);
+        }
+        Ok(saved)
+    })
+    .await
+}
+
+/// Why the record or pause shortcut could not be registered (e.g. taken
+/// by another app or macOS), as of the last change.
+#[tauri::command]
+pub fn hotkey_errors(state: State<'_, HotkeyState>) -> HotkeyErrors {
+    state.errors()
 }
 
 /// The library as Settings shows it.
