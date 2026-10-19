@@ -9,6 +9,8 @@ import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
 import type {
+  AiEndpoint,
+  AiProviderKind,
   CaptureArea,
   HotkeyErrors,
   LibraryInfo,
@@ -26,6 +28,7 @@ import {
   AFTER_FRAME_DELAY_MS,
   bundleIdError,
   inRange,
+  isBaseUrl,
   isBundleId,
   isHotkey,
   isLanguage,
@@ -528,27 +531,62 @@ export function PrivacySection() {
   );
 }
 
-export function AiSection({ api }: { api: SettingsApi }) {
-  const settings = useSettings((s) => s.settings)!;
-  const readOnly = useSettings((s) => s.readOnly);
-  const change = useChange();
-  const ai = settings.ai;
-  const setAi = (patch: Partial<Settings["ai"]>) => change((s) => ({ ...s, ai: { ...s.ai, ...patch } }));
+const PROVIDERS: { value: AiProviderKind; label: string }[] = [
+  { value: "anthropic", label: "Anthropic" },
+  { value: "openAiCompatible", label: "OpenAI-compatible API" },
+  { value: "ollama", label: "Ollama (on this Mac)" },
+  { value: "lmStudio", label: "LM Studio (on this Mac)" },
+];
+
+/** The local presets' servers, used when the base URL is empty (see `OpenAiConfig` in core). */
+const LOCAL_BASE_URLS: Partial<Record<AiProviderKind, string>> = {
+  ollama: "http://localhost:11434/v1",
+  lmStudio: "http://localhost:1234/v1",
+};
+
+type EndpointProvider = "openAiCompatible" | "ollama" | "lmStudio";
+
+function providerIntro(provider: AiProviderKind): string {
+  switch (provider) {
+    case "openAiCompatible":
+      return "GuideRecorder sends step text, and screenshots if the model takes images, to the API below to write guide text.";
+    case "ollama":
+    case "lmStudio":
+      return `GuideRecorder writes guide text with ${provider === "ollama" ? "Ollama" : "LM Studio"} on this Mac. Nothing leaves your Mac.`;
+    default:
+      return "GuideRecorder sends step screenshots and their text to Anthropic to write guide text.";
+  }
+}
+
+/** A provider's API key: stored in the Keychain, never shown back. */
+function ApiKeyField({
+  api,
+  provider,
+  title,
+  placeholder,
+  optional,
+}: {
+  api: SettingsApi;
+  provider: AiProviderKind;
+  title: string;
+  placeholder: string;
+  optional?: boolean;
+}) {
   const [stored, setStored] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.apiKeyStored().then(setStored, (e) => setError(errorMessage(e)));
-  }, [api]);
+    api.apiKeyStored(provider).then(setStored, (e) => setError(errorMessage(e)));
+  }, [api, provider]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
       await action();
-      setStored(await api.apiKeyStored());
+      setStored(await api.apiKeyStored(provider));
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -557,7 +595,62 @@ export function AiSection({ api }: { api: SettingsApi }) {
   };
 
   return (
-    <Section title="AI" intro="GuideRecorder sends step screenshots and their text to Anthropic to write guide text.">
+    <div className="flex flex-col gap-2 border-b border-border py-3">
+      <span className="text-sm font-medium">{title}</span>
+      <span className="text-xs text-muted-foreground">
+        {stored === null
+          ? "Checking the Keychain…"
+          : stored
+            ? "A key is stored in your Keychain. It is never shown again."
+            : optional
+              ? "No key stored; only needed if the API asks for one. The key is kept in your Keychain."
+              : "No key stored. The key is kept in your Keychain."}
+      </span>
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (key.trim()) void run(() => api.setApiKey(key, provider).then(() => setKey("")));
+        }}
+      >
+        <Input
+          type="password"
+          aria-label="API key"
+          autoComplete="off"
+          placeholder={stored ? "Replace the stored key" : placeholder}
+          value={key}
+          disabled={busy}
+          onChange={(e) => setKey(e.target.value)}
+        />
+        <Button type="submit" variant="outline" disabled={busy || !key.trim()}>
+          Save key
+        </Button>
+        {stored && (
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => void run(() => api.deleteApiKey(provider))}>
+            Remove
+          </Button>
+        )}
+      </form>
+      <ErrorText>{error}</ErrorText>
+    </div>
+  );
+}
+
+const isOptionalModelId = (value: string) => value === "" || isModelId(value);
+
+export function AiSection({ api }: { api: SettingsApi }) {
+  const settings = useSettings((s) => s.settings)!;
+  const readOnly = useSettings((s) => s.readOnly);
+  const change = useChange();
+  const ai = settings.ai;
+  const setAi = (patch: Partial<Settings["ai"]>) => change((s) => ({ ...s, ai: { ...s.ai, ...patch } }));
+  const provider = ai.provider;
+  const endpoint = provider === "anthropic" ? null : ai[provider];
+  const setEndpoint = (name: EndpointProvider, patch: Partial<AiEndpoint>) =>
+    change((s) => ({ ...s, ai: { ...s.ai, [name]: { ...s.ai[name], ...patch } } }));
+
+  return (
+    <Section title="AI" intro={providerIntro(provider)}>
       <Row label="Use AI">
         <Toggle label="Use AI" checked={ai.enabled} disabled={readOnly} onChange={(enabled) => setAi({ enabled })} />
       </Row>
@@ -569,48 +662,82 @@ export function AiSection({ api }: { api: SettingsApi }) {
           onChange={(autoRun) => setAi({ autoRun })}
         />
       </Row>
-      <div className="flex flex-col gap-2 border-b border-border py-3">
-        <span className="text-sm font-medium">Anthropic API key</span>
-        <span className="text-xs text-muted-foreground">
-          {stored === null
-            ? "Checking the Keychain…"
-            : stored
-              ? "A key is stored in your Keychain. It is never shown again."
-              : "No key stored. The key is kept in your Keychain."}
-        </span>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (key.trim()) void run(() => api.setApiKey(key).then(() => setKey("")));
-          }}
-        >
-          <Input
-            type="password"
-            aria-label="API key"
-            autoComplete="off"
-            placeholder={stored ? "Replace the stored key" : "sk-ant-…"}
-            value={key}
-            disabled={busy}
-            onChange={(e) => setKey(e.target.value)}
-          />
-          <Button type="submit" variant="outline" disabled={busy || !key.trim()}>
-            Save key
-          </Button>
-          {stored && (
-            <Button type="button" variant="ghost" disabled={busy} onClick={() => void run(api.deleteApiKey)}>
-              Remove
-            </Button>
+      <Row label="Provider" note="Ollama and LM Studio run models on this Mac.">
+        <Select
+          label="Provider"
+          value={provider}
+          options={PROVIDERS}
+          disabled={readOnly}
+          onChange={(provider) => setAi({ provider })}
+        />
+      </Row>
+      {provider === "anthropic" && (
+        <>
+          <ApiKeyField key={provider} api={api} provider={provider} title="Anthropic API key" placeholder="sk-ant-…" />
+          <Row label="Step model" note="Writes each step.">
+            <CommitInput label="Step model" value={ai.stepModel} valid={isModelId} disabled={readOnly} onCommit={(stepModel) => setAi({ stepModel })} />
+          </Row>
+          <Row label="Guide model" note="Writes the title, summary and sections.">
+            <CommitInput label="Guide model" value={ai.guideModel} valid={isModelId} disabled={readOnly} onCommit={(guideModel) => setAi({ guideModel })} />
+          </Row>
+        </>
+      )}
+      {endpoint && provider !== "anthropic" && (
+        <>
+          <Row
+            label="Base URL"
+            note={
+              provider === "openAiCompatible"
+                ? "Up to the version, such as https://api.openai.com/v1."
+                : `Empty: ${LOCAL_BASE_URLS[provider]}.`
+            }
+          >
+            <CommitInput
+              label="Base URL"
+              className="w-64"
+              placeholder={LOCAL_BASE_URLS[provider] ?? "https://api.example.com/v1"}
+              value={endpoint.baseUrl}
+              valid={isBaseUrl}
+              disabled={readOnly}
+              onCommit={(baseUrl) => setEndpoint(provider, { baseUrl })}
+            />
+          </Row>
+          {provider === "openAiCompatible" && (
+            <ApiKeyField key={provider} api={api} provider={provider} title="API key" placeholder="sk-…" optional />
           )}
-        </form>
-        <ErrorText>{error}</ErrorText>
-      </div>
-      <Row label="Step model" note="Writes each step.">
-        <CommitInput label="Step model" value={ai.stepModel} valid={isModelId} disabled={readOnly} onCommit={(stepModel) => setAi({ stepModel })} />
-      </Row>
-      <Row label="Guide model" note="Writes the title, summary and sections.">
-        <CommitInput label="Guide model" value={ai.guideModel} valid={isModelId} disabled={readOnly} onCommit={(guideModel) => setAi({ guideModel })} />
-      </Row>
+          <Row label="Step model" note="Writes each step. The model must support tool calls.">
+            <CommitInput
+              label="Step model"
+              placeholder="Model id"
+              value={endpoint.stepModel}
+              valid={isOptionalModelId}
+              disabled={readOnly}
+              onCommit={(stepModel) => setEndpoint(provider, { stepModel })}
+            />
+          </Row>
+          <Row label="Guide model" note="Writes the title, summary and sections. Can be the same model.">
+            <CommitInput
+              label="Guide model"
+              placeholder="Model id"
+              value={endpoint.guideModel}
+              valid={isOptionalModelId}
+              disabled={readOnly}
+              onCommit={(guideModel) => setEndpoint(provider, { guideModel })}
+            />
+          </Row>
+          <Row
+            label="Send screenshots"
+            note="Turn off for a model without image input: steps are then written from the clicked element, keystrokes and step kind, with no redaction suggestions."
+          >
+            <Toggle
+              label="Send screenshots"
+              checked={endpoint.images}
+              disabled={readOnly}
+              onChange={(images) => setEndpoint(provider, { images })}
+            />
+          </Row>
+        </>
+      )}
       <Row label="Language" note="A language tag such as en or de-CH. Empty: the guide's own language.">
         <CommitInput
           label="Language"
@@ -889,15 +1016,34 @@ export function McpSection({ api }: { api: SettingsApi }) {
   const [setup, setSetup] = useState<McpSetup | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
+  const writable = useSettings((s) => s.settings!.mcp.writable);
+  const readOnly = useSettings((s) => s.readOnly);
+  const refresh = useCallback(() => {
     api.mcpSetup().then(setSetup, (e) => setError(errorMessage(e)));
   }, [api]);
+  useEffect(refresh, [refresh]);
+
+  /** The command comes from the saved setting, so it is fetched again once stored. */
+  const allowEdits = async (on: boolean) => {
+    if (await settingsStore.getState().change((s) => ({ ...s, mcp: { ...s.mcp, writable: on } }))) refresh();
+  };
 
   return (
     <Section
       title="MCP"
       intro="Let Claude Code read and search your guides: run this command once in a terminal."
     >
+      <Row
+        label="Allow MCP to edit guides"
+        note="Adds --writable: Claude Code can then change guide text, tags and order, and create annotation guides from images. Guides open in the editor are never changed. If you added the server before, run claude mcp remove guiderecorder first."
+      >
+        <Toggle
+          label="Allow MCP to edit guides"
+          checked={writable}
+          disabled={readOnly}
+          onChange={(on) => void allowEdits(on)}
+        />
+      </Row>
       {setup && (
         <div className="mt-2 flex flex-col gap-2">
           <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all select-all">

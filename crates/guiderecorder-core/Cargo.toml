@@ -23,10 +23,15 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 resvg = "0.48.1"
 svgtypes = "0.16.1"
 minijinja = "3.0.0"
+sha2 = "0.10.9"
 docx-rs = "0.4.22"
 typst = "0.15.1"
 typst-pdf = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
+
+# The editor lock's liveness check (`edit.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 lopdf = "0.45.0"

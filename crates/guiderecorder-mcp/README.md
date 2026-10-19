@@ -1,9 +1,10 @@
 # guiderecorder-mcp
 
-A read-only [MCP](https://modelcontextprotocol.io) server over a GuideRecorder
+An [MCP](https://modelcontextprotocol.io) server over a GuideRecorder
 library, over stdio. It lets an agent such as Claude Code find and read your
-recorded guides, including their screenshots. It works whether or not the
-GuideRecorder app is running.
+recorded guides, including their screenshots, and, if you allow it with
+`--writable`, edit them and create annotation guides. It works whether or not
+the GuideRecorder app is running.
 
 ## Setup
 
@@ -28,6 +29,10 @@ Options:
 | --- | --- | --- |
 | `--library <dir>` | `$GUIDERECORDER_LIBRARY` | Library folder. It must already exist. |
 | `--index <path>` | `~/Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite` | The app's search index. |
+| `--writable` | off | Also offer the [write tools](#writing---writable). |
+
+In the app, Settings → MCP shows the command; "Allow MCP to edit guides"
+adds `--writable` to it.
 
 The server opens the index read-only. If the index is missing, stale or from
 another version, the server scans the library folders instead, which gives
@@ -35,7 +40,7 @@ the same results more slowly.
 
 ## Read-only
 
-The server never writes to the library or the index:
+Without `--writable` the server never writes to the library or the index:
 
 - Guides are read with `Library::read`, which migrates older guides in memory
   only, and never with `load`.
@@ -51,8 +56,8 @@ The server never writes to the library or the index:
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. |
-| `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown, and optionally step screenshots (at most about 5 MB of images). |
+| `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. Also `owner`, `status`, `version`, `last_reviewed`, `review_interval_months`, `review_due` (null when unset) and `review_overdue`. |
+| `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set), and optionally step screenshots (at most about 5 MB of images). |
 | `get_step` | `guide_id`, `step_id`, `image?` (`"crop"`, `"full"` or `"none"`; default `"crop"`) | The step's text, element, keys and screenshot. |
 | `search_steps` | `query`, `limit?` (20, max 100) | Hits with `guide_id`, `guide_title`, `kind`, `item_id`, `step_number`, `title` and `snippet` (matches in `**bold**`). |
 
@@ -100,6 +105,59 @@ If a render had problems, the image's text block says so. For example, a
 missing file becomes a placeholder, and a crop whose position is unknown
 falls back to the full screenshot so that redactions stay in place.
 
+## Writing (`--writable`)
+
+With `--writable` these tools are listed too. Without it they are neither
+listed nor routed.
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `update_guide_fields` | `guide_id`, `title?`, `intro?`, `prerequisites?`, `summary?`, `tags?` (replaces the list) | `changed_fields`. |
+| `update_step` | `guide_id`, `step_id`, `title?`, `description?` | `step_id`. |
+| `add_note` | `guide_id`, `body`, `kind?` (`"tip"`, `"warning"` or `"note"`; default `"note"`), `after_id?` or `before_id?` (default: at the end) | `note_id`. |
+| `reorder_items` | `guide_id`, `item_ids` (every item, once, in the new order) | |
+| `add_tags` / `remove_tags` | `guide_id`, `tags` (case-insensitive) | `added` / `removed`, and `tags`. |
+| `create_guide_from_images` | `paths` (absolute; PNG, JPEG or WebP; at most 100), `title?` (default: the first file's name) | `guide_id`, `title`, `folder`, `step_count`, `step_ids`. |
+
+Every edit also returns `guide_id`, `changed` (false when nothing was
+different; then nothing is written) and `updated_at`. Item ids may keep
+their `step-`, `section-` or `note-` anchor prefix.
+
+How edits are made (see `guiderecorder_core::edit`):
+
+- **Atomically.** Edits go through `Library::edit`, which reads the guide,
+  changes a copy and writes `guide.json` with `Library::save_to` (temp file,
+  fsync, rename). If `guide.json` changed on disk meanwhile, the edit is
+  refused. Edits run one at a time.
+- **Marked as the user's.** An edit through MCP is an explicit edit by the
+  user, so it marks text as the editor does: a changed guide-level field joins
+  `editedFields` and the guide's `aiState` becomes `edited`; a changed step
+  title or description makes the step `edited`. GuideRecorder's AI passes then
+  leave that text alone. Text already marked edited can still be changed.
+  Adding notes and reordering mark nothing, as in the editor.
+- **Not while open in the app.** The app's editor saves a guide whole, so it
+  would overwrite an edit made while the guide is open. While a guide is open,
+  the app keeps a `.editor.lock` file in its bundle holding the app's process
+  id, and edits are refused while that process runs. A lock left behind by a
+  crash names a process that has exited, and is ignored. The lock is checked
+  before the read and again before the write; an app that opens the guide
+  during the write itself could still load the old copy.
+- **Not read-only guides.** Guides saved by a newer GuideRecorder are
+  refused, and so are guides in an older format until the app has opened
+  (and upgraded) them once.
+- **The title keeps the folder.** As in the editor, a new title doesn't
+  rename the bundle folder.
+- **The index is not written.** The app indexes changes at its next sync.
+  Until then, this server's reads see the index as stale and scan the
+  library instead.
+- `create_guide_from_images` makes the guide the app's "New annotation
+  guide…" makes (`guiderecorder_core::pages`), in the library's top folder:
+  one page per image, titled after its file, scaled down to at most 4000 px.
+  A file that fails leaves no guide behind. PDFs are only supported in the
+  app.
+
+There is no undo yet; version history (#25) will add it.
+
 ## Resources
 
 - `guiderecorder://guide/{id}`: a guide as Markdown, the same text as `get_guide`.
@@ -130,5 +188,6 @@ tokio duplex, using a copy of `fixtures/guides` and an index built from that
 copy. They cover every tool and resource, the errors, image equality with
 `render_step_image`, a burned-in blur, the image byte budget on large
 screenshots, and that the library and index bytes are unchanged after every
-call. The SQLite `-shm`/`-wal` sidecars are the stated exception: the `-wal`
-file must stay empty.
+read-only call. The SQLite `-shm`/`-wal` sidecars are the stated exception:
+the `-wal` file must stay empty. The write tests check what is saved, the
+edited markers, and that refused and no-op edits change no file.

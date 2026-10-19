@@ -187,6 +187,7 @@ pub fn run() {
             commands::create_folder,
             commands::duplicate_guide,
             commands::rename_guide,
+            commands::mark_guide_reviewed,
             commands::move_guide,
             commands::reveal_in_library,
             commands::step_image,

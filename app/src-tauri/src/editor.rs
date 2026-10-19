@@ -4,20 +4,19 @@
 //! pool.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
 use guiderecorder_core::library::{
-    step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError, PixelBuffer,
+    step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
     StepImageVariant, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
-use guiderecorder_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
+use guiderecorder_core::model::{Guide, NaiveDate, ReviewInfo, Step, StepImage};
+use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
-use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
+use image::{ImageFormat, RgbaImage};
 use serde::Serialize;
 
 /// Environment variable that overrides the library folder.
@@ -87,6 +86,17 @@ impl From<LibraryError> for AppError {
     }
 }
 
+impl From<PageError> for AppError {
+    fn from(e: PageError) -> Self {
+        match e {
+            PageError::Invalid(message) => Self::new(ErrorKind::Invalid, message),
+            PageError::NotFound(message) => Self::new(ErrorKind::NotFound, message),
+            PageError::Io(message) => Self::new(ErrorKind::Io, message),
+            PageError::Library(e) => e.into(),
+        }
+    }
+}
+
 pub type Result<T, E = AppError> = std::result::Result<T, E>;
 
 /// A library listing row.
@@ -103,6 +113,10 @@ pub struct GuideListItem {
     pub updated_at: String,
     /// The library folder holding it, `/` separated; `""` at the top.
     pub folder: String,
+    /// `owner`, `status`, `version`, `lastReviewed` and
+    /// `reviewIntervalMonths`, as in `guide.json` (absent when unset).
+    #[serde(flatten)]
+    pub review: ReviewInfo,
     pub read_only: bool,
     pub duplicate_of: Option<PathBuf>,
 }
@@ -119,6 +133,7 @@ impl From<IndexedGuide> for GuideListItem {
             created_at: g.created_at.to_rfc3339(),
             updated_at: g.updated_at.to_rfc3339(),
             folder: g.folder,
+            review: g.review,
             read_only: g.read_only,
             duplicate_of: g.duplicate_of,
         }
@@ -132,6 +147,15 @@ impl From<IndexedGuide> for GuideListItem {
 pub struct RenamedGuide {
     pub path: PathBuf,
     pub title: String,
+    pub updated_at: String,
+}
+
+/// `mark_guide_reviewed`'s result: the review day and update time as
+/// saved (for the editor, if the guide is open).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewedGuide {
+    pub last_reviewed: NaiveDate,
     pub updated_at: String,
 }
 
@@ -157,10 +181,6 @@ pub const MAX_PNG_BYTES: usize = 256 * 1024 * 1024;
 pub const IMAGE_FILE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "tif", "tiff", "bmp",
 ];
-
-/// Largest image file `read_image_file` reads, and largest file the pages
-/// of an annotated guide come from.
-pub const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Most pixels in a manual step's image (the editor scales larger ones
 /// down to fit): 40 MP is 160 MB as RGBA.
@@ -288,12 +308,26 @@ impl Session {
 
     /// Loads a guide for editing (migrating it if older) and remembers its
     /// bundle for `save_guide` and `step_image`.
+    ///
+    /// Marks the bundle open with the editor lock (core's `edit` module)
+    /// until [`Session::close_guide`], so the MCP server does not write a
+    /// guide the editor would save over. The lock goes in before the guide
+    /// is read; failing to write it (a read-only folder) is only logged.
     pub fn open_guide(&self, id: &str) -> Result<OpenedGuide> {
         let id = parse_id(id)?;
         let lock = self.guide_lock(id);
         let _guard = lock.lock().unwrap();
         let handle = self.library.find(id)?.ok_or(LibraryError::NotFound(id))?;
-        let loaded = self.library.load(&handle.path)?;
+        if let Err(e) = self.library.lock_for_editor(&handle) {
+            eprintln!("guiderecorder: cannot mark guide {id} open: {e}");
+        }
+        let loaded = match self.library.load(&handle.path) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                let _ = self.library.unlock_for_editor(&handle);
+                return Err(e.into());
+            }
+        };
         let opened = OpenedGuide {
             guide: loaded.guide.clone(),
             path: loaded.handle.path.clone(),
@@ -476,6 +510,9 @@ impl Session {
         let Some(entry) = self.open.lock().unwrap().remove(&guide_id) else {
             return Ok(Vec::new());
         };
+        if let Err(e) = self.library.unlock_for_editor(&entry.handle) {
+            eprintln!("guiderecorder: cannot mark guide {guide_id} closed: {e}");
+        }
         if entry.read_only {
             return Ok(Vec::new());
         }
@@ -567,6 +604,32 @@ impl Session {
         Ok(result)
     }
 
+    /// Records that the guide at `path` was reviewed on `today` (the
+    /// editor's local day; see [`Library::mark_reviewed`]). An open guide
+    /// from that bundle takes the saved copy; the editor saves it first and
+    /// takes the new fields from the result.
+    pub fn mark_guide_reviewed(
+        &self,
+        guide_id: &str,
+        path: &Path,
+        today: NaiveDate,
+    ) -> Result<ReviewedGuide> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let handle = GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        };
+        let guide = self.library.mark_reviewed(&handle, today)?;
+        let result = ReviewedGuide {
+            last_reviewed: today,
+            updated_at: guide.updated_at.to_rfc3339(),
+        };
+        self.follow(&handle, &handle, Some(guide));
+        Ok(result)
+    }
+
     /// Moves the guide at `path` into `folder` (`""`: the top) and returns
     /// its new path. An open guide from that bundle follows it.
     pub fn move_guide(&self, guide_id: &str, path: &Path, folder: &str) -> Result<PathBuf> {
@@ -632,36 +695,10 @@ pub(crate) fn check_image_path(path: &str) -> Result<()> {
     }
 }
 
-/// Stores `image` as the full image of a new manual step (shown whole,
-/// without a crop) titled `title`, and returns the step. The guide itself
-/// is not changed; the caller holds the guide's lock.
+/// Stores `image` as the full image of a new manual step titled `title`
+/// (see [`pages::image_step`]). The caller holds the guide's lock.
 pub(crate) fn image_step(handle: &GuideHandle, title: String, image: &RgbaImage) -> Result<Step> {
-    let id = Ulid::new();
-    let (width, height) = image.dimensions();
-    let full = handle.write_step_image(
-        id,
-        StepImageVariant::Full,
-        &PixelBuffer::rgba(width, height, image.as_raw()),
-    )?;
-    Ok(Step {
-        id,
-        title,
-        description: String::new(),
-        kind: StepKind::Manual,
-        point: None,
-        end_point: None,
-        element: None,
-        keystrokes: None,
-        image: StepImage {
-            full,
-            crop: None,
-            crop_rect: None,
-            after: None,
-            show: ImageShow::Full,
-        },
-        annotations: Vec::new(),
-        ai_state: AiState::default(),
-    })
+    Ok(pages::image_step(handle, title, image)?)
 }
 
 /// Reads a step image file of the bundle: a checked path, a regular file
@@ -697,11 +734,7 @@ fn decode_png(png: &[u8]) -> Result<RgbaImage> {
     )
 }
 
-/// Decodes an image in one of `formats` (told by its content, named `what`
-/// in errors) as RGBA, turned upright as its EXIF orientation says. The
-/// size in its header is checked before any pixels are decoded (at most
-/// `max_side` per side and `max_pixels`), and the decoder runs with
-/// matching limits.
+/// Decodes an image (see [`pages::decode_image`]).
 pub(crate) fn decode_image(
     bytes: &[u8],
     formats: &[ImageFormat],
@@ -709,53 +742,9 @@ pub(crate) fn decode_image(
     max_side: u32,
     max_pixels: u64,
 ) -> Result<RgbaImage> {
-    let invalid = |e: image::ImageError| {
-        AppError::new(
-            ErrorKind::Invalid,
-            format!("not a readable {what} image: {e}"),
-        )
-    };
-    let reader = || -> Result<ImageReader<Cursor<&[u8]>>> {
-        let reader = ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()
-            .map_err(|e| invalid(e.into()))?;
-        match reader.format() {
-            Some(format) if !formats.contains(&format) => Err(AppError::new(
-                ErrorKind::Invalid,
-                format!("not a {what} image"),
-            )),
-            _ => Ok(reader),
-        }
-    };
-    let (width, height) = reader()?.into_dimensions().map_err(invalid)?;
-    let valid = 1..=max_side;
-    if !valid.contains(&width)
-        || !valid.contains(&height)
-        || u64::from(width) * u64::from(height) > max_pixels
-    {
-        return Err(AppError::new(
-            ErrorKind::Invalid,
-            format!(
-                "image size {width}×{height} is not supported (at most {max_side} \
-                 per side and {} MP)",
-                max_pixels / 1_000_000
-            ),
-        ));
-    }
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(max_side);
-    limits.max_image_height = Some(max_side);
-    // 16-bit RGBA at the pixel limit, plus the 8-bit copy.
-    limits.max_alloc = Some(max_pixels * 12);
-    let mut reader = reader()?;
-    reader.limits(limits.clone());
-    let mut decoder = reader.into_decoder().map_err(invalid)?;
-    limits.reserve(decoder.total_bytes()).map_err(invalid)?;
-    // A photo's camera orientation; PNGs from the webview have none.
-    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image = DynamicImage::from_decoder(decoder).map_err(invalid)?;
-    image.apply_orientation(orientation);
-    Ok(image.into_rgba8())
+    Ok(pages::decode_image(
+        bytes, formats, what, max_side, max_pixels,
+    )?)
 }
 
 /// Deletes files in `steps/` named like step images (`<ulid>.webp`,
@@ -952,39 +941,10 @@ fn read_image_file(path: &Path) -> Result<Vec<u8>> {
     read_file(path)
 }
 
-/// Reads a regular file of at most [`MAX_IMAGE_FILE_BYTES`]. The size is
-/// checked on the open file and the read is capped, so a file that grows
-/// meanwhile is refused too.
+/// Reads a regular file of at most [`pages::MAX_FILE_BYTES`] (see
+/// [`pages::read_file`]).
 pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>> {
-    let file = std::fs::File::open(path).map_err(|e| file_error(path, e))?;
-    let meta = file.metadata().map_err(|e| file_error(path, e))?;
-    if !meta.is_file() {
-        return Err(AppError::new(
-            ErrorKind::Invalid,
-            format!("{} is not a file", path.display()),
-        ));
-    }
-    let too_large = || {
-        AppError::new(
-            ErrorKind::Invalid,
-            format!(
-                "{} is too large (over {} MB)",
-                path.display(),
-                MAX_IMAGE_FILE_BYTES / 1024 / 1024
-            ),
-        )
-    };
-    if meta.len() > MAX_IMAGE_FILE_BYTES {
-        return Err(too_large());
-    }
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.take(MAX_IMAGE_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| file_error(path, e))?;
-    if bytes.len() as u64 > MAX_IMAGE_FILE_BYTES {
-        return Err(too_large());
-    }
-    Ok(bytes)
+    Ok(pages::read_file(path)?)
 }
 
 pub(crate) fn file_error(path: &Path, e: std::io::Error) -> AppError {
@@ -1043,6 +1003,7 @@ impl SessionCell {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use guiderecorder_core::model::{ImageShow, StepKind};
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1159,6 +1120,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_open_guide_holds_the_editor_lock() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let ulid = parse_id(&id).unwrap();
+        let handle = session.library().find(ulid).unwrap().unwrap();
+        assert_eq!(session.library().editor_lock_holder(&handle), None);
+        session.open_guide(&id).unwrap();
+        assert_eq!(
+            session.library().editor_lock_holder(&handle),
+            Some(std::process::id())
+        );
+        let edit = session.library().edit(ulid, |_| Ok(()));
+        assert!(matches!(
+            edit,
+            Err(guiderecorder_core::edit::EditError::OpenInEditor { .. })
+        ));
+        session.close_guide(&id).unwrap();
+        assert_eq!(session.library().editor_lock_holder(&handle), None);
+        assert!(!handle
+            .path
+            .join(guiderecorder_core::edit::EDITOR_LOCK_FILE)
+            .exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn delete_forgets_open_guide_and_updates_index() {
         let root = library();
         let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
@@ -1262,6 +1250,42 @@ pub(crate) mod tests {
         assert!(session.check_bundle(&root.join("Work")).is_err());
         assert!(session
             .check_bundle(&root.join("Nope.guiderecorder"))
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mark_reviewed_lists_the_day_and_keeps_an_open_guide_saving() {
+        let root = library();
+        let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
+        let id = fixture_id(&root);
+        let row = |session: &Session| {
+            session
+                .list_guides(None)
+                .unwrap()
+                .into_iter()
+                .find(|g| g.id == id)
+                .unwrap()
+        };
+        let path = row(&session).path;
+        assert_eq!(row(&session).review, ReviewInfo::default());
+        let opened = session.open_guide(&id).unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let reviewed = session.mark_guide_reviewed(&id, &path, day).unwrap();
+        assert_eq!(reviewed.last_reviewed, day);
+        assert_eq!(row(&session).review.last_reviewed, Some(day));
+        let json = serde_json::to_value(row(&session)).unwrap();
+        assert_eq!(json["lastReviewed"], "2026-10-19");
+        assert!(json.get("owner").is_none());
+
+        // The open guide saves on with the day the editor took over.
+        let mut guide = opened.guide;
+        guide.review.last_reviewed = Some(day);
+        guide.review.owner = Some("IT".into());
+        session.save_guide(guide).unwrap();
+        assert_eq!(row(&session).review.owner.as_deref(), Some("IT"));
+        assert!(session
+            .mark_guide_reviewed(&id, &root.join("Nope.guiderecorder"), day)
             .is_err());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1823,7 +1847,7 @@ pub(crate) mod tests {
         let big = root.join("big.webp");
         fs::File::create(&big)
             .unwrap()
-            .set_len(MAX_IMAGE_FILE_BYTES + 1)
+            .set_len(pages::MAX_FILE_BYTES + 1)
             .unwrap();
         assert_eq!(read_image_file(&big).unwrap_err().kind, ErrorKind::Invalid);
         fs::remove_dir_all(root).unwrap();

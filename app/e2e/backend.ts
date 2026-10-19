@@ -161,13 +161,18 @@ export class Backend {
     ai: {
       enabled: true,
       autoRun: true,
+      provider: "anthropic",
       stepModel: "claude-haiku-5-5",
       guideModel: "claude-sonnet-5-5",
+      openAiCompatible: { baseUrl: "", stepModel: "", guideModel: "", images: true },
+      ollama: { baseUrl: "", stepModel: "", guideModel: "", images: true },
+      lmStudio: { baseUrl: "", stepModel: "", guideModel: "", images: true },
       language: "",
       audience: "beginner",
     },
     export: { format: "pdf", folder: null, logo: null, accent: null },
     redaction: { mode: "suggest", patterns: [], words: [] },
+    mcp: { writable: false },
   };
   /** Whether an API key is "stored"; the key itself is never kept. */
   apiKeyStored = false;
@@ -810,7 +815,7 @@ export class Backend {
         return null;
       case "mcp_setup":
         return {
-          command: "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder",
+          command: `claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder${this.settings.mcp.writable ? " --writable" : ""}`,
           mcpPath: "/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp",
           found: true,
           library: "/Users/me/Documents/GuideRecorder",

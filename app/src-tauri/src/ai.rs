@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use guiderecorder_core::ai::claude::{ClaudeConfig, ClaudeProvider};
+use guiderecorder_core::ai::openai::{OpenAiConfig, OpenAiProvider};
 use guiderecorder_core::ai::pipeline::{self, GuidePassOutcome, StepOutcome};
 use guiderecorder_core::ai::{
     keychain, AiError, AiProvider, ApiKey, CancelToken, ImageSource, PipelineEvent,
@@ -42,7 +43,7 @@ use crate::blocking::blocking;
 use crate::editor::{
     check_image_path, parse_id, AppError, ErrorKind, Result, Session, SessionCell,
 };
-use crate::settings::{self, SettingsStore};
+use crate::settings::{self, Provider, SettingsStore};
 
 pub const STARTED_EVENT: &str = "ai://started";
 pub const STEP_EVENT: &str = "ai://step";
@@ -51,6 +52,8 @@ pub const FINISHED_EVENT: &str = "ai://finished";
 
 pub const AI_OFF: &str = "AI is turned off in Settings.";
 pub const NO_KEY: &str = "Add an API key in Settings to write with AI.";
+pub const NO_MODEL: &str = "Choose a step model and a guide model in Settings to write with AI.";
+pub const NO_BASE_URL: &str = "Add the API's base URL in Settings to write with AI.";
 pub const BUSY: &str = "Already writing this guide.";
 /// An annotated guide's pages have no clicks for the prompts to describe.
 pub const NOT_RECORDED: &str = "AI writing is for recorded guides.";
@@ -266,19 +269,68 @@ impl Drop for RunGuard {
 }
 
 /// The API key to write with, checking the settings first: [`AI_OFF`] when
-/// AI is off (the Keychain is not asked then), [`NO_KEY`] without a key.
+/// AI is off, [`NO_BASE_URL`] or [`NO_MODEL`] for an OpenAI-compatible
+/// provider not set up yet (the Keychain is not asked then), [`NO_KEY`]
+/// without the Anthropic key. `key` reads the Keychain entry it is given.
+/// `None` without a key: local providers never ask, and a custom API's key
+/// is optional.
 pub fn check_ready(
     ai: &settings::Ai,
-    key: impl FnOnce() -> Result<Option<ApiKey>, AiError>,
-) -> Result<ApiKey> {
+    key: impl FnOnce(&str) -> Result<Option<ApiKey>, AiError>,
+) -> Result<Option<ApiKey>> {
     if !ai.enabled {
         return Err(AppError::new(ErrorKind::Invalid, AI_OFF));
     }
-    match key() {
-        Ok(Some(key)) => Ok(key),
-        Ok(None) | Err(AiError::MissingApiKey) => Err(AppError::new(ErrorKind::Invalid, NO_KEY)),
-        Err(e) => Err(AppError::new(ErrorKind::Io, e.to_string())),
+    if let Some(endpoint) = ai.endpoint() {
+        if ai.provider == Provider::OpenAiCompatible && endpoint.base_url.trim().is_empty() {
+            return Err(AppError::new(ErrorKind::Invalid, NO_BASE_URL));
+        }
+        if endpoint.step_model.trim().is_empty() || endpoint.guide_model.trim().is_empty() {
+            return Err(AppError::new(ErrorKind::Invalid, NO_MODEL));
+        }
     }
+    let keychain_error = |e: AiError| AppError::new(ErrorKind::Io, e.to_string());
+    match ai.provider {
+        Provider::Anthropic => match key(keychain::ACCOUNT) {
+            Ok(Some(key)) => Ok(Some(key)),
+            Ok(None) | Err(AiError::MissingApiKey) => {
+                Err(AppError::new(ErrorKind::Invalid, NO_KEY))
+            }
+            Err(e) => Err(keychain_error(e)),
+        },
+        Provider::OpenAiCompatible => match key(keychain::OPENAI_COMPATIBLE_ACCOUNT) {
+            Ok(key) => Ok(key),
+            Err(AiError::MissingApiKey) => Ok(None),
+            Err(e) => Err(keychain_error(e)),
+        },
+        Provider::Ollama | Provider::LmStudio => Ok(None),
+    }
+}
+
+/// The provider in Settings, with the key [`check_ready`] returned.
+pub fn provider(ai: &settings::Ai, key: Option<ApiKey>) -> Result<Arc<dyn AiProvider>> {
+    let io = |e: AiError| AppError::new(ErrorKind::Io, e.to_string());
+    Ok(match (openai_config(ai), key) {
+        (Some(config), key) => Arc::new(OpenAiProvider::new(key, config).map_err(io)?),
+        (None, Some(key)) => Arc::new(ClaudeProvider::new(key, claude_config(ai)).map_err(io)?),
+        (None, None) => return Err(AppError::new(ErrorKind::Invalid, NO_KEY)),
+    })
+}
+
+/// The OpenAI-compatible configuration for the provider in Settings;
+/// `None` for Anthropic. An empty base URL is the local preset's.
+pub fn openai_config(ai: &settings::Ai) -> Option<OpenAiConfig> {
+    let e = ai.endpoint()?;
+    let (step, guide) = (e.step_model.trim(), e.guide_model.trim());
+    let mut config = match ai.provider {
+        Provider::Ollama => OpenAiConfig::ollama(step, guide),
+        Provider::LmStudio => OpenAiConfig::lm_studio(step, guide),
+        _ => OpenAiConfig::new(e.base_url.trim(), step, guide),
+    };
+    if !e.base_url.trim().is_empty() {
+        config.base_url = e.base_url.trim().to_owned();
+    }
+    Some(config)
 }
 
 /// The Claude configuration for the models in Settings.
@@ -342,6 +394,7 @@ pub fn begin(
     let run_id = guard.id;
     let pipeline_options = PipelineOptions {
         guide_pass,
+        images: ai.images(),
         ..PipelineOptions::default()
     };
     let task = drive(
@@ -731,17 +784,15 @@ pub async fn ai_generate<R: Runtime>(
     let (key, guide, handle) = blocking({
         let ai = ai.clone();
         move || {
-            let key = check_ready(&ai, keychain::get_api_key)?;
+            let key = check_ready(&ai, keychain::get_key)?;
             let (guide, handle) = ai_guide(&*cell.get()?, id)?;
             Ok((key, guide, handle))
         }
     })
     .await?;
-    let provider = ClaudeProvider::new(key, claude_config(&ai))
-        .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
     let (run_id, task) = begin(
         &runs,
-        Arc::new(provider),
+        provider(&ai, key)?,
         guide,
         Arc::new(BundleImages(handle)),
         &options,
@@ -775,15 +826,13 @@ pub async fn ai_rewrite_step(
     let (key, guide) = blocking({
         let ai = ai.clone();
         move || {
-            let key = check_ready(&ai, keychain::get_api_key)?;
+            let key = check_ready(&ai, keychain::get_key)?;
             let (guide, _) = ai_guide(&*cell.get()?, id)?;
             Ok((key, guide))
         }
     })
     .await?;
-    let provider = ClaudeProvider::new(key, claude_config(&ai))
-        .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
-    rewrite(&provider, &guide, &step_id, style, &ai).await
+    rewrite(&*provider(&ai, key)?, &guide, &step_id, style, &ai).await
 }
 
 /// The quit backstop: stops any run still going (nothing is lost; the
@@ -1216,13 +1265,42 @@ mod tests {
     }
 
     #[test]
+    fn text_only_models_get_no_images() {
+        let images: Arc<dyn ImageSource> = Arc::new(|_: &str| Ok(RgbaImage::new(400, 200)));
+        let run = |ai: settings::Ai| {
+            let provider = Arc::new(MockProvider::new());
+            let (_, task) = begin(
+                &Arc::new(AiRuns::default()),
+                Arc::clone(&provider) as Arc<dyn AiProvider>,
+                guide(),
+                Arc::clone(&images),
+                &GenerateOptions::default(),
+                &ai,
+                Arc::new(Events::default()),
+            )
+            .unwrap();
+            tauri::async_runtime::block_on(task);
+            provider.seen_steps()
+        };
+        assert!(run(ai()).iter().all(|s| s.full.is_some()));
+        let mut text_only = settings::Ai {
+            provider: Provider::LmStudio,
+            ..ai()
+        };
+        text_only.lm_studio.images = false;
+        let seen = run(text_only);
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|s| s.full.is_none() && s.crop.is_none()));
+    }
+
+    #[test]
     fn checks_settings_before_the_key() {
         let off = settings::Ai {
             enabled: false,
             ..ai()
         };
         let asked = AtomicBool::new(false);
-        let err = check_ready(&off, || {
+        let err = check_ready(&off, |_| {
             asked.store(true, Ordering::SeqCst);
             Ok(None)
         })
@@ -1230,15 +1308,85 @@ mod tests {
         assert_eq!(err, AppError::new(ErrorKind::Invalid, AI_OFF));
         assert!(!asked.load(Ordering::SeqCst));
 
-        let err = check_ready(&ai(), || Ok(None)).unwrap_err();
+        let err = check_ready(&ai(), |_| Ok(None)).unwrap_err();
         assert_eq!(err, AppError::new(ErrorKind::Invalid, NO_KEY));
-        let err = check_ready(&ai(), || Err(AiError::MissingApiKey)).unwrap_err();
+        let err = check_ready(&ai(), |_| Err(AiError::MissingApiKey)).unwrap_err();
         assert_eq!(err, AppError::new(ErrorKind::Invalid, NO_KEY));
-        let err = check_ready(&ai(), || Err(AiError::Keychain("locked".into()))).unwrap_err();
+        let err = check_ready(&ai(), |_| Err(AiError::Keychain("locked".into()))).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Io);
 
-        let key = check_ready(&ai(), || Ok(Some(ApiKey::new("sk-1").unwrap()))).unwrap();
-        assert_eq!(key.expose(), "sk-1");
+        let key = check_ready(&ai(), |account| {
+            assert_eq!(account, keychain::ACCOUNT);
+            Ok(Some(ApiKey::new("sk-1").unwrap()))
+        })
+        .unwrap();
+        assert_eq!(key.unwrap().expose(), "sk-1");
+        assert!(provider(&ai(), key_for_test()).is_ok());
+        assert!(provider(&ai(), None).is_err());
+    }
+
+    fn key_for_test() -> Option<ApiKey> {
+        Some(ApiKey::new("sk-1").unwrap())
+    }
+
+    #[test]
+    fn openai_compatible_providers_need_models_not_keys() {
+        let never = |_: &str| -> std::result::Result<Option<ApiKey>, AiError> {
+            panic!("local providers never ask the Keychain")
+        };
+        let mut local = settings::Ai {
+            provider: Provider::Ollama,
+            ..ai()
+        };
+        let err = check_ready(&local, never).unwrap_err();
+        assert_eq!(err, AppError::new(ErrorKind::Invalid, NO_MODEL));
+        local.ollama.step_model = "qwen3-vl:8b".into();
+        local.ollama.guide_model = "qwen3:14b".into();
+        assert_eq!(check_ready(&local, never).unwrap(), None);
+        assert!(provider(&local, None).is_ok());
+        let config = openai_config(&local).unwrap();
+        assert_eq!(config.url(), "http://localhost:11434/v1/chat/completions");
+        assert_eq!(config.step.model, "qwen3-vl:8b");
+        assert_eq!(config.rewrite.model, "qwen3-vl:8b");
+        assert_eq!(config.guide.model, "qwen3:14b");
+        // A changed port.
+        local.ollama.base_url = "http://localhost:9999/v1".into();
+        assert_eq!(
+            openai_config(&local).unwrap().url(),
+            "http://localhost:9999/v1/chat/completions"
+        );
+        let studio = settings::Ai {
+            provider: Provider::LmStudio,
+            lm_studio: local.ollama.clone(),
+            ..ai()
+        };
+        assert_eq!(
+            openai_config(&studio).unwrap().base_url,
+            "http://localhost:9999/v1"
+        );
+
+        let mut custom = settings::Ai {
+            provider: Provider::OpenAiCompatible,
+            ..ai()
+        };
+        custom.open_ai_compatible.step_model = "gpt-5-mini".into();
+        custom.open_ai_compatible.guide_model = "gpt-5".into();
+        let err = check_ready(&custom, never).unwrap_err();
+        assert_eq!(err, AppError::new(ErrorKind::Invalid, NO_BASE_URL));
+        custom.open_ai_compatible.base_url = "https://api.openai.com/v1".into();
+        // The key is optional, and read from its own entry.
+        let key = check_ready(&custom, |account| {
+            assert_eq!(account, keychain::OPENAI_COMPATIBLE_ACCOUNT);
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(key, None);
+        let key = check_ready(&custom, |_| Ok(key_for_test())).unwrap();
+        assert!(key.is_some());
+        let err = check_ready(&custom, |_| Err(AiError::Keychain("locked".into()))).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Io);
+        assert!(provider(&custom, None).is_ok());
+        assert!(openai_config(&ai()).is_none());
     }
 
     #[test]

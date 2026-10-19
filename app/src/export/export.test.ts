@@ -3,11 +3,14 @@ import {
   baseName,
   exportName,
   initialPaper,
+  initialReviewDetails,
   isAccent,
   isPlainName,
   localePaper,
+  isFolderFormat,
   outPath,
   rememberPaper,
+  rememberReviewDetails,
   runExport,
   unreviewedBlurs,
   unreviewedBlursText,
@@ -34,6 +37,7 @@ const request = {
   overwrite: false,
   branding: { logo: null, accent: "  #abc " },
   paper: "letter" as const,
+  reviewDetails: true,
 };
 
 describe("export names and paths", () => {
@@ -60,6 +64,8 @@ describe("export names and paths", () => {
     const destination = { folder: "/Users/me/Desktop/", name: " Guide ", file: "/Users/me/Guide.pdf" };
     expect(outPath("md", destination)).toBe("/Users/me/Desktop/Guide");
     expect(outPath("html", { ...destination, folder: null })).toBeNull();
+    expect(isFolderFormat("walkthrough")).toBe(true);
+    expect(outPath("walkthrough", destination)).toBe("/Users/me/Desktop/Guide");
     expect(outPath("md", { ...destination, name: "a/b" })).toBeNull();
     expect(outPath("pdf", destination)).toBe("/Users/me/Guide.pdf");
     // The file chosen for another format doesn't count.
@@ -105,6 +111,27 @@ describe("paper size", () => {
   });
 });
 
+describe("review details", () => {
+  it("are off at first and remember the last choice", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    };
+    expect(initialReviewDetails(storage)).toBe(false);
+    rememberReviewDetails(true, storage);
+    expect(initialReviewDetails(storage)).toBe(true);
+    rememberReviewDetails(false, storage);
+    expect(initialReviewDetails(storage)).toBe(false);
+    const broken = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(initialReviewDetails(broken)).toBe(false);
+  });
+});
+
 describe("runExport", () => {
   it("saves first, then exports with a trimmed accent", async () => {
     const order: string[] = [];
@@ -123,7 +150,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter");
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

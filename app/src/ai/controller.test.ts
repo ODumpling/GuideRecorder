@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { autoRun, createAiStore, NO_KEY_MESSAGE, summary, type Listen } from "@/ai/controller";
+import { aiReady, autoRun, createAiStore, NO_KEY_MESSAGE, summary, type Listen } from "@/ai/controller";
 import { acceptBlurSuggestion, rejectBlurSuggestion } from "@/annotations/commands";
 import { setGuideField, setItemText } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
@@ -44,6 +44,7 @@ async function setup({
     createFolder: vi.fn(async () => ""),
     duplicateGuide: vi.fn(async () => "G3"),
     renameGuide: vi.fn(async () => ({ path: "", title: "", updatedAt: "" })),
+    markGuideReviewed: vi.fn(async () => ({ lastReviewed: "", updatedAt: "" })),
     moveGuide: vi.fn(async () => ""),
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
@@ -630,6 +631,34 @@ describe("auto-run", () => {
     expect(await autoRun(ai, "G1", null, async () => true)).toBe(false);
     expect(api.generate).not.toHaveBeenCalled();
     expect(await autoRun(ai, "G1", settings(true, true), async () => true)).toBe(true);
+    expect(api.generate).toHaveBeenCalledWith("G1");
+  });
+
+  it("needs models, not a key, for an OpenAI-compatible provider", async () => {
+    const endpoint = { baseUrl: "", stepModel: "qwen3-vl:8b", guideModel: "qwen3:14b", images: false };
+    const ai = (provider: Settings["ai"]["provider"], patch: Partial<typeof endpoint> = {}) =>
+      ({
+        provider,
+        openAiCompatible: { ...endpoint, ...patch },
+        ollama: { ...endpoint, ...patch },
+        lmStudio: { ...endpoint, ...patch },
+      }) as Settings["ai"];
+    const noKey = vi.fn(async () => false);
+    expect(await aiReady(ai("ollama"), noKey)).toBe(true);
+    expect(await aiReady(ai("lmStudio"), noKey)).toBe(true);
+    expect(await aiReady(ai("ollama", { guideModel: " " }), noKey)).toBe(false);
+    expect(noKey).not.toHaveBeenCalled();
+    // A custom API needs its base URL.
+    expect(await aiReady(ai("openAiCompatible"), noKey)).toBe(false);
+    expect(await aiReady(ai("openAiCompatible", { baseUrl: "https://api.example.com/v1" }), noKey)).toBe(true);
+    // Anthropic needs its key.
+    expect(await aiReady(ai("anthropic"), noKey)).toBe(false);
+    expect(noKey).toHaveBeenCalledWith("anthropic");
+    expect(await aiReady(ai("anthropic"), async () => true)).toBe(true);
+
+    const { ai: store, api } = await setup();
+    const settings = { ai: { ...ai("ollama"), enabled: true, autoRun: true } } as Settings;
+    expect(await autoRun(store, "G1", settings, noKey)).toBe(true);
     expect(api.generate).toHaveBeenCalledWith("G1");
   });
 

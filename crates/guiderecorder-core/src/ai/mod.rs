@@ -1,12 +1,15 @@
-//! AI provider abstraction and Claude implementation. See design scratchpad
-//! #442 ("Pipeline"); implemented in #361.
+//! AI provider abstraction and its implementations. See design scratchpad
+//! #442 ("Pipeline"); implemented in #361, more providers in #11.
 //!
 //! - [`AiProvider`] is the provider-neutral interface: a per-step pass
 //!   ([`AiProvider::generate_step`], which also returns redaction
 //!   suggestions), a guide-level pass ([`AiProvider::generate_guide`]) and
 //!   step rewrites ([`AiProvider::rewrite`]).
 //! - [`claude::ClaudeProvider`] implements it over the Anthropic Messages API.
-//! - [`keychain`] stores the API key in the macOS Keychain.
+//! - [`openai::OpenAiProvider`] implements it over an OpenAI-compatible
+//!   Chat Completions API, including local Ollama and LM Studio servers,
+//!   with the same prompts.
+//! - [`keychain`] stores API keys in the macOS Keychain.
 //! - [`concurrency::for_each_bounded`] runs per-step calls in parallel with a
 //!   limit; [`retry`] holds the backoff policy.
 //! - [`mock::MockProvider`] is a deterministic provider for tests downstream.
@@ -30,6 +33,7 @@ pub mod claude;
 pub mod concurrency;
 pub mod keychain;
 pub mod mock;
+pub mod openai;
 pub mod pipeline;
 pub mod prompts;
 pub mod retry;
@@ -37,6 +41,7 @@ pub mod retry;
 pub use claude::{ClaudeConfig, ClaudeProvider, Effort, ModelSettings};
 pub use keychain::ApiKey;
 pub use mock::MockProvider;
+pub use openai::{OpenAiConfig, OpenAiModel, OpenAiProvider};
 pub use pipeline::{CancelToken, ImageSource, PipelineEvent, PipelineOptions, PipelineSummary};
 
 /// Boxed future returned by [`AiProvider`] methods, so the trait stays

@@ -46,7 +46,9 @@
 //! with the app using only those. The app opens guides with
 //! [`Library::load`] (which may migrate and rewrite the file), saves,
 //! creates, renames, deletes and calls [`Library::recover`]. The SQLite
-//! index (#340) is a separate layer.
+//! index (#340) is a separate layer. The one other writer is the MCP
+//! server when started with `--writable`, through [`Library::edit`] and
+//! [`crate::pages::create_from_images`] (see [`crate::edit`]).
 //!
 //! Schema versions (#444 "Versioning", [`crate::migrate`]): every read
 //! migrates older `guide.json` files in memory. `load` also backs up the
@@ -57,10 +59,10 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageFormat, RgbaImage};
 use serde::Deserialize;
@@ -68,7 +70,7 @@ use serde_json::Value;
 use ulid::Ulid;
 
 use crate::migrate::{self, MigrationError, Schema};
-use crate::model::Guide;
+use crate::model::{Guide, ReviewInfo};
 
 /// Extension of a guide bundle folder.
 pub const BUNDLE_EXTENSION: &str = "guiderecorder";
@@ -297,6 +299,9 @@ pub struct GuideSummary {
     /// The folder holding the bundle, relative to the root (`""` for the
     /// root itself, `Work/Onboarding` below it).
     pub folder: String,
+    /// Owner, status, version and review schedule. Read field by field, so
+    /// a value this app does not know leaves just that field unset.
+    pub review: ReviewInfo,
     /// Set when another bundle holds the same id (e.g. a Finder copy): the
     /// path of the canonical bundle, which `find` and `save` use. The app
     /// should offer to give this copy a new id.
@@ -356,6 +361,9 @@ pub struct Library {
     /// Guide id → bundle path, filled by `scan`, `create` and `load`.
     /// Only a hint: entries are re-checked before use.
     known: RwLock<HashMap<Ulid, PathBuf>>,
+    /// Held across each [`Library::edit`], so two edits through this
+    /// `Library` never interleave their read and write.
+    pub(crate) edits: Mutex<()>,
 }
 
 impl Library {
@@ -373,6 +381,7 @@ impl Library {
             root,
             schema,
             known: RwLock::new(HashMap::new()),
+            edits: Mutex::new(()),
         })
     }
 
@@ -652,7 +661,7 @@ impl Library {
 
     /// Reads, migrates in memory and decodes a bundle's guide. Returns the
     /// original bytes for the backup. Pure.
-    fn open_guide(&self, path: &Path) -> Result<(LoadedGuide, Vec<u8>)> {
+    pub(crate) fn open_guide(&self, path: &Path) -> Result<(LoadedGuide, Vec<u8>)> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }
@@ -841,6 +850,20 @@ impl Library {
             .rename_bundle(&loaded.handle, title)
             .unwrap_or(loaded.handle);
         Ok((renamed, guide))
+    }
+
+    /// Records that a guide was reviewed `on` that day: sets
+    /// [`ReviewInfo::last_reviewed`] (and `updated_at`) in `guide.json`.
+    /// Loads and saves like [`Library::rename`]. Returns the saved guide.
+    pub fn mark_reviewed(&self, handle: &GuideHandle, on: NaiveDate) -> Result<Guide> {
+        self.check_inside(&handle.path)?;
+        let loaded = self.load(&handle.path)?;
+        check_guide_id(handle, &loaded.guide)?;
+        let mut guide = loaded.guide;
+        guide.review.last_reviewed = Some(on);
+        guide.updated_at = Utc::now();
+        self.save_to(&loaded.handle, &guide)?;
+        Ok(guide)
     }
 
     /// Copies a guide into a new bundle next to it: a new id, `title`, new
@@ -1035,7 +1058,7 @@ impl Library {
 
     /// Checks that `path` is a bundle in the root or one of its folders
     /// (not inside another bundle, a hidden folder or too deep).
-    fn check_inside(&self, path: &Path) -> Result<()> {
+    pub(crate) fn check_inside(&self, path: &Path) -> Result<()> {
         if !is_bundle_path(path) {
             return Err(LibraryError::NotABundle(path.to_path_buf()));
         }
@@ -1569,8 +1592,24 @@ fn read_summary(bundle: &Path, schema: &Schema) -> Result<GuideSummary> {
         created_at: raw.created_at.unwrap_or(raw.updated_at),
         updated_at: raw.updated_at,
         folder: String::new(),
+        review: read_review(&value),
         duplicate_of: None,
     })
+}
+
+/// The review fields of a `guide.json` value, each one dropped if it does
+/// not decode.
+fn read_review(value: &Value) -> ReviewInfo {
+    fn field<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Option<T> {
+        T::deserialize(value.get(key)?).ok()
+    }
+    ReviewInfo {
+        owner: field(value, "owner"),
+        status: field(value, "status"),
+        version: field(value, "version"),
+        last_reviewed: field(value, "lastReviewed"),
+        review_interval_months: field(value, "reviewIntervalMonths"),
+    }
 }
 
 fn newer_placeholder(
@@ -1615,6 +1654,7 @@ fn newer_placeholder(
         created_at,
         updated_at,
         folder: String::new(),
+        review: read_review(value),
         duplicate_of: None,
     })
 }
@@ -3351,6 +3391,52 @@ mod tests {
 
         // A stale handle renames nothing.
         assert!(lib.rename(&handle, "Other").is_err());
+    }
+
+    #[test]
+    fn mark_reviewed_sets_the_review_day_and_lists_it() {
+        let (_tmp, lib) = library();
+        let mut guide = Guide::new("Rotate", "en");
+        guide.review.owner = Some("IT".into());
+        guide.review.review_interval_months = Some(6);
+        let handle = lib.create(&guide).unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+
+        let saved = lib.mark_reviewed(&handle, day).unwrap();
+        assert_eq!(saved.review.last_reviewed, Some(day));
+        assert_eq!(saved.review.owner.as_deref(), Some("IT"));
+        assert!(saved.updated_at >= guide.updated_at);
+        assert_eq!(lib.read(&handle.path).unwrap().guide, saved);
+        let listed = &lib.list().unwrap()[0];
+        assert_eq!(listed.review, saved.review);
+
+        let other = GuideHandle {
+            id: Ulid::new(),
+            path: handle.path.clone(),
+        };
+        assert!(lib.mark_reviewed(&other, day).is_err());
+    }
+
+    #[test]
+    fn listing_skips_review_fields_it_cannot_read() {
+        let (_tmp, lib) = library();
+        let handle = lib.create(&Guide::new("Odd", "en")).unwrap();
+        let path = handle.guide_json();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["owner"] = "Ana".into();
+        value["status"] = "archived".into();
+        value["lastReviewed"] = "yesterday".into();
+        value["reviewIntervalMonths"] = 12.into();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let listed = &lib.list().unwrap()[0];
+        assert_eq!(
+            listed.review,
+            ReviewInfo {
+                owner: Some("Ana".into()),
+                review_interval_months: Some(12),
+                ..ReviewInfo::default()
+            }
+        );
     }
 
     #[test]

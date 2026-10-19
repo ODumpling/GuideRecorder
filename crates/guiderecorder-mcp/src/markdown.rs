@@ -20,6 +20,8 @@ pub struct GuideMeta<'a> {
     pub tags: &'a [String],
     pub updated_at: String,
     pub read_only: bool,
+    /// When the next review is due, e.g. `2026-04-10 (overdue)`.
+    pub review_due: Option<String>,
 }
 
 /// The whole guide.
@@ -41,6 +43,29 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     if !meta.tags.is_empty() {
         let tags: Vec<String> = meta.tags.iter().map(|t| escape_line(t)).collect();
         facts.insert(1, format!("Tags: {}", tags.join(", ")));
+    }
+    let review = &render.review;
+    let text = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(escape_line)
+    };
+    if let Some(owner) = text(&review.owner) {
+        facts.push(format!("Owner: {owner}"));
+    }
+    if let Some(status) = review.status {
+        facts.push(format!("Status: {}", status.as_str()));
+    }
+    if let Some(version) = text(&review.version) {
+        facts.push(format!("Version: {version}"));
+    }
+    if let Some(day) = review.last_reviewed {
+        facts.push(format!("Last reviewed: {day}"));
+    }
+    if let Some(due) = &meta.review_due {
+        facts.push(format!("Review due: {}", escape_line(due)));
     }
     if render.kind == GuideKind::Annotated {
         facts.insert(

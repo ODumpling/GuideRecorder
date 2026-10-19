@@ -2,7 +2,7 @@
 //! Support (`dev.dufflebear.guiderecorder/settings.json`), written atomically, with a
 //! schema version.
 //!
-//! The API key is not here: it lives in the Keychain (core's
+//! API keys are not here: they live in the Keychain (core's
 //! `ai::keychain`). Each recording reads the recording settings when it
 //! starts (`recording::session_config`); the record and pause shortcuts
 //! are registered at startup and again on every change
@@ -54,6 +54,7 @@ pub struct Settings {
     pub ai: Ai,
     pub export: ExportDefaults,
     pub redaction: Redaction,
+    pub mcp: Mcp,
 }
 
 impl Default for Settings {
@@ -65,6 +66,7 @@ impl Default for Settings {
             ai: Ai::default(),
             export: ExportDefaults::default(),
             redaction: Redaction::default(),
+            mcp: Mcp::default(),
         }
     }
 }
@@ -175,14 +177,63 @@ pub fn default_excluded_apps() -> Vec<String> {
     }
 }
 
+/// Who writes the guide text. Settings saved before there was a choice
+/// have no `provider` and stay on Anthropic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Provider {
+    #[default]
+    Anthropic,
+    /// Any OpenAI-compatible API at [`Endpoint::base_url`], with an
+    /// optional key.
+    OpenAiCompatible,
+    /// Ollama on this Mac; no key.
+    Ollama,
+    /// LM Studio on this Mac; no key.
+    LmStudio,
+}
+
+/// An OpenAI-compatible provider's settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Endpoint {
+    /// Up to the version segment, e.g. `https://api.openai.com/v1`; empty:
+    /// the local preset's default (required for a custom API).
+    pub base_url: String,
+    /// Writes each step, and rewrites; empty until chosen.
+    pub step_model: String,
+    /// Writes the guide fields; empty until chosen.
+    pub guide_model: String,
+    /// The step model takes images. Off: steps are written from their
+    /// element, keystrokes and kind only.
+    pub images: bool,
+}
+
+impl Default for Endpoint {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            step_model: String::new(),
+            guide_model: String::new(),
+            images: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Ai {
     pub enabled: bool,
     /// Write the guide text when a recording stops.
     pub auto_run: bool,
+    pub provider: Provider,
+    /// Anthropic's step model.
     pub step_model: String,
+    /// Anthropic's guide model.
     pub guide_model: String,
+    pub open_ai_compatible: Endpoint,
+    pub ollama: Endpoint,
+    pub lm_studio: Endpoint,
     /// BCP 47 tag of the language to write in; empty: the guide's own.
     pub language: String,
     pub audience: Audience,
@@ -193,11 +244,33 @@ impl Default for Ai {
         Self {
             enabled: true,
             auto_run: true,
+            provider: Provider::default(),
             step_model: DEFAULT_STEP_MODEL.into(),
             guide_model: DEFAULT_GUIDE_MODEL.into(),
+            open_ai_compatible: Endpoint::default(),
+            ollama: Endpoint::default(),
+            lm_studio: Endpoint::default(),
             language: String::new(),
             audience: Audience::default(),
         }
+    }
+}
+
+impl Ai {
+    /// The selected OpenAI-compatible provider's settings; `None` for
+    /// Anthropic.
+    pub fn endpoint(&self) -> Option<&Endpoint> {
+        match self.provider {
+            Provider::Anthropic => None,
+            Provider::OpenAiCompatible => Some(&self.open_ai_compatible),
+            Provider::Ollama => Some(&self.ollama),
+            Provider::LmStudio => Some(&self.lm_studio),
+        }
+    }
+
+    /// Whether step images are sent: always for Anthropic.
+    pub fn images(&self) -> bool {
+        self.endpoint().is_none_or(|e| e.images)
     }
 }
 
@@ -222,6 +295,16 @@ pub struct Redaction {
     pub patterns: Vec<String>,
     /// Words and phrases to blur wherever they appear, ignoring case.
     pub words: Vec<String>,
+}
+
+/// The MCP server setup shown in Settings → MCP.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Mcp {
+    /// Let MCP clients edit and create guides: the setup command passes
+    /// `--writable`. Only the command changes; a server already set up
+    /// keeps the flags it was added with.
+    pub writable: bool,
 }
 
 /// Limits for the stored values.
@@ -285,12 +368,29 @@ fn same_hotkey(a: &str, b: &str) -> bool {
     !a.is_empty() && !b.is_empty() && canonical(a) == canonical(b)
 }
 
-/// A model id such as `claude-haiku-5-5`.
+/// A model id such as `claude-haiku-5-5`, `qwen3-vl:8b` or
+/// `lmstudio-community/gemma-3-12b`.
 pub fn is_model_id(value: &str) -> bool {
-    (1..=100).contains(&value.len())
+    (1..=200).contains(&value.len())
         && value
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._:@".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"-._:@/".contains(&b))
+}
+
+/// Empty, or an `http` or `https` URL without spaces or a query.
+pub fn is_base_url(value: &str) -> bool {
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    value.is_empty()
+        || (value.len() <= 2048
+            && rest.is_some_and(|rest| {
+                !rest.is_empty()
+                    && !rest.starts_with('/')
+                    && rest
+                        .bytes()
+                        .all(|b| b.is_ascii_graphic() && !b"?#".contains(&b))
+            }))
 }
 
 /// Empty, or a BCP 47-looking tag (`en`, `de-CH`, `zh-Hant-TW`).
@@ -391,6 +491,23 @@ impl Settings {
         for model in [&self.ai.step_model, &self.ai.guide_model] {
             if !is_model_id(model) {
                 return Err(invalid(format!("{model:?} is not a model id")));
+            }
+        }
+        for e in [
+            &self.ai.open_ai_compatible,
+            &self.ai.ollama,
+            &self.ai.lm_studio,
+        ] {
+            for model in [&e.step_model, &e.guide_model] {
+                if !model.is_empty() && !is_model_id(model) {
+                    return Err(invalid(format!("{model:?} is not a model id")));
+                }
+            }
+            if !is_base_url(&e.base_url) {
+                return Err(invalid(format!(
+                    "{:?} is not an http or https URL",
+                    e.base_url
+                )));
             }
         }
         if !is_language(&self.ai.language) {
@@ -770,12 +887,13 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 /// The `claude mcp add` command that registers the GuideRecorder MCP server for
-/// the library at `library`.
-pub fn mcp_add_command(mcp: &Path, library: &Path) -> String {
+/// the library at `library`, with its write tools if `writable`.
+pub fn mcp_add_command(mcp: &Path, library: &Path, writable: bool) -> String {
     format!(
-        "claude mcp add guiderecorder -- {} --library {}",
+        "claude mcp add guiderecorder -- {} --library {}{}",
         shell_quote(&mcp.to_string_lossy()),
-        shell_quote_home(&library.to_string_lossy())
+        shell_quote_home(&library.to_string_lossy()),
+        if writable { " --writable" } else { "" }
     )
 }
 
@@ -818,12 +936,59 @@ mod tests {
         assert_eq!(json["recording"]["typingIdleMs"], 1500);
         assert_eq!(json["ai"]["stepModel"], DEFAULT_STEP_MODEL);
         assert_eq!(json["export"]["format"], "pdf");
-        assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), settings);
+        assert_eq!(
+            serde_json::from_value::<Settings>(json.clone()).unwrap(),
+            settings
+        );
         // Missing fields take their defaults.
         let partial: Settings =
             serde_json::from_str(r#"{"version":1,"ai":{"enabled":false}}"#).unwrap();
         assert!(!partial.ai.enabled);
         assert_eq!(partial.ai.guide_model, DEFAULT_GUIDE_MODEL);
+        assert_eq!(json["ai"]["provider"], "anthropic");
+        assert_eq!(json["ai"]["openAiCompatible"]["images"], true);
+        assert_eq!(json["ai"]["lmStudio"]["baseUrl"], "");
+    }
+
+    #[test]
+    fn ai_settings_from_before_providers_stay_on_anthropic() {
+        let dir = scratch();
+        let path = dir.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":2,"ai":{"enabled":true,"autoRun":false,
+                "stepModel":"claude-sonnet-5-5","guideModel":"claude-opus-5-5",
+                "language":"de","audience":"expert"}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let view = store.view();
+        assert!(view.load_error.is_none());
+        let ai = &view.settings.ai;
+        assert_eq!(ai.provider, Provider::Anthropic);
+        assert_eq!(ai.step_model, "claude-sonnet-5-5");
+        assert_eq!(ai.guide_model, "claude-opus-5-5");
+        assert!(!ai.auto_run);
+        assert_eq!(ai.language, "de");
+        assert_eq!(ai.ollama, Endpoint::default());
+        assert!(ai.endpoint().is_none() && ai.images());
+
+        // A provider and its endpoint round-trip.
+        let mut settings = store.get();
+        settings.ai.provider = Provider::Ollama;
+        settings.ai.ollama = Endpoint {
+            base_url: String::new(),
+            step_model: "qwen3-vl:8b".into(),
+            guide_model: "hf.co/org/model:Q4_K_M".into(),
+            images: false,
+        };
+        store.update(settings, &ChosenPaths::default()).unwrap();
+        let saved = SettingsStore::load(Some(path)).get();
+        assert_eq!(saved.ai.provider, Provider::Ollama);
+        assert_eq!(saved.ai.endpoint(), Some(&saved.ai.ollama));
+        assert_eq!(saved.ai.ollama.guide_model, "hf.co/org/model:Q4_K_M");
+        assert!(!saved.ai.images());
+        assert_eq!(saved.ai.step_model, "claude-sonnet-5-5");
     }
 
     #[test]
@@ -880,7 +1045,26 @@ mod tests {
             assert!(!is_hotkey(bad), "{bad}");
         }
         assert!(is_model_id("claude-sonnet-5-5"));
+        assert!(is_model_id("qwen3-vl:8b") && is_model_id("lmstudio-community/gemma-3-12b"));
         assert!(!is_model_id("") && !is_model_id("a b"));
+        for ok in [
+            "",
+            "https://api.openai.com/v1",
+            "http://localhost:11434/v1",
+            "http://192.168.1.5:8080",
+        ] {
+            assert!(is_base_url(ok), "{ok}");
+        }
+        for bad in [
+            "localhost:11434",
+            "ftp://x",
+            "https://",
+            "https:///v1",
+            "https://a b",
+            "https://x/v1?key=1",
+        ] {
+            assert!(!is_base_url(bad), "{bad}");
+        }
         assert!(same_hotkey("Ctrl+Alt+R", "Option+Control+R"));
         assert!(same_hotkey("CmdOrCtrl+Shift+R", "Shift+Cmd+R"));
         assert!(!same_hotkey("Ctrl+Alt+R", "Ctrl+Alt+Shift+R"));
@@ -929,6 +1113,12 @@ mod tests {
         let mut s = Settings::default();
         s.export.accent = Some("blue".into());
         assert!(s.validate().is_err());
+        let mut s = Settings::default();
+        s.ai.ollama.step_model = "a b".into();
+        assert!(s.validate().is_err());
+        let mut s = Settings::default();
+        s.ai.open_ai_compatible.base_url = "api.example.com".into();
+        assert!(s.validate().unwrap_err().message.contains("URL"));
     }
 
     #[test]
@@ -1212,7 +1402,11 @@ mod tests {
     #[test]
     fn mcp_command_keeps_the_home_tilde() {
         assert_eq!(
-            mcp_add_command(Path::new("/a/mcp"), Path::new("~/Documents/GuideRecorder")),
+            mcp_add_command(
+                Path::new("/a/mcp"),
+                Path::new("~/Documents/GuideRecorder"),
+                false
+            ),
             "claude mcp add guiderecorder -- /a/mcp --library ~/Documents/GuideRecorder"
         );
         assert_eq!(shell_quote_home("~/My Guides"), "~/'My Guides'");
@@ -1221,16 +1415,28 @@ mod tests {
     }
 
     #[test]
+    fn mcp_command_adds_writable_when_allowed() {
+        assert_eq!(
+            mcp_add_command(Path::new("/a/mcp"), Path::new("/lib"), true),
+            "claude mcp add guiderecorder -- /a/mcp --library /lib --writable"
+        );
+        // Off unless chosen, also in a settings file from before the option.
+        let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        assert!(!old.mcp.writable);
+    }
+
+    #[test]
     fn mcp_command_quotes_paths() {
         assert_eq!(
             mcp_add_command(
                 Path::new("/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp"),
-                Path::new("/Users/me/Documents/GuideRecorder")
+                Path::new("/Users/me/Documents/GuideRecorder"),
+                false
             ),
             "claude mcp add guiderecorder -- /Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp --library /Users/me/Documents/GuideRecorder"
         );
         assert_eq!(
-            mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's")),
+            mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's"), false),
             r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it'\''s'"
         );
     }

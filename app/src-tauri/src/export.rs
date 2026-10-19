@@ -28,21 +28,24 @@ use crate::editor::{check_image_path, file_error, parse_id, AppError, ErrorKind,
 pub enum Format {
     Md,
     Html,
+    /// The interactive click-through HTML (`HtmlMode::Walkthrough`).
+    Walkthrough,
     Docx,
     #[default]
     Pdf,
 }
 
 impl Format {
-    /// Markdown and HTML write into a folder; DOCX and PDF write one file.
+    /// Markdown and HTML (either mode) write into a folder; DOCX and PDF
+    /// write one file.
     pub fn is_folder(self) -> bool {
-        matches!(self, Self::Md | Self::Html)
+        matches!(self, Self::Md | Self::Html | Self::Walkthrough)
     }
 
     /// The file extension of a DOCX or PDF export.
     pub fn extension(self) -> Option<&'static str> {
         match self {
-            Self::Md | Self::Html => None,
+            Self::Md | Self::Html | Self::Walkthrough => None,
             Self::Docx => Some("docx"),
             Self::Pdf => Some("pdf"),
         }
@@ -245,7 +248,7 @@ pub fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
 }
 
 /// Exports a guide from its saved bundle (the editor flushes its changes
-/// first) to `out` on `paper` (DOCX and PDF only), which [`ChosenPaths::check_destination`] has accepted.
+/// first) to `out` on `paper` (DOCX and PDF only), with the review details line when `review_details`, which [`ChosenPaths::check_destination`] has accepted.
 /// The guide lock is held throughout, so no save or close sweep changes the
 /// bundle while it is read.
 #[allow(clippy::too_many_arguments)]
@@ -258,6 +261,7 @@ pub fn export_guide(
     overwrite: bool,
     branding: &BrandingRequest,
     paper: docx::Paper,
+    review_details: bool,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
     chosen.check_destination(format, out)?;
@@ -300,14 +304,22 @@ pub fn export_guide(
             let opts = md::MdOptions {
                 overwrite,
                 branding,
+                review_details,
                 ..md::MdOptions::default()
             };
             md::export(&render, &handle, out, &opts).map_err(md_error)?
         }
-        Format::Html => {
+        Format::Html | Format::Walkthrough => {
+            let mode = if format == Format::Walkthrough {
+                html::HtmlMode::Walkthrough
+            } else {
+                html::HtmlMode::Document
+            };
             let opts = html::HtmlOptions {
+                mode,
                 overwrite,
                 branding,
+                review_details,
                 ..html::HtmlOptions::default()
             };
             html::export(&render, &handle, out, &opts).map_err(md_error)?
@@ -318,6 +330,7 @@ pub fn export_guide(
                 timestamp,
                 paper,
                 branding,
+                review_details,
                 ..docx::DocxOptions::default()
             };
             docx::export(&render, &handle, out, &opts).map_err(|e| match e {
@@ -331,6 +344,7 @@ pub fn export_guide(
                 timestamp,
                 paper,
                 branding,
+                review_details,
                 ..pdf::PdfOptions::default()
             };
             pdf::export(&render, &handle, out, &opts).map_err(|e| match e {
@@ -604,6 +618,7 @@ mod tests {
             false,
             &none,
             docx::Paper::A4,
+            false,
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -621,9 +636,31 @@ mod tests {
             false,
             &none,
             docx::Paper::A4,
+            false,
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
+        let walkthrough = export_guide(
+            &session,
+            &chosen,
+            &id,
+            Format::Walkthrough,
+            &dir.join("walkthrough"),
+            false,
+            &none,
+            docx::Paper::A4,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            walkthrough.files,
+            [dir.join("walkthrough").join(html::GUIDE_FILE)]
+        );
+        let page = std::fs::read_to_string(&walkthrough.files[0]).unwrap();
+        assert!(page.contains("<script>"));
+        assert!(!std::fs::read_to_string(&html.files[0])
+            .unwrap()
+            .contains("<script>"));
 
         for format in [Format::Docx, Format::Pdf] {
             let out = with_extension(dir.join("Guide"), format.extension().unwrap());
@@ -636,7 +673,8 @@ mod tests {
                 &out,
                 false,
                 &none,
-                docx::Paper::A4
+                docx::Paper::A4,
+                false,
             )
             .is_err());
             chosen.add_file(out.clone());
@@ -649,6 +687,7 @@ mod tests {
                 false,
                 &none,
                 docx::Paper::A4,
+                false,
             )
             .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
@@ -663,6 +702,7 @@ mod tests {
                 false,
                 &none,
                 docx::Paper::A4,
+                false,
             )
             .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
@@ -675,6 +715,7 @@ mod tests {
                 true,
                 &none,
                 docx::Paper::A4,
+                false,
             )
             .unwrap();
         }
@@ -688,6 +729,7 @@ mod tests {
             false,
             &none,
             docx::Paper::A4,
+            false,
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -700,6 +742,7 @@ mod tests {
             true,
             &none,
             docx::Paper::A4,
+            false,
         )
         .unwrap();
     }
@@ -723,6 +766,7 @@ mod tests {
                 false,
                 &none,
                 paper,
+                false,
             )
             .unwrap();
             let pdf = fs::read(&out).unwrap();
@@ -743,6 +787,7 @@ mod tests {
                 false,
                 &none,
                 paper,
+                false,
             )
             .unwrap();
             fs::read(&out).unwrap()
@@ -764,6 +809,7 @@ mod tests {
             false,
             &none,
             docx::Paper::A4,
+            false,
         )
         .unwrap_err();
         assert!(
@@ -789,6 +835,7 @@ mod tests {
             false,
             &branding,
             docx::Paper::A4,
+            false,
         )
         .unwrap_err();
         assert!(
@@ -806,6 +853,7 @@ mod tests {
             false,
             &branding,
             docx::Paper::A4,
+            false,
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -823,6 +871,7 @@ mod tests {
             false,
             &bad,
             docx::Paper::A4,
+            false,
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);

@@ -9,11 +9,13 @@ import {
   exportName,
   FORMATS,
   initialPaper,
+  initialReviewDetails,
   isAccent,
   isFolderFormat,
   outPath,
   PAPERS,
   rememberPaper,
+  rememberReviewDetails,
   runExport,
   unreviewedBlurs,
   unreviewedBlursText,
@@ -29,8 +31,8 @@ import { cn } from "@/lib/utils";
 /**
  * Choices made in this dialog while the app runs; until then the dialog
  * starts from the Export defaults in Settings. Not "Replace": that is
- * asked afresh for every destination. The paper size is kept across
- * restarts too, see `initialPaper`.
+ * asked afresh for every destination. The paper size and the review
+ * details choice are kept across restarts too, see `initialPaper`.
  */
 const remembered: {
   format?: ExportFormat;
@@ -107,6 +109,7 @@ export function ExportDialog({
   const [logo, setLogo] = useState<string | null>(() => initialChoices().logo);
   const [accent, setAccent] = useState(() => initialChoices().accent);
   const [paper, setPaper] = useState<PaperSize>(() => initialChoices().paper);
+  const [reviewDetails, setReviewDetails] = useState(() => initialReviewDetails());
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -128,6 +131,7 @@ export function ExportDialog({
       setLogo(start.logo);
       setAccent(start.accent);
       setPaper(start.paper);
+      setReviewDetails(initialReviewDetails());
       setOutcome(null);
       setRevealError(null);
       setSkipReview(false);
@@ -177,12 +181,13 @@ export function ExportDialog({
     if (!guideId || !out || !canExport) return;
     Object.assign(remembered, { format, folder: destination.folder, logo, accent, paper });
     rememberPaper(paper);
+    rememberReviewDetails(reviewDetails);
     setBusy(true);
     setOutcome(null);
     setRevealError(null);
     const result = await runExport(
       { flush: () => editorStore.getState().flush(), api },
-      { guideId, format, out, overwrite, branding: { logo, accent }, paper },
+      { guideId, format, out, overwrite, branding: { logo, accent }, paper, reviewDetails },
     );
     setBusy(false);
     setOutcome(result);
@@ -339,6 +344,16 @@ export function ExportDialog({
                   onChange={(e) => setOverwrite(e.target.checked)}
                 />
                 Replace an earlier export there
+              </label>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={reviewDetails}
+                  disabled={busy}
+                  onChange={(e) => setReviewDetails(e.target.checked)}
+                />
+                Show the version, owner and last review date
               </label>
 
               <Field label="Branding (optional)">

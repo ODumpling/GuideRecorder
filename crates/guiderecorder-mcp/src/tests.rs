@@ -7,11 +7,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
+use guiderecorder_core::edit::EDITOR_LOCK_FILE;
 use guiderecorder_core::export::{render_step_image, RenderedImage};
 use guiderecorder_core::index::Index;
 use guiderecorder_core::library::{read_webp, write_webp, Library, PixelBuffer};
 use guiderecorder_core::model::{
-    ImageShow, Item, Rect, RedactionSuggestion, Shape, SuggestionSource,
+    AiStatus, Guide, GuideField, ImageShow, Item, NoteKind, Rect, RedactionSuggestion, Shape,
+    SuggestionSource,
 };
 use guiderecorder_core::Ulid;
 use rmcp::ServiceExt;
@@ -81,7 +83,26 @@ impl Fixture {
         Config {
             library: Library::open(&self.library).unwrap(),
             index: Some(self.index.clone()),
+            writable: false,
         }
+    }
+
+    /// As started with `--writable`.
+    fn writable(&self) -> Config {
+        Config {
+            writable: true,
+            ..self.config()
+        }
+    }
+
+    /// A guide as saved on disk.
+    fn saved(&self, id: &str) -> Guide {
+        let library = Library::open(&self.library).unwrap();
+        let handle = library
+            .find(Ulid::from_string(id).unwrap())
+            .unwrap()
+            .unwrap();
+        library.read(&handle.path).unwrap().guide
     }
 
     /// Every file in the library, and the index database itself.
@@ -156,6 +177,8 @@ struct Client {
     writer: WriteHalf<DuplexStream>,
     lines: Lines<BufReader<ReadHalf<DuplexStream>>>,
     next_id: u64,
+    /// The `initialize` result.
+    init: Value,
 }
 
 impl Client {
@@ -173,6 +196,7 @@ impl Client {
             writer,
             lines: BufReader::new(reader).lines(),
             next_id: 1,
+            init: Value::Null,
         };
         let init = client
             .request(
@@ -188,6 +212,7 @@ impl Client {
         assert_eq!(init["serverInfo"]["name"], "guiderecorder");
         assert!(init["capabilities"]["tools"].is_object());
         assert!(init["capabilities"]["resources"].is_object());
+        client.init = init;
         client
             .send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
             .await;
@@ -280,6 +305,7 @@ fn rendered(png: &[u8]) -> RenderedImage {
         height: 0,
         warnings: Vec::new(),
         hotspots: Vec::new(),
+        point: None,
     }
 }
 
@@ -419,6 +445,52 @@ async fn guides_in_folders_are_listed_and_read_with_and_without_the_index() {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+}
+
+#[tokio::test]
+async fn review_fields_are_listed_and_in_the_guide_markdown() {
+    let fx = Fixture::new();
+    let path = fx.bundle("Rotate an API key").join("guide.json");
+    let mut guide: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    guide["owner"] = "Security *team*".into();
+    guide["status"] = "needsUpdate".into();
+    guide["version"] = "2.1".into();
+    guide["lastReviewed"] = "2000-01-31".into();
+    guide["reviewIntervalMonths"] = 1.into();
+    fs::write(&path, serde_json::to_vec(&guide).unwrap()).unwrap();
+    let fx = fx.with_index();
+    for index in [Some(fx.index.clone()), None] {
+        let config = Config {
+            index,
+            ..fx.config()
+        };
+        let mut client = Client::start(config).await;
+        let all = client.ok("list_guides", json!({})).await;
+        let guides = all["structuredContent"]["guides"].as_array().unwrap();
+        let rotate = guides.iter().find(|g| g["id"] == ROTATE).unwrap();
+        assert_eq!(rotate["owner"], "Security *team*");
+        assert_eq!(rotate["status"], "needsUpdate");
+        assert_eq!(rotate["version"], "2.1");
+        assert_eq!(rotate["last_reviewed"], "2000-01-31");
+        assert_eq!(rotate["review_interval_months"], 1);
+        assert_eq!(rotate["review_due"], "2000-02-29");
+        assert_eq!(rotate["review_overdue"], true);
+        let calendar = guides.iter().find(|g| g["id"] == CALENDAR).unwrap();
+        assert_eq!(calendar["owner"], Value::Null);
+        assert_eq!(calendar["review_overdue"], false);
+
+        let md = client.ok("get_guide", json!({ "id": ROTATE })).await;
+        let md = text(&md, 0);
+        for fact in [
+            "Owner: Security \\*team\\*",
+            "Status: needsUpdate",
+            "Version: 2\\.1",
+            "Last reviewed: 2000-01-31",
+            "Review due: 2000-02-29 (overdue)",
+        ] {
+            assert!(md.contains(fact), "{fact} in {md}");
+        }
     }
 }
 
@@ -1091,6 +1163,422 @@ async fn no_call_writes_to_the_library_or_index() {
     fx.assert_sidecars_hold_no_data();
 }
 
+// ---------------------------------------------------------------------------
+// Write tools (`--writable`)
+
+const WRITE_TOOLS: [&str; 7] = [
+    "add_note",
+    "add_tags",
+    "create_guide_from_images",
+    "remove_tags",
+    "reorder_items",
+    "update_guide_fields",
+    "update_step",
+];
+
+async fn tool_names(client: &mut Client) -> Vec<String> {
+    let tools = client.request("tools/list", json!({})).await.unwrap();
+    let mut names: Vec<String> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn write_tools_only_with_writable() {
+    let fx = Fixture::new().with_index();
+    let before = fx.snapshot();
+    let mut client = Client::start(fx.config()).await;
+    let names = tool_names(&mut client).await;
+    assert!(WRITE_TOOLS.iter().all(|t| !names.iter().any(|n| n == t)));
+    assert!(text_of(&client.init["instructions"]).contains("(read-only)"));
+    // Not routed either: the call is refused and nothing changes.
+    let call = client
+        .request(
+            "tools/call",
+            json!({ "name": "add_tags", "arguments": { "guide_id": ROTATE, "tags": ["x"] } }),
+        )
+        .await;
+    assert!(match call {
+        Err(_) => true,
+        Ok(result) => result["isError"] == true,
+    });
+    assert_eq!(fx.snapshot(), before);
+
+    let mut client = Client::start(fx.writable()).await;
+    let names = tool_names(&mut client).await;
+    for tool in WRITE_TOOLS {
+        assert!(names.iter().any(|n| n == tool), "{tool} missing: {names:?}");
+    }
+    assert_eq!(names.len(), 4 + WRITE_TOOLS.len());
+    assert!(text_of(&client.init["instructions"]).contains("Editing is allowed"));
+}
+
+fn text_of(value: &Value) -> &str {
+    value.as_str().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn update_guide_fields_marks_the_fields_edited() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.writable()).await;
+    let result = client
+        .ok(
+            "update_guide_fields",
+            json!({
+                "guide_id": ROTATE,
+                "title": "Rotate an API key safely",
+                "summary": "Replace a leaked or expiring API key without downtime.",
+                "tags": ["security", "Keys, rotation"],
+            }),
+        )
+        .await;
+    let out = &result["structuredContent"];
+    assert_eq!(out["guide_id"], ROTATE);
+    assert_eq!(out["changed"], true);
+    // The summary was already that.
+    assert_eq!(out["changed_fields"], json!(["title", "tags"]));
+
+    let saved = fx.saved(ROTATE);
+    assert_eq!(saved.title, "Rotate an API key safely");
+    assert_eq!(saved.tags, ["security", "Keys", "rotation"]);
+    assert_eq!(saved.edited_fields, [GuideField::Title, GuideField::Tags]);
+    assert_eq!(saved.ai_state.status, AiStatus::Edited);
+    assert_eq!(out["updated_at"], saved.updated_at.to_rfc3339());
+    // The folder keeps its name, as when the title is edited in the app.
+    assert!(fx.bundle("Rotate an API key").is_dir());
+
+    // Reads see it at once (the stale index falls back to a scan).
+    let guide = client.ok("get_guide", json!({ "id": ROTATE })).await;
+    assert!(text(&guide, 0).starts_with("# Rotate an API key safely"));
+    let listed = client.ok("list_guides", json!({ "tag": "rotation" })).await;
+    assert_eq!(listed["structuredContent"]["guides"][0]["id"], ROTATE);
+
+    // The same values again change nothing and write nothing.
+    let before = fx.snapshot();
+    let again = client
+        .ok(
+            "update_guide_fields",
+            json!({ "guide_id": ROTATE, "title": "Rotate an API key safely" }),
+        )
+        .await;
+    assert_eq!(again["structuredContent"]["changed"], false);
+    assert_eq!(again["structuredContent"]["changed_fields"], json!([]));
+    assert_eq!(fx.snapshot(), before);
+
+    let message = client
+        .tool_error("update_guide_fields", json!({ "guide_id": ROTATE }))
+        .await;
+    assert!(message.contains("nothing to change"), "{message}");
+    let message = client
+        .tool_error(
+            "update_guide_fields",
+            json!({ "guide_id": ROTATE, "title": "  " }),
+        )
+        .await;
+    assert!(message.contains("cannot be empty"), "{message}");
+}
+
+#[tokio::test]
+async fn update_step_add_note_and_reorder() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.writable()).await;
+
+    let result = client
+        .ok(
+            "update_step",
+            json!({
+                "guide_id": ROTATE,
+                "step_id": format!("step-{ROTATE_PASSWORD_STEP}"),
+                "description": "Type your **console** password.",
+            }),
+        )
+        .await;
+    assert_eq!(result["structuredContent"]["step_id"], ROTATE_PASSWORD_STEP);
+    assert_eq!(result["structuredContent"]["changed"], true);
+    let saved = fx.saved(ROTATE);
+    let step = saved
+        .steps()
+        .find(|s| s.id.to_string() == ROTATE_PASSWORD_STEP)
+        .unwrap();
+    assert_eq!(step.description, "Type your **console** password.");
+    assert_eq!(step.ai_state.status, AiStatus::Edited);
+    // A step edit is not a guide-level edit.
+    assert!(saved.edited_fields.is_empty());
+
+    let message = client
+        .tool_error(
+            "update_step",
+            json!({ "guide_id": ROTATE, "step_id": ROTATE_NOTE, "title": "x" }),
+        )
+        .await;
+    assert!(message.contains("is a note"), "{message}");
+
+    let result = client
+        .ok(
+            "add_note",
+            json!({
+                "guide_id": ROTATE,
+                "kind": "tip",
+                "body": "Keep the old key until CI passes.",
+                "after_id": format!("step-{ROTATE_FIRST_STEP}"),
+            }),
+        )
+        .await;
+    let note = result["structuredContent"]["note_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let saved = fx.saved(ROTATE);
+    let ids: Vec<String> = saved.items.iter().map(|i| i.id().to_string()).collect();
+    assert_eq!(ids[1], ROTATE_FIRST_STEP);
+    assert_eq!(ids[2], note);
+    assert!(matches!(
+        &saved.items[2],
+        Item::Note(n) if n.kind == NoteKind::Tip && n.body == "Keep the old key until CI passes."
+    ));
+    let guide = client.ok("get_guide", json!({ "id": ROTATE })).await;
+    assert!(text(&guide, 0).contains(&format!("{{#note-{note}}}")));
+
+    let message = client
+        .tool_error(
+            "add_note",
+            json!({
+                "guide_id": ROTATE,
+                "body": "x",
+                "after_id": ROTATE_NOTE,
+                "before_id": ROTATE_NOTE,
+            }),
+        )
+        .await;
+    assert!(message.contains("not both"), "{message}");
+
+    // Reverse every item, prefixed ids and bare ones mixed.
+    let mut reversed: Vec<String> = ids.iter().rev().cloned().collect();
+    reversed[0] = format!("step-{}", reversed[0]);
+    let result = client
+        .ok(
+            "reorder_items",
+            json!({ "guide_id": ROTATE, "item_ids": reversed }),
+        )
+        .await;
+    assert_eq!(result["structuredContent"]["changed"], true);
+    let order: Vec<String> = fx
+        .saved(ROTATE)
+        .items
+        .iter()
+        .map(|i| i.id().to_string())
+        .collect();
+    assert_eq!(order, ids.iter().rev().cloned().collect::<Vec<_>>());
+
+    let message = client
+        .tool_error(
+            "reorder_items",
+            json!({ "guide_id": ROTATE, "item_ids": [ROTATE_NOTE] }),
+        )
+        .await;
+    assert!(message.contains("exactly once"), "{message}");
+}
+
+#[tokio::test]
+async fn add_and_remove_tags() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.writable()).await;
+    let result = client
+        .ok(
+            "add_tags",
+            json!({ "guide_id": CALENDAR, "tags": ["Sharing", "MACOS"] }),
+        )
+        .await;
+    let out = &result["structuredContent"];
+    assert_eq!(out["added"], json!(["Sharing"]));
+    assert!(out["tags"].as_array().unwrap().contains(&json!("Sharing")));
+    assert_eq!(fx.saved(CALENDAR).edited_fields, [GuideField::Tags]);
+
+    let result = client
+        .ok(
+            "remove_tags",
+            json!({ "guide_id": CALENDAR, "tags": ["sharing", "nope"] }),
+        )
+        .await;
+    assert_eq!(result["structuredContent"]["removed"], json!(["Sharing"]));
+    assert!(!fx.saved(CALENDAR).tags.contains(&"Sharing".to_owned()));
+
+    let before = fx.snapshot();
+    let result = client
+        .ok(
+            "remove_tags",
+            json!({ "guide_id": CALENDAR, "tags": ["nope"] }),
+        )
+        .await;
+    assert_eq!(result["structuredContent"]["changed"], false);
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[tokio::test]
+async fn writes_refuse_open_read_only_and_unknown_guides() {
+    let fx = Fixture::new();
+    // Open in the editor of a running app (this test process).
+    let lock = fx.bundle("Rotate an API key").join(EDITOR_LOCK_FILE);
+    fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+    // Saved by a newer app.
+    let path = fx.bundle("Share a calendar event").join("guide.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["schemaVersion"] = json!(guiderecorder_core::SCHEMA_VERSION + 1);
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    let fx = fx.with_index();
+    let before = fx.snapshot();
+    let mut client = Client::start(fx.writable()).await;
+
+    let message = client
+        .tool_error("add_tags", json!({ "guide_id": ROTATE, "tags": ["x"] }))
+        .await;
+    assert!(
+        message.contains("open in the GuideRecorder editor"),
+        "{message}"
+    );
+    let message = client
+        .tool_error(
+            "update_step",
+            json!({ "guide_id": ROTATE, "step_id": ROTATE_FIRST_STEP, "title": "x" }),
+        )
+        .await;
+    assert!(
+        message.contains("open in the GuideRecorder editor"),
+        "{message}"
+    );
+    let message = client
+        .tool_error("add_tags", json!({ "guide_id": CALENDAR, "tags": ["x"] }))
+        .await;
+    assert!(
+        message.contains("read-only") && message.contains("newer GuideRecorder"),
+        "{message}"
+    );
+    let message = client
+        .tool_error(
+            "add_tags",
+            json!({ "guide_id": Ulid::nil().to_string(), "tags": ["x"] }),
+        )
+        .await;
+    assert!(message.contains("no guide with id"), "{message}");
+    let message = client
+        .tool_error("add_tags", json!({ "guide_id": "nope", "tags": ["x"] }))
+        .await;
+    assert!(message.contains("not a valid guide id"), "{message}");
+    assert_eq!(fx.snapshot(), before);
+
+    // A lock left by an app that is gone does not count.
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let gone = child.id();
+    child.wait().unwrap();
+    fs::write(&lock, format!("{gone}\n")).unwrap();
+    client
+        .ok("add_tags", json!({ "guide_id": ROTATE, "tags": ["x"] }))
+        .await;
+    assert!(fx.saved(ROTATE).tags.contains(&"x".to_owned()));
+}
+
+#[tokio::test]
+async fn older_guides_are_refused_until_the_app_upgrades_them() {
+    let fx = Fixture::new();
+    let path = fx.bundle("Rotate an API key").join("guide.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["schemaVersion"] = json!(1);
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    let before = fx.snapshot();
+    let mut client = Client::start(fx.writable()).await;
+    let message = client
+        .tool_error("add_tags", json!({ "guide_id": ROTATE, "tags": ["x"] }))
+        .await;
+    assert!(
+        message.contains("read-only") && message.contains("open it once in GuideRecorder"),
+        "{message}"
+    );
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[tokio::test]
+async fn create_guide_from_images_makes_an_annotation_guide() {
+    let fx = Fixture::new().with_index();
+    let files = tempfile::tempdir().unwrap();
+    let pixels = [200u8, 10, 10, 255].repeat(6 * 4);
+    let plan = files.path().join("Ground floor.webp");
+    write_webp(&plan, &PixelBuffer::rgba(6, 4, &pixels)).unwrap();
+    let roof = files.path().join("Roof.webp");
+    write_webp(&roof, &PixelBuffer::rgba(6, 4, &pixels)).unwrap();
+    let mut client = Client::start(fx.writable()).await;
+
+    let result = client
+        .ok(
+            "create_guide_from_images",
+            json!({ "paths": [plan, roof], "title": "Building" }),
+        )
+        .await;
+    let out = &result["structuredContent"];
+    assert_eq!(out["title"], "Building");
+    assert_eq!(out["step_count"], 2);
+    assert_eq!(out["folder"], "");
+    let id = out["guide_id"].as_str().unwrap().to_owned();
+    assert!(fx.bundle("Building").is_dir());
+
+    let guide = client.ok("get_guide", json!({ "id": id })).await;
+    let md = text(&guide, 0);
+    assert!(md.contains("Kind: annotation guide"), "{md}");
+    assert!(md.contains("### 1. Ground floor {#step-"), "{md}");
+    assert!(md.contains("### 2. Roof {#step-"), "{md}");
+    let step = out["step_ids"][0].as_str().unwrap();
+    let page = client
+        .ok(
+            "get_step",
+            json!({ "guide_id": id, "step_id": step, "image": "full" }),
+        )
+        .await;
+    assert_eq!(images(&page).len(), 1);
+    let all = client.ok("list_guides", json!({})).await;
+    assert_eq!(
+        all["structuredContent"]["guides"].as_array().unwrap().len(),
+        FIXTURE_COUNT + 1
+    );
+
+    // Bad input leaves no guide.
+    let before = fx.snapshot();
+    let message = client
+        .tool_error(
+            "create_guide_from_images",
+            json!({ "paths": ["relative.png"] }),
+        )
+        .await;
+    assert!(message.contains("not an absolute path"), "{message}");
+    let pdf = files.path().join("Manual.pdf");
+    fs::write(&pdf, b"%PDF-1.4").unwrap();
+    let message = client
+        .tool_error("create_guide_from_images", json!({ "paths": [plan, pdf] }))
+        .await;
+    assert!(
+        message.contains("Manual.pdf is not a PNG, JPEG or WebP image")
+            && message.contains("GuideRecorder app"),
+        "{message}"
+    );
+    let broken = files.path().join("broken.png");
+    fs::write(&broken, b"not a png").unwrap();
+    let message = client
+        .tool_error(
+            "create_guide_from_images",
+            json!({ "paths": [plan, broken] }),
+        )
+        .await;
+    assert!(message.contains("broken.png: not a readable"), "{message}");
+    let message = client
+        .tool_error("create_guide_from_images", json!({ "paths": [] }))
+        .await;
+    assert!(message.contains("no files"), "{message}");
+    assert_eq!(fx.snapshot(), before);
+}
+
 #[test]
 fn parses_arguments() {
     let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
@@ -1098,9 +1586,15 @@ fn parses_arguments() {
         parse_args(args(&["--library", "/lib", "--index=/x.sqlite"]), None).unwrap(),
         Command::Serve {
             library: "/lib".into(),
-            index: Some("/x.sqlite".into())
+            index: Some("/x.sqlite".into()),
+            writable: false,
         }
     );
+    match parse_args(args(&["--writable", "--library", "/lib"]), None).unwrap() {
+        Command::Serve { writable, .. } => assert!(writable),
+        other => panic!("{other:?}"),
+    }
+    assert!(parse_args(args(&["--writable=yes"]), Some("/env".into())).is_err());
     match parse_args(args(&[]), Some("/env".into())).unwrap() {
         Command::Serve { library, .. } => assert_eq!(library, PathBuf::from("/env")),
         other => panic!("{other:?}"),

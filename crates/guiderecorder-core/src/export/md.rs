@@ -62,7 +62,7 @@ use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use super::ast::{plain_text, Block, Inline};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderStep};
 use crate::library::{write_atomic, Durability, GuideHandle, LibraryError};
-use crate::model::{GuideKind, NoteKind};
+use crate::model::{GuideKind, NoteKind, ReviewInfo};
 
 /// File name of the Markdown document inside the output folder.
 pub const GUIDE_FILE: &str = "guide.md";
@@ -83,6 +83,9 @@ pub struct MdOptions {
     pub labels: Option<Labels>,
     /// Logo under the title; off by default. The accent is not used.
     pub branding: CheckedBranding,
+    /// Show the version, owner and last review day under the summary (see
+    /// [`Labels::review_details`]); off by default.
+    pub review_details: bool,
 }
 
 /// Errors from [`export`] (and the HTML writer's file output).
@@ -113,6 +116,10 @@ pub struct Labels {
     pub tip: String,
     pub warning: String,
     pub note: String,
+    /// The review details line (see [`Labels::review_details`]).
+    pub version: String,
+    pub owner: String,
+    pub last_reviewed: String,
 }
 
 impl Labels {
@@ -124,17 +131,31 @@ impl Labels {
             .next()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let [prerequisites, step, page, tip, warning, note] = match primary.as_str() {
-            "de" => [
-                "Voraussetzungen",
-                "Schritt",
-                "Seite",
-                "Tipp",
-                "Warnung",
-                "Hinweis",
-            ],
-            _ => ["Prerequisites", "Step", "Page", "Tip", "Warning", "Note"],
-        };
+        let [prerequisites, step, page, tip, warning, note, version, owner, last_reviewed] =
+            match primary.as_str() {
+                "de" => [
+                    "Voraussetzungen",
+                    "Schritt",
+                    "Seite",
+                    "Tipp",
+                    "Warnung",
+                    "Hinweis",
+                    "Version",
+                    "Verantwortlich",
+                    "Zuletzt geprüft",
+                ],
+                _ => [
+                    "Prerequisites",
+                    "Step",
+                    "Page",
+                    "Tip",
+                    "Warning",
+                    "Note",
+                    "Version",
+                    "Owner",
+                    "Last reviewed",
+                ],
+            };
         Self {
             prerequisites: prerequisites.into(),
             step: step.into(),
@@ -142,7 +163,35 @@ impl Labels {
             tip: tip.into(),
             warning: warning.into(),
             note: note.into(),
+            version: version.into(),
+            owner: owner.into(),
+            last_reviewed: last_reviewed.into(),
         }
+    }
+
+    /// One plain-text line with the guide's version, owner and last review
+    /// day, those that are set: `Version: 1.2 · Owner: IT · Last reviewed:
+    /// 2026-10-19`. `None` when none is. Writers show it under the summary
+    /// when their `review_details` option is on.
+    pub fn review_details(&self, review: &ReviewInfo) -> Option<String> {
+        let text = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|v| !v.is_empty())
+        };
+        let parts: Vec<String> = [
+            (&self.version, text(&review.version)),
+            (&self.owner, text(&review.owner)),
+            (
+                &self.last_reviewed,
+                review.last_reviewed.map(|d| d.to_string()),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(label, value)| Some(format!("{label}: {}", value?)))
+        .collect();
+        (!parts.is_empty()).then(|| parts.join(" · "))
     }
 
     /// What a step is called in a guide of `kind`: "Step", or "Page" in an
@@ -389,7 +438,11 @@ pub fn export(
         write_atomic(&logo_path, png, Durability::RenameOnly)?;
     }
 
-    let markdown = render_with_logo(guide, &names, &labels, logo.is_some());
+    let details = opts
+        .review_details
+        .then(|| labels.review_details(&guide.review))
+        .flatten();
+    let markdown = render_document(guide, &names, &labels, logo.is_some(), details.as_deref());
     let doc = out_dir.join(GUIDE_FILE);
     write_atomic(&doc, markdown.as_bytes(), Durability::RenameOnly)?;
     report.files.push(doc);
@@ -418,6 +471,18 @@ pub fn render_with_logo(
     labels: &Labels,
     logo: bool,
 ) -> String {
+    render_document(guide, image_names, labels, logo, None)
+}
+
+/// [`render_with_logo`], plus a `details` line (the review details) under
+/// the summary.
+fn render_document(
+    guide: &RenderGuide,
+    image_names: &[String],
+    labels: &Labels,
+    logo: bool,
+    details: Option<&str>,
+) -> String {
     let mut out = Vec::new();
     let title = escape_line(&single_line(&guide.title));
     if !title.is_empty() {
@@ -429,6 +494,9 @@ pub fn render_with_logo(
     let summary = single_line(&guide.summary);
     if !summary.is_empty() {
         push_block(&mut out, &escape_line(&summary));
+    }
+    if let Some(details) = details {
+        push_block(&mut out, &format!("*{}*", escape_line(details)));
     }
     if !guide.intro.is_empty() {
         push_block(&mut out, &blocks(&guide.intro));

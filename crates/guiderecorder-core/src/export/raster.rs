@@ -33,6 +33,15 @@
 //! the output image, so a format that can (HTML) overlays its own
 //! interactive markers on an image rendered without them.
 //!
+//! # Click point
+//!
+//! [`RenderedImage::point`] places `step.point` on the output image the
+//! same way, for a writer that marks the click target itself (the
+//! interactive HTML walkthrough). A crop with no annotations needs no
+//! origin to be drawn, so its origin is only looked up (stored rect, else
+//! [`locate_crop`]) when [`ImageOptions::locate_point`] asks for it; if it
+//! stays unknown, the point is left unplaced and the crop is still shown.
+//!
 //! # Order
 //!
 //! Annotations are drawn first and blur/pixelate is burned in after them,
@@ -75,6 +84,10 @@ pub struct ImageOptions {
     /// review in between (the MCP server, the CLI): text found here as
     /// sensitive is never sent.
     pub burn_on_device_suggestions: bool,
+    /// Look up a crop's origin even when nothing is drawn on it, so
+    /// [`RenderedImage::point`] can be placed (off by default; it reads the
+    /// full screenshot).
+    pub locate_point: bool,
 }
 
 impl Default for ImageOptions {
@@ -85,6 +98,7 @@ impl Default for ImageOptions {
             placeholder_size: (800, 450),
             hotspot_markers: true,
             burn_on_device_suggestions: false,
+            locate_point: false,
         }
     }
 }
@@ -99,6 +113,10 @@ pub struct RenderedImage {
     /// Every hotspot of the step, in number order, whether or not it is in
     /// view (a placeholder has them all, unplaced).
     pub hotspots: Vec<PlacedHotspot>,
+    /// `step.point` on the output image, as fractions (0 to 1) of its
+    /// width and height. `None` if the step has none, it lies outside the
+    /// view, the view's origin is unknown, or the image is a placeholder.
+    pub point: Option<Point>,
 }
 
 /// A hotspot of a rendered step image.
@@ -193,9 +211,16 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
         let hotspots = place_hotspots(&step.annotations, None);
         return placeholder(opts, warnings, hotspots);
     };
-    let (source, origin) = apply_crop(source, origin, step, &mut warnings);
+    // An unknown origin only happens when nothing is drawn (no crop
+    // annotation either), so drawing at the top-left is right.
+    let known = origin.is_some();
+    let (source, origin) = apply_crop(source, origin.unwrap_or(ORIGIN), step, &mut warnings);
     // Fractions of the view, which scaling keeps.
     let hotspots = place_hotspots(&step.annotations, Some((origin, source.dimensions())));
+    let point = step
+        .point
+        .filter(|_| known)
+        .and_then(|p| fraction_point(p, origin, source.dimensions()));
 
     // One pixmap from here on; the source buffer is reused, not copied.
     let mut pixmap = into_pixmap(source);
@@ -227,7 +252,18 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
         let rgba = from_pixmap(pixmap);
         pixmap = into_pixmap(imageops::resize(&rgba, max, height, FilterType::Lanczos3));
     }
-    encode(&pixmap, warnings, hotspots)
+    let mut image = encode(&pixmap, warnings, hotspots);
+    image.point = point;
+    image
+}
+
+/// `p` (full-screenshot pixels) as fractions of the view at `origin` with
+/// size `(w, h)`; `None` if it is outside the view or not finite.
+fn fraction_point(p: Point, origin: Point, (w, h): (u32, u32)) -> Option<Point> {
+    let (w, h) = (f64::from(w), f64::from(h));
+    let (x, y) = (p.x - origin.x, p.y - origin.y);
+    let inside = x.is_finite() && y.is_finite() && (0.0..=w).contains(&x) && (0.0..=h).contains(&y);
+    (inside && w > 0.0 && h > 0.0).then(|| Point { x: x / w, y: y / h })
 }
 
 /// The step's hotspots, numbered, with their rectangles as fractions of
@@ -284,28 +320,36 @@ fn fraction_rect(rect: &Rect, origin: Point, (w, h): (u32, u32)) -> Option<Rect>
     })
 }
 
-/// The image to show and its origin in full-screenshot pixels.
+/// The image to show and its origin in full-screenshot pixels; `None` for
+/// a crop with nothing drawn on it whose origin was not looked up or not
+/// found.
 fn load_view(
     handle: &GuideHandle,
     step: &Step,
     opts: &ImageOptions,
     warnings: &mut Vec<RenderWarning>,
-) -> Option<(RgbaImage, Point)> {
+) -> Option<(RgbaImage, Option<Point>)> {
     let show = opts.show.unwrap_or(step.image.show);
     if let (ImageShow::Crop, Some(crop_path)) = (show, &step.image.crop) {
         match read(handle, crop_path, warnings) {
-            Some(crop) if !needs_origin(step) => return Some((crop, ORIGIN)),
+            Some(crop) if !needs_origin(step) => {
+                let origin = opts
+                    .locate_point
+                    .then(|| quiet_crop_origin(handle, step, &crop))
+                    .flatten();
+                return Some((crop, origin));
+            }
             Some(crop) => {
                 let full = handle.read_image(&step.image.full);
                 if let Some(rect) = step.image.crop_rect {
                     match (stored_origin(rect, &crop), &full) {
                         // Verified against the full screenshot.
                         (Some((x, y)), Ok(full)) if crop_matches_at(full, &crop, x, y) => {
-                            return Some((crop, point(x, y)));
+                            return Some((crop, Some(point(x, y))));
                         }
                         // Nothing to verify against: trust the stored rect,
                         // which capture cut the crop with.
-                        (Some((x, y)), Err(_)) => return Some((crop, point(x, y))),
+                        (Some((x, y)), Err(_)) => return Some((crop, Some(point(x, y)))),
                         _ => warnings.push(RenderWarning::CropRectMismatch),
                     }
                 }
@@ -319,17 +363,32 @@ fn load_view(
                     }
                 };
                 if let Some(origin) = locate_crop(&full, &crop, step.point) {
-                    return Some((crop, origin));
+                    return Some((crop, Some(origin)));
                 }
                 warnings.push(RenderWarning::CropOffsetUnknown);
-                return Some((full, ORIGIN));
+                return Some((full, Some(ORIGIN)));
             }
             // Fall back to the full screenshot (warning already recorded).
             None => {}
         }
     }
     let full = read(handle, &step.image.full, warnings)?;
-    Some((full, ORIGIN))
+    Some((full, Some(ORIGIN)))
+}
+
+/// The origin of a crop with nothing drawn on it, found as
+/// [`load_view`] finds it for one with annotations, but without warnings:
+/// the stored rect if it checks out (or there is nothing to check it
+/// against), else [`locate_crop`].
+fn quiet_crop_origin(handle: &GuideHandle, step: &Step, crop: &RgbaImage) -> Option<Point> {
+    let full = handle.read_image(&step.image.full).ok();
+    if let Some((x, y)) = step.image.crop_rect.and_then(|r| stored_origin(r, crop)) {
+        match &full {
+            Some(full) if !crop_matches_at(full, crop, x, y) => {}
+            _ => return Some(point(x, y)),
+        }
+    }
+    locate_crop(full.as_ref()?, crop, step.point)
 }
 
 const ORIGIN: Point = Point { x: 0.0, y: 0.0 };
@@ -553,6 +612,7 @@ fn encode(
         height: pixmap.height(),
         warnings,
         hotspots,
+        point: None,
     }
 }
 
