@@ -1,8 +1,9 @@
 # GuideRecorder Web
 
 The web app for Pro and Enterprise workspaces: accounts, workspaces and
-roles, billing, and image storage for synced guides. Later phases add the
-cloud library, sharing, the web editor, approvals and audit.
+roles, billing, image storage for synced guides, and for Enterprise SSO,
+SCIM, an admin console and data retention. Later phases add the cloud
+library, sharing, the web editor, approvals and audit.
 
 TanStack Start (Vite, file routes in `src/routes`, server functions in
 `src/server`), Better Auth (email/password, magic link, Google, Microsoft,
@@ -20,7 +21,10 @@ pnpm dev                      # http://localhost:3000
 ```
 
 Production: `pnpm build`, then `node .output/server/index.mjs` with the
-environment set (`.env.local` is only read in development).
+environment set (`.env.local` is only read in development), or the Docker
+image and `compose.prod.yaml`. See [deployment](../docs/web-deployment.md),
+[security](../docs/web-security.md), [Enterprise](../docs/web-enterprise.md)
+and [SOC 2](../docs/soc2.md).
 
 Without Stripe keys billing is hidden; set a workspace's plan by hand with
 `insert into subscription (id, plan, reference_id, status) values ('dev', 'pro', '<workspace id>', 'active')`.
@@ -45,6 +49,15 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 - The desktop app signs in with device authorization: it shows a code, the
   user approves it at `/device`, and the app calls the API with the session
   token as a bearer token.
+- Enterprise (`sso` entitlement): OIDC and SAML single sign-on per workspace
+  with DNS domain verification and domain capture (`src/lib/sso.ts`), SCIM
+  provisioning (`src/lib/scim.ts`), and a policy for sharing, required SSO
+  and retention (`src/lib/policy.ts`), managed at `/admin` by owners and
+  admins (`workspace: manage`). `src/lib/enterprise.ts` ties them to plans
+  and sessions.
+- An hourly job deletes what's past its retention (`src/lib/retention.ts`).
+- Security events (admin changes, SSO, SCIM, rate limits) are logged as JSON
+  (`src/lib/security-events.ts`); the audit log plugs in there.
 
 ## API
 
@@ -60,8 +73,13 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 | `GET` / `DELETE` | `/api/workspaces/:id/sync/guides/:guideId` | The head revision / move to the trash |
 | `POST` | `/api/workspaces/:id/sync/guides/:guideId/restore` | Take out of the trash |
 
-API calls take the session cookie or `Authorization: Bearer <token>`.
 | `GET` | `/api/health` | Database check |
+| `POST` | `/api/jobs/retention` | Runs the retention job; `Authorization: Bearer $JOBS_TOKEN` |
+| `*` | `/api/auth/scim/v2/*` | SCIM 2.0 `Users` and `Groups`, with a workspace's SCIM token |
+| `*` | `/api/auth/sso/*` | SSO callbacks (`callback/:providerId`, `saml2/sp/acs/:providerId`) and SP metadata |
+
+API calls take the session cookie or `Authorization: Bearer <token>`. The
+workspace API is rate limited per user (429 with `Retry-After`).
 
 ## Tests
 

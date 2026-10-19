@@ -1,0 +1,103 @@
+# A single-host production deployment: the app, Postgres, migrations, the
+# hourly retention job and nightly database backups. Object storage is S3 or
+# R2 (not run here). See docs/web-deployment.md.
+#
+#   cp .env.example .env.production   # fill in, see the deployment doc
+#   docker compose -f web/compose.prod.yaml --env-file web/.env.production up -d --build
+#
+# Put a TLS-terminating proxy (Caddy, nginx, a load balancer) in front of
+# `app` and set TRUSTED_PROXIES to its address.
+name: guiderecorder-prod
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://guiderecorder:${POSTGRES_PASSWORD:?}@postgres:5432/guiderecorder
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL:?}
+  S3_ENDPOINT: ${S3_ENDPOINT:?}
+  S3_REGION: ${S3_REGION:-auto}
+  S3_BUCKET: ${S3_BUCKET:?}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?}
+  S3_SSE: ${S3_SSE:-}
+  S3_SSE_KMS_KEY_ID: ${S3_SSE_KMS_KEY_ID:-}
+  SCIM_TOKEN_SECRET: ${SCIM_TOKEN_SECRET:-}
+  JOBS_TOKEN: ${JOBS_TOKEN:?}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+  MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+  STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  EMAIL_FROM: ${EMAIL_FROM:-GuideRecorder <no-reply@guiderecorder.app>}
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: guiderecorder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: guiderecorder
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guiderecorder"]
+      interval: 10s
+      retries: 5
+
+  # Applies migrations, then exits; the app waits for it.
+  migrate:
+    build: { context: .., dockerfile: web/Dockerfile, target: build }
+    environment: *app-env
+    command: ["pnpm", "-C", "web", "db:migrate"]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  app:
+    build: { context: .., dockerfile: web/Dockerfile }
+    image: guiderecorder-web
+    restart: unless-stopped
+    environment: *app-env
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    logging: { driver: json-file, options: { max-size: 50m, max-file: "5" } }
+
+  # Hourly retention: trash, old revisions, orphaned images, expired
+  # sessions (src/lib/retention.ts). Runs as an API call so it uses the
+  # app's code and config. A server-side export worker would go here too.
+  jobs:
+    image: alpine:3
+    restart: unless-stopped
+    environment: { JOBS_TOKEN: "${JOBS_TOKEN:?}" }
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        apk add --no-cache curl >/dev/null &&
+        while true; do
+          curl -fsS -X POST -H "authorization: Bearer $$JOBS_TOKEN" http://app:3000/api/jobs/retention || echo "retention failed";
+          sleep 3600;
+        done
+    depends_on: [app]
+
+  # Nightly pg_dump, keeping 7 daily, 4 weekly and 6 monthly dumps. Copy
+  # ./backups off the host (e.g. to a second bucket) as well.
+  backup:
+    image: prodrigestivill/postgres-backup-local:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: guiderecorder
+      POSTGRES_USER: guiderecorder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      HEALTHCHECK_PORT: 8080
+    volumes: [./backups:/backups]
+    depends_on: { postgres: { condition: service_healthy } }
+
+volumes:
+  postgres:
