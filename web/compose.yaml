@@ -1,5 +1,8 @@
 # Local services for the web app: `docker compose up -d`, then
 # `pnpm db:migrate` and `pnpm dev`. Matches .env.example.
+# One fixed name so every worktree shares the same services and ports.
+name: guiderecorder-web
+
 services:
   postgres:
     image: postgres:17
