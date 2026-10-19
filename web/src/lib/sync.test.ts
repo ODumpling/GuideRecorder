@@ -59,6 +59,11 @@ describe("push", () => {
     expect((await push(db, "org", grace, request(retitled("Grace's"), null), "web")).status).toBe(409);
   });
 
+  it("adds no revision when nothing changed", async () => {
+    const first = await pushed(ada, fixture, null);
+    expect((await pushed(ada, fixture, first.id)).id).toBe(first.id);
+  });
+
   it("accepts a retried push that already landed", async () => {
     const first = await pushed(ada, fixture, null);
     const second = await pushed(ada, retitled("Again"), first.id);

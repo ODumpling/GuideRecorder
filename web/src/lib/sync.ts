@@ -61,7 +61,9 @@ export async function push(
 ): Promise<PushResult> {
   const parsed = guideSchema.safeParse(request.guide);
   if (!parsed.success) return { status: 400, error: "The guide isn't valid.", issues: parsed.error.issues };
-  const content = parsed.data;
+  // Stored as sent, without the defaults parsing fills in, so clients get
+  // back exactly what they pushed.
+  const content = request.guide as unknown as Guide;
   if (content.id !== request.guideId) return { status: 400, error: "guideId doesn't match the guide's id." };
 
   const paths = imagePaths(content);
@@ -96,11 +98,13 @@ export async function push(
       return { status: 410, error: "The guide is in the trash.", ...trashDates(row.deletedAt) } as const;
     }
 
-    if (exists && request.baseRevision !== row.headRevisionId) {
+    if (exists) {
       const [head] = await revisions(tx, [row.headRevisionId!]);
-      // A retried push that already landed: same content on the head.
+      // Nothing new (or a retried push that already landed): the head as is.
       if (head && equal(head.guide, content) && equal(head.assets, request.assets)) return { status: 200, revision: head } as const;
-      return { status: 409, error: "The guide changed on the server. Merge and push again.", head: head! } as const;
+      if (request.baseRevision !== row.headRevisionId) {
+        return { status: 409, error: "The guide changed on the server. Merge and push again.", head: head! } as const;
+      }
     }
 
     const id = crypto.randomUUID();
