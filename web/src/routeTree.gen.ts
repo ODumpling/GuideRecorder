@@ -18,6 +18,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as GuidesGuideIdEditRouteImport } from './routes/guides.$guideId_.edit'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
 import { Route as ApiWorkspacesWorkspaceIdAssetsUploadsRouteImport } from './routes/api/workspaces/$workspaceId/assets/uploads'
@@ -70,6 +71,11 @@ const InvitationsIdRoute = InvitationsIdRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidesGuideIdEditRoute = GuidesGuideIdEditRouteImport.update({
+  id: '/guides/$guideId_/edit',
+  path: '/guides/$guideId/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiWorkspacesWorkspaceIdAssetsSha256Route =
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -150,6 +157,7 @@ export interface FileRoutesByTo {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/guides/$guideId_/edit': typeof GuidesGuideIdEditRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/guides/$guideId/edit'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/guides/$guideId/edit'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -229,6 +240,7 @@ export interface FileRouteTypes {
     | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
+    | '/guides/$guideId_/edit'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
@@ -249,6 +261,7 @@ export interface RootRouteChildren {
   GuidesGuideIdRoute: typeof GuidesGuideIdRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  GuidesGuideIdEditRoute: typeof GuidesGuideIdEditRoute
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   ApiWorkspacesWorkspaceIdAssetsUploadsRoute: typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
@@ -324,6 +337,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/guides/$guideId_/edit': {
+      id: '/guides/$guideId_/edit'
+      path: '/guides/$guideId/edit'
+      fullPath: '/guides/$guideId/edit'
+      preLoaderRoute: typeof GuidesGuideIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/workspaces/$workspaceId/assets/$sha256': {
       id: '/api/workspaces/$workspaceId/assets/$sha256'
       path: '/api/workspaces/$workspaceId/assets/$sha256'
@@ -393,6 +413,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuidesGuideIdRoute: GuidesGuideIdRoute,
   InvitationsIdRoute: InvitationsIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  GuidesGuideIdEditRoute: GuidesGuideIdEditRoute,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
     ApiWorkspacesWorkspaceIdAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsCommitRoute:

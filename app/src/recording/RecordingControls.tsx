@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertDialog } from "radix-ui";
 import { Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
 import { NewGuideButton } from "@/components/NewGuideDialog";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";

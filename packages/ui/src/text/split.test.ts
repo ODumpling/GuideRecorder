@@ -1,8 +1,8 @@
 import { getSchema } from "@tiptap/core";
 import { describe, expect, it } from "vitest";
-import { textExtensions } from "@/text/extensions";
-import { parseMarkdown } from "@/text/markdown";
-import { splitMarkdown } from "@/text/split";
+import { textExtensions } from "./extensions.ts";
+import { parseMarkdown } from "./markdown.ts";
+import { splitMarkdown } from "./split.ts";
 
 const schema = getSchema(textExtensions());
 const doc = (markdown: string) => schema.nodeFromJSON(parseMarkdown(markdown));

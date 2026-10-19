@@ -1,6 +1,6 @@
-import { colorOr } from "@/annotations/color";
-import { DEFAULT_HOTSPOT_COLOR } from "@/annotations/geometry";
-import type { AnnotationStyle, HotspotGeometry } from "@/lib/types";
+import { colorOr } from "@guiderecorder/ui/color";
+import { DEFAULT_HOTSPOT_COLOR } from "@guiderecorder/ui/geometry";
+import type { AnnotationStyle, HotspotGeometry } from "@guiderecorder/guide-schema";
 
 /** The popover's width at most, in CSS pixels; it is kept that far from the right edge. */
 export const POPOVER_WIDTH = 288;

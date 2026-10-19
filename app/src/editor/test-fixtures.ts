@@ -1,4 +1,4 @@
-import type { Guide, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 
 export function step(id: string, title = `Step ${id}`): Step {
   return {

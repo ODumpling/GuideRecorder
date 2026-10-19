@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { RotateCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { Row, Section, Select, Toggle } from "@/components/settings/controls";
 import { timeAgo } from "@/editor/library";
 import { syncStore, useSync } from "@/sync/sync";

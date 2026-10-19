@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { aiStore } from "@/ai/ai";
 import { useAiBlocked } from "@/ai/WriteWithAi";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 
 /** The most a custom rewrite instruction may be, after trimming (as `ai_rewrite_step` checks). */
 export const MAX_INSTRUCTION = 500;

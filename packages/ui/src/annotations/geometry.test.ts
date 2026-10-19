@@ -22,8 +22,8 @@ import {
   resizeRect,
   sizesMatch,
   strokeWidth,
-} from "@/annotations/geometry";
-import type { Annotation, StepImage } from "@/lib/types";
+} from "./geometry.ts";
+import type { Annotation, StepImage } from "@guiderecorder/guide-schema";
 
 const crop: StepImage = {
   full: "steps/A.webp",

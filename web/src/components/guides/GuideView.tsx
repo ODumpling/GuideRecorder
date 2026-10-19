@@ -68,9 +68,13 @@ export function GuideView({ workspaceId, revision, canEdit }: Props) {
               </Button>
             </span>
           ) : (
-            <Button variant="secondary" onClick={() => setDraft(structuredClone(revision.guide))}>
+            <Link
+              to="/guides/$guideId/edit"
+              params={{ guideId: revision.guideId }}
+              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted"
+            >
               Edit
-            </Button>
+            </Link>
           )
         ) : null}
       </header>

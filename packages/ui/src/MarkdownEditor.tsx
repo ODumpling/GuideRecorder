@@ -1,12 +1,12 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { Bold, Code, Italic, Link2, Link2Off, List, ListOrdered } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { textExtensions } from "@/text/extensions";
-import { linkFromInput, parseMarkdown, serializeMarkdown } from "@/text/markdown";
-import { splitMarkdown } from "@/text/split";
-import { cn } from "@/lib/utils";
+import { Button } from "./button.tsx";
+import { Input } from "./input.tsx";
+import { textExtensions } from "./text/extensions.ts";
+import { linkFromInput, parseMarkdown, serializeMarkdown } from "./text/markdown.ts";
+import { splitMarkdown } from "./text/split.ts";
+import { cn } from "./utils.ts";
 
 /** What the editor offers its parent. */
 export interface MarkdownEditorHandle {

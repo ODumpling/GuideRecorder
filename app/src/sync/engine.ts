@@ -15,8 +15,7 @@ import {
   type Revision,
   type Side,
 } from "@guiderecorder/sync";
-import type { Guide as SchemaGuide } from "@guiderecorder/guide-schema";
-import type { Guide } from "@/lib/types";
+import type { Guide } from "@guiderecorder/guide-schema";
 
 export interface ApiResponse<T = unknown> {
   status: number;
@@ -115,9 +114,6 @@ function content(guide: Guide): Omit<Guide, "updatedAt"> {
 export function changedLocally(local: Guide, entry: GuideSync | undefined): boolean {
   return !entry?.base || !equal(content(local), content(entry.base));
 }
-
-const asSchema = (guide: Guide) => guide as unknown as SchemaGuide;
-const fromSchema = (guide: SchemaGuide) => guide as unknown as Guide;
 
 function errorKind(error: unknown): string | undefined {
   return error && typeof error === "object" && "kind" in error ? String((error as { kind: unknown }).kind) : undefined;
@@ -239,7 +235,7 @@ async function pull(ctx: Ctx, revision: Revision) {
   const local = await backend.readGuide(id);
   if (local?.readOnly) return;
   if (!local || !changedLocally(local.guide, entry)) {
-    await accept(ctx, revision, fromSchema(revision.guide), revision.assets);
+    await accept(ctx, revision, revision.guide, revision.assets);
     return;
   }
   await mergeIn(ctx, id, local.guide, revision);
@@ -251,12 +247,12 @@ async function pull(ctx: Ctx, revision: Revision) {
  */
 async function mergeIn(ctx: Ctx, id: string, local: Guide, head: Revision): Promise<boolean> {
   const entry = ctx.state.guides[id] ?? newEntry();
-  const merged = mergeGuides(entry.base && asSchema(entry.base), asSchema(local), head.guide);
+  const merged = mergeGuides(entry.base && entry.base, local, head.guide);
   if (merged.conflicts.length) {
     ctx.state.guides[id] = { ...entry, status: "conflict", head, conflicts: merged.conflicts, error: undefined };
     return false;
   }
-  await writeMerged(ctx, id, head, fromSchema(merged.guide));
+  await writeMerged(ctx, id, head, merged.guide);
   return true;
 }
 
@@ -270,7 +266,7 @@ async function writeMerged(ctx: Ctx, id: string, head: Revision, merged: Guide) 
   ctx.state.guides[id] = {
     ...entry,
     revisionId: head.id,
-    base: fromSchema(head.guide),
+    base: head.guide,
     status: "pending",
     error: undefined,
     head: undefined,
@@ -370,12 +366,12 @@ export async function resolveConflict(backend: SyncBackend, initial: SyncState, 
     if (!local) return;
     if (resolution === "both") {
       await backend.duplicateGuide(id, local.path, `${local.guide.title} (conflicted copy)`);
-      await accept(ctx, head, fromSchema(head.guide), head.assets);
+      await accept(ctx, head, head.guide, head.assets);
       return;
     }
     const prefer: Side = resolution === "mine" ? "ours" : "theirs";
-    const merged = mergeGuides(entry.base && asSchema(entry.base), asSchema(local.guide), head.guide, prefer);
-    await writeMerged(ctx, id, head, fromSchema(merged.guide));
+    const merged = mergeGuides(entry.base && entry.base, local.guide, head.guide, prefer);
+    await writeMerged(ctx, id, head, merged.guide);
     await push(ctx, id);
   });
   return state;

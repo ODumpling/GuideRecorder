@@ -16,15 +16,15 @@ import {
 import { aiStore, useAi } from "@/ai/ai";
 import { BUSY_HINT } from "@/ai/controller";
 import { StepStatusBadge, useAiBlocked } from "@/ai/WriteWithAi";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { deleteSelected } from "@/editor/actions";
-import { Input } from "@/components/ui/input";
+import { Input } from "@guiderecorder/ui/input";
 import { useStepThumbnail } from "@/components/useStepThumbnail";
 import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
 import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
-import type { Item, Step } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { markdownToPlainText } from "@/text/markdown";
+import type { Item, Step } from "@guiderecorder/guide-schema";
+import { cn } from "@guiderecorder/ui/utils";
+import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 
 // Plain-text labels by Markdown source. The outline re-renders on every
 // keystroke, but only the edited item's text changes.

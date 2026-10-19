@@ -1,8 +1,9 @@
 import { useStepThumbnail } from "@/components/useStepThumbnail";
 import { isAccent, isFolderFormat, isMotionFormat } from "@/export/export";
-import type { ExportFormat, Guide, MotionAspect, PaperSize, Step } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { markdownToPlainText } from "@/text/markdown";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
+import type { ExportFormat, MotionAspect, PaperSize } from "@/lib/types";
+import { cn } from "@guiderecorder/ui/utils";
+import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 
 /** Steps shown on the preview page. */
 const PREVIEW_STEPS = 3;

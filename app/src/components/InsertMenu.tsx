@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { DropdownMenu } from "radix-ui";
 import { FilePlus2, Heading, ImagePlus, Info, Lightbulb, Plus, TriangleAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { IMAGE_EXTENSIONS } from "@/editor/images";

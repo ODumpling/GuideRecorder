@@ -3,32 +3,8 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type {
-  AiFinishedEvent,
-  AiGuideEvent,
-  AiRewriteResult,
-  AiStepEvent,
-  CaptureArea,
-  CaptureTargetArg,
-  CaptureWindow,
-  ExportBranding,
-  ExportResult,
-  Guide,
-  HotkeyErrors,
-  GuideListItem,
-  OpenedGuide,
-  Rect,
-  RecordingSaved,
-  RecordingSnapshot,
-  RecordingStatus,
-  RedactionSuggestion,
-  RewriteStyleArg,
-  Settings,
-  StampedStatus,
-  Step,
-  StepImage,
-  UpdateStatus,
-} from "../src/lib/types";
+import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */

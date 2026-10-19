@@ -11,7 +11,7 @@ import Text from "@tiptap/extension-text";
 import { Placeholder } from "@tiptap/extensions";
 import { Fragment, type Node as PMNode, Slice } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
-import { linkFromInput } from "@/text/markdown";
+import { linkFromInput } from "./markdown.ts";
 
 export interface TextExtensionOptions {
   /** One paragraph, no line breaks or lists (titles). */

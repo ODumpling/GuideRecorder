@@ -11,8 +11,8 @@ import {
   X,
 } from "lucide-react";
 import { ExportPreview } from "@/components/ExportPreview";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   ASPECTS,
@@ -45,7 +45,7 @@ import {
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
 import type { ExportFormat, MotionOptions, PaperSize } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /**
  * Choices made in this dialog while the app runs; until then the dialog
