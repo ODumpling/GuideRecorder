@@ -8,29 +8,34 @@ import {
   baseName,
   exportName,
   FORMATS,
+  initialPaper,
   isAccent,
   isFolderFormat,
   outPath,
+  PAPERS,
+  rememberPaper,
   runExport,
   warningLines,
   type Destination,
   type ExportOutcome,
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
-import type { ExportFormat } from "@/lib/types";
+import type { ExportFormat, PaperSize } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
 /**
  * Choices made in this dialog while the app runs; until then the dialog
  * starts from the Export defaults in Settings. Not "Replace": that is
- * asked afresh for every destination.
+ * asked afresh for every destination. The paper size is kept across
+ * restarts too, see `initialPaper`.
  */
 const remembered: {
   format?: ExportFormat;
   folder?: string | null;
   logo?: string | null;
   accent?: string;
+  paper?: PaperSize;
 } = {};
 
 /** The dialog's starting choices: this session's, else the Settings defaults. */
@@ -41,6 +46,7 @@ function initialChoices() {
     folder: remembered.folder !== undefined ? remembered.folder : (defaults?.folder ?? null),
     logo: remembered.logo !== undefined ? remembered.logo : (defaults?.logo ?? null),
     accent: remembered.accent ?? defaults?.accent ?? "",
+    paper: remembered.paper ?? initialPaper(),
   };
 }
 
@@ -98,6 +104,7 @@ export function ExportDialog({
   const [overwrite, setOverwrite] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => initialChoices().logo);
   const [accent, setAccent] = useState(() => initialChoices().accent);
+  const [paper, setPaper] = useState<PaperSize>(() => initialChoices().paper);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -116,6 +123,7 @@ export function ExportDialog({
       setDestination((d) => ({ ...d, folder: start.folder }));
       setLogo(start.logo);
       setAccent(start.accent);
+      setPaper(start.paper);
       setOutcome(null);
       setRevealError(null);
     }
@@ -153,13 +161,14 @@ export function ExportDialog({
 
   const start = async () => {
     if (!guideId || !out || !canExport) return;
-    Object.assign(remembered, { format, folder: destination.folder, logo, accent });
+    Object.assign(remembered, { format, folder: destination.folder, logo, accent, paper });
+    rememberPaper(paper);
     setBusy(true);
     setOutcome(null);
     setRevealError(null);
     const result = await runExport(
       { flush: () => editorStore.getState().flush(), api },
-      { guideId, format, out, overwrite, branding: { logo, accent } },
+      { guideId, format, out, overwrite, branding: { logo, accent }, paper },
     );
     setBusy(false);
     setOutcome(result);
@@ -280,6 +289,30 @@ export function ExportDialog({
                     <Button variant="outline" size="sm" disabled={busy} onClick={() => void chooseDestination()}>
                       Choose…
                     </Button>
+                  </div>
+                </Field>
+              )}
+
+              {!isFolderFormat(format) && (
+                <Field label="Paper size">
+                  <div role="radiogroup" aria-label="Paper size" className="grid grid-cols-2 gap-2">
+                    {PAPERS.map((p) => (
+                      <button
+                        key={p.paper}
+                        type="button"
+                        role="radio"
+                        aria-checked={paper === p.paper}
+                        disabled={busy}
+                        onClick={() => setPaper(p.paper)}
+                        className={cn(
+                          "flex items-baseline justify-between gap-2 rounded-md border border-border px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          paper === p.paper ? "border-[var(--status-info)] bg-muted" : "hover:bg-muted/60",
+                        )}
+                      >
+                        <span className="text-sm font-medium">{p.label}</span>
+                        <span className="text-xs text-muted-foreground">{p.detail}</span>
+                      </button>
+                    ))}
                   </div>
                 </Field>
               )}

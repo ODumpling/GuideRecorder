@@ -79,9 +79,12 @@ use docx_rs::{
     NumberingId, PageMargin, Paragraph, ParagraphBorder, ParagraphBorderPosition, ParagraphBorders,
     Pic, Run, RunFonts, Shading, ShdType, SpecialIndentType, Start, Style, StyleType,
 };
+use serde::{Deserialize, Serialize};
 
-/// Paper size of the document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Paper size of the document (DOCX and PDF). Serialized as `a4` or
+/// `letter`, as the app and the CLI name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Paper {
     #[default]
     A4,
@@ -853,6 +856,15 @@ mod tests {
             &mut report,
         )
         .display_size(px.0, px.1)
+    }
+
+    #[test]
+    fn paper_names_round_trip() {
+        for (paper, name) in [(Paper::A4, "\"a4\""), (Paper::Letter, "\"letter\"")] {
+            assert_eq!(serde_json::to_string(&paper).unwrap(), name);
+            assert_eq!(serde_json::from_str::<Paper>(name).unwrap(), paper);
+        }
+        assert!(serde_json::from_str::<Paper>("\"legal\"").is_err());
     }
 
     #[test]

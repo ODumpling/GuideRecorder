@@ -38,7 +38,8 @@ Anthropic API key.
    things worth hiding (emails, account numbers) and suggest blurs, which you
    accept or reject.
 4. **Export.** Save the guide as **PDF**, **Word (DOCX)**, **Markdown** or
-   **HTML**, with your logo if you like. Blurs are applied to the actual pixels
+   **HTML**, with your logo if you like. PDF and Word come on A4 or Letter
+   paper (the default follows your region). Blurs are applied to the actual pixels
    on export, so hidden information is really gone.
 
 ## Annotation guides
@@ -106,15 +107,20 @@ See [crates/guiderecorder-mcp/README.md](crates/guiderecorder-mcp/README.md).
 
 ## Command line
 
-A small CLI lists, searches and validates guides, and rebuilds the search
-index:
+A small CLI lists, searches, validates and exports guides, and rebuilds the
+search index:
 
 ```sh
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder list
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder search "api key"
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder validate "<guide>.guiderecorder"
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <path> reindex
+cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
+
+`export` takes `--format md|html|docx|pdf`, `--out`, and optionally
+`--paper a4|letter` (DOCX and PDF; default A4), `--logo`, `--accent`,
+`--overwrite` and `--strict`. See `guiderecorder export --help`.
 
 ## Build from source
 
