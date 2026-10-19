@@ -1,6 +1,4 @@
-"use client";
-
-import { useRouter } from "next/navigation";
+import { useRouter } from "@tanstack/react-router";
 import { authClient } from "@/lib/auth-client";
 
 export function WorkspaceSwitcher({ workspaces, activeId }: { workspaces: { id: string; name: string }[]; activeId: string | null }) {
@@ -13,7 +11,7 @@ export function WorkspaceSwitcher({ workspaces, activeId }: { workspaces: { id: 
       value={activeId ?? ""}
       onChange={async (event) => {
         await authClient.organization.setActive({ organizationId: event.target.value });
-        router.refresh();
+        await router.invalidate();
       }}
     >
       {workspaces.map((w) => (

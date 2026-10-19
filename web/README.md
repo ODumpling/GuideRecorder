@@ -4,9 +4,9 @@ The web app for Pro and Enterprise workspaces: accounts, workspaces and
 roles, billing, and image storage for synced guides. Later phases add the
 cloud library, sharing, the web editor, approvals and audit.
 
-Next.js (App Router), Better Auth (email/password, magic link, Google,
-Microsoft, organizations, Stripe), Drizzle on Postgres, and any
-S3-compatible store. The `guide.json` types come from
+TanStack Start (Vite, file routes in `src/routes`, server functions in
+`src/server`), Better Auth (email/password, magic link, Google, Microsoft,
+organizations, Stripe), Drizzle on Postgres, and any S3-compatible store. The `guide.json` types come from
 `packages/guide-schema`, generated from the Rust model.
 
 ## Run locally
@@ -18,6 +18,9 @@ pnpm install
 pnpm db:migrate
 pnpm dev                      # http://localhost:3000
 ```
+
+Production: `pnpm build`, then `node .output/server/index.mjs` with the
+environment set (`.env.local` is only read in development).
 
 Without Stripe keys billing is hidden; set a workspace's plan by hand with
 `insert into subscription (id, plan, reference_id, status) values ('dev', 'pro', '<workspace id>', 'active')`.

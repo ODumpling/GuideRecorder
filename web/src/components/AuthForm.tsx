@@ -1,7 +1,4 @@
-"use client";
-
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Button, Card, ErrorText, Input, Label } from "./ui";
@@ -34,9 +31,9 @@ export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps
     const email = String(form.get("email"));
     const password = String(form.get("password"));
     if (mode === "sign-up") {
-      void run(() => authClient.signUp.email({ name: String(form.get("name")), email, password }), () => router.push(next));
+      void run(() => authClient.signUp.email({ name: String(form.get("name")), email, password }), () => router.navigate({ href: next }));
     } else {
-      void run(() => authClient.signIn.email({ email, password }), () => router.push(next));
+      void run(() => authClient.signIn.email({ email, password }), () => router.navigate({ href: next }));
     }
   }
 
@@ -85,7 +82,7 @@ export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps
           {mode === "sign-in" ? "Sign in" : "Create account"}
         </Button>
         {mode === "sign-in" && (
-          <Button type="button" variant="secondary" disabled={busy} onClick={magicLink} formNoValidate>
+          <Button type="button" variant="secondary" disabled={busy} onClick={magicLink}>
             Email me a sign-in link
           </Button>
         )}
@@ -107,11 +104,11 @@ export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps
       <p className="mt-6 text-center text-sm text-muted-foreground">
         {mode === "sign-in" ? (
           <>
-            New here? <Link className="text-brand underline-offset-4 hover:underline" href={`/sign-up?next=${encodeURIComponent(next)}`}>Create an account</Link>
+            New here? <Link className="text-brand underline-offset-4 hover:underline" to="/sign-up" search={{ next }}>Create an account</Link>
           </>
         ) : (
           <>
-            Have an account? <Link className="text-brand underline-offset-4 hover:underline" href={`/sign-in?next=${encodeURIComponent(next)}`}>Sign in</Link>
+            Have an account? <Link className="text-brand underline-offset-4 hover:underline" to="/sign-in" search={{ next }}>Sign in</Link>
           </>
         )}
       </p>

@@ -1,16 +1,17 @@
-import type { Metadata } from "next";
-import { redirect } from "next/navigation";
-import { connection } from "next/server";
+import { createFileRoute } from "@tanstack/react-router";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { WorkspaceSwitcher } from "@/components/dashboard/WorkspaceSwitcher";
 import { Card } from "@/components/ui";
-import { authFeatures, getSession } from "@/lib/auth";
-import { loadDashboard } from "@/lib/dashboard";
-import { roles, type RoleName } from "@/lib/permissions";
+import { title } from "@/lib/title";
+import { getDashboard } from "@/server/dashboard";
 
-export const metadata: Metadata = { title: "Dashboard" };
+export const Route = createFileRoute("/dashboard")({
+  loader: () => getDashboard(),
+  head: () => title("Dashboard"),
+  component: Dashboard,
+});
 
 const PLAN_LABEL = { free: "Free", pro: "Pro", enterprise: "Enterprise" } as const;
 
@@ -20,14 +21,8 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-export default async function Dashboard() {
-  await connection();
-  const session = await getSession();
-  if (!session) redirect("/sign-in?next=/dashboard");
-  const { workspaces, active } = await loadDashboard(session.user.id, session.session.activeOrganizationId);
-
-  const can = (permission: Parameters<(typeof roles)[RoleName]["authorize"]>[0]) =>
-    Boolean(active && active.role in roles && roles[active.role as RoleName].authorize(permission).success);
+function Dashboard() {
+  const { user, workspaces, active, billingEnabled, can } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -37,7 +32,7 @@ export default async function Dashboard() {
           <WorkspaceSwitcher workspaces={workspaces} activeId={active?.id ?? null} />
         </div>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          {session.user.email}
+          {user.email}
           <SignOutButton />
         </div>
       </header>
@@ -71,19 +66,14 @@ export default async function Dashboard() {
           </Card>
           <Members
             workspaceId={active.id}
-            currentUserId={session.user.id}
+            currentUserId={user.id}
             members={active.members}
-            invitations={active.invitations.map((i) => ({ ...i, expiresAt: i.expiresAt.toISOString() }))}
-            canInvite={can({ invitation: ["create"] })}
-            canManage={can({ member: ["update"] })}
+            invitations={active.invitations}
+            canInvite={can.invite}
+            canManage={can.manageMembers}
             seatsLeft={active.plan.entitlements.seats - active.members.length - active.invitations.length}
           />
-          <Billing
-            workspaceId={active.id}
-            plan={active.plan.plan}
-            enabled={authFeatures().billing}
-            canManage={can({ billing: ["manage"] })}
-          />
+          <Billing workspaceId={active.id} plan={active.plan.plan} enabled={billingEnabled} canManage={can.manageBilling} />
         </>
       ) : (
         <Card>You aren&rsquo;t in any workspace.</Card>

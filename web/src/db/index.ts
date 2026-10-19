@@ -1,4 +1,4 @@
-import "server-only";
+import "@tanstack/react-start/server-only";
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import postgres from "postgres";

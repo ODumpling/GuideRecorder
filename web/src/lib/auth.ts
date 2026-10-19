@@ -1,5 +1,5 @@
-import "server-only";
-import { headers } from "next/headers";
+import "@tanstack/react-start/server-only";
+import { getRequestHeaders } from "@tanstack/react-start/server";
 import Stripe from "stripe";
 import { db } from "@/db";
 import { createAuth, type Auth } from "./create-auth";
@@ -37,7 +37,7 @@ export function auth(): Auth {
 
 /** The signed-in session for this request, or null. */
 export async function getSession() {
-  return auth().api.getSession({ headers: await headers() });
+  return auth().api.getSession({ headers: getRequestHeaders() });
 }
 
 /** Which sign-in methods and billing are configured, for the UI. */

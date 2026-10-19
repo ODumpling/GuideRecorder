@@ -1,6 +1,4 @@
-"use client";
-
-import { useRouter } from "next/navigation";
+import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Button, Card, ErrorText } from "../ui";
@@ -15,8 +13,7 @@ export function AcceptInvitation({ invitationId }: { invitationId: string }) {
       ? await authClient.organization.acceptInvitation({ invitationId })
       : await authClient.organization.rejectInvitation({ invitationId });
     if (error) return setError(error.message ?? "This invitation can't be used.");
-    router.push("/dashboard");
-    router.refresh();
+    await router.navigate({ to: "/dashboard" });
   }
 
   return (

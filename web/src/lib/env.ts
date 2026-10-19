@@ -1,4 +1,4 @@
-import "server-only";
+import "@tanstack/react-start/server-only";
 import { z } from "zod";
 
 // Server configuration, read once on first use so `next build` runs without

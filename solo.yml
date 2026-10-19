@@ -41,7 +41,7 @@ processes:
     auto_start: false
 
   "Web":
-    # Starts Postgres and storage (web/compose.yaml), migrates, runs Next.
+    # Starts Postgres and storage (web/compose.yaml), migrates, runs the Vite dev server.
     # Needs web/.env.local (copy web/.env.example).
     command: "set -e; docker compose up -d --wait postgres storage; docker compose up storage-setup; pnpm db:migrate; pnpm dev"
     working_dir: web

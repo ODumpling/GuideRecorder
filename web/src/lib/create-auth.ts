@@ -2,8 +2,8 @@ import { stripe as stripePlugin } from "@better-auth/stripe";
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { nextCookies } from "better-auth/next-js";
 import { magicLink, organization } from "better-auth/plugins";
+import { tanstackStartCookies } from "better-auth/tanstack-start";
 import type Stripe from "stripe";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
@@ -96,8 +96,8 @@ export function createAuth(deps: AuthDeps) {
         },
       }),
       ...(billing ? [billing] : []),
-      // Must stay last: sets cookies from server actions.
-      nextCookies(),
+      // Must stay last: sets cookies when server functions call auth.api.
+      tanstackStartCookies(),
     ],
   });
 }

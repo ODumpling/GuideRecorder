@@ -1,6 +1,8 @@
-import Link from "next/link";
+import { createFileRoute, Link } from "@tanstack/react-router";
 
-export default function Home() {
+export const Route = createFileRoute("/")({ component: Home });
+
+function Home() {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center gap-6 p-8">
       <h1 className="font-serif text-6xl leading-tight">
@@ -11,10 +13,10 @@ export default function Home() {
         current.
       </p>
       <div className="flex gap-3">
-        <Link href="/sign-up" className="inline-flex h-10 items-center rounded-lg bg-brand px-5 text-sm font-medium text-brand-foreground hover:bg-brand/90">
+        <Link to="/sign-up" className="inline-flex h-10 items-center rounded-lg bg-brand px-5 text-sm font-medium text-brand-foreground hover:bg-brand/90">
           Get started
         </Link>
-        <Link href="/sign-in" className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-5 text-sm font-medium hover:bg-muted">
+        <Link to="/sign-in" className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-5 text-sm font-medium hover:bg-muted">
           Sign in
         </Link>
       </div>

@@ -1,6 +1,4 @@
-"use client";
-
-import { useRouter } from "next/navigation";
+import { useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth-client";
 import { ROLE_NAMES, type RoleName } from "@/lib/permissions";
@@ -10,7 +8,7 @@ interface Props {
   workspaceId: string;
   currentUserId: string;
   members: { id: string; userId: string; role: string; name: string; email: string }[];
-  invitations: { id: string; email: string; role: string | null; expiresAt: string }[];
+  invitations: { id: string; email: string; role: string | null }[];
   canInvite: boolean;
   canManage: boolean;
   seatsLeft: number;
@@ -27,7 +25,7 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
     setError(null);
     const { error } = await action();
     if (error) setError(error.message ?? "Something went wrong.");
-    else router.refresh();
+    else await router.invalidate();
   }
 
   function invite(event: FormEvent<HTMLFormElement>) {

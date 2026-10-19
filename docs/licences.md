@@ -26,14 +26,11 @@ permissive. Direct additions: 13 TipTap 3.32 packages and markdown-it 15
 
 ## Web (`web/`, `pnpm licenses list --prod`, 2026-10-19)
 
-Server-side only, not shipped in the desktop app. 226 packages: 197 MIT, plus
-Apache-2.0, ISC, BSD-2/3-Clause, 0BSD, Unlicense, PSF-2.0, OFL-1.1 (Inter and
-Instrument Serif fonts), CC-BY-4.0 (caniuse-lite data). Two to note:
-
-- `@img/sharp-libvips-*` (LGPL-3.0-or-later): libvips, a prebuilt shared
-  library loaded by `sharp`, Next.js's optional image optimizer. Dynamically
-  linked and unmodified, so the LGPL is satisfied.
-- `lightningcss` (MPL-2.0): build-time CSS tooling via Tailwind; unmodified.
+Server-side only, not shipped in the desktop app. 162 packages, nearly all
+MIT, plus Apache-2.0, ISC, BSD-2/3-Clause, 0BSD, Unlicense, OFL-1.1 (Inter
+and Instrument Serif fonts), CC-BY-4.0 (caniuse-lite data) and Python-2.0
+(argparse, CLI only). `lightningcss` (MPL-2.0) is build-time CSS tooling via
+Tailwind, used unmodified. Nothing GPL/LGPL.
 
 ## Bundled assets
 
