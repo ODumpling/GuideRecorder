@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::editor::{AppError, ErrorKind, Result};
 use crate::export::{ChosenPaths, Format};
 
-/// The settings format this app writes.
-pub const SETTINGS_VERSION: u32 = 1;
+/// The settings format this app writes. Version 2 changed the default
+/// shortcuts (see [`migrate`]).
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// File name inside the app's Application Support folder.
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -532,6 +533,9 @@ fn read(path: &Path) -> (Settings, LoadState) {
         .unwrap_or(u64::from(SETTINGS_VERSION));
     let read_only = version > u64::from(SETTINGS_VERSION);
     let decoded = serde_json::from_value::<Settings>(value).map(|mut settings| {
+        if !read_only {
+            migrate(&mut settings, version);
+        }
         let dropped = drop_invalid_excluded_apps(&mut settings);
         (settings, dropped)
     });
@@ -569,6 +573,33 @@ fn read(path: &Path) -> (Settings, LoadState) {
             ),
         ),
         Err(e) => set_aside(path, format!("{}: {e}", path.display())),
+    }
+}
+
+/// Brings settings saved by an older version up to date, in memory; the
+/// next save writes them as [`SETTINGS_VERSION`].
+///
+/// Version 1 saved ⇧⌘R, ⇧⌘P and ⇧⌘M as the default shortcuts, but the app
+/// always registered ⌃⌥R, ⌃⌥P and ⌃⌥S. Now that the saved shortcuts are
+/// used, a shortcut still at its old default becomes the one that actually
+/// worked, rather than taking over ⇧⌘P (the command palette in many apps).
+fn migrate(settings: &mut Settings, version: u64) {
+    if version < 2 {
+        let hotkeys = &mut settings.recording.hotkeys;
+        let defaults = Hotkeys::default();
+        for (key, old, new) in [
+            (&mut hotkeys.record, "CmdOrCtrl+Shift+R", defaults.record),
+            (&mut hotkeys.pause, "CmdOrCtrl+Shift+P", defaults.pause),
+            (
+                &mut hotkeys.manual_step,
+                "CmdOrCtrl+Shift+M",
+                defaults.manual_step,
+            ),
+        ] {
+            if *key == old {
+                *key = new;
+            }
+        }
     }
 }
 
@@ -718,7 +749,7 @@ mod tests {
         let settings = Settings::default();
         settings.validate().unwrap();
         let json = serde_json::to_value(&settings).unwrap();
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], SETTINGS_VERSION);
         assert_eq!(json["recording"]["typingIdleMs"], 1500);
         assert_eq!(json["ai"]["stepModel"], DEFAULT_STEP_MODEL);
         assert_eq!(json["export"]["format"], "pdf");
@@ -893,7 +924,7 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 
-        fs::write(&path, br#"{"version":2,"ai":{"language":"fr"}}"#).unwrap();
+        fs::write(&path, br#"{"version":3,"ai":{"language":"fr"}}"#).unwrap();
         let store = SettingsStore::load(Some(path.clone()));
         assert!(store.view().read_only);
         assert_eq!(store.get().ai.language, "fr");
@@ -902,11 +933,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, ErrorKind::ReadOnly);
         assert!(store.modify(|_| {}).is_err());
-        assert!(fs::read_to_string(&path).unwrap().contains("\"version\":2"));
+        assert!(fs::read_to_string(&path).unwrap().contains("\"version\":3"));
 
         // A newer file this version can't decode: defaults, read-only, and
         // the file is neither renamed nor saved over.
-        let newer = br#"{"version":2,"export":{"format":"pptx"}}"#;
+        let newer = br#"{"version":3,"export":{"format":"pptx"}}"#;
         fs::write(&path, newer).unwrap();
         let store = SettingsStore::load(Some(path.clone()));
         let view = store.view();
@@ -979,13 +1010,46 @@ mod tests {
         );
 
         // A newer, read-only file is left alone on disk but not applied.
-        let newer = br#"{"version":2,"recording":{"excludedApps":["com.apple"]}}"#;
+        let newer = br#"{"version":3,"recording":{"excludedApps":["com.apple"]}}"#;
         fs::write(&path, newer).unwrap();
         let view = SettingsStore::load(Some(path.clone())).view();
         assert!(view.read_only);
         assert!(view.settings.recording.excluded_apps.is_empty());
         assert!(view.load_error.unwrap().contains("too broad"));
         assert_eq!(fs::read(&path).unwrap(), newer);
+    }
+
+    #[test]
+    fn old_default_shortcuts_are_migrated() {
+        let dir = scratch();
+        let path = dir.join("settings.json");
+        // Version 1 defaults for record and manual step, a custom pause.
+        fs::write(
+            &path,
+            br#"{"version":1,"recording":{"hotkeys":{"record":"CmdOrCtrl+Shift+R",
+                "pause":"Ctrl+Alt+K","manualStep":"CmdOrCtrl+Shift+M"}}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path.clone()));
+        let view = store.view();
+        assert!(view.load_error.is_none());
+        let hotkeys = &view.settings.recording.hotkeys;
+        assert_eq!(hotkeys.record, "Ctrl+Alt+R");
+        assert_eq!(hotkeys.pause, "Ctrl+Alt+K");
+        assert_eq!(hotkeys.manual_step, "Ctrl+Alt+S");
+        store.update(store.get(), &ChosenPaths::default()).unwrap();
+        let saved: Settings = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.version, 2);
+        assert_eq!(saved.recording.hotkeys, store.get().recording.hotkeys);
+
+        // Chosen in version 2: kept.
+        fs::write(
+            &path,
+            br#"{"version":2,"recording":{"hotkeys":{"pause":"CmdOrCtrl+Shift+P"}}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(Some(path));
+        assert_eq!(store.get().recording.hotkeys.pause, "CmdOrCtrl+Shift+P");
     }
 
     #[test]

@@ -4,7 +4,7 @@ import type { Settings } from "@/lib/types";
 import { createSettingsStore } from "@/settings/store";
 
 const DEFAULTS: Settings = {
-  version: 1,
+  version: 2,
   general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
   recording: {
     hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },

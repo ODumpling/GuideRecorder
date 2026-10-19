@@ -144,7 +144,7 @@ export class Backend {
 
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
-    version: 1,
+    version: 2,
     general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true },
     recording: {
       hotkeys: { record: "CmdOrCtrl+Shift+R", pause: "CmdOrCtrl+Shift+P", manualStep: "CmdOrCtrl+Shift+M" },
