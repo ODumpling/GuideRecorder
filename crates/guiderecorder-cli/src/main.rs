@@ -141,6 +141,9 @@ struct ExportArgs {
     /// Accent colour, `#rgb` or `#rrggbb` (not used by Markdown).
     #[arg(long, value_name = "#HEX")]
     accent: Option<String>,
+    /// Paper size of a DOCX or PDF export.
+    #[arg(long, value_enum, default_value_t = Paper::A4)]
+    paper: Paper,
     /// Exit with 1 when the export has warnings or notes (the export is
     /// still written).
     #[arg(long)]
@@ -155,6 +158,21 @@ enum Format {
     Html,
     Docx,
     Pdf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Paper {
+    A4,
+    Letter,
+}
+
+impl From<Paper> for docx::Paper {
+    fn from(paper: Paper) -> Self {
+        match paper {
+            Paper::A4 => Self::A4,
+            Paper::Letter => Self::Letter,
+        }
+    }
 }
 
 impl Format {
@@ -649,6 +667,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     let out = &args.out;
     let overwrite = args.overwrite;
     let timestamp = Some(guide.updated_at);
+    let paper = args.paper.into();
     // The md and html writers create their folder; match that for files.
     if matches!(args.format, Format::Docx | Format::Pdf) {
         if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -677,6 +696,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             let opts = docx::DocxOptions {
                 overwrite,
                 timestamp,
+                paper,
                 branding,
                 ..docx::DocxOptions::default()
             };
@@ -686,6 +706,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             let opts = pdf::PdfOptions {
                 overwrite,
                 timestamp,
+                paper,
                 branding,
                 ..pdf::PdfOptions::default()
             };

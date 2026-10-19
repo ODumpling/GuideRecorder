@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   baseName,
   exportName,
+  initialPaper,
   isAccent,
   isPlainName,
+  localePaper,
   outPath,
+  rememberPaper,
   runExport,
   warningLines,
 } from "@/export/export";
@@ -28,6 +31,7 @@ const request = {
   out: "/out/Guide",
   overwrite: false,
   branding: { logo: null, accent: "  #abc " },
+  paper: "letter" as const,
 };
 
 describe("export names and paths", () => {
@@ -63,6 +67,42 @@ describe("export names and paths", () => {
   });
 });
 
+describe("paper size", () => {
+  it("defaults from the system locale", () => {
+    for (const tag of ["en-US", "en-CA", "fr-CA", "es-MX", "fil-PH", "en-PH", "es-CL", "en"]) {
+      expect(localePaper([tag])).toBe("letter");
+    }
+    for (const tag of ["en-GB", "en-AU", "de-DE", "de", "fr-FR", "ja-JP", "es-ES", "pt-BR"]) {
+      expect(localePaper([tag])).toBe("a4");
+    }
+    // The first usable tag decides.
+    expect(localePaper(["not a tag!", "en-GB", "en-US"])).toBe("a4");
+    expect(localePaper([])).toBe("a4");
+  });
+
+  it("remembers the last choice over the locale", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    };
+    expect(initialPaper(storage, ["en-US"])).toBe("letter");
+    rememberPaper("a4", storage);
+    expect(initialPaper(storage, ["en-US"])).toBe("a4");
+    rememberPaper("letter", storage);
+    expect(initialPaper(storage, ["de-DE"])).toBe("letter");
+    // Junk or unreadable storage falls back to the locale.
+    store.set("guiderecorder.exportPaper", "legal");
+    expect(initialPaper(storage, ["de-DE"])).toBe("a4");
+    const broken = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(initialPaper(broken, ["en-CA"])).toBe("letter");
+  });
+});
+
 describe("runExport", () => {
   it("saves first, then exports with a trimmed accent", async () => {
     const order: string[] = [];
@@ -81,7 +121,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" });
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter");
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

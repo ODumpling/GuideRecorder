@@ -837,6 +837,33 @@ fn export_branding_flags() {
 }
 
 #[test]
+fn export_paper_flag() {
+    let fx = Fixture::new();
+    let a4 = fx.out("a4.pdf");
+    let letter = fx.out("letter.pdf");
+    fx.export_json(DRUCKER, "pdf", &a4, &[]);
+    fx.export_json(DRUCKER, "pdf", &letter, &["--paper", "letter"]);
+    let a4 = fs::read(a4).unwrap();
+    let letter = fs::read(letter).unwrap();
+    let has = |pdf: &[u8], needle: &str| String::from_utf8_lossy(pdf).contains(needle);
+    assert!(
+        has(&a4, "/MediaBox[0 0 595.2756 841.8898]"),
+        "A4 by default"
+    );
+    assert!(has(&letter, "/MediaBox[0 0 612 792]"), "Letter");
+
+    let a4 = fx.out("a4.docx");
+    let letter = fx.out("letter.docx");
+    fx.export_json(DRUCKER, "docx", &a4, &["--paper", "a4"]);
+    fx.export_json(DRUCKER, "docx", &letter, &["--paper", "letter"]);
+    assert_ne!(fs::read(a4).unwrap(), fs::read(letter).unwrap());
+
+    let out = fx.export(DRUCKER, "pdf", &fx.out("x.pdf"), &["--paper", "legal"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!fx.out("x.pdf").exists());
+}
+
+#[test]
 fn export_refuses_bad_branding_before_writing() {
     let fx = Fixture::new();
     let svg = fx.dir.path().join("logo.svg");

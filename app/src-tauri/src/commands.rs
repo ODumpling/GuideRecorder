@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use guiderecorder_core::export::docx::Paper;
 use guiderecorder_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
@@ -353,6 +354,7 @@ pub async fn choose_logo<R: Runtime>(
 /// Exports a guide from its saved bundle (see [`export::export_guide`]).
 /// The editor saves its changes first.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn export_guide(
     cell: State<'_, Arc<SessionCell>>,
     chosen: State<'_, Arc<ChosenPaths>>,
@@ -361,10 +363,13 @@ pub async fn export_guide(
     out: PathBuf,
     overwrite: bool,
     branding: BrandingRequest,
+    paper: Paper,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
     with_session(cell, move |s| {
-        export::export_guide(s, &chosen, &guide_id, format, &out, overwrite, &branding)
+        export::export_guide(
+            s, &chosen, &guide_id, format, &out, overwrite, &branding, paper,
+        )
     })
     .await
 }

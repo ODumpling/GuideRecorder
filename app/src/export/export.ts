@@ -1,6 +1,6 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { AppError, ExportBranding, ExportFormat, ExportResult, Item } from "@/lib/types";
+import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperSize } from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -8,6 +8,58 @@ export const FORMATS: { format: ExportFormat; label: string; detail: string }[] 
   { format: "docx", label: "Word", detail: "One .docx file" },
   { format: "pdf", label: "PDF", detail: "One .pdf file" },
 ];
+
+export const PAPERS: { paper: PaperSize; label: string; detail: string }[] = [
+  { paper: "a4", label: "A4", detail: "210 × 297 mm" },
+  { paper: "letter", label: "Letter", detail: "8.5 × 11 in" },
+];
+
+/** Regions that use US Letter (CLDR `paperSize`); everywhere else uses A4. */
+const LETTER_REGIONS = new Set(["BZ", "CA", "CL", "CO", "CR", "GT", "MX", "NI", "PA", "PH", "PR", "SV", "US", "VE"]);
+
+/**
+ * The paper size usual where `locales` (BCP 47 tags, most preferred
+ * first) point: Letter in the US, Canada, Mexico, the Philippines and the
+ * other Letter regions, A4 elsewhere. A tag without a region takes its
+ * likely one ("en" → US).
+ */
+export function localePaper(locales: readonly string[]): PaperSize {
+  for (const tag of locales) {
+    try {
+      const region = new Intl.Locale(tag).maximize().region;
+      if (region) return LETTER_REGIONS.has(region.toUpperCase()) ? "letter" : "a4";
+    } catch {
+      // Not a valid tag: try the next.
+    }
+  }
+  return "a4";
+}
+
+/** The last paper chosen in the Export dialog (on this Mac). */
+const PAPER_KEY = "guiderecorder.exportPaper";
+
+/** The paper chosen last time, else the system locale's. */
+export function initialPaper(
+  storage: Pick<Storage, "getItem"> = localStorage,
+  locales: readonly string[] = navigator.languages,
+): PaperSize {
+  let stored: string | null = null;
+  try {
+    stored = storage.getItem(PAPER_KEY);
+  } catch {
+    // Storage unavailable: fall back to the locale.
+  }
+  return stored === "a4" || stored === "letter" ? stored : localePaper(locales);
+}
+
+/** Remembers `paper` for the next time the dialog opens, also after a restart. */
+export function rememberPaper(paper: PaperSize, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(PAPER_KEY, paper);
+  } catch {
+    // Not remembered; the locale default applies next time.
+  }
+}
 
 /** Markdown and HTML export into a folder; DOCX and PDF into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
@@ -79,7 +131,14 @@ export type ExportOutcome =
  */
 export async function runExport(
   deps: { flush(): Promise<boolean>; api: ExportApi },
-  request: { guideId: string; format: ExportFormat; out: string; overwrite: boolean; branding: ExportBranding },
+  request: {
+    guideId: string;
+    format: ExportFormat;
+    out: string;
+    overwrite: boolean;
+    branding: ExportBranding;
+    paper: PaperSize;
+  },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
     return {
@@ -89,9 +148,9 @@ export async function runExport(
     };
   }
   try {
-    const { guideId, format, out, overwrite, branding } = request;
+    const { guideId, format, out, overwrite, branding, paper } = request;
     const accent = branding.accent?.trim() || null;
-    const result = await deps.api.exportGuide(guideId, format, out, overwrite, { logo: branding.logo, accent });
+    const result = await deps.api.exportGuide(guideId, format, out, overwrite, { logo: branding.logo, accent }, paper);
     return { ok: true, result };
   } catch (error) {
     const exists = !!error && typeof error === "object" && (error as AppError).kind === "exists";

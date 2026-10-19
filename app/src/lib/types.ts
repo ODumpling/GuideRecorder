@@ -201,6 +201,9 @@ export interface AppError {
 
 export type ExportFormat = "md" | "html" | "docx" | "pdf";
 
+/** Paper size of a DOCX or PDF export (core `export::docx::Paper`). */
+export type PaperSize = "a4" | "letter";
+
 /** Export branding: a logo the user chose in the logo dialog, and an accent colour. */
 export interface ExportBranding {
   logo: string | null;

@@ -245,9 +245,10 @@ pub fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
 }
 
 /// Exports a guide from its saved bundle (the editor flushes its changes
-/// first) to `out`, which [`ChosenPaths::check_destination`] has accepted.
+/// first) to `out` on `paper` (DOCX and PDF only), which [`ChosenPaths::check_destination`] has accepted.
 /// The guide lock is held throughout, so no save or close sweep changes the
 /// bundle while it is read.
+#[allow(clippy::too_many_arguments)]
 pub fn export_guide(
     session: &Session,
     chosen: &ChosenPaths,
@@ -256,6 +257,7 @@ pub fn export_guide(
     out: &Path,
     overwrite: bool,
     branding: &BrandingRequest,
+    paper: docx::Paper,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
     chosen.check_destination(format, out)?;
@@ -314,6 +316,7 @@ pub fn export_guide(
             let opts = docx::DocxOptions {
                 overwrite,
                 timestamp,
+                paper,
                 branding,
                 ..docx::DocxOptions::default()
             };
@@ -326,6 +329,7 @@ pub fn export_guide(
             let opts = pdf::PdfOptions {
                 overwrite,
                 timestamp,
+                paper,
                 branding,
                 ..pdf::PdfOptions::default()
             };
@@ -599,6 +603,7 @@ mod tests {
             &dir.join("md"),
             false,
             &none,
+            docx::Paper::A4,
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -615,6 +620,7 @@ mod tests {
             &dir.join("html"),
             false,
             &none,
+            docx::Paper::A4,
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
@@ -622,15 +628,55 @@ mod tests {
         for format in [Format::Docx, Format::Pdf] {
             let out = with_extension(dir.join("Guide"), format.extension().unwrap());
             // Not chosen in a save dialog yet.
-            assert!(export_guide(&session, &chosen, &id, format, &out, false, &none).is_err());
+            assert!(export_guide(
+                &session,
+                &chosen,
+                &id,
+                format,
+                &out,
+                false,
+                &none,
+                docx::Paper::A4
+            )
+            .is_err());
             chosen.add_file(out.clone());
-            let result = export_guide(&session, &chosen, &id, format, &out, false, &none).unwrap();
+            let result = export_guide(
+                &session,
+                &chosen,
+                &id,
+                format,
+                &out,
+                false,
+                &none,
+                docx::Paper::A4,
+            )
+            .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
             assert!(fs::metadata(&out).unwrap().len() > 0);
             // A second export needs overwrite.
-            let err = export_guide(&session, &chosen, &id, format, &out, false, &none).unwrap_err();
+            let err = export_guide(
+                &session,
+                &chosen,
+                &id,
+                format,
+                &out,
+                false,
+                &none,
+                docx::Paper::A4,
+            )
+            .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
-            export_guide(&session, &chosen, &id, format, &out, true, &none).unwrap();
+            export_guide(
+                &session,
+                &chosen,
+                &id,
+                format,
+                &out,
+                true,
+                &none,
+                docx::Paper::A4,
+            )
+            .unwrap();
         }
 
         let err = export_guide(
@@ -641,6 +687,7 @@ mod tests {
             &dir.join("md"),
             false,
             &none,
+            docx::Paper::A4,
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -652,8 +699,55 @@ mod tests {
             &dir.join("md"),
             true,
             &none,
+            docx::Paper::A4,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn exports_on_the_chosen_paper() {
+        let (session, id, chosen, dir) = session();
+        let none = BrandingRequest::default();
+        for (paper, media_box) in [
+            (docx::Paper::A4, "/MediaBox[0 0 595.2756 841.8898]"),
+            (docx::Paper::Letter, "/MediaBox[0 0 612 792]"),
+        ] {
+            let out = dir.join(format!("{paper:?}.pdf"));
+            chosen.add_file(out.clone());
+            export_guide(
+                &session,
+                &chosen,
+                &id,
+                Format::Pdf,
+                &out,
+                false,
+                &none,
+                paper,
+            )
+            .unwrap();
+            let pdf = fs::read(&out).unwrap();
+            assert!(
+                String::from_utf8_lossy(&pdf).contains(media_box),
+                "{paper:?}"
+            );
+        }
+        let docx = |paper: docx::Paper| {
+            let out = dir.join(format!("{paper:?}.docx"));
+            chosen.add_file(out.clone());
+            export_guide(
+                &session,
+                &chosen,
+                &id,
+                Format::Docx,
+                &out,
+                false,
+                &none,
+                paper,
+            )
+            .unwrap();
+            fs::read(&out).unwrap()
+        };
+        assert_ne!(docx(docx::Paper::A4), docx(docx::Paper::Letter));
     }
 
     #[test]
@@ -669,6 +763,7 @@ mod tests {
             &session.root().join("x"),
             false,
             &none,
+            docx::Paper::A4,
         )
         .unwrap_err();
         assert!(
@@ -693,6 +788,7 @@ mod tests {
             &dir.join("a"),
             false,
             &branding,
+            docx::Paper::A4,
         )
         .unwrap_err();
         assert!(
@@ -709,6 +805,7 @@ mod tests {
             &dir.join("a"),
             false,
             &branding,
+            docx::Paper::A4,
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -725,6 +822,7 @@ mod tests {
             &dir.join("b"),
             false,
             &bad,
+            docx::Paper::A4,
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);

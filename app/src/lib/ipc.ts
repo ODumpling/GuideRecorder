@@ -13,6 +13,7 @@ import type {
   LibraryInfo,
   McpSetup,
   OpenedGuide,
+  PaperSize,
   Permission,
   PermissionRow,
   PermissionStatus,
@@ -135,6 +136,8 @@ export interface ExportApi {
     out: string,
     overwrite: boolean,
     branding: ExportBranding,
+    /** Used by DOCX and PDF; Markdown and HTML ignore it. */
+    paper: PaperSize,
   ): Promise<ExportResult>;
   /** Shows a file an export wrote in Finder. */
   reveal(path: string): Promise<void>;
@@ -145,8 +148,8 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
 
