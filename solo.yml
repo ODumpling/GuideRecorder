@@ -40,6 +40,17 @@ processes:
     working_dir: app
     auto_start: false
 
+  "Web":
+    # Starts Postgres and storage (web/compose.yaml), migrates, runs Next.
+    # Needs web/.env.local (copy web/.env.example).
+    command: "set -e; docker compose up -d --wait postgres storage; docker compose up storage-setup; pnpm db:migrate; pnpm dev"
+    working_dir: web
+    auto_start: false
+
+  "Test: web":
+    command: "set -e; pnpm --filter @guiderecorder/guide-schema test; pnpm --filter @guiderecorder/web typecheck; pnpm --filter @guiderecorder/web test"
+    auto_start: false
+
   "Install dependencies":
-    command: "set -e; cd app && pnpm install && pnpm exec playwright install chromium"
+    command: "set -e; pnpm install && cd app && pnpm exec playwright install chromium"
     auto_start: false

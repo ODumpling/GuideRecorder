@@ -24,6 +24,17 @@ ISC (lucide-react), BSD-2-Clause (entities, via markdown-it) and PSF-2.0
 permissive. Direct additions: 13 TipTap 3.32 packages and markdown-it 15
 (MIT).
 
+## Web (`web/`, `pnpm licenses list --prod`, 2026-10-19)
+
+Server-side only, not shipped in the desktop app. 226 packages: 197 MIT, plus
+Apache-2.0, ISC, BSD-2/3-Clause, 0BSD, Unlicense, PSF-2.0, OFL-1.1 (Inter and
+Instrument Serif fonts), CC-BY-4.0 (caniuse-lite data). Two to note:
+
+- `@img/sharp-libvips-*` (LGPL-3.0-or-later): libvips, a prebuilt shared
+  library loaded by `sharp`, Next.js's optional image optimizer. Dynamically
+  linked and unmodified, so the LGPL is satisfied.
+- `lightningcss` (MPL-2.0): build-time CSS tooling via Tailwind; unmodified.
+
 ## Bundled assets
 
 - Lato Regular/Bold/Italic/BoldItalic 2.015: SIL OFL 1.1

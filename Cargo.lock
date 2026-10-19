@@ -2369,6 +2369,7 @@ dependencies = [
  "reqwest",
  "resvg 0.48.1",
  "rusqlite",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",

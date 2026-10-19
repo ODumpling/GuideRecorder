@@ -57,7 +57,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
@@ -69,3 +69,27 @@ jobs:
           name: e2e-results
           path: app/e2e/test-results
           retention-days: 7
+
+  web:
+    name: Web (guide schema, typecheck, unit, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # guide.schema.json comes from the Rust model (checked by the rust job);
+      # the TypeScript generated from it must be current too.
+      - name: Generated guide types are current
+        run: pnpm --filter @guiderecorder/guide-schema generate && git diff --exit-code packages/guide-schema
+      - run: pnpm --filter @guiderecorder/guide-schema typecheck
+      - run: pnpm --filter @guiderecorder/guide-schema test
+      - run: pnpm --filter @guiderecorder/web typecheck
+      - run: pnpm --filter @guiderecorder/web test
+      - run: pnpm --filter @guiderecorder/web build
