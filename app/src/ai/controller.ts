@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Command, Patch } from "@/editor/commands";
+import { editedGuideFields, GUIDE_TEXT_FIELDS, type Command, type Patch } from "@/editor/commands";
 import type { EditorStore } from "@/editor/store";
 import {
   AI_FINISHED_EVENT,
@@ -223,18 +223,23 @@ export function stepPatches(live: Step | null, event: AiStepEvent): Patch[] | nu
   return null;
 }
 
-/** The patches that apply the guide pass to the live guide; null to leave it. */
+/**
+ * The patches that apply the guide pass to the live guide; null to leave
+ * it. Only the fields the pass wrote that the user has not edited here are
+ * written: one edited during the run is kept too.
+ */
 export function guidePatches(live: Guide, event: AiGuideEvent): Patch[] | null {
-  if (live.aiState?.status === "edited") return null;
+  const edited = editedGuideFields(live);
+  if (edited.length === GUIDE_TEXT_FIELDS.length) return null;
   if (event.fields) {
-    const { title, intro, prerequisites, summary, tags } = event.fields;
+    const fields = event.fields;
+    const keys = (event.written ?? GUIDE_TEXT_FIELDS).filter((key) => !edited.includes(key));
+    if (keys.length === 0) return null;
+    // `edited` while any field is the user's, as the backend does.
+    const aiState: AiState = { ...event.aiState, status: edited.length ? "edited" : "ai" };
     return [
-      { op: "setGuide", key: "title", value: title },
-      { op: "setGuide", key: "intro", value: intro },
-      { op: "setGuide", key: "prerequisites", value: prerequisites },
-      { op: "setGuide", key: "summary", value: summary },
-      { op: "setGuide", key: "tags", value: tags },
-      { op: "setGuide", key: "aiState", value: event.aiState },
+      ...keys.map((key): Patch => ({ op: "setGuide", key, value: fields[key] })),
+      { op: "setGuide", key: "aiState", value: aiState },
     ];
   }
   // Failed: record the error, leave the fields.
@@ -265,18 +270,23 @@ export function stepResultCommand(
   };
 }
 
-/** The guide pass's fields and `aiState` as one undoable command. */
+/**
+ * The guide pass's fields and `aiState` as one undoable command. The user
+ * asked for it, so their edited fields are replaced and no longer count as
+ * edited; Undo brings both back.
+ */
 export function guideResultCommand(live: Guide, event: AiGuideEvent & { fields: NonNullable<AiGuideEvent["fields"]> }): Command {
-  const keys = ["title", "intro", "prerequisites", "summary", "tags"] as const;
   return {
     label: "Regenerate guide details",
     forward: [
-      ...keys.map((key): Patch => ({ op: "setGuide", key, value: event.fields[key] })),
+      ...GUIDE_TEXT_FIELDS.map((key): Patch => ({ op: "setGuide", key, value: event.fields[key] })),
+      { op: "setGuide", key: "editedFields", value: undefined },
       { op: "setGuide", key: "aiState", value: event.aiState },
     ],
     inverse: [
       { op: "setGuide", key: "aiState", value: live.aiState },
-      ...keys.map((key): Patch => ({ op: "setGuide", key, value: live[key] })),
+      { op: "setGuide", key: "editedFields", value: live.editedFields },
+      ...GUIDE_TEXT_FIELDS.map((key): Patch => ({ op: "setGuide", key, value: live[key] })),
     ],
   };
 }

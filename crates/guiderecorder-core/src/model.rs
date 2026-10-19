@@ -45,9 +45,16 @@ pub struct Guide {
     pub items: Vec<Item>,
     /// Provenance of the guide-level fields (`title`, `intro`,
     /// `prerequisites`, `summary`, `tags`). The editor sets `edited` when the
-    /// user changes any of them; the AI guide pass then leaves them alone.
+    /// user changes any of them, and keeps it while any is in
+    /// [`Guide::edited_fields`].
     #[serde(default, skip_serializing_if = "is_default")]
     pub ai_state: AiState,
+    /// The guide-level fields the user wrote by hand; the AI guide pass
+    /// leaves them alone and may still write the others. Empty in guides
+    /// saved before it existed: there an `edited` [`Guide::ai_state`] means
+    /// every field is the user's (see [`Guide::is_field_edited`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edited_fields: Vec<GuideField>,
 }
 
 impl Guide {
@@ -70,6 +77,18 @@ impl Guide {
             recording: None,
             items: Vec::new(),
             ai_state: AiState::default(),
+            edited_fields: Vec::new(),
+        }
+    }
+
+    /// Whether the user wrote `field` by hand, so AI must not overwrite it.
+    /// A guide with no [`Guide::edited_fields`] but an `edited`
+    /// [`Guide::ai_state`] predates per-field tracking: all its fields are.
+    pub fn is_field_edited(&self, field: GuideField) -> bool {
+        if self.edited_fields.is_empty() {
+            self.ai_state.status == AiStatus::Edited
+        } else {
+            self.edited_fields.contains(&field)
         }
     }
 
@@ -80,6 +99,27 @@ impl Guide {
             _ => None,
         })
     }
+}
+
+/// A guide-level field the AI guide pass writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideField {
+    Title,
+    Intro,
+    Prerequisites,
+    Summary,
+    Tags,
+}
+
+impl GuideField {
+    pub const ALL: [GuideField; 5] = [
+        GuideField::Title,
+        GuideField::Intro,
+        GuideField::Prerequisites,
+        GuideField::Summary,
+        GuideField::Tags,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -560,6 +600,36 @@ mod tests {
             })
         );
         assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+    }
+
+    #[test]
+    fn edited_fields_round_trip_and_default_empty() {
+        let mut guide = Guide::new("Untitled", "en");
+        assert!(serde_json::to_value(&guide)
+            .unwrap()
+            .get("editedFields")
+            .is_none());
+        guide.edited_fields = vec![GuideField::Intro, GuideField::Tags];
+        guide.ai_state.status = AiStatus::Edited;
+        let json = serde_json::to_value(&guide).unwrap();
+        assert_eq!(json["editedFields"], json!(["intro", "tags"]));
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+
+        let old: Guide = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        assert!(old.edited_fields.is_empty());
+    }
+
+    #[test]
+    fn field_edits_are_per_field_with_legacy_edited_meaning_all() {
+        let mut guide = Guide::new("Untitled", "en");
+        assert!(GuideField::ALL.iter().all(|&f| !guide.is_field_edited(f)));
+        // Saved before `editedFields`: `edited` covers every field.
+        guide.ai_state.status = AiStatus::Edited;
+        assert!(GuideField::ALL.iter().all(|&f| guide.is_field_edited(f)));
+        guide.edited_fields = vec![GuideField::Summary];
+        assert!(guide.is_field_edited(GuideField::Summary));
+        assert!(!guide.is_field_edited(GuideField::Intro));
+        assert!(!guide.is_field_edited(GuideField::Title));
     }
 
     #[test]

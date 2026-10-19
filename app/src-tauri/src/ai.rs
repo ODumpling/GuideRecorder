@@ -32,7 +32,7 @@ use guiderecorder_core::ai::{
     PipelineOptions, PipelineSummary, RedactionSuggestion, RewriteInput, RewriteStyle,
 };
 use guiderecorder_core::library::GuideHandle;
-use guiderecorder_core::model::{AiState, AiStatus, Guide, GuideKind, Item, Step};
+use guiderecorder_core::model::{AiState, AiStatus, Guide, GuideField, GuideKind, Item, Step};
 use guiderecorder_core::Ulid;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -125,9 +125,12 @@ pub struct GuidePayload {
     pub run_id: u64,
     pub guide_id: String,
     pub fields: Option<GuideFields>,
-    /// The guide's `aiState` after the pass: `ai` with model and prompt
-    /// version when `fields` is set, the error when it failed, else as it
-    /// was.
+    /// The fields the pass wrote, when `fields` is set: never one the user
+    /// edited (unless forced). The others in `fields` are as they were.
+    pub written: Vec<GuideField>,
+    /// The guide's `aiState` after the pass: with model and prompt version
+    /// when `fields` is set (`ai`, or `edited` while the user has edited
+    /// fields), the error when it failed, else as it was.
     pub ai_state: AiState,
     pub error: Option<String>,
 }
@@ -320,11 +323,16 @@ pub fn begin(
     let (unselected, forced) =
         select_steps(&mut guide, options.step_ids.as_deref(), options.force)?;
     let forced = Forced {
-        guide: options.force && guide_pass && guide.ai_state.status == AiStatus::Edited,
+        guide: options.force
+            && guide_pass
+            && GuideField::ALL
+                .into_iter()
+                .any(|field| guide.is_field_edited(field)),
         ..forced
     };
     if forced.guide {
         guide.ai_state.status = AiStatus::Template;
+        guide.edited_fields.clear();
     }
     if !ai.language.trim().is_empty() {
         guide.language = ai.language.clone();
@@ -462,6 +470,7 @@ async fn drive(
                 run_id,
                 guide_id: guide_id.clone(),
                 fields: None,
+                written: Vec::new(),
                 ai_state,
                 error: Some(RUN_FAILED.into()),
             }));
@@ -532,7 +541,7 @@ fn closing_events(
 ) -> Vec<AiEvent> {
     let guide_id = guide.id.to_string();
     let mut events = Vec::new();
-    let (fields, error) = match &summary.guide {
+    let (fields, written, error) = match &summary.guide {
         GuidePassOutcome::Applied(applied) => {
             for id in &applied.edited_steps {
                 if let Some(step) = guide.steps().find(|step| step.id == *id) {
@@ -547,17 +556,17 @@ fn closing_events(
                     }));
                 }
             }
-            let fields = applied.fields_applied.then(|| GuideFields {
+            let fields = (!applied.fields.is_empty()).then(|| GuideFields {
                 title: guide.title.clone(),
                 intro: guide.intro.clone(),
                 prerequisites: guide.prerequisites.clone(),
                 summary: guide.summary.clone(),
                 tags: guide.tags.clone(),
             });
-            (fields, None)
+            (fields, applied.fields.clone(), None)
         }
-        GuidePassOutcome::Failed(e) => (None, Some(e.to_string())),
-        GuidePassOutcome::NotRun | GuidePassOutcome::Cancelled => (None, None),
+        GuidePassOutcome::Failed(e) => (None, Vec::new(), Some(e.to_string())),
+        GuidePassOutcome::NotRun | GuidePassOutcome::Cancelled => (None, Vec::new(), None),
     };
     let mut ai_state = guide.ai_state.clone();
     if fields.is_none() {
@@ -567,6 +576,7 @@ fn closing_events(
         run_id,
         guide_id,
         fields,
+        written,
         ai_state,
         error,
     }));
@@ -984,6 +994,7 @@ mod tests {
                     "summary": "3 steps",
                     "tags": [],
                 },
+                "written": ["title", "intro", "prerequisites", "summary", "tags"],
                 "aiState": { "status": "ai", "model": "mock", "promptVersion": "guide.v1" },
                 "error": null,
             })
@@ -1409,6 +1420,7 @@ mod tests {
                 "runId": run_id,
                 "guideId": gid,
                 "fields": null,
+                "written": [],
                 "aiState": { "status": "template", "model": "earlier" },
                 "error": RUN_FAILED,
             })
@@ -1695,6 +1707,65 @@ mod tests {
             (finished.applied, finished.skipped_edited, finished.failed),
             (0, 0, 0)
         );
+    }
+
+    #[test]
+    fn guide_fields_edited_by_hand_are_not_written() {
+        let mut guide = guide();
+        guide.summary = "My summary".into();
+        guide.edited_fields = vec![GuideField::Summary];
+        guide.ai_state.status = AiStatus::Edited;
+        let provider = MockProvider::new().on_guide(|_| {
+            Ok(GuideOutput {
+                title: "New".into(),
+                intro: "Intro".into(),
+                prerequisites: "- Access".into(),
+                summary: "AI summary".into(),
+                tags: vec!["keys".into()],
+                step_edits: Vec::new(),
+                meta: mock_meta(prompts::GUIDE.version),
+            })
+        });
+        let (events, _) = run_all(provider, guide, GenerateOptions::default());
+        let guide_event = guide_event(&events);
+        let fields = guide_event.fields.as_ref().unwrap();
+        assert_eq!(fields.summary, "My summary");
+        assert_eq!(fields.intro, "Intro");
+        assert_eq!(
+            guide_event.written,
+            [
+                GuideField::Title,
+                GuideField::Intro,
+                GuideField::Prerequisites,
+                GuideField::Tags
+            ]
+        );
+        assert_eq!(guide_event.ai_state.status, AiStatus::Edited);
+        let json = serde_json::to_value(guide_event).unwrap();
+        assert_eq!(
+            json["written"],
+            json!(["title", "intro", "prerequisites", "tags"])
+        );
+    }
+
+    #[test]
+    fn force_regenerates_fields_edited_by_hand() {
+        let mut guide = guide();
+        guide.edited_fields = vec![GuideField::Intro];
+        guide.ai_state.status = AiStatus::Edited;
+        let (events, _) = run_all(
+            MockProvider::new(),
+            guide,
+            GenerateOptions {
+                step_ids: Some(Vec::new()),
+                guide_pass: Some(true),
+                force: true,
+            },
+        );
+        let guide_event = guide_event(&events);
+        assert!(guide_event.fields.is_some());
+        assert_eq!(guide_event.written, GuideField::ALL);
+        assert_eq!(guide_event.ai_state.status, AiStatus::Ai);
     }
 
     #[test]

@@ -154,12 +154,35 @@ describe("AI run controller", () => {
     expect(e().notice).toBe("AI wrote nothing new. Kept your edits to 2 steps.");
   });
 
-  it("keeps guide fields the user edited", async () => {
+  it("keeps guide fields the user edited and writes the others", async () => {
     const { e, ai, events } = await setup();
     await ai.getState().start();
     e().dispatch(setGuideField(e().doc!.guide, "summary", "My summary"));
     events.emit("ai://guide", guideEvent(7));
-    expect(e().doc!.guide).toMatchObject({ title: "Guide", intro: "", summary: "My summary", aiState: { status: "edited" } });
+    expect(e().doc!.guide).toMatchObject({
+      title: "AI guide",
+      intro: "AI intro",
+      summary: "My summary",
+      tags: ["ai"],
+      editedFields: ["summary"],
+      aiState: { status: "edited", promptVersion: "guide.v1" },
+    });
+  });
+
+  it("writes only the guide fields the pass wrote", async () => {
+    const { e, ai, events } = await setup();
+    await ai.getState().start();
+    // The backend left the tags alone (edited in the saved copy).
+    events.emit("ai://guide", { ...guideEvent(7), written: ["title", "intro", "prerequisites", "summary"] });
+    expect(e().doc!.guide).toMatchObject({ title: "AI guide", summary: "AI summary", tags: [], aiState: { status: "ai" } });
+  });
+
+  it("leaves a guide alone whose details were all edited before per-field tracking", async () => {
+    const { e, ai, events } = await setup();
+    e().applyUntracked([{ op: "setGuide", key: "aiState", value: { status: "edited" } }]);
+    await ai.getState().start();
+    events.emit("ai://guide", guideEvent(7));
+    expect(e().doc!.guide).toMatchObject({ title: "Guide", intro: "", summary: "", aiState: { status: "edited" } });
   });
 
   it("records a failed step's error and keeps its text", async () => {
@@ -380,9 +403,15 @@ describe("explicit AI actions", () => {
     events.emit("ai://guide", guideEvent(7));
     events.emit("ai://finished", finished(7));
     expect(e().doc!.guide).toMatchObject({ title: "AI guide", summary: "AI summary", aiState: { status: "ai" } });
+    expect(e().doc!.guide.editedFields).toBeUndefined();
     expect(e().undoStack.at(-1)!.command.label).toBe("Regenerate guide details");
     e().undo();
-    expect(e().doc!.guide).toMatchObject({ title: "Guide", summary: "My summary", aiState: { status: "edited" } });
+    expect(e().doc!.guide).toMatchObject({
+      title: "Guide",
+      summary: "My summary",
+      editedFields: ["summary"],
+      aiState: { status: "edited" },
+    });
   });
 
   it("Rewrite flushes, then applies the result as one undoable change", async () => {

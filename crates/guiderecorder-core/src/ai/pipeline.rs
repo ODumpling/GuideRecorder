@@ -19,8 +19,9 @@
 //!   as suggestions only (Q9), replacing earlier ones; they never become
 //!   annotations without the user.
 //! - Guide-level fields (title, intro, prerequisites, summary, tags) are
-//!   written only while [`Guide::ai_state`] is not `edited`. The editor sets
-//!   `edited` when the user changes any of them (#366).
+//!   written one by one, each only when the user has not edited it
+//!   ([`Guide::is_field_edited`]). The editor marks a field edited when the
+//!   user changes it (#366, #5).
 //!
 //! Contract for the app: [`run`] holds `&mut Guide` for the whole run, so it
 //! works on its own copy. If the app keeps a separate live copy that the user
@@ -46,7 +47,7 @@ use super::{
 };
 use crate::export::raster::locate_crop;
 use crate::library::GuideHandle;
-use crate::model::{AiState, AiStatus, Guide, Item, Point, Rect, Step};
+use crate::model::{AiState, AiStatus, Guide, GuideField, Item, Point, Rect, Step};
 
 /// Reads a step image by its bundle-relative path (e.g. `steps/<id>.webp`).
 pub trait ImageSource: Send + Sync {
@@ -175,8 +176,8 @@ pub enum PipelineEvent {
         step_ids: Vec<Ulid>,
     },
     Step(StepEvent),
-    /// The guide-level pass finished. Guide fields (unless the guide is
-    /// `edited`) and any consistency edits are already applied; a failure is
+    /// The guide-level pass finished. Guide fields the user has not edited
+    /// and any consistency edits are already applied; a failure is
     /// recorded in [`Guide::ai_state`]'s `error`.
     Guide(GuidePassOutcome),
 }
@@ -184,8 +185,9 @@ pub enum PipelineEvent {
 /// What [`apply_guide_output`] changed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GuideApplied {
-    /// Guide-level fields were written (false when the guide is `edited`).
-    pub fields_applied: bool,
+    /// Guide-level fields written, in [`GuideField::ALL`] order; never one
+    /// the user has edited.
+    pub fields: Vec<GuideField>,
     /// Steps changed by consistency edits.
     pub edited_steps: Vec<Ulid>,
     /// Consistency edits dropped because the step is `edited` or unknown.
@@ -480,28 +482,40 @@ pub fn apply_step_error(guide: &mut Guide, step_id: Ulid, error: &AiError) -> Op
     Some(StepOutcome::Failed(error.clone()))
 }
 
-/// Writes a guide-level result. Title, intro, prerequisites, summary and
-/// tags are written, and [`Guide::ai_state`] set to `ai` with the model and
-/// prompt version, only when the guide's `ai_state` is not `edited`.
-/// Consistency edits go to steps that are not `edited`; those steps get the
-/// guide prompt's model and version, keeping their suggestions and error.
+/// Writes a guide-level result. Each of title, intro, prerequisites,
+/// summary and tags is written only when the user has not edited it (an
+/// empty title is never written). If any was written, [`Guide::ai_state`]
+/// gets the model and prompt version, and is `ai`, or still `edited` while
+/// the user has edited fields. Consistency edits go to steps that are not
+/// `edited`; those steps get the guide prompt's model and version, keeping
+/// their suggestions and error.
 pub fn apply_guide_output(guide: &mut Guide, output: &GuideOutput) -> GuideApplied {
     let mut applied = GuideApplied::default();
-    if guide.ai_state.status != AiStatus::Edited {
-        if !output.title.trim().is_empty() {
-            guide.title = output.title.clone();
+    for field in GuideField::ALL {
+        if guide.is_field_edited(field) {
+            continue;
         }
-        guide.intro = output.intro.clone();
-        guide.prerequisites = output.prerequisites.clone();
-        guide.summary = output.summary.clone();
-        guide.tags = output.tags.clone();
+        match field {
+            GuideField::Title if output.title.trim().is_empty() => continue,
+            GuideField::Title => guide.title = output.title.clone(),
+            GuideField::Intro => guide.intro = output.intro.clone(),
+            GuideField::Prerequisites => guide.prerequisites = output.prerequisites.clone(),
+            GuideField::Summary => guide.summary = output.summary.clone(),
+            GuideField::Tags => guide.tags = output.tags.clone(),
+        }
+        applied.fields.push(field);
+    }
+    if !applied.fields.is_empty() {
         guide.ai_state = AiState {
-            status: AiStatus::Ai,
+            status: if guide.edited_fields.is_empty() {
+                AiStatus::Ai
+            } else {
+                AiStatus::Edited
+            },
             model: Some(output.meta.model.clone()),
             prompt_version: Some(output.meta.prompt_version.clone()),
             ..AiState::default()
         };
-        applied.fields_applied = true;
     }
 
     for edit in &output.step_edits {
@@ -899,7 +913,7 @@ mod tests {
         assert_eq!(g.prerequisites, "- Numbers");
         assert_eq!(g.summary, "Export a sheet.");
         assert_eq!(g.tags, ["numbers", "pdf"]);
-        assert!(applied.fields_applied);
+        assert_eq!(applied.fields, GuideField::ALL);
         assert_eq!(g.ai_state.status, AiStatus::Ai);
         assert_eq!(g.ai_state.prompt_version.as_deref(), Some("guide.v1"));
     }
@@ -989,8 +1003,61 @@ mod tests {
         let GuidePassOutcome::Applied(applied) = summary.guide else {
             panic!("guide pass should apply");
         };
-        assert!(!applied.fields_applied);
+        assert!(applied.fields.is_empty());
         assert_eq!(applied.edited_steps, [id]);
+    }
+
+    #[test]
+    fn guide_fields_edited_by_hand_are_kept_and_the_rest_written() {
+        let mut g = guide(vec![step("Click A", AiStatus::Template)]);
+        g.intro = "My intro".into();
+        g.tags = vec!["mine".into()];
+        g.edited_fields = vec![GuideField::Intro, GuideField::Tags];
+        g.ai_state.status = AiStatus::Edited;
+        let output = GuideOutput {
+            title: "AI title".into(),
+            intro: "AI intro".into(),
+            prerequisites: "- AI prereqs".into(),
+            summary: "AI summary".into(),
+            tags: vec!["ai".into()],
+            step_edits: Vec::new(),
+            meta: mock_meta("guide.v1"),
+        };
+        let applied = apply_guide_output(&mut g, &output);
+        assert_eq!(
+            applied.fields,
+            [
+                GuideField::Title,
+                GuideField::Prerequisites,
+                GuideField::Summary
+            ]
+        );
+        assert_eq!(g.title, "AI title");
+        assert_eq!(g.intro, "My intro");
+        assert_eq!(g.prerequisites, "- AI prereqs");
+        assert_eq!(g.summary, "AI summary");
+        assert_eq!(g.tags, ["mine"]);
+        assert_eq!(g.edited_fields, [GuideField::Intro, GuideField::Tags]);
+        // Still `edited` (older apps then leave every field alone), with
+        // the model of the text it did write.
+        assert_eq!(g.ai_state.status, AiStatus::Edited);
+        assert_eq!(g.ai_state.prompt_version.as_deref(), Some("guide.v1"));
+
+        // Running again keeps them still.
+        let again = apply_guide_output(&mut g, &output);
+        assert_eq!(again.fields, applied.fields);
+        assert_eq!(g.intro, "My intro");
+        assert_eq!(g.tags, ["mine"]);
+
+        // Every field edited: nothing written, state left alone.
+        g.edited_fields = GuideField::ALL.to_vec();
+        g.ai_state = AiState {
+            status: AiStatus::Edited,
+            ..AiState::default()
+        };
+        let none = apply_guide_output(&mut g, &output);
+        assert!(none.fields.is_empty());
+        assert_eq!(g.ai_state.prompt_version, None);
     }
 
     #[tokio::test]

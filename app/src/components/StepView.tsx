@@ -2,6 +2,7 @@ import { lazy, Suspense, useRef, useState, type Ref } from "react";
 import { ChevronDown, ImageOff, Merge, Scissors, Sparkles, Trash2 } from "lucide-react";
 import { useAi } from "@/ai/ai";
 import { CustomRewrite } from "@/ai/CustomRewrite";
+import { GuideDetails } from "@/components/GuideDetails";
 import type { MarkdownEditorHandle } from "@/components/MarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { useStepImage } from "@/components/useStepImage";
@@ -152,12 +153,11 @@ function ItemActions({ item, onSplit, onCustom }: { item: Item; onSplit(): void;
   );
 }
 
-/** The centre pane: the selected step, section or note. */
+/** The centre pane: the selected step, section or note, or else the guide's details. */
 export function StepView() {
   const doc = useEditor((s) => s.doc);
   const item = useSelectedItem();
   const annotated = useAnnotated();
-  const noun = stepNoun(annotated);
   const Noun = annotated ? "Page" : "Step";
   const description = useRef<MarkdownEditorHandle>(null);
   // The step whose custom rewrite form is open.
@@ -169,13 +169,7 @@ export function StepView() {
       </div>
     );
   }
-  if (!item) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        {doc.guide.items.length ? `Select a ${noun}` : `This guide has no ${noun}s`}
-      </div>
-    );
-  }
+  if (!item) return <GuideDetails />;
   const split = () => {
     if (item.type !== "step") return;
     // Until the editor has loaded, the whole description stays.

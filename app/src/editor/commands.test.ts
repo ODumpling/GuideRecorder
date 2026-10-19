@@ -16,6 +16,7 @@ import {
   PatchError,
   renameGuide,
   setGuideField,
+  editedGuideFields,
   setImageShow,
   setItemText,
   setItemTitle,
@@ -320,6 +321,7 @@ describe("guide-level fields", () => {
     for (const command of edits) {
       const after = roundTrip(command);
       expect(after.aiState).toEqual({ status: "edited" });
+      expect(after.editedFields).toEqual([command.forward[0].op === "setGuide" && command.forward[0].key]);
     }
     expect(roundTrip(setGuideField(guide(), "tags", ["a", "b"])).tags).toEqual(["a", "b"]);
   });
@@ -340,6 +342,24 @@ describe("guide-level fields", () => {
     const g2 = applyPatches(g0, merged.forward);
     expect(g2).toMatchObject({ intro: "Hi", aiState: { status: "edited" } });
     expect(applyPatches(g2, merged.inverse)).toEqual(g0);
+  });
+
+  it("add each edited field to the others, in field order", () => {
+    const g0 = guide();
+    const g1 = applyPatches(g0, setGuideField(g0, "tags", ["x"]).forward);
+    const g2 = applyPatches(g1, setGuideField(g1, "intro", "Hi").forward);
+    expect(g2.editedFields).toEqual(["intro", "tags"]);
+    expect(editedGuideFields(g2)).toEqual(["intro", "tags"]);
+    expect(editedGuideFields(g0)).toEqual([]);
+  });
+
+  it("treat an older edited guide as having every field edited", () => {
+    const legacy = { ...guide(), aiState: { status: "edited" as const } };
+    expect(editedGuideFields(legacy)).toEqual(["title", "intro", "prerequisites", "summary", "tags"]);
+    const command = setGuideField(legacy, "summary", "Mine");
+    const after = applyPatches(legacy, command.forward);
+    expect(after.editedFields).toEqual(["title", "intro", "prerequisites", "summary", "tags"]);
+    expect(applyPatches(after, command.inverse)).toEqual(legacy);
   });
 
   it("change nothing, not even the AI state, when the value is the same", () => {

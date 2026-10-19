@@ -1,4 +1,4 @@
-import type { Guide, ImageShow, Item, NoteKind, Step, StepImage } from "@/lib/types";
+import type { Guide, GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@/text/markdown";
 
@@ -96,8 +96,20 @@ export function findStep(guide: Guide, id: string): Step {
   return item;
 }
 
-/** The guide-level fields the AI guide pass writes. */
-export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
+export type { GuideTextField };
+
+/** The guide-level fields the AI guide pass writes, in order. */
+export const GUIDE_TEXT_FIELDS: readonly GuideTextField[] = ["title", "intro", "prerequisites", "summary", "tags"];
+
+/**
+ * The guide-level fields the user wrote by hand, which AI must not
+ * overwrite. A guide saved before `editedFields` existed has only an
+ * `edited` `aiState`, which covers every field.
+ */
+export function editedGuideFields(guide: Guide): GuideTextField[] {
+  if (guide.editedFields?.length) return guide.editedFields;
+  return guide.aiState?.status === "edited" ? [...GUIDE_TEXT_FIELDS] : [];
+}
 
 const GUIDE_LABELS: Record<GuideTextField, string> = {
   title: "Rename guide",
@@ -108,8 +120,9 @@ const GUIDE_LABELS: Record<GuideTextField, string> = {
 };
 
 /**
- * Sets a guide-level field. Like step text, this marks the guide's
- * `aiState` `edited`, so the AI guide pass no longer overwrites these fields.
+ * Sets a guide-level field. Like step text, this marks the field edited (in
+ * `editedFields`, and the guide's `aiState` `edited`), so the AI guide pass
+ * no longer overwrites it; it may still write the other fields.
  */
 export function setGuideField<K extends GuideTextField>(guide: Guide, key: K, value: Guide[K]): Command {
   const field: Command = {
@@ -120,14 +133,20 @@ export function setGuideField<K extends GuideTextField>(guide: Guide, key: K, va
   };
   // Unchanged (e.g. retyping the title): a no-op the store refuses.
   if (JSON.stringify(value) === JSON.stringify(guide[key])) return field;
+  const edited = new Set([...editedGuideFields(guide), key]);
   return {
     ...field,
     // Always in `forward`: a coalesced command keeps only the last forward.
     forward: [
       ...field.forward,
+      { op: "setGuide", key: "editedFields", value: GUIDE_TEXT_FIELDS.filter((f) => edited.has(f)) },
       { op: "setGuide", key: "aiState", value: { ...(guide.aiState ?? { status: "template" }), status: "edited" } },
     ],
-    inverse: [...field.inverse, { op: "setGuide", key: "aiState", value: guide.aiState }],
+    inverse: [
+      ...field.inverse,
+      { op: "setGuide", key: "editedFields", value: guide.editedFields },
+      { op: "setGuide", key: "aiState", value: guide.aiState },
+    ],
   };
 }
 
@@ -209,7 +228,8 @@ export function coalesce(prev: Command, next: Command): Command | null {
   if (!prev.coalesceKey || prev.coalesceKey !== next.coalesceKey) return null;
   const merged = { ...next, inverse: prev.inverse };
   // Typed, then deleted back: the text is as it was, so its AI state is too.
-  const text = (patches: Patch[]) => JSON.stringify(patches.filter((p) => !("key" in p) || p.key !== "aiState"));
+  const provenance = new Set(["aiState", "editedFields"]);
+  const text = (patches: Patch[]) => JSON.stringify(patches.filter((p) => !("key" in p) || !provenance.has(p.key)));
   return text(merged.forward) === text(merged.inverse) ? { ...merged, forward: merged.inverse } : merged;
 }
 
