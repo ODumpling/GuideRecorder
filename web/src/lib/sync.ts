@@ -252,6 +252,18 @@ export async function getGuide(db: Database, organizationId: string, userId: str
   return { guide: g, head: head! };
 }
 
+/** One revision of a guide, if the user can see the guide. */
+export async function getRevision(db: Database, organizationId: string, userId: string, guideId: string, revisionId: string) {
+  const [found] = await db
+    .select({ id: revision.id })
+    .from(revision)
+    .innerJoin(guide, and(eq(guide.organizationId, revision.organizationId), eq(guide.id, revision.guideId)))
+    .where(and(eq(revision.organizationId, organizationId), eq(revision.guideId, guideId), eq(revision.id, revisionId), visibleTo(userId)));
+  if (!found) return null;
+  const [r] = await revisions(db, [found.id]);
+  return r ?? null;
+}
+
 /** Revisions by id, with their asset maps. */
 async function revisions(db: Database, ids: string[]): Promise<Revision[]> {
   if (!ids.length) return [];

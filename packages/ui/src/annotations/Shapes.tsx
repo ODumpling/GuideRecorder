@@ -4,7 +4,7 @@
 // redaction into the pixels.
 
 import { useEffect, useState } from "react";
-import { colorOr } from "@/annotations/color";
+import { colorOr } from "./color.ts";
 import {
   arrowShape,
   maskOutside,
@@ -22,8 +22,8 @@ import {
   LINE_HEIGHT,
   strokeWidth,
   type View,
-} from "@/annotations/geometry";
-import type { Annotation, Rect } from "@/lib/types";
+} from "./geometry.ts";
+import type { Annotation, Rect } from "@guiderecorder/guide-schema";
 
 /** The image under the layer: its URL and where it sits, in full pixels. */
 export interface Backdrop {
@@ -33,7 +33,7 @@ export interface Backdrop {
 
 function opacity(annotation: Annotation, fallback?: number): number | undefined {
   const value = annotation.style?.opacity;
-  const chosen = value !== undefined && Number.isFinite(value) ? value : fallback;
+  const chosen = value != null && Number.isFinite(value) ? value : fallback;
   return chosen === undefined ? undefined : Math.min(Math.max(chosen, 0), 1);
 }
 
@@ -43,6 +43,7 @@ const valid = (r: Rect) =>
 /** A region of the backdrop drawn in blocks, like the exporter's pixelate. */
 function Pixelated({ rect, block, backdrop }: { rect: Rect; block: number; backdrop: Backdrop }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [unreadable, setUnreadable] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const image = new Image();
@@ -60,13 +61,20 @@ function Pixelated({ rect, block, backdrop }: { rect: Rect; block: number; backd
       if (!context) return;
       context.imageSmoothingEnabled = true;
       context.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-      setUrl(canvas.toDataURL());
+      try {
+        setUrl(canvas.toDataURL());
+      } catch {
+        // A cross-origin image (the web's asset URLs) can't be read back.
+        setUnreadable(true);
+      }
     };
     image.src = backdrop.url;
     return () => {
       cancelled = true;
     };
   }, [rect.x, rect.y, rect.width, rect.height, block, backdrop.url, backdrop.rect]);
+  // Covered instead, so the region never shows unredacted.
+  if (unreadable) return <rect x={rect.x} y={rect.y} width={rect.width} height={rect.height} fill="#8e8e93" />;
   if (!url) return null;
   return (
     <image
@@ -231,7 +239,7 @@ export function Shape({
           width={r.width}
           height={r.height}
           rx={sw}
-          fill={style.fill === undefined ? "none" : colorOr(style.fill, "none")}
+          fill={style.fill == null ? "none" : colorOr(style.fill, "none")}
           stroke={colorOr(style.color, DEFAULT_COLOR)}
           strokeWidth={sw}
         />
@@ -257,7 +265,7 @@ export function Shape({
       const sw = strokeWidth(style.strokeWidth, DEFAULT_CALLOUT_STROKE);
       const stroke = colorOr(style.color, DEFAULT_COLOR);
       const fontSize =
-        style.fontSize !== undefined && Number.isFinite(style.fontSize) && style.fontSize > 0
+        style.fontSize != null && Number.isFinite(style.fontSize) && style.fontSize > 0
           ? Math.min(style.fontSize, 512)
           : DEFAULT_FONT_SIZE;
       const pad = Math.max(fontSize * 0.5, sw + 2);

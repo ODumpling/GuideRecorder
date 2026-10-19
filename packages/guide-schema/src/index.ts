@@ -2,9 +2,11 @@
 // TypeScript types and a Zod schema, both generated from the Rust model.
 
 import { z } from "zod";
-import { guideJsonSchema, type Guide } from "./guide.gen.ts";
+import { guideJsonSchema, type Annotation, type Guide } from "./guide.gen.ts";
 
 export * from "./guide.gen.ts";
+
+export type AnnotationType = Annotation["type"];
 
 /** The guide.json schema version this package was generated for. */
 export const SCHEMA_VERSION = 2;

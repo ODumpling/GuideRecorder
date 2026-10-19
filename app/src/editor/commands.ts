@@ -1,6 +1,7 @@
-import type { Guide, GuideTextField, ImageShow, Item, NoteKind, ReviewFields, Step, StepImage } from "@/lib/types";
+import type { Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { ReviewFields } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
-import { normalizeMarkdown } from "@/text/markdown";
+import { normalizeMarkdown } from "@guiderecorder/ui/markdown";
 
 /**
  * A minimal change to a guide. Items are addressed by id, so a patch stays

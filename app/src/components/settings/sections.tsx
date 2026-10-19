@@ -1,31 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, ExternalLink, RotateCw, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { CommitInput, HotkeyField, PathText, Row, Section, Select, Toggle } from "@/components/settings/controls";
 import { useEditor } from "@/editor/editor";
 import { allGranted, setupStore } from "@/onboarding/onboarding";
 import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
-import type {
-  AiEndpoint,
-  AiProviderKind,
-  CaptureArea,
-  HotkeyErrors,
-  LibraryInfo,
-  McpSetup,
-  Permission,
-  PermissionRow,
-  PermissionStatus,
-  RedactionMode,
-  Settings,
-  Theme,
-  UpdateStatus,
-} from "@/lib/types";
+import type { AiEndpoint, AiProviderKind, CaptureArea, HotkeyErrors, LibraryInfo, McpSetup, Permission, PermissionRow, PermissionStatus, RedactionMode, Settings, Theme, UpdateStatus } from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
 import { THEMES } from "@/settings/theme";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 import {
   AFTER_FRAME_DELAY_MS,
   bundleIdError,

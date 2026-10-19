@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "zustand";
 import { Camera, Check, LoaderCircle, Pause, Play, Plus, Square, TriangleAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { elapsedMs, formatElapsed, type RecordingStore } from "@/recording/store";
 import { toolbarView, type ManualStepStore } from "@/toolbar/toolbar";
 

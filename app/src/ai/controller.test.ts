@@ -5,7 +5,8 @@ import { setGuideField, setItemText } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 import type { AiApi, EditorApi } from "@/lib/ipc";
-import type { AiGuideEvent, AiRewriteResult, AiStepEvent, Guide, Settings, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
+import type { AiGuideEvent, AiRewriteResult, AiStepEvent, Settings } from "@/lib/types";
 
 function fakeEvents() {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();

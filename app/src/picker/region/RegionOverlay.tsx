@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import type { Rect } from "@/lib/types";
+import type { Rect } from "@guiderecorder/guide-schema";
 import { dragRect, isPickable, MIN_REGION_SIDE, type Point } from "@/picker/region/region";
 
 const DIM = "rgba(0, 0, 0, 0.45)";

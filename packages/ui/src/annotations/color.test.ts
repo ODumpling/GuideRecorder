@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorOr, isValidColor } from "@/annotations/color";
+import { colorOr, isValidColor } from "./color.ts";
 
 describe("colours (as core accepts them)", () => {
   it("accept hex and CSS names", () => {

@@ -12,10 +12,10 @@ import {
   RecordingSection,
 } from "@/components/settings/sections";
 import { SyncSection } from "@/components/settings/SyncSection";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
 import { settingsStore, useSettings } from "@/settings/settings";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp" | "sync";
 
