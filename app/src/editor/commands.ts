@@ -1,4 +1,4 @@
-import type { Guide, GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@/lib/types";
+import type { Guide, GuideTextField, ImageShow, Item, NoteKind, ReviewFields, Step, StepImage } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@/text/markdown";
 
@@ -147,6 +147,32 @@ export function setGuideField<K extends GuideTextField>(guide: Guide, key: K, va
       { op: "setGuide", key: "editedFields", value: guide.editedFields },
       { op: "setGuide", key: "aiState", value: guide.aiState },
     ],
+  };
+}
+
+/** The owner, status, version and review fields (`ReviewFields`). */
+export type ReviewField = keyof ReviewFields;
+
+const REVIEW_LABELS: Record<ReviewField, string> = {
+  owner: "Edit owner",
+  status: "Change status",
+  version: "Edit version",
+  lastReviewed: "Edit review date",
+  reviewIntervalMonths: "Edit review interval",
+};
+
+/**
+ * Sets an owner, status, version or review field. These are the user's
+ * alone (AI never writes them), so nothing is marked edited. An empty
+ * value (`""`, null, a 0 interval) unsets the field.
+ */
+export function setReviewField<K extends ReviewField>(guide: Guide, key: K, value: ReviewFields[K]): Command {
+  const unset = value === "" || value === null || value === undefined || (key === "reviewIntervalMonths" && value === 0);
+  return {
+    label: REVIEW_LABELS[key],
+    forward: [{ op: "setGuide", key, value: unset ? undefined : value }],
+    inverse: [{ op: "setGuide", key, value: guide[key] }],
+    coalesceKey: `guide.${key}`,
   };
 }
 

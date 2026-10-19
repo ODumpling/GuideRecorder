@@ -168,6 +168,49 @@ fn branded() -> MdOptions {
 }
 
 #[test]
+fn review_details_follow_the_summary_when_asked() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let mut guide = guide.clone();
+    guide.language = "en".into();
+    guide.summary = "Short.".into();
+    guide.review = ReviewInfo {
+        owner: Some("*Ops*  team".into()),
+        status: Some(GuideStatus::Published),
+        version: Some("1.2".into()),
+        last_reviewed: chrono::NaiveDate::from_ymd_opt(2026, 10, 1),
+        review_interval_months: Some(6),
+    };
+    let read = |opts: &MdOptions| {
+        let out = tempfile::tempdir().unwrap();
+        export(&guide, handle, out.path(), opts);
+        fs::read_to_string(out.path().join(md::GUIDE_FILE)).unwrap()
+    };
+    assert!(!read(&MdOptions::default()).contains("Version"));
+    let text = read(&MdOptions {
+        review_details: true,
+        ..MdOptions::default()
+    });
+    assert!(
+        text.contains(
+            "Short.\n\n*Version: 1.2 · Owner: \\*Ops\\* team · Last reviewed: 2026-10-01*\n\n"
+        ),
+        "{text}"
+    );
+
+    let de = md::Labels::for_language("de-DE");
+    assert_eq!(
+        de.review_details(&ReviewInfo {
+            owner: Some("Ana".into()),
+            ..ReviewInfo::default()
+        })
+        .as_deref(),
+        Some("Verantwortlich: Ana")
+    );
+    assert_eq!(de.review_details(&ReviewInfo::default()), None);
+}
+
+#[test]
 fn branded_fixture_goldens() {
     let fixtures = fixtures();
     for (handle, guide) in &fixtures.guides {

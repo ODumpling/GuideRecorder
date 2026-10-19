@@ -235,6 +235,7 @@ pub(super) fn render_string(
         csp => csp(),
         title => &guide.title,
         summary => &guide.summary,
+        details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
         css => Value::from_safe_string(format!("{}{STYLE}", stylesheet(branding))),
         script => Value::from_safe_string(SCRIPT.to_owned()),
         logo => logo,

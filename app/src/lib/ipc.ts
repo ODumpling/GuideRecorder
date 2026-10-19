@@ -17,6 +17,7 @@ import type {
   PaperSize,
   Permission,
   RenamedGuide,
+  ReviewedGuide,
   PermissionRow,
   PermissionStatus,
   RecordingReadiness,
@@ -56,6 +57,8 @@ export interface EditorApi {
   duplicateGuide(id: string, path: string, title: string): Promise<string>;
   /** Retitles the guide at `path`; its folder on disk is renamed to match. */
   renameGuide(id: string, path: string, title: string): Promise<RenamedGuide>;
+  /** Sets the last review day of the guide at `path` to `today` (`YYYY-MM-DD`). */
+  markGuideReviewed(id: string, path: string, today: string): Promise<ReviewedGuide>;
   /** Moves the guide at `path` into `folder` (`""`: the top). Returns its new path. */
   moveGuide(id: string, path: string, folder: string): Promise<string>;
   /** Shows a guide's bundle, or a library folder, in Finder. */
@@ -84,6 +87,7 @@ export const tauriApi: EditorApi = {
   createFolder: (parent, name) => invoke("create_folder", { parent, name }),
   duplicateGuide: (id, path, title) => invoke("duplicate_guide", { id, path, title }),
   renameGuide: (id, path, title) => invoke("rename_guide", { id, path, title }),
+  markGuideReviewed: (id, path, today) => invoke("mark_guide_reviewed", { id, path, today }),
   moveGuide: (id, path, folder) => invoke("move_guide", { id, path, folder }),
   reveal: (target) =>
     invoke("reveal_in_library", {
@@ -163,6 +167,8 @@ export interface ExportApi {
     branding: ExportBranding,
     /** Used by DOCX and PDF; Markdown and HTML ignore it. */
     paper: PaperSize,
+    /** Show the version, owner and last review day (those set) under the summary, or on the PDF cover. */
+    reviewDetails: boolean,
   ): Promise<ExportResult>;
   /** Shows a file an export wrote in Finder. */
   reveal(path: string): Promise<void>;
@@ -173,8 +179,8 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding, paper) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding, paper }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
 

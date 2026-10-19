@@ -20,7 +20,7 @@ use base64::Engine as _;
 use guiderecorder_core::export::{render_step_image, ImageOptions, RenderGuide, RenderStep};
 use guiderecorder_core::index::{self, ListFilter};
 use guiderecorder_core::library::{Library, LibraryError, LoadedGuide};
-use guiderecorder_core::model::{ImageShow, Item};
+use guiderecorder_core::model::{local_today, GuideStatus, ImageShow, Item};
 use guiderecorder_core::Ulid;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -179,7 +179,9 @@ impl GuideRecorderMcp {
         description = "List guides in the GuideRecorder library, most recently updated first. Returns \
                        id, title, summary, tags, step_count, updated_at, read_only and folder for \
                        each. folder is the library subfolder holding the guide (\"Work/Onboarding\"; \
-                       empty at the top level). \
+                       empty at the top level). Also owner, status (draft, inReview, published or \
+                       needsUpdate), version, last_reviewed, review_interval_months and review_due \
+                       (YYYY-MM-DD dates; null when unset) and review_overdue. \
                        read_only is true when the GuideRecorder app will not edit the guide as it is: \
                        it was saved by a newer GuideRecorder, or uses an older format the app \
                        upgrades when it next opens the guide. Read-only guides can still be read \
@@ -320,6 +322,7 @@ fn list_guides(config: &Config, args: &ListGuidesArgs) -> ToolResult<CallToolRes
     };
     let guides = list(config, &filter)?;
     let total = guides.len();
+    let today = local_today();
     let guides: Vec<_> = guides
         .into_iter()
         .take(limit)
@@ -333,6 +336,13 @@ fn list_guides(config: &Config, args: &ListGuidesArgs) -> ToolResult<CallToolRes
                 "updated_at": g.updated_at.to_rfc3339(),
                 "read_only": g.read_only,
                 "folder": g.folder,
+                "owner": g.review.owner,
+                "status": g.review.status.map(GuideStatus::as_str),
+                "version": g.review.version,
+                "last_reviewed": g.review.last_reviewed.map(|d| d.to_string()),
+                "review_interval_months": g.review.review_interval_months,
+                "review_due": g.review_due().map(|d| d.to_string()),
+                "review_overdue": g.is_review_overdue(today),
             })
         })
         .collect();
@@ -588,6 +598,10 @@ fn guide_markdown(loaded: &LoadedGuide) -> String {
             tags: &loaded.guide.tags,
             updated_at: loaded.guide.updated_at.to_rfc3339(),
             read_only: loaded.read_only && loaded.migrated_from.is_none(),
+            review_due: loaded.guide.review_due().map(|due| {
+                let overdue = loaded.guide.is_review_overdue(local_today());
+                format!("{due}{}", if overdue { " (overdue)" } else { "" })
+            }),
         },
     )
 }

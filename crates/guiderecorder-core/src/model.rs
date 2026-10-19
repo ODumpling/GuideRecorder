@@ -6,9 +6,12 @@
 //! relative to the guide bundle. All geometry is in image pixels of the full
 //! screenshot (annotations: of the image they are drawn on).
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Months, Utc};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
+
+/// The type of review days, re-exported for crates without chrono.
+pub use chrono::NaiveDate;
 
 use crate::SCHEMA_VERSION;
 
@@ -55,6 +58,11 @@ pub struct Guide {
     /// every field is the user's (see [`Guide::is_field_edited`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edited_fields: Vec<GuideField>,
+    /// Owner, status, version and review schedule. Flattened: the fields
+    /// sit at the top level of `guide.json` and are left out while unset,
+    /// so guides without them read and write unchanged.
+    #[serde(flatten)]
+    pub review: ReviewInfo,
 }
 
 impl Guide {
@@ -78,7 +86,20 @@ impl Guide {
             items: Vec::new(),
             ai_state: AiState::default(),
             edited_fields: Vec::new(),
+            review: ReviewInfo::default(),
         }
+    }
+
+    /// When the next review is due (see [`ReviewInfo::review_due`]).
+    pub fn review_due(&self) -> Option<NaiveDate> {
+        self.review.review_due(self.created_at.date_naive())
+    }
+
+    /// Whether the review is overdue on `today` (see
+    /// [`ReviewInfo::is_review_overdue`]).
+    pub fn is_review_overdue(&self, today: NaiveDate) -> bool {
+        self.review
+            .is_review_overdue(self.created_at.date_naive(), today)
     }
 
     /// Whether the user wrote `field` by hand, so AI must not overwrite it.
@@ -120,6 +141,76 @@ impl GuideField {
         GuideField::Summary,
         GuideField::Tags,
     ];
+}
+
+/// Who owns a guide, where it stands, which version it is and how often it
+/// is reviewed. Every field is optional and set by hand; see
+/// [`Guide::review`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewInfo {
+    /// Who keeps the guide current, as free text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<GuideStatus>,
+    /// Free text, e.g. `1.2`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The day the guide was last reviewed, `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reviewed: Option<NaiveDate>,
+    /// Review every N months; unset or 0: no schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_interval_months: Option<u32>,
+}
+
+impl ReviewInfo {
+    /// When the next review is due: [`ReviewInfo::last_reviewed`] (or
+    /// `created`, the day the guide was made, if it never was) plus the
+    /// interval, on the same day of the month or else the month's last day.
+    /// `None` without an interval.
+    pub fn review_due(&self, created: NaiveDate) -> Option<NaiveDate> {
+        let months = self.review_interval_months.filter(|&m| m > 0)?;
+        self.last_reviewed
+            .unwrap_or(created)
+            .checked_add_months(Months::new(months))
+    }
+
+    /// Whether the review is overdue on `today`: past its due day (see
+    /// [`ReviewInfo::review_due`]). Due today is not overdue yet.
+    pub fn is_review_overdue(&self, created: NaiveDate, today: NaiveDate) -> bool {
+        self.review_due(created).is_some_and(|due| today > due)
+    }
+}
+
+/// Where a guide stands in its review cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideStatus {
+    Draft,
+    InReview,
+    Published,
+    /// Known to be out of date.
+    NeedsUpdate,
+}
+
+impl GuideStatus {
+    /// The name in `guide.json`, e.g. `needsUpdate`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GuideStatus::Draft => "draft",
+            GuideStatus::InReview => "inReview",
+            GuideStatus::Published => "published",
+            GuideStatus::NeedsUpdate => "needsUpdate",
+        }
+    }
+}
+
+/// Today in the local time zone: the `today` for
+/// [`ReviewInfo::is_review_overdue`] outside tests.
+pub fn local_today() -> NaiveDate {
+    Local::now().date_naive()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -665,6 +756,74 @@ mod tests {
         assert!(
             matches!(&bare.shape, Shape::Hotspot(h) if h.title.is_empty() && h.description.is_empty())
         );
+    }
+
+    #[test]
+    fn review_fields_round_trip_at_the_top_level_and_default_unset() {
+        let old: Guide = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        assert_eq!(old.review, ReviewInfo::default());
+        let mut guide = Guide::new("Rotate a key", "en");
+        let json = serde_json::to_value(&guide).unwrap();
+        for key in [
+            "owner",
+            "status",
+            "version",
+            "lastReviewed",
+            "reviewIntervalMonths",
+        ] {
+            assert!(json.get(key).is_none(), "{key}");
+        }
+        guide.review = ReviewInfo {
+            owner: Some("IT Ops".into()),
+            status: Some(GuideStatus::NeedsUpdate),
+            version: Some("1.2".into()),
+            last_reviewed: NaiveDate::from_ymd_opt(2026, 3, 31),
+            review_interval_months: Some(6),
+        };
+        let json = serde_json::to_value(&guide).unwrap();
+        assert_eq!(json["owner"], "IT Ops");
+        assert_eq!(json["status"], "needsUpdate");
+        assert_eq!(json["version"], "1.2");
+        assert_eq!(json["lastReviewed"], "2026-03-31");
+        assert_eq!(json["reviewIntervalMonths"], 6);
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+        for status in [
+            GuideStatus::Draft,
+            GuideStatus::InReview,
+            GuideStatus::Published,
+            GuideStatus::NeedsUpdate,
+        ] {
+            assert_eq!(serde_json::to_value(status).unwrap(), status.as_str());
+        }
+    }
+
+    #[test]
+    fn review_is_due_after_the_interval_and_overdue_after_that_day() {
+        let day = |m, d| NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+        let created = day(1, 10);
+        let mut review = ReviewInfo::default();
+        assert_eq!(review.review_due(created), None);
+        assert!(!review.is_review_overdue(created, day(12, 31)));
+        // Never reviewed: due an interval after the guide was made.
+        review.review_interval_months = Some(3);
+        assert_eq!(review.review_due(created), Some(day(4, 10)));
+        assert!(!review.is_review_overdue(created, day(4, 10)));
+        assert!(review.is_review_overdue(created, day(4, 11)));
+        // Month ends clamp.
+        review.last_reviewed = Some(day(8, 31));
+        assert_eq!(review.review_due(created), Some(day(11, 30)));
+        assert!(!review.is_review_overdue(created, day(11, 30)));
+        assert!(review.is_review_overdue(created, day(12, 1)));
+        // 0 months is no schedule.
+        review.review_interval_months = Some(0);
+        assert_eq!(review.review_due(created), None);
+
+        let mut guide = Guide::new("T", "en");
+        guide.created_at = "2025-10-19T23:30:00Z".parse().unwrap();
+        guide.review.review_interval_months = Some(12);
+        assert_eq!(guide.review_due(), NaiveDate::from_ymd_opt(2026, 10, 19));
+        assert!(!guide.is_review_overdue(day(10, 19)));
+        assert!(guide.is_review_overdue(day(10, 20)));
     }
 
     #[test]

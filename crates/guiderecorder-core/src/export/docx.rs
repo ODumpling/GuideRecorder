@@ -2,7 +2,8 @@
 //!
 //! # Layout
 //!
-//! - Title (style `Title`), summary (`Subtitle`), intro, then a
+//! - Title (style `Title`), summary (`Subtitle`), the review details line
+//!   when [`DocxOptions::review_details`] is on, intro, then a
 //!   prerequisites heading with its text.
 //! - Sections are `Heading1`; steps are `Heading2` headings numbered
 //!   "1. ", "2. ", ... followed by the step image and the description, in
@@ -118,6 +119,9 @@ pub struct DocxOptions {
     /// language.
     pub labels: Option<Labels>,
     pub branding: CheckedBranding,
+    /// Show the version, owner and last review day under the summary (see
+    /// [`Labels::review_details`]); off by default.
+    pub review_details: bool,
 }
 
 impl Default for DocxOptions {
@@ -132,6 +136,7 @@ impl Default for DocxOptions {
             paper: Paper::default(),
             labels: None,
             branding: CheckedBranding::default(),
+            review_details: false,
         }
     }
 }
@@ -407,6 +412,17 @@ impl<'a> Writer<'a> {
                 .style("Subtitle")
                 .add_run(text_run(&guide.summary));
             self.push(summary);
+        }
+        let details = self
+            .opts
+            .review_details
+            .then(|| self.labels.review_details(&guide.review))
+            .flatten();
+        if let Some(details) = details {
+            let details = self
+                .paragraph()
+                .add_run(text_run(&details).size(20).color("595959"));
+            self.push(details);
         }
         self.blocks(&guide.intro, Context::default());
         if !guide.prerequisites.is_empty() {

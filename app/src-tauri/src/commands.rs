@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use guiderecorder_core::export::docx::Paper;
-use guiderecorder_core::model::{Guide, Step, StepImage};
+use guiderecorder_core::model::{Guide, NaiveDate, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{
@@ -18,7 +18,7 @@ use crate::annotated::PAGE_FILE_EXTENSIONS;
 use crate::blocking::blocking;
 use crate::editor::{
     parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, RenamedGuide, Result,
-    Session, SessionCell, MAX_PNG_BYTES,
+    ReviewedGuide, Session, SessionCell, MAX_PNG_BYTES,
 };
 use crate::export::{self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format};
 
@@ -131,6 +131,17 @@ pub async fn rename_guide(
     title: String,
 ) -> Result<RenamedGuide> {
     with_session(cell, move |s| s.rename_guide(&id, &path, &title)).await
+}
+
+/// Sets the guide's last review day to `today` (the editor's local day).
+#[tauri::command]
+pub async fn mark_guide_reviewed(
+    cell: State<'_, Arc<SessionCell>>,
+    id: String,
+    path: PathBuf,
+    today: NaiveDate,
+) -> Result<ReviewedGuide> {
+    with_session(cell, move |s| s.mark_guide_reviewed(&id, &path, today)).await
 }
 
 /// Moves the guide at `path` into `folder`; returns its new path.
@@ -438,11 +449,20 @@ pub async fn export_guide(
     overwrite: bool,
     branding: BrandingRequest,
     paper: Paper,
+    review_details: bool,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
     with_session(cell, move |s| {
         export::export_guide(
-            s, &chosen, &guide_id, format, &out, overwrite, &branding, paper,
+            s,
+            &chosen,
+            &guide_id,
+            format,
+            &out,
+            overwrite,
+            &branding,
+            paper,
+            review_details,
         )
     })
     .await

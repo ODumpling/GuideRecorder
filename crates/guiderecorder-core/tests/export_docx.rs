@@ -543,6 +543,28 @@ fn empty_step_titles_fall_back_like_markdown() {
 }
 
 #[test]
+fn review_details_follow_the_title_when_asked() {
+    let mut guide = Guide::new("Audit", "en");
+    guide.summary = "Yearly.".into();
+    guide.review = ReviewInfo {
+        version: Some("1.0".into()),
+        last_reviewed: chrono::NaiveDate::from_ymd_opt(2026, 10, 19),
+        ..ReviewInfo::default()
+    };
+    let dump = Synthetic::new().export(&guide).text_dump();
+    assert_eq!(dump, "Title | Audit\nSubtitle | Yearly.\n");
+    let opts = DocxOptions {
+        review_details: true,
+        ..DocxOptions::default()
+    };
+    let (package, _) = Synthetic::new().export_with_options(&guide, opts);
+    assert_eq!(
+        package.text_dump(),
+        "Title | Audit\nSubtitle | Yearly.\nNormal | Version: 1.0 · Last reviewed: 2026-10-19\n"
+    );
+}
+
+#[test]
 fn labels_follow_the_guide_language_or_the_options() {
     let mut guide = Guide::new("Sprache", "de");
     guide.prerequisites = "Ein Drucker".into();
