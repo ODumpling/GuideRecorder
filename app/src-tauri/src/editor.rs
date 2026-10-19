@@ -14,7 +14,9 @@ use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError, PixelBuffer,
     StepImageVariant, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
-use guiderecorder_core::model::{AiState, Guide, ImageShow, Step, StepImage, StepKind};
+use guiderecorder_core::model::{
+    AiState, Guide, ImageShow, NaiveDate, ReviewInfo, Step, StepImage, StepKind,
+};
 use guiderecorder_core::Ulid;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
@@ -103,6 +105,10 @@ pub struct GuideListItem {
     pub updated_at: String,
     /// The library folder holding it, `/` separated; `""` at the top.
     pub folder: String,
+    /// `owner`, `status`, `version`, `lastReviewed` and
+    /// `reviewIntervalMonths`, as in `guide.json` (absent when unset).
+    #[serde(flatten)]
+    pub review: ReviewInfo,
     pub read_only: bool,
     pub duplicate_of: Option<PathBuf>,
 }
@@ -119,6 +125,7 @@ impl From<IndexedGuide> for GuideListItem {
             created_at: g.created_at.to_rfc3339(),
             updated_at: g.updated_at.to_rfc3339(),
             folder: g.folder,
+            review: g.review,
             read_only: g.read_only,
             duplicate_of: g.duplicate_of,
         }
@@ -132,6 +139,15 @@ impl From<IndexedGuide> for GuideListItem {
 pub struct RenamedGuide {
     pub path: PathBuf,
     pub title: String,
+    pub updated_at: String,
+}
+
+/// `mark_guide_reviewed`'s result: the review day and update time as
+/// saved (for the editor, if the guide is open).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewedGuide {
+    pub last_reviewed: NaiveDate,
     pub updated_at: String,
 }
 
@@ -564,6 +580,32 @@ impl Session {
             updated_at: guide.updated_at.to_rfc3339(),
         };
         self.follow(&old, &renamed, Some(guide));
+        Ok(result)
+    }
+
+    /// Records that the guide at `path` was reviewed on `today` (the
+    /// editor's local day; see [`Library::mark_reviewed`]). An open guide
+    /// from that bundle takes the saved copy; the editor saves it first and
+    /// takes the new fields from the result.
+    pub fn mark_guide_reviewed(
+        &self,
+        guide_id: &str,
+        path: &Path,
+        today: NaiveDate,
+    ) -> Result<ReviewedGuide> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let handle = GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        };
+        let guide = self.library.mark_reviewed(&handle, today)?;
+        let result = ReviewedGuide {
+            last_reviewed: today,
+            updated_at: guide.updated_at.to_rfc3339(),
+        };
+        self.follow(&handle, &handle, Some(guide));
         Ok(result)
     }
 
@@ -1262,6 +1304,42 @@ pub(crate) mod tests {
         assert!(session.check_bundle(&root.join("Work")).is_err());
         assert!(session
             .check_bundle(&root.join("Nope.guiderecorder"))
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mark_reviewed_lists_the_day_and_keeps_an_open_guide_saving() {
+        let root = library();
+        let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
+        let id = fixture_id(&root);
+        let row = |session: &Session| {
+            session
+                .list_guides(None)
+                .unwrap()
+                .into_iter()
+                .find(|g| g.id == id)
+                .unwrap()
+        };
+        let path = row(&session).path;
+        assert_eq!(row(&session).review, ReviewInfo::default());
+        let opened = session.open_guide(&id).unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let reviewed = session.mark_guide_reviewed(&id, &path, day).unwrap();
+        assert_eq!(reviewed.last_reviewed, day);
+        assert_eq!(row(&session).review.last_reviewed, Some(day));
+        let json = serde_json::to_value(row(&session)).unwrap();
+        assert_eq!(json["lastReviewed"], "2026-10-19");
+        assert!(json.get("owner").is_none());
+
+        // The open guide saves on with the day the editor took over.
+        let mut guide = opened.guide;
+        guide.review.last_reviewed = Some(day);
+        guide.review.owner = Some("IT".into());
+        session.save_guide(guide).unwrap();
+        assert_eq!(row(&session).review.owner.as_deref(), Some("IT"));
+        assert!(session
+            .mark_guide_reviewed(&id, &root.join("Nope.guiderecorder"), day)
             .is_err());
         fs::remove_dir_all(root).unwrap();
     }

@@ -59,6 +59,10 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
       title,
       updatedAt: "2026-10-19T00:00:00Z",
     })),
+    markGuideReviewed: vi.fn(async (_id: string, _path: string, today: string) => ({
+      lastReviewed: today,
+      updatedAt: "2026-10-19T00:00:00Z",
+    })),
     moveGuide: vi.fn(async () => "/lib/Work/Guide.guiderecorder"),
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
@@ -200,6 +204,25 @@ describe("library", () => {
     store.getState().setTag("security");
     expect(store.getState().sort).toBe("title");
     expect(store.getState().tag).toBe("security");
+    store.getState().setStatusFilter("overdue");
+    store.getState().setOwner("IT");
+    expect(store.getState().statusFilter).toBe("overdue");
+    expect(store.getState().owner).toBe("IT");
+  });
+
+  it("marks the open guide reviewed: saved first, then its review day follows", async () => {
+    const { api, s, saved } = await opened();
+    await s().loadGuides();
+    s().dispatch(renameGuide(s().doc!.guide, "Edited"));
+    expect(await s().markReviewed(s().guides[0], "2026-10-19")).toBe(true);
+    expect(saved.at(-1)?.title).toBe("Edited");
+    expect(api.markGuideReviewed).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", "2026-10-19");
+    expect(s().doc?.guide.lastReviewed).toBe("2026-10-19");
+    expect(s().saveStatus).toBe("saved");
+
+    api.markGuideReviewed = vi.fn(async () => Promise.reject({ kind: "readOnly", message: "read-only" }));
+    expect(await s().markReviewed(s().guides[0])).toBe(false);
+    expect(s().notice).toBe("Could not mark the guide reviewed: read-only");
   });
 });
 

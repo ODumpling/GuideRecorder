@@ -84,6 +84,9 @@ pub struct HtmlOptions {
     /// Fixed labels; `None` picks them from the guide language.
     pub labels: Option<Labels>,
     pub branding: CheckedBranding,
+    /// Show the version, owner and last review day under the summary (see
+    /// [`Labels::review_details`]); off by default.
+    pub review_details: bool,
 }
 
 impl Default for HtmlOptions {
@@ -96,6 +99,7 @@ impl Default for HtmlOptions {
             overwrite: false,
             labels: None,
             branding: CheckedBranding::default(),
+            review_details: false,
         }
     }
 }
@@ -194,6 +198,7 @@ pub fn render_string(
         csp => CSP,
         title => &guide.title,
         summary => &guide.summary,
+        details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
         css => Value::from_safe_string(stylesheet(branding)),
         logo => logo,
         labels => context! {

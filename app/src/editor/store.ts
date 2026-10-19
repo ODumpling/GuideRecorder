@@ -3,7 +3,7 @@ import { errorMessage, type EditorApi } from "@/lib/ipc";
 import type { Guide, GuideListItem } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
-import { copyTitle, type GuideSort } from "@/editor/library";
+import { copyTitle, localToday, type GuideSort, type StatusFilter } from "@/editor/library";
 
 /** The guide being edited, as opened. */
 export interface OpenDoc {
@@ -34,6 +34,10 @@ export interface EditorState {
   query: string;
   /** The sidebar's tag filter (case-insensitive); null shows every guide. */
   tag: string | null;
+  /** The sidebar's status filter (a status, or overdue reviews); null shows every guide. */
+  statusFilter: StatusFilter | null;
+  /** The sidebar's owner filter (case-insensitive); null shows every guide. */
+  owner: string | null;
   sort: GuideSort;
   listError: string | null;
 
@@ -64,6 +68,8 @@ export interface EditorState {
   loadGuides(): Promise<void>;
   setQuery(query: string): Promise<void>;
   setTag(tag: string | null): void;
+  setStatusFilter(filter: StatusFilter | null): void;
+  setOwner(owner: string | null): void;
   setSort(sort: GuideSort): void;
   /** Makes a folder in `parent` (`""`: the top). False if it failed (in `notice`). */
   createFolder(parent: string, name: string): Promise<boolean>;
@@ -79,6 +85,12 @@ export interface EditorState {
   renameGuide(item: GuideListItem, title: string): Promise<boolean>;
   /** Moves a listed guide into `folder` (`""`: the top); the open guide follows. */
   moveGuide(item: GuideListItem, folder: string): Promise<boolean>;
+  /**
+   * Records that a listed guide was reviewed `today` (local `YYYY-MM-DD`).
+   * The open guide is saved first and takes the new day, outside the undo
+   * history.
+   */
+  markReviewed(item: GuideListItem, today?: string): Promise<boolean>;
   /** Shows a guide or a library folder in Finder. */
   reveal(target: { path: string } | { folder: string }): Promise<void>;
   /**
@@ -421,6 +433,8 @@ export function createEditorStore({
       folders: [],
       query: "",
       tag: null,
+      statusFilter: null,
+      owner: null,
       sort: "updated",
       listError: null,
       doc: null,
@@ -462,6 +476,14 @@ export function createEditorStore({
         set({ tag });
       },
 
+      setStatusFilter(statusFilter) {
+        set({ statusFilter });
+      },
+
+      setOwner(owner) {
+        set({ owner });
+      },
+
       setSort(sort) {
         set({ sort });
       },
@@ -496,6 +518,20 @@ export function createEditorStore({
                 ...doc,
                 path: renamed.path,
                 guide: { ...doc.guide, title: renamed.title, updatedAt: renamed.updatedAt },
+              },
+            });
+          }
+        }),
+
+      markReviewed: (item, today = localToday()) =>
+        organize(item, "mark the guide reviewed", async (isOpen) => {
+          const reviewed = await api.markGuideReviewed(item.id, item.path, today);
+          const doc = get().doc;
+          if (isOpen && doc) {
+            set({
+              doc: {
+                ...doc,
+                guide: { ...doc.guide, lastReviewed: reviewed.lastReviewed, updatedAt: reviewed.updatedAt },
               },
             });
           }

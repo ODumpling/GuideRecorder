@@ -147,7 +147,25 @@ export type Item = Step | Section | Note;
  */
 export type GuideKind = "walkthrough" | "annotated";
 
-export interface Guide {
+/** Where a guide stands in its review cycle (core `GuideStatus`). */
+export type GuideStatus = "draft" | "inReview" | "published" | "needsUpdate";
+
+/**
+ * Owner, status, version and review schedule (core `ReviewInfo`), at the
+ * top level of `guide.json`. All optional; absent when unset.
+ */
+export interface ReviewFields {
+  owner?: string | null;
+  status?: GuideStatus | null;
+  /** Free text, e.g. `1.2`. */
+  version?: string | null;
+  /** `YYYY-MM-DD`. */
+  lastReviewed?: string | null;
+  /** Review every N months; unset or 0: no schedule. */
+  reviewIntervalMonths?: number | null;
+}
+
+export interface Guide extends ReviewFields {
   schemaVersion: number;
   id: Ulid;
   title: string;
@@ -180,7 +198,7 @@ export interface Guide {
 /** The guide-level fields the AI guide pass writes. */
 export type GuideTextField = "title" | "intro" | "prerequisites" | "summary" | "tags";
 
-export interface GuideListItem {
+export interface GuideListItem extends ReviewFields {
   id: Ulid;
   path: string;
   title: string;
@@ -193,6 +211,12 @@ export interface GuideListItem {
   folder: string;
   readOnly: boolean;
   duplicateOf: string | null;
+}
+
+/** `mark_guide_reviewed`'s result. */
+export interface ReviewedGuide {
+  lastReviewed: string;
+  updatedAt: string;
 }
 
 /** `rename_guide`'s result. */

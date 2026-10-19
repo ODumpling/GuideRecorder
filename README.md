@@ -114,6 +114,7 @@ search index:
 
 ```sh
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder list
+cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder list --overdue
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder search "api key"
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder validate "<guide>.guiderecorder"
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <path> reindex
@@ -122,7 +123,9 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<g
 
 `export` takes `--format md|html|docx|pdf`, `--out`, and optionally
 `--paper a4|letter` (DOCX and PDF; default A4), `--logo`, `--accent`,
+`--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
+`list --overdue` shows only guides whose review is past due.
 
 ## Build from source
 

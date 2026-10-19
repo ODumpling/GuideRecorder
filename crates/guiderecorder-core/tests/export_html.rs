@@ -576,6 +576,41 @@ fn branding_is_off_by_default_and_validated() {
 }
 
 #[test]
+fn review_details_show_only_when_asked() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let mut guide = guide.clone();
+    guide.language = "en".into();
+    guide.review = ReviewInfo {
+        owner: Some("<b>Ops</b>".into()),
+        version: Some("2.0".into()),
+        last_reviewed: chrono::NaiveDate::from_ymd_opt(2026, 10, 1),
+        ..ReviewInfo::default()
+    };
+    let (plain, _) = render(&guide, handle, &HtmlOptions::default());
+    assert!(!plain.contains("class=\"details\""));
+    let opts = HtmlOptions {
+        review_details: true,
+        ..HtmlOptions::default()
+    };
+    let (html, _) = render(&guide, handle, &opts);
+    assert_safe(&html);
+    let line = html
+        .lines()
+        .find(|l| l.contains("class=\"details\""))
+        .unwrap();
+    assert_eq!(
+        line,
+        "<p class=\"details\">Version: 2.0 · Owner: &lt;b&gt;Ops&lt;&#x2f;b&gt; · Last reviewed: \
+         2026-10-01</p>"
+    );
+    // Nothing set: no line.
+    guide.review = ReviewInfo::default();
+    let (html, _) = render(&guide, handle, &opts);
+    assert!(!html.contains("class=\"details\""));
+}
+
+#[test]
 fn branded_fixture_goldens() {
     let fixtures = fixtures();
     let opts = HtmlOptions {

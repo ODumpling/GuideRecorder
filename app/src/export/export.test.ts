@@ -3,11 +3,13 @@ import {
   baseName,
   exportName,
   initialPaper,
+  initialReviewDetails,
   isAccent,
   isPlainName,
   localePaper,
   outPath,
   rememberPaper,
+  rememberReviewDetails,
   runExport,
   warningLines,
 } from "@/export/export";
@@ -32,6 +34,7 @@ const request = {
   overwrite: false,
   branding: { logo: null, accent: "  #abc " },
   paper: "letter" as const,
+  reviewDetails: true,
 };
 
 describe("export names and paths", () => {
@@ -103,6 +106,27 @@ describe("paper size", () => {
   });
 });
 
+describe("review details", () => {
+  it("are off at first and remember the last choice", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    };
+    expect(initialReviewDetails(storage)).toBe(false);
+    rememberReviewDetails(true, storage);
+    expect(initialReviewDetails(storage)).toBe(true);
+    rememberReviewDetails(false, storage);
+    expect(initialReviewDetails(storage)).toBe(false);
+    const broken = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(initialReviewDetails(broken)).toBe(false);
+  });
+});
+
 describe("runExport", () => {
   it("saves first, then exports with a trimmed accent", async () => {
     const order: string[] = [];
@@ -121,7 +145,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter");
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

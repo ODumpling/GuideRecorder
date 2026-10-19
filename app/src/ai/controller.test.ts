@@ -44,6 +44,7 @@ async function setup({
     createFolder: vi.fn(async () => ""),
     duplicateGuide: vi.fn(async () => "G3"),
     renameGuide: vi.fn(async () => ({ path: "", title: "", updatedAt: "" })),
+    markGuideReviewed: vi.fn(async () => ({ lastReviewed: "", updatedAt: "" })),
     moveGuide: vi.fn(async () => ""),
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),

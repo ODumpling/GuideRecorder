@@ -155,6 +155,31 @@ fn cover_page_has_title_summary_and_date() {
 }
 
 #[test]
+fn cover_page_has_review_details_when_asked() {
+    let lib = Synthetic::new();
+    let mut guide = Guide::new("Cover test", "en");
+    guide.items = vec![step("Click A")];
+    guide.review = ReviewInfo {
+        owner: Some("IT".into()),
+        version: Some("4".into()),
+        last_reviewed: chrono::NaiveDate::from_ymd_opt(2026, 9, 30),
+        ..ReviewInfo::default()
+    };
+    // Off by default.
+    assert_eq!(lib.render(&guide).page_text[0], "Cover test");
+    let opts = PdfOptions {
+        timestamp: Some("2026-03-04T05:06:07Z".parse().unwrap()),
+        review_details: true,
+        ..PdfOptions::default()
+    };
+    let output = lib.render_with(&guide, opts);
+    assert_eq!(
+        output.page_text[0],
+        "Cover test\n2026-03-04\nVersion: 4 · Owner: IT · Last reviewed: 2026-09-30"
+    );
+}
+
+#[test]
 fn hostile_text_is_printed_literally_and_never_runs() {
     let hostile = [
         r#"#panic("x")"#,

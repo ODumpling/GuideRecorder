@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "create_folder",
     "duplicate_guide",
     "rename_guide",
+    "mark_guide_reviewed",
     "move_guide",
     "reveal_in_library",
     "step_image",
