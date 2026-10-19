@@ -1,0 +1,5 @@
+# One Rust for everyone and CI, so a new clippy lint lands in a deliberate
+# bump rather than as a surprise CI failure.
+[toolchain]
+channel = "1.99"
+components = ["clippy", "rustfmt"]

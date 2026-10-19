@@ -130,10 +130,10 @@ fn blur(data: &mut [u8], width: u32, r: Region, radius: u32) {
             let start = index(width, r.x, y);
             let row = &mut data[start..start + r.width as usize * 4];
             line.clear();
-            line.extend(row.chunks_exact(4).map(|px| [px[0], px[1], px[2], px[3]]));
+            line.extend(row.as_chunks::<4>().0);
             box_line(&line, radius, &mut out);
-            for (px, v) in row.chunks_exact_mut(4).zip(&out) {
-                px.copy_from_slice(v);
+            for (px, v) in row.as_chunks_mut::<4>().0.iter_mut().zip(&out) {
+                *px = *v;
             }
         }
         for x in r.x..r.x + r.width {
@@ -200,15 +200,15 @@ fn fill_cell(data: &mut [u8], width: u32, x0: u32, y0: u32, w: u32, h: u32) {
     let rows = || (y0..y0 + h).map(|y| index(width, x0, y)..index(width, x0 + w, y));
     let mut sum = [0u64; 4];
     for row in rows() {
-        for px in data[row].chunks_exact(4) {
+        for px in data[row].as_chunks::<4>().0 {
             (0..4).for_each(|c| sum[c] += u64::from(px[c]));
         }
     }
     let n = u64::from(w) * u64::from(h);
     let mean = sum.map(|s| ((s + n / 2) / n) as u8);
     for row in rows() {
-        for px in data[row].chunks_exact_mut(4) {
-            px.copy_from_slice(&mean);
+        for px in data[row].as_chunks_mut::<4>().0 {
+            *px = mean;
         }
     }
 }
@@ -343,8 +343,8 @@ mod tests {
     #[test]
     fn pixelate_fills_blocks_with_their_mean() {
         let mut data = vec![0u8; 4 * 4 * 4];
-        for (i, px) in data.chunks_exact_mut(4).enumerate() {
-            px.copy_from_slice(&[(i * 10) as u8, 0, 0, 255]);
+        for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = [(i * 10) as u8, 0, 0, 255];
         }
         let all = Region {
             x: 0,
@@ -353,6 +353,10 @@ mod tests {
             height: 4,
         };
         pixelate(&mut data, 4, all, 4);
-        assert!(data.chunks_exact(4).all(|px| px == [75, 0, 0, 255]));
+        assert!(data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| *px == [75, 0, 0, 255]));
     }
 }

@@ -510,7 +510,7 @@ fn into_pixmap(image: RgbaImage) -> Pixmap {
     let size =
         IntSize::from_wh(image.width(), image.height()).expect("decoded images are non-empty");
     let mut data = image.into_raw();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let a = u16::from(px[3]);
         if a < 255 {
             for c in &mut px[..3] {

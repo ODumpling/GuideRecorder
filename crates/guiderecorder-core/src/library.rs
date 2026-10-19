@@ -1498,7 +1498,7 @@ impl<'a> PixelBuffer<'a> {
             out.extend_from_slice(&self.data[start..start + row]);
         }
         if self.format == PixelFormat::Bgra {
-            for px in out.chunks_exact_mut(4) {
+            for px in out.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
             }
         }

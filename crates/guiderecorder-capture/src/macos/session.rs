@@ -4326,7 +4326,7 @@ mod tests {
     /// BGRA frame whose pixel (x, y) is B=x, G=y, R=0, A=255.
     fn frame(ts: u64, width: u32, height: u32, geometry: FrameGeometry) -> Frame {
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
-        for (i, px) in pixels.chunks_exact_mut(4).enumerate() {
+        for (i, px) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x, y) = (i as u32 % width, i as u32 / width);
             px.copy_from_slice(&[x as u8, y as u8, 0, 255]);
         }
@@ -4854,7 +4854,7 @@ mod tests {
     fn crop_view_reads_the_right_pixels() {
         let (w, h) = (100u32, 60u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x, y) = (i as u32 % w, i as u32 / w);
             px.copy_from_slice(&[x as u8, y as u8, 7, 255]);
         }
