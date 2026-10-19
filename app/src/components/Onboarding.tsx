@@ -28,9 +28,9 @@ function PermissionsStep({ api, onNext }: { api: SettingsApi; onNext(): void }) 
       <p className="text-sm text-muted-foreground">
         To record a guide, GuideRecorder needs to see the screen and notice your clicks and typing. Allow each one in
         System Settings. You can edit and export guides without them; recording stays off until all three are
-        allowed. Screen Recording may need GuideRecorder to restart.
+        allowed. Screen Recording may need GuideRecorder to restart; this list says when.
       </p>
-      <PermissionList api={api} poll onRows={onRows} />
+      <PermissionList api={api} onRows={onRows} />
       <p className={cn("text-xs", granted ? "text-[var(--status-success)]" : "text-muted-foreground")}>
         {granted ? "All set: recording is available." : "Recording is off until every permission is allowed."}
       </p>

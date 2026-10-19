@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use guiderecorder_core::model::{Guide, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{
     DialogExt, FileDialogBuilder, FilePath, MessageDialogButtons, MessageDialogKind,
 };
@@ -451,9 +451,25 @@ pub struct QuitGate {
     acked: AtomicBool,
     /// A `terminate:` held with `NSTerminateLater`; see `terminate`.
     pending: crate::terminate::PendingReply,
+    /// Set by [`QuitGate::restart`]: the app starts again once it has quit.
+    restart: AtomicBool,
 }
 
 impl QuitGate {
+    /// Quits like Cmd+Q (the editor saves, a recording is stopped and
+    /// saved), then starts the app again: an installed update, or a
+    /// Screen Recording grant macOS only applies at launch. A cancelled
+    /// quit cancels the restart too.
+    pub fn restart<R: Runtime>(self: &Arc<Self>, app: &AppHandle<R>) {
+        self.restart.store(true, Ordering::SeqCst);
+        self.on_quit_menu(app);
+    }
+
+    /// Whether the app should start again as it exits.
+    pub fn restart_requested(&self) -> bool {
+        self.restart.load(Ordering::SeqCst)
+    }
+
     /// Handles `RunEvent::ExitRequested`. Returns true to prevent the exit.
     pub fn on_exit_requested<R: Runtime>(
         self: &Arc<Self>,
@@ -595,8 +611,7 @@ pub fn quit_app<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
 /// could not be stopped): a held Dock Quit or logout is cancelled now.
 #[tauri::command]
 pub fn quit_cancel<R: Runtime>(app: AppHandle<R>, gate: State<'_, Arc<QuitGate>>) {
-    // A restart to update is off too.
-    app.state::<Arc<crate::updater::Updates>>().cancel_restart();
+    gate.restart.store(false, Ordering::SeqCst);
     gate.cancel(&app);
 }
 

@@ -51,6 +51,7 @@ const COMMANDS: &[&str] = &[
     "request_permission",
     "recording_readiness",
     "mcp_setup",
+    "restart_app",
     "start_recording",
     "pause_recording",
     "resume_recording",

@@ -36,6 +36,7 @@ function api(overrides: Partial<SettingsApi> = {}): SettingsApi {
     requestPermission: fail,
     recordingReadiness: fail,
     mcpSetup: fail,
+    restartApp: fail,
     ...overrides,
   };
 }

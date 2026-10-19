@@ -94,6 +94,46 @@ pub fn check_input_monitoring() -> PermissionStatus {
     }
 }
 
+/// Whether Screen Recording is allowed right now, read live.
+/// `CGPreflightScreenCaptureAccess` keeps the answer it had when the app
+/// started, so a grant made in System Settings only shows there after a
+/// restart. Window titles of other apps are withheld without the
+/// permission, and that check is live: any titled window of another
+/// process (the Dock's are always titled, so it doesn't count) means it
+/// is allowed now.
+pub fn screen_recording_allowed_live() -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2_core_graphics::{CGWindowListCopyWindowInfo, CGWindowListOption};
+    use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
+
+    type Dict = NSDictionary<AnyObject, AnyObject>;
+    let Some(list) = CGWindowListCopyWindowInfo(
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
+        0,
+    ) else {
+        return false;
+    };
+    // SAFETY: a CFArray of CFDictionary is toll-free bridged to NSArray of
+    // NSDictionary; `list` outlives the borrow.
+    let list: &NSArray<Dict> = unsafe { &*(&*list as *const _ as *const NSArray<Dict>) };
+    let get = |d: &Dict, key: &str| {
+        let key = NSString::from_str(key);
+        let key: &AnyObject = key.as_ref();
+        d.objectForKey(key)
+    };
+    let own_pid = i64::from(std::process::id());
+    list.iter().any(|window| {
+        let pid = get(&window, "kCGWindowOwnerPID")
+            .and_then(|v| v.downcast_ref::<NSNumber>().map(|n| n.longLongValue()));
+        let owner = get(&window, "kCGWindowOwnerName")
+            .and_then(|v| v.downcast_ref::<NSString>().map(|s| s.to_string()));
+        pid.is_some_and(|p| p != own_pid)
+            && owner.as_deref() != Some("Dock")
+            && owner.as_deref() != Some("Window Server")
+            && get(&window, "kCGWindowName").is_some()
+    })
+}
+
 /// Shows the Screen Recording prompt the first time; afterwards only adds
 /// the app to the list in System Settings. Returns the current grant.
 pub fn request_screen_recording() -> PermissionStatus {

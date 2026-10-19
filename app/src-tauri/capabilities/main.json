@@ -41,6 +41,7 @@
     "allow-request-permission",
     "allow-recording-readiness",
     "allow-mcp-setup",
+    "allow-restart-app",
     "allow-start-recording",
     "allow-pause-recording",
     "allow-resume-recording",

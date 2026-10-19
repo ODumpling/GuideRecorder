@@ -9,8 +9,8 @@ test.describe("on first launch", () => {
 
     // 1. Permissions: recording is off until all are allowed; editing isn't blocked.
     await expect(setup.getByText("Recording is off until every permission is allowed.")).toBeVisible();
-    await setup.getByRole("button", { name: "Allow…" }).first().click();
-    await setup.getByRole("button", { name: "Allow…" }).first().click();
+    await setup.getByRole("button", { name: "Turn on…" }).first().click();
+    await setup.getByRole("button", { name: "Turn on…" }).first().click();
     await expect(setup.getByText("All set: recording is available.")).toBeVisible();
     expect(backend.calls.filter((c) => c.cmd === "request_permission")).toHaveLength(2);
     await setup.getByRole("button", { name: "Continue", exact: true }).click();

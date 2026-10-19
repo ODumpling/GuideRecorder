@@ -6,9 +6,9 @@
 //! `general.checkForUpdates` is on; the frontend (or the app menu's Check
 //! for Updates…) can check at any time. An update is only downloaded and
 //! installed when the user asks, and it takes effect after a restart that
-//! goes through the `QuitGate`, so the editor saves first.
+//! goes through the `QuitGate` (`QuitGate::restart`), so the editor saves
+//! first.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -80,15 +80,12 @@ impl UpdateStatus {
 /// The updater's state (managed).
 pub struct Updates {
     state: Mutex<(UpdateStatus, Option<Update>)>,
-    /// Set by `restart_to_update`: the app starts again once it has quit.
-    restart: AtomicBool,
 }
 
 impl Default for Updates {
     fn default() -> Self {
         Self {
             state: Mutex::new((UpdateStatus::Idle, None)),
-            restart: AtomicBool::new(false),
         }
     }
 }
@@ -144,16 +141,6 @@ impl Updates {
         drop(state);
         let _ = app.emit(STATUS_EVENT, status);
         Ok(update)
-    }
-
-    /// Whether the app should start again as it exits.
-    pub fn restart_requested(&self) -> bool {
-        self.restart.load(Ordering::SeqCst)
-    }
-
-    /// The quit was cancelled: a later quit just quits.
-    pub fn cancel_restart(&self) {
-        self.restart.store(false, Ordering::SeqCst);
     }
 }
 
@@ -324,9 +311,7 @@ pub fn restart_to_update<R: Runtime>(
             "no update is installed yet",
         ));
     }
-    updates.restart.store(true, Ordering::SeqCst);
-    app.state::<Arc<crate::commands::QuitGate>>()
-        .on_quit_menu(&app);
+    app.state::<Arc<crate::commands::QuitGate>>().restart(&app);
     Ok(())
 }
 

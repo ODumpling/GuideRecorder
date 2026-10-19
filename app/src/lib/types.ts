@@ -315,6 +315,14 @@ export interface LibraryInfo {
 export type Permission = "screen_recording" | "accessibility" | "input_monitoring";
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unknown";
 
+/** A row of `permission_status`. */
+export interface PermissionRow {
+  permission: Permission;
+  status: PermissionStatus;
+  /** Allowed in System Settings since launch; macOS applies it after a restart (Screen Recording). */
+  restartNeeded: boolean;
+}
+
 /** Whether recording may start (checked live before each recording). */
 export interface RecordingReadiness {
   ready: boolean;

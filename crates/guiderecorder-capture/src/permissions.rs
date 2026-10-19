@@ -123,6 +123,21 @@ pub fn check(permission: Permission) -> PermissionStatus {
     }
 }
 
+/// Screen Recording was allowed in System Settings after the app started:
+/// [`check`] still says no (macOS keeps that answer until the app
+/// restarts) and recording needs a restart to use it. Never prompts.
+pub fn screen_recording_needs_restart() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::macos::permissions as sys;
+        !sys::check_screen_recording().is_granted() && sys::screen_recording_allowed_live()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Status of every permission. Never prompts.
 pub fn check_all() -> PermissionReport {
     PermissionReport {
@@ -157,6 +172,12 @@ pub fn request(permission: Permission) -> PermissionStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_restart_check_never_prompts_or_fails() {
+        // Live, without TCC prompts: an answer either way, no crash.
+        let _ = screen_recording_needs_restart();
+    }
 
     #[test]
     fn settings_url_covers_every_permission() {

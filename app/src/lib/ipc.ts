@@ -14,6 +14,7 @@ import type {
   McpSetup,
   OpenedGuide,
   Permission,
+  PermissionRow,
   PermissionStatus,
   RecordingReadiness,
   RecordingSaved,
@@ -176,13 +177,15 @@ export interface SettingsApi {
   apiKeyStored(): Promise<boolean>;
   setApiKey(key: string): Promise<void>;
   deleteApiKey(): Promise<void>;
-  permissions(): Promise<{ permission: Permission; status: PermissionStatus }[]>;
+  permissions(): Promise<PermissionRow[]>;
   openPermissionSettings(permission: Permission): Promise<void>;
   /** Asks macOS for the permission (may prompt); only from a click. */
   requestPermission(permission: Permission): Promise<PermissionStatus>;
   /** The live check recording starts with. */
   recordingReadiness(): Promise<RecordingReadiness>;
   mcpSetup(): Promise<McpSetup>;
+  /** Quits through the quit flow (the editor saves first) and starts again. */
+  restartApp(): Promise<void>;
 }
 
 export const tauriSettingsApi: SettingsApi = {
@@ -201,6 +204,7 @@ export const tauriSettingsApi: SettingsApi = {
   requestPermission: (permission) => invoke("request_permission", { permission }),
   recordingReadiness: () => invoke("recording_readiness"),
   mcpSetup: () => invoke("mcp_setup"),
+  restartApp: () => invoke("restart_app"),
 };
 
 /** Recording commands (see app/src-tauri/src/recording.rs). */

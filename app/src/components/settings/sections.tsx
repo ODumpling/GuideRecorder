@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, ExternalLink, RefreshCw, X } from "lucide-react";
+import { Check, Copy, ExternalLink, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CommitInput, HotkeyField, PathText, Row, Section, Select, Toggle } from "@/components/settings/controls";
 import { useEditor } from "@/editor/editor";
-import { setupStore } from "@/onboarding/onboarding";
+import { allGranted, setupStore } from "@/onboarding/onboarding";
 import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
-import type { CaptureArea, LibraryInfo, McpSetup, Permission, PermissionStatus, Settings, UpdateStatus } from "@/lib/types";
+import type {
+  CaptureArea,
+  LibraryInfo,
+  McpSetup,
+  Permission,
+  PermissionRow,
+  PermissionStatus,
+  Settings,
+  UpdateStatus,
+} from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
 import {
   AFTER_FRAME_DELAY_MS,
@@ -565,24 +574,38 @@ const STATUS: Record<PermissionStatus, { label: string; color: string }> = {
   unknown: { label: "Unknown", color: "var(--status-neutral)" },
 };
 
-type PermissionRow = { permission: Permission; status: PermissionStatus };
+/** How often the checklist checks again while it is on screen. */
+const PERMISSION_POLL_MS = 1000;
+
+/** Permissions "Turn on…" has asked macOS for (on this Mac), so the next click opens System Settings. */
+const ASKED_KEY = "guiderecorder.permissionsAsked";
+
+function readAsked(): Permission[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(ASKED_KEY) ?? "[]");
+    return Array.isArray(value) ? (value.filter((p) => typeof p === "string") as Permission[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Where to turn a permission on, once macOS has been asked. */
+function howTo(permission: Permission): string {
+  return `In System Settings → Privacy & Security → ${PERMISSIONS[permission].label}, turn on GuideRecorder. Not in the list? Click + and choose GuideRecorder from Applications.`;
+}
 
 /**
- * The live permission checklist: status, an "Allow…" button that asks
- * macOS (only on a click), and a link to the System Settings pane. It
- * checks again when the window regains focus (coming back from System
- * Settings) and, with `poll`, every couple of seconds.
+ * The live permission checklist. It checks every second while on screen
+ * (and at once when the window comes back to the front), so a switch
+ * flipped in System Settings shows up right away. Each missing permission
+ * has one button: the first time it asks macOS (which adds GuideRecorder
+ * to the list in System Settings, and may show its own prompt); after
+ * that it opens the right System Settings pane. A Screen Recording grant
+ * that macOS applies only at launch offers a restart.
  */
-export function PermissionList({
-  api,
-  poll = false,
-  onRows,
-}: {
-  api: SettingsApi;
-  poll?: boolean;
-  onRows?(rows: PermissionRow[]): void;
-}) {
+export function PermissionList({ api, onRows }: { api: SettingsApi; onRows?(rows: PermissionRow[]): void }) {
   const [rows, setRows] = useState<PermissionRow[] | null>(null);
+  const [asked, setAsked] = useState<Permission[]>(readAsked);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
     api.permissions().then(
@@ -596,15 +619,29 @@ export function PermissionList({
   }, [api, onRows]);
   useEffect(() => {
     refresh();
+    const onVisible = () => document.visibilityState === "visible" && refresh();
     window.addEventListener("focus", refresh);
-    const timer = poll ? setInterval(refresh, 2000) : undefined;
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => document.visibilityState === "visible" && refresh(), PERMISSION_POLL_MS);
     return () => {
       window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
       clearInterval(timer);
     };
-  }, [refresh, poll]);
+  }, [refresh]);
 
-  const ask = async (permission: Permission) => {
+  const openSettings = (permission: Permission) =>
+    api.openPermissionSettings(permission).catch((e) => setError(errorMessage(e)));
+
+  const turnOn = async (permission: Permission) => {
+    setError(null);
+    if (asked.includes(permission)) {
+      await openSettings(permission);
+      return;
+    }
+    const next = [...asked, permission];
+    setAsked(next);
+    localStorage.setItem(ASKED_KEY, JSON.stringify(next));
     try {
       await api.requestPermission(permission);
     } catch (e) {
@@ -615,45 +652,65 @@ export function PermissionList({
 
   return (
     <div className="flex flex-col">
-      {rows?.map(({ permission, status }) => (
-        <Row key={permission} label={PERMISSIONS[permission].label} note={PERMISSIONS[permission].why}>
-          <span className="text-xs font-medium" style={{ color: STATUS[status].color }}>
-            {STATUS[status].label}
-          </span>
-          {status !== "granted" && (
-            <>
-              <Button variant="outline" size="sm" onClick={() => void ask(permission)}>
-                Allow…
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={`Open System Settings for ${PERMISSIONS[permission].label}`}
-                onClick={() => api.openPermissionSettings(permission).catch((e) => setError(errorMessage(e)))}
-              >
-                <ExternalLink /> System Settings
-              </Button>
-            </>
-          )}
-        </Row>
-      ))}
-      <div className="pt-3">
-        <Button variant="ghost" size="sm" onClick={refresh}>
-          <RefreshCw /> Check again
-        </Button>
-      </div>
+      {rows?.map(({ permission, status, restartNeeded }) => {
+        const { label, why } = PERMISSIONS[permission];
+        const granted = status === "granted";
+        const wasAsked = asked.includes(permission);
+        return (
+          <Row key={permission} label={label} note={granted || restartNeeded || !wasAsked ? why : howTo(permission)}>
+            {restartNeeded ? (
+              <>
+                <span className="text-xs font-medium text-[var(--status-success)]">Allowed after a restart</span>
+                <Button variant="outline" size="sm" onClick={() => api.restartApp().catch((e) => setError(errorMessage(e)))}>
+                  <RotateCw /> Restart GuideRecorder
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="flex items-center gap-1 text-xs font-medium" style={{ color: STATUS[status].color }}>
+                  {granted && <Check className="size-3.5" />}
+                  {STATUS[status].label}
+                </span>
+                {!granted && (
+                  <Button variant={wasAsked ? "outline" : "default"} size="sm" onClick={() => void turnOn(permission)}>
+                    {wasAsked ? (
+                      <>
+                        <ExternalLink /> Open System Settings
+                      </>
+                    ) : (
+                      "Turn on…"
+                    )}
+                  </Button>
+                )}
+              </>
+            )}
+          </Row>
+        );
+      })}
       <ErrorText>{error}</ErrorText>
     </div>
   );
 }
 
 export function PermissionsSection({ api }: { api: SettingsApi }) {
+  const [rows, setRows] = useState<PermissionRow[] | null>(null);
+  const restartNeeded = rows?.some((r) => r.restartNeeded) ?? false;
   return (
     <Section
       title="Permissions"
-      intro="Recording needs all of these and stays off until they are allowed. Editing and exporting work without them. Some changes take effect only after GuideRecorder restarts."
+      intro="Recording needs all of these and stays off until they are allowed. Editing and exporting work without them. This list updates as soon as you change a switch in System Settings."
     >
-      <PermissionList api={api} />
+      <PermissionList api={api} onRows={setRows} />
+      {rows && allGranted(rows) && (
+        <p className="mt-3 flex items-center gap-2 text-xs text-[var(--status-success)]">
+          <Check className="size-3.5" /> All set: recording is available.
+        </p>
+      )}
+      {restartNeeded && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          macOS applies Screen Recording when GuideRecorder starts. Restart saves the open guide first.
+        </p>
+      )}
     </Section>
   );
 }

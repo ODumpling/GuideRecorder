@@ -208,6 +208,7 @@ pub fn run() {
             settings_commands::request_permission,
             settings_commands::recording_readiness,
             settings_commands::mcp_setup,
+            settings_commands::restart_app,
             recording::start_recording,
             recording::pause_recording,
             recording::resume_recording,
@@ -240,8 +241,8 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            // After `restart_to_update`: start the installed version.
-            RunEvent::Exit if app.state::<Arc<updater::Updates>>().restart_requested() => {
+            // After `QuitGate::restart` (an update, a Screen Recording grant).
+            RunEvent::Exit if app.state::<Arc<commands::QuitGate>>().restart_requested() => {
                 tauri::process::restart(&app.env());
             }
             _ => {}

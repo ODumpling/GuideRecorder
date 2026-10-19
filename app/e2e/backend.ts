@@ -166,7 +166,15 @@ export class Backend {
   };
   /** Whether an API key is "stored"; the key itself is never kept. */
   apiKeyStored = false;
-  /** Permission states; `request_permission` grants. */
+  /** Permissions allowed since launch that need a restart (`restartNeeded`). */
+  restartNeeded: string[] = [];
+  /** Permissions whose System Settings pane was opened, in order. */
+  readonly openedPermissionSettings: string[] = [];
+  /** Whether `restart_app` was called. */
+  restarted = false;
+  /** Whether `request_permission` grants at once (false: macOS showed its prompt, nothing changed yet). */
+  requestGrants = true;
+  /** Permission states; `request_permission` grants (see `requestGrants`). */
   permissions: Record<string, string> = {
     screen_recording: "granted",
     accessibility: "denied",
@@ -757,8 +765,8 @@ export class Backend {
         return path;
       }
       case "request_permission":
-        this.permissions[String(args.permission)] = "granted";
-        return "granted";
+        if (this.requestGrants) this.permissions[String(args.permission)] = "granted";
+        return this.permissions[String(args.permission)];
       case "recording_readiness": {
         const missing = Object.keys(this.permissions).filter((p) => this.permissions[p] !== "granted");
         return { ready: missing.length === 0, missing };
@@ -778,8 +786,16 @@ export class Backend {
         this.apiKeyStored = false;
         return null;
       case "permission_status":
-        return Object.entries(this.permissions).map(([permission, status]) => ({ permission, status }));
+        return Object.entries(this.permissions).map(([permission, status]) => ({
+          permission,
+          status,
+          restartNeeded: this.restartNeeded.includes(permission),
+        }));
       case "open_permission_settings":
+        this.openedPermissionSettings.push(String(args.permission));
+        return null;
+      case "restart_app":
+        this.restarted = true;
         return null;
       case "mcp_setup":
         return {

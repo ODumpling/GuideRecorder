@@ -333,22 +333,35 @@ pub async fn delete_api_key() -> Result<()> {
 pub struct PermissionRow {
     pub permission: Permission,
     pub status: PermissionStatus,
+    /// Allowed in System Settings since launch, but macOS applies it only
+    /// after a restart (Screen Recording).
+    pub restart_needed: bool,
 }
 
-/// The status of every permission recording needs. Never prompts.
+/// The status of every permission recording needs. Never prompts; cheap
+/// enough to poll every second.
 #[tauri::command]
 pub async fn permission_status() -> Result<Vec<PermissionRow>> {
     blocking(|| {
         let report = permissions::check_all();
+        let restart = permissions::screen_recording_needs_restart();
         Ok(Permission::ALL
             .into_iter()
             .map(|permission| PermissionRow {
                 permission,
                 status: report.get(permission),
+                restart_needed: restart && permission == Permission::ScreenRecording,
             })
             .collect())
     })
     .await
+}
+
+/// Quits through the quit flow (the editor saves first) and starts the app
+/// again, e.g. for a Screen Recording grant macOS applies only at launch.
+#[tauri::command]
+pub fn restart_app<R: Runtime>(app: AppHandle<R>) {
+    app.state::<Arc<crate::commands::QuitGate>>().restart(&app);
 }
 
 /// Asks macOS for `permission` (may show the system prompt) and returns
