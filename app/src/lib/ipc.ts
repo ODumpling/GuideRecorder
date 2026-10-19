@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AiProviderKind,
   AiRewriteResult,
   AppError,
   CaptureDisplay,
@@ -203,9 +204,10 @@ export interface SettingsApi {
   launchAtLogin(): Promise<boolean>;
   /** Returns the login item's actual state. */
   setLaunchAtLogin(enabled: boolean): Promise<boolean>;
-  apiKeyStored(): Promise<boolean>;
-  setApiKey(key: string): Promise<void>;
-  deleteApiKey(): Promise<void>;
+  /** Whether `provider`'s key is stored (default Anthropic; never for a local one). */
+  apiKeyStored(provider?: AiProviderKind): Promise<boolean>;
+  setApiKey(key: string, provider?: AiProviderKind): Promise<void>;
+  deleteApiKey(provider?: AiProviderKind): Promise<void>;
   permissions(): Promise<PermissionRow[]>;
   openPermissionSettings(permission: Permission): Promise<void>;
   /** Asks macOS for the permission (may prompt); only from a click. */
@@ -226,9 +228,9 @@ export const tauriSettingsApi: SettingsApi = {
   switchLibrary: (path) => invoke("switch_library", { path }),
   launchAtLogin: () => invoke("launch_at_login"),
   setLaunchAtLogin: (enabled) => invoke("set_launch_at_login", { enabled }),
-  apiKeyStored: () => invoke("api_key_status"),
-  setApiKey: (key) => invoke("set_api_key", { key }),
-  deleteApiKey: () => invoke("delete_api_key"),
+  apiKeyStored: (provider) => invoke("api_key_status", { provider }),
+  setApiKey: (key, provider) => invoke("set_api_key", { key, provider }),
+  deleteApiKey: (provider) => invoke("delete_api_key", { provider }),
   permissions: () => invoke("permission_status"),
   openPermissionSettings: (permission) => invoke("open_permission_settings", { permission }),
   requestPermission: (permission) => invoke("request_permission", { permission }),

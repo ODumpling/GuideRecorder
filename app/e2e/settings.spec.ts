@@ -47,6 +47,23 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await expect(dialog.getByLabel("API key")).toHaveValue("");
   expect(backend.apiKeyStored).toBe(true);
 
+  // A local provider: no key, its own models, and text only.
+  await dialog.getByLabel("Provider").selectOption("ollama");
+  await expect.poll(() => backend.settings.ai.provider).toBe("ollama");
+  await expect(dialog.getByText(/Nothing leaves your Mac/)).toBeVisible();
+  await expect(dialog.getByLabel("API key")).toHaveCount(0);
+  await expect(dialog.getByLabel("Base URL")).toHaveAttribute("placeholder", "http://localhost:11434/v1");
+  await dialog.getByRole("textbox", { name: "Step model" }).fill("qwen3-vl:8b");
+  await dialog.getByRole("textbox", { name: "Step model" }).press("Enter");
+  await dialog.getByRole("switch", { name: "Send screenshots" }).click();
+  await expect
+    .poll(() => backend.settings.ai.ollama)
+    .toMatchObject({ stepModel: "qwen3-vl:8b", images: false });
+  // Anthropic's models are kept.
+  expect(backend.settings.ai.stepModel).toBe("claude-haiku-5-5");
+  await dialog.getByLabel("Provider").selectOption("anthropic");
+  await expect(dialog.getByText(/A key is stored in your Keychain/)).toBeVisible();
+
   // Export defaults.
   await dialog.getByRole("button", { name: "Export", exact: true }).click();
   await dialog.getByLabel("Default format").selectOption("html");

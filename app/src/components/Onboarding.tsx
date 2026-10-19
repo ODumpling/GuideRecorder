@@ -141,7 +141,8 @@ function ApiKeyStep({ api, onDone }: { api: SettingsApi; onDone(): void }) {
     >
       <p className="text-sm text-muted-foreground">
         With an Anthropic API key, GuideRecorder writes the step text for you from the screenshots. It's optional: you
-        can write guides yourself, or add a key later in Settings. The key is kept in your Keychain.
+        can write guides yourself, add a key later, or use another provider or a model on this Mac (Ollama, LM
+        Studio) in Settings. The key is kept in your Keychain.
       </p>
       {stored && <p className="text-xs text-[var(--status-success)]">A key is already stored.</p>}
       <Input
