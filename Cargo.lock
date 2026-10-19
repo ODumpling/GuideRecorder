@@ -2309,6 +2309,7 @@ dependencies = [
  "image",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",
@@ -2318,6 +2319,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
+ "tempfile",
  "tokio",
 ]
 

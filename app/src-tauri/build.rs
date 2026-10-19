@@ -83,6 +83,17 @@ const COMMANDS: &[&str] = &[
     "check_for_update",
     "install_update",
     "restart_to_update",
+    "sync_account",
+    "sync_sign_in_start",
+    "sync_sign_in_poll",
+    "sync_sign_out",
+    "sync_request",
+    "sync_load_state",
+    "sync_save_state",
+    "sync_read_guide",
+    "sync_prepare_guide",
+    "sync_upload",
+    "sync_apply_guide",
 ];
 
 fn main() {

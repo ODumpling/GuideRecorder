@@ -48,7 +48,7 @@ processes:
     auto_start: false
 
   "Test: web":
-    command: "set -e; pnpm --filter @guiderecorder/guide-schema test; pnpm --filter @guiderecorder/web typecheck; pnpm --filter @guiderecorder/web test"
+    command: "set -e; pnpm --filter @guiderecorder/guide-schema test; pnpm --filter @guiderecorder/sync test; pnpm --filter @guiderecorder/web typecheck; pnpm --filter @guiderecorder/web test"
     auto_start: false
 
   "Install dependencies":

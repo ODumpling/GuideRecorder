@@ -11,14 +11,21 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as DeviceRouteImport } from './routes/device'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
 import { Route as ApiWorkspacesWorkspaceIdAssetsUploadsRouteImport } from './routes/api/workspaces/$workspaceId/assets/uploads'
+import { Route as ApiWorkspacesWorkspaceIdSyncChangesRouteImport } from './routes/api/workspaces/$workspaceId/sync/changes'
+import { Route as ApiWorkspacesWorkspaceIdSyncEventsRouteImport } from './routes/api/workspaces/$workspaceId/sync/events'
+import { Route as ApiWorkspacesWorkspaceIdSyncPushRouteImport } from './routes/api/workspaces/$workspaceId/sync/push'
+import { Route as ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRouteImport } from './routes/api/workspaces/$workspaceId/sync/guides/$guideId/index'
+import { Route as ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRouteImport } from './routes/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,6 +35,11 @@ const IndexRoute = IndexRouteImport.update({
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeviceRoute = DeviceRouteImport.update({
+  id: '/device',
+  path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -43,6 +55,11 @@ const SignUpRoute = SignUpRouteImport.update({
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidesGuideIdRoute = GuidesGuideIdRouteImport.update({
+  id: '/guides/$guideId',
+  path: '/guides/$guideId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InvitationsIdRoute = InvitationsIdRouteImport.update({
@@ -73,94 +90,173 @@ const ApiWorkspacesWorkspaceIdAssetsUploadsRoute =
     path: '/api/workspaces/$workspaceId/assets/uploads',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiWorkspacesWorkspaceIdSyncChangesRoute =
+  ApiWorkspacesWorkspaceIdSyncChangesRouteImport.update({
+    id: '/api/workspaces/$workspaceId/sync/changes',
+    path: '/api/workspaces/$workspaceId/sync/changes',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSyncEventsRoute =
+  ApiWorkspacesWorkspaceIdSyncEventsRouteImport.update({
+    id: '/api/workspaces/$workspaceId/sync/events',
+    path: '/api/workspaces/$workspaceId/sync/events',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSyncPushRoute =
+  ApiWorkspacesWorkspaceIdSyncPushRouteImport.update({
+    id: '/api/workspaces/$workspaceId/sync/push',
+    path: '/api/workspaces/$workspaceId/sync/push',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute =
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRouteImport.update({
+    id: '/api/workspaces/$workspaceId/sync/guides/$guideId/',
+    path: '/api/workspaces/$workspaceId/sync/guides/$guideId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute =
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRouteImport.update({
+    id: '/api/workspaces/$workspaceId/sync/guides/$guideId/restore',
+    path: '/api/workspaces/$workspaceId/sync/guides/$guideId/restore',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
+  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
+  '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
+  '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
+  '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId/': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
+  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
+  '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
+  '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
+  '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
+  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
+  '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
+  '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
+  '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
+  '/api/workspaces/$workspaceId/sync/guides/$guideId/': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/dashboard'
+    | '/device'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
+    | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
+    | '/api/workspaces/$workspaceId/sync/changes'
+    | '/api/workspaces/$workspaceId/sync/events'
+    | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/dashboard'
+    | '/device'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
+    | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
+    | '/api/workspaces/$workspaceId/sync/changes'
+    | '/api/workspaces/$workspaceId/sync/events'
+    | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId'
   id:
     | '__root__'
     | '/'
     | '/dashboard'
+    | '/device'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
+    | '/guides/$guideId'
     | '/invitations/$id'
     | '/api/auth/$'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
+    | '/api/workspaces/$workspaceId/sync/changes'
+    | '/api/workspaces/$workspaceId/sync/events'
+    | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+    | '/api/workspaces/$workspaceId/sync/guides/$guideId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
+  DeviceRoute: typeof DeviceRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  GuidesGuideIdRoute: typeof GuidesGuideIdRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   ApiWorkspacesWorkspaceIdAssetsUploadsRoute: typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
+  ApiWorkspacesWorkspaceIdSyncChangesRoute: typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
+  ApiWorkspacesWorkspaceIdSyncEventsRoute: typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
+  ApiWorkspacesWorkspaceIdSyncPushRoute: typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -177,6 +273,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/device': {
+      id: '/device'
+      path: '/device'
+      fullPath: '/device'
+      preLoaderRoute: typeof DeviceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -198,6 +301,13 @@ declare module '@tanstack/react-router' {
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guides/$guideId': {
+      id: '/guides/$guideId'
+      path: '/guides/$guideId'
+      fullPath: '/guides/$guideId'
+      preLoaderRoute: typeof GuidesGuideIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/invitations/$id': {
@@ -235,15 +345,52 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWorkspacesWorkspaceIdAssetsUploadsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/workspaces/$workspaceId/sync/changes': {
+      id: '/api/workspaces/$workspaceId/sync/changes'
+      path: '/api/workspaces/$workspaceId/sync/changes'
+      fullPath: '/api/workspaces/$workspaceId/sync/changes'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSyncChangesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/sync/events': {
+      id: '/api/workspaces/$workspaceId/sync/events'
+      path: '/api/workspaces/$workspaceId/sync/events'
+      fullPath: '/api/workspaces/$workspaceId/sync/events'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSyncEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/sync/push': {
+      id: '/api/workspaces/$workspaceId/sync/push'
+      path: '/api/workspaces/$workspaceId/sync/push'
+      fullPath: '/api/workspaces/$workspaceId/sync/push'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSyncPushRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/sync/guides/$guideId/': {
+      id: '/api/workspaces/$workspaceId/sync/guides/$guideId/'
+      path: '/api/workspaces/$workspaceId/sync/guides/$guideId'
+      fullPath: '/api/workspaces/$workspaceId/sync/guides/$guideId/'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': {
+      id: '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+      path: '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+      fullPath: '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
+  DeviceRoute: DeviceRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   ApiHealthRoute: ApiHealthRoute,
+  GuidesGuideIdRoute: GuidesGuideIdRoute,
   InvitationsIdRoute: InvitationsIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
@@ -252,6 +399,15 @@ const rootRouteChildren: RootRouteChildren = {
     ApiWorkspacesWorkspaceIdAssetsCommitRoute,
   ApiWorkspacesWorkspaceIdAssetsUploadsRoute:
     ApiWorkspacesWorkspaceIdAssetsUploadsRoute,
+  ApiWorkspacesWorkspaceIdSyncChangesRoute:
+    ApiWorkspacesWorkspaceIdSyncChangesRoute,
+  ApiWorkspacesWorkspaceIdSyncEventsRoute:
+    ApiWorkspacesWorkspaceIdSyncEventsRoute,
+  ApiWorkspacesWorkspaceIdSyncPushRoute: ApiWorkspacesWorkspaceIdSyncPushRoute,
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute:
+    ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute,
+  ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute:
+    ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,6 +1,7 @@
 //! API key storage in the macOS Keychain (Windows Credential Manager /
 //! Secret Service elsewhere, via `keyring`): one entry per provider that
-//! takes a key ([`ACCOUNT`] for Anthropic, [`OPENAI_COMPATIBLE_ACCOUNT`]).
+//! takes a key ([`ACCOUNT`] for Anthropic, [`OPENAI_COMPATIBLE_ACCOUNT`]),
+//! and the web app sign-in for sync ([`SYNC_ACCOUNT`]).
 //!
 //! The key is wrapped in [`ApiKey`], whose `Debug` and `Display` never show
 //! it, so it cannot end up in logs by accident.
@@ -12,6 +13,8 @@ pub const SERVICE: &str = "dev.dufflebear.guiderecorder";
 pub const ACCOUNT: &str = "anthropic-api-key";
 /// The key for a custom OpenAI-compatible API.
 pub const OPENAI_COMPATIBLE_ACCOUNT: &str = "openai-compatible-api-key";
+/// The web app session token the desktop app syncs with.
+pub const SYNC_ACCOUNT: &str = "sync-token";
 
 /// An API key. Formatting it prints `ApiKey(<redacted>)`.
 #[derive(Clone, PartialEq, Eq)]

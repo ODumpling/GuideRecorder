@@ -73,6 +73,17 @@
     "allow-update-status",
     "allow-check-for-update",
     "allow-install-update",
-    "allow-restart-to-update"
+    "allow-restart-to-update",
+    "allow-sync-account",
+    "allow-sync-sign-in-start",
+    "allow-sync-sign-in-poll",
+    "allow-sync-sign-out",
+    "allow-sync-request",
+    "allow-sync-load-state",
+    "allow-sync-save-state",
+    "allow-sync-read-guide",
+    "allow-sync-prepare-guide",
+    "allow-sync-upload",
+    "allow-sync-apply-guide"
   ]
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { Bot, EyeOff, FileOutput, Keyboard, Lock, Palette, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
+import { Bot, Cloud, EyeOff, FileOutput, Keyboard, Lock, Palette, Plug, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import {
   AiSection,
   AppearanceSection,
@@ -11,12 +11,13 @@ import {
   PrivacySection,
   RecordingSection,
 } from "@/components/settings/sections";
+import { SyncSection } from "@/components/settings/SyncSection";
 import { Button } from "@/components/ui/button";
 import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@/lib/utils";
 
-export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp";
+export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp" | "sync";
 
 const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "general", label: "General", icon: SlidersHorizontal },
@@ -27,6 +28,7 @@ const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "export", label: "Export", icon: FileOutput },
   { page: "permissions", label: "Permissions", icon: ShieldCheck },
   { page: "mcp", label: "MCP", icon: Plug },
+  { page: "sync", label: "Sync", icon: Cloud },
 ];
 
 /** The Settings window: a sheet over the editor with one page per section. */
@@ -122,6 +124,8 @@ export function SettingsDialog({
                 <ExportSection exportApi={exportApi} />
               ) : page === "permissions" ? (
                 <PermissionsSection api={api} />
+              ) : page === "sync" ? (
+                <SyncSection />
               ) : (
                 <McpSection api={api} />
               )}

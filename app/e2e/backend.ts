@@ -130,6 +130,15 @@ export class Backend {
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
+  /** The web app: who's signed in, the stored sync state, what was pushed. */
+  sync = {
+    server: null as string | null,
+    signedIn: false,
+    /** Whether the user approved the sign-in code in the browser. */
+    approved: false,
+    state: null as unknown,
+    pushes: [] as { guideId: string; guide: Guide }[],
+  };
   /** `verify_crop`'s answer for a crop that has a `cropRect`. */
   cropVerifies = true;
   /**
@@ -958,6 +967,56 @@ export class Backend {
       // The main window's title bar follows the theme.
       case "plugin:window|set_theme":
         return null;
+      // The web app: device sign-in, then a sync API that accepts every push.
+      case "sync_account":
+        return { server: this.sync.server, signedIn: this.sync.signedIn };
+      case "sync_sign_in_start":
+        this.sync.server = String(args.server);
+        return {
+          deviceCode: "device-code",
+          userCode: "WDJBMJHT",
+          verificationUri: `${this.sync.server}/device`,
+          verificationUriComplete: `${this.sync.server}/device?user_code=WDJBMJHT`,
+          expiresIn: 900,
+          interval: 1,
+        };
+      case "sync_sign_in_poll":
+        this.sync.signedIn = this.sync.approved;
+        return this.sync.approved ? "approved" : "pending";
+      case "sync_sign_out":
+        this.sync.signedIn = false;
+        return null;
+      case "sync_load_state":
+        return this.sync.state;
+      case "sync_save_state":
+        this.sync.state = args.state;
+        return null;
+      case "sync_read_guide": {
+        const bundle = this.bundles.get(String(args.id));
+        return bundle ? { guide: structuredClone(bundle.guide), path: bundle.path, readOnly: false } : null;
+      }
+      case "sync_prepare_guide": {
+        const guide = structuredClone(this.bundle(String(args.id)).guide);
+        const paths = guide.items.flatMap((item) =>
+          item.type === "step" ? [item.image.full, item.image.crop, item.image.after].filter((p): p is string => Boolean(p)) : [],
+        );
+        const images = [...new Set(paths)].map((path) => ({ path, sha256: "0".repeat(64), size: 1, contentType: "image/webp" }));
+        return { guide, images };
+      }
+      case "sync_request": {
+        const path = String(args.path);
+        const body = args.body as { guideId: string; guide: Guide; assets: Record<string, string> };
+        let response: unknown;
+        if (path === "/api/auth/organization/list") response = [{ id: "ws1", name: "Acme" }];
+        else if (path.includes("/sync/changes")) response = { changes: [], cursor: "0", hasMore: false };
+        else if (path.endsWith("/assets/uploads")) response = { present: ["0".repeat(64)], uploads: [] };
+        else if (path.endsWith("/sync/push")) {
+          this.sync.pushes.push(body);
+          const revision = { id: `r${this.sync.pushes.length}`, guideId: body.guideId, parentId: null, guide: body.guide, assets: body.assets };
+          response = { revision: { ...revision, authorId: "u", source: "app", createdAt: new Date().toISOString() } };
+        } else return { status: 404, body: { error: "not found" } };
+        return { status: 200, body: response };
+      }
       case "restart_to_update":
         if (this.updateStatus.state !== "ready") return fail("invalid", "no update is installed yet");
         this.restartedToUpdate = true;

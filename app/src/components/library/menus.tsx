@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
+import { guideSyncStatus } from "@/sync/store";
+import { syncStore } from "@/sync/sync";
 
 /** What the name dialog is asking for. */
 export type Naming = { kind: "rename"; guide: GuideListItem } | { kind: "folder"; parent: string };
@@ -59,6 +61,7 @@ export async function showGuideMenu(event: MouseEvent, guide: GuideListItem, fol
             ...folders.map((folder) => moveTo(folder, folder.split("/").join(" › "))),
           ],
         },
+        ...syncItems(guide),
         { item: "Separator" },
         {
           id: "reveal-guide",
@@ -78,6 +81,29 @@ export async function showGuideMenu(event: MouseEvent, guide: GuideListItem, fol
   } catch (error) {
     console.error("guide menu failed:", error);
   }
+}
+
+/** Sync to Web, and Resolve Sync Conflict while there is one; none until signed in. */
+function syncItems(guide: GuideListItem) {
+  const sync = syncStore.getState();
+  if (!sync.account?.signedIn || !sync.state.workspaceId) return [];
+  const status = guideSyncStatus(sync, guide.id);
+  const items: ({ item: "Separator" } | { id: string; text: string; enabled?: boolean; action: () => void })[] = [
+    { item: "Separator" },
+  ];
+  if (!sync.state.library) {
+    const on = Boolean(sync.state.guides[guide.id]?.enabled);
+    items.push({
+      id: "sync-guide",
+      text: on ? "Stop Syncing to Web" : "Sync to Web",
+      enabled: !guide.readOnly,
+      action: () => void syncStore.getState().setGuideEnabled(guide.id, !on),
+    });
+  }
+  if (status === "conflict") {
+    items.push({ id: "resolve-sync-conflict", text: "Resolve Sync Conflict…", action: () => syncStore.getState().openConflict(guide.id) });
+  }
+  return items.length > 1 ? items : [];
 }
 
 /** The native context menu of a folder in the list. */

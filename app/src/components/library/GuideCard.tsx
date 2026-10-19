@@ -1,5 +1,6 @@
 import { BookOpen, Camera, Lock } from "lucide-react";
 import { Avatar, StatusPill } from "@/components/library/bits";
+import { SyncBadge } from "@/components/library/SyncBadge";
 import { askName, showGuideMenu } from "@/components/library/menus";
 import { useGuideCover } from "@/components/library/useGuideCover";
 import { editorStore, useEditor } from "@/editor/editor";
@@ -51,6 +52,7 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
         <span className="mt-2.5 flex items-center gap-1.5 px-0.5 text-sm font-semibold tracking-tight">
           <span className="truncate">{guide.title || "Untitled"}</span>
           {guide.readOnly && <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="Read-only" />}
+          <SyncBadge guideId={guide.id} />
           {guide.version && (
             <span className="shrink-0 text-xs font-normal text-muted-foreground">v{guide.version}</span>
           )}

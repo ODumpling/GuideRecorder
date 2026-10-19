@@ -24,7 +24,8 @@ pub mod walkthrough;
 pub use md::{Branding, CheckedBranding};
 pub use out_path::{check_out_path, OutPathError};
 pub use raster::{
-    render_step_image, verify_crop_rect, ImageOptions, PlacedHotspot, RenderWarning, RenderedImage,
+    has_redactions, redacted_image, render_step_image, verify_crop_rect, ImageOptions,
+    PlacedHotspot, RenderWarning, RenderedImage,
 };
 pub use render::{RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep};
 pub use report::ExportReport;

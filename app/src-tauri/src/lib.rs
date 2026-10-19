@@ -19,6 +19,7 @@ mod recording;
 mod redaction;
 mod settings;
 mod settings_commands;
+mod sync;
 mod terminate;
 mod toolbar;
 mod tray;
@@ -119,6 +120,7 @@ pub fn run() {
             app.manage(Arc::new(recording::Recorder::default()));
             app.manage(Arc::new(picker::RegionPicker::default()));
             app.manage(Arc::new(ai::AiRuns::default()));
+            app.manage(Arc::new(sync::SyncState::default()));
             if let Err(e) = tray::create(app.handle()) {
                 eprintln!("guiderecorder: cannot create the tray icon: {e}");
             }
@@ -242,6 +244,17 @@ pub fn run() {
             updater::check_for_update,
             updater::install_update,
             updater::restart_to_update,
+            sync::sync_account,
+            sync::sync_sign_in_start,
+            sync::sync_sign_in_poll,
+            sync::sync_sign_out,
+            sync::sync_request,
+            sync::sync_load_state,
+            sync::sync_save_state,
+            sync::sync_read_guide,
+            sync::sync_prepare_guide,
+            sync::sync_upload,
+            sync::sync_apply_guide,
         ])
         .build(tauri::generate_context!())
         .expect("error while building GuideRecorder")

@@ -3,12 +3,17 @@ import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { WorkspaceSwitcher } from "@/components/dashboard/WorkspaceSwitcher";
+import { SyncedGuides } from "@/components/guides/SyncedGuides";
 import { Card } from "@/components/ui";
 import { title } from "@/lib/title";
 import { getDashboard } from "@/server/dashboard";
+import { getSyncedGuides } from "@/server/guides";
 
 export const Route = createFileRoute("/dashboard")({
-  loader: () => getDashboard(),
+  loader: async () => {
+    const [dashboard, guides] = await Promise.all([getDashboard(), getSyncedGuides()]);
+    return { ...dashboard, guides };
+  },
   head: () => title("Dashboard"),
   component: Dashboard,
 });
@@ -22,7 +27,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, workspaces, active, billingEnabled, can } = Route.useLoaderData();
+  const { user, workspaces, active, billingEnabled, can, guides } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -64,6 +69,7 @@ function Dashboard() {
               </div>
             </dl>
           </Card>
+          {guides.available ? <SyncedGuides {...guides} /> : null}
           <Members
             workspaceId={active.id}
             currentUserId={user.id}

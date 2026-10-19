@@ -1,0 +1,24 @@
+{
+  "name": "@guiderecorder/sync",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@guiderecorder/guide-schema": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "fast-check": "^4.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

@@ -15,6 +15,7 @@ pub mod model;
 pub mod pages;
 pub mod redact;
 pub mod steps;
+pub mod sync;
 
 pub use ulid::Ulid;
 
