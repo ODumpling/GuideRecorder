@@ -126,7 +126,7 @@ export function Outline() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-2 border-b border-sidebar-border p-3">
         <div className="flex items-center justify-between">
-          <Button variant="ghost" size="sm" onClick={() => void back()}>
+          <Button variant="ghost" size="sm" title="Close this guide and go back to the library" onClick={() => void back()}>
             <ArrowLeft /> Library
           </Button>
           <Suspense
@@ -209,6 +209,7 @@ export function Outline() {
                   variant="ghost"
                   size="icon"
                   aria-label="Move up"
+                  title="Move up"
                   disabled={index === 0}
                   onClick={() => move(item.id, index - 1)}
                 >
@@ -218,6 +219,7 @@ export function Outline() {
                   variant="ghost"
                   size="icon"
                   aria-label="Move down"
+                  title="Move down"
                   disabled={index === guide.items.length - 1}
                   onClick={() => move(item.id, index + 1)}
                 >

@@ -131,6 +131,7 @@ export function StyleBar({
           <Label>Stroke</Label>
           <select
             aria-label="Stroke width"
+            title="Line thickness"
             className="h-7 rounded-md border border-input bg-transparent px-1 text-sm"
             value={strokeWidth(style.strokeWidth, type === "callout" ? DEFAULT_CALLOUT_STROKE : DEFAULT_STROKE)}
             onChange={(e) => set({ strokeWidth: Number(e.target.value) })}
@@ -149,6 +150,7 @@ export function StyleBar({
           <input
             type="range"
             aria-label="Opacity"
+            title="How see-through the highlight is"
             min={0.1}
             max={1}
             step={0.05}
@@ -165,6 +167,7 @@ export function StyleBar({
                 key={mode}
                 size="sm"
                 variant={(style.blurMode ?? "blur") === mode ? "default" : "outline"}
+                title={mode === "blur" ? "Hide the area by blurring it" : "Hide the area behind large pixels"}
                 // The amount means radius or block size: back to the mode's default.
                 onClick={() => set({ blurMode: mode, blurAmount: undefined }, "mode")}
               >
@@ -177,6 +180,7 @@ export function StyleBar({
             <input
               type="range"
               aria-label={pixelate ? "Block size" : "Blur strength"}
+              title={pixelate ? "Size of each pixel block" : "How strongly the area is blurred"}
               min={MIN_BLUR_AMOUNT}
               max={40}
               step={1}
@@ -196,6 +200,7 @@ export function StyleBar({
             <Label>Text size</Label>
             <select
               aria-label="Text size"
+              title="Size of the callout text"
               className="h-7 rounded-md border border-input bg-transparent px-1 text-sm"
               value={style.fontSize ?? DEFAULT_FONT_SIZE}
               onChange={(e) => set({ fontSize: Number(e.target.value) })}
@@ -210,6 +215,11 @@ export function StyleBar({
           <Button
             size="sm"
             variant="outline"
+            title={
+              annotation.geometry.anchor
+                ? "Remove the line from the callout to what it points at"
+                : "Add a line from the callout to what it points at; drag its end to aim it"
+            }
             onClick={() => {
               const g = annotation.geometry;
               const geometry = { ...g };
@@ -239,7 +249,7 @@ export function StyleBar({
         variant="ghost"
         size="sm"
         className="ml-auto"
-        title="Delete (⌫)"
+        title="Delete this annotation (⌫)"
         onClick={() => {
           if (run((guide) => removeAnnotation(guide, stepId, annotation.id))) onDeleted();
         }}

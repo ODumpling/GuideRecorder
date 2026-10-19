@@ -20,7 +20,12 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
     <>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild disabled={disabled}>
-          <Button variant="outline" size="sm" aria-label="Insert">
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Insert"
+            title={annotated ? "Add pages, a section or a note" : "Add a step from an image, a section or a note"}
+          >
             <Plus /> Insert
           </Button>
         </DropdownMenu.Trigger>

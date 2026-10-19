@@ -89,7 +89,13 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
         {doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
         {doc && (
           <>
-            <Button variant="outline" size="sm" className="ml-1" onClick={() => setExporting(true)}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-1"
+              title="Export this guide as Markdown, HTML, Word or PDF"
+              onClick={() => setExporting(true)}
+            >
               <FileOutput /> Export…
             </Button>
             <ExportDialog open={exporting} onOpenChange={setExporting} />
