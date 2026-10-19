@@ -16,6 +16,7 @@ pub mod pdf;
 pub mod raster;
 pub mod render;
 pub mod report;
+pub mod walkthrough;
 
 pub use md::{Branding, CheckedBranding};
 pub use out_path::{check_out_path, OutPathError};

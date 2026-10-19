@@ -113,11 +113,13 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Export a guide as Markdown, HTML, DOCX or PDF.
+    /// Export a guide as Markdown, HTML, an interactive HTML walkthrough,
+    /// DOCX or PDF.
     ///
     /// Reads the guide without changing the library. Markdown and HTML
     /// write into the `--out` folder (`guide.md` plus `images/`, or
-    /// `guide.html`); DOCX and PDF write the `--out` file. Image problems
+    /// `guide.html`; a walkthrough is also one `guide.html`); DOCX and PDF
+    /// write the `--out` file. Image problems
     /// become placeholders and warnings, not errors.
     Export(ExportArgs),
 }
@@ -129,7 +131,7 @@ struct ExportArgs {
     guide: String,
     #[arg(long, value_enum)]
     format: Format,
-    /// Output folder (md, html) or file (docx, pdf).
+    /// Output folder (md, html, walkthrough) or file (docx, pdf).
     #[arg(long, value_name = "PATH")]
     out: PathBuf,
     /// Replace an earlier export at `--out`.
@@ -156,6 +158,8 @@ struct ExportArgs {
 enum Format {
     Md,
     Html,
+    /// Interactive click-through HTML, one step at a time.
+    Walkthrough,
     Docx,
     Pdf,
 }
@@ -180,6 +184,7 @@ impl Format {
         match self {
             Self::Md => "md",
             Self::Html => "html",
+            Self::Walkthrough => "walkthrough",
             Self::Docx => "docx",
             Self::Pdf => "pdf",
         }
@@ -686,8 +691,14 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             };
             md::export(&render, &handle, out, &opts)?
         }
-        Format::Html => {
+        Format::Html | Format::Walkthrough => {
+            let mode = if args.format == Format::Walkthrough {
+                html::HtmlMode::Walkthrough
+            } else {
+                html::HtmlMode::Document
+            };
             let opts = html::HtmlOptions {
+                mode,
                 overwrite,
                 branding,
                 ..html::HtmlOptions::default()
