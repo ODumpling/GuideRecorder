@@ -33,6 +33,7 @@ import type {
   StepImage,
   UpdateStatus,
 } from "@/lib/types";
+import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
 export interface EditorApi {
@@ -404,3 +405,52 @@ export const tauriUpdaterApi: UpdaterApi = {
 
 /** Emitted with an `UpdateStatus` on every change of the updater's state. */
 export const UPDATE_STATUS_EVENT = "updater://status";
+
+/** Where the app is signed in to the web app (see app/src-tauri/src/sync.rs). */
+export interface SyncAccount {
+  server: string | null;
+  signedIn: boolean;
+}
+
+/** A device code to show while the user approves it in the browser. */
+export interface DeviceCode {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+}
+
+export type SignInStatus = "pending" | "slowDown" | "approved" | "denied" | "expired";
+
+/** Sync commands: signing in, and the stored sync state. */
+export interface SyncApi {
+  account(): Promise<SyncAccount>;
+  /** Asks `server` for a device code and opens its approval page in the browser. */
+  signInStart(server: string): Promise<DeviceCode>;
+  signInPoll(deviceCode: string): Promise<SignInStatus>;
+  signOut(): Promise<void>;
+  loadState(): Promise<unknown>;
+  saveState(state: unknown): Promise<void>;
+}
+
+export const tauriSyncApi: SyncApi = {
+  account: () => invoke("sync_account"),
+  signInStart: (server) => invoke("sync_sign_in_start", { server }),
+  signInPoll: (deviceCode) => invoke("sync_sign_in_poll", { deviceCode }),
+  signOut: () => invoke("sync_sign_out"),
+  loadState: () => invoke("sync_load_state"),
+  saveState: (state) => invoke("sync_save_state", { state }),
+};
+
+/** What the sync loop needs from the app (`src/sync/engine.ts`). */
+export const tauriSyncBackend: SyncBackend = {
+  request: (method, path, body) => invoke("sync_request", { method, path, body: body ?? null }),
+  readGuide: (id) => invoke("sync_read_guide", { id }),
+  prepareGuide: (id) => invoke("sync_prepare_guide", { id }),
+  upload: (uploads) => invoke("sync_upload", { uploads }),
+  applyGuide: (workspaceId, guide, assets) => invoke("sync_apply_guide", { workspaceId, guide, assets }),
+  duplicateGuide: (id, path, title) => invoke("duplicate_guide", { id, path, title }),
+  listGuideIds: async () => ((await invoke("list_guides", { query: null })) as GuideListItem[]).filter((g) => !g.duplicateOf).map((g) => g.id),
+};

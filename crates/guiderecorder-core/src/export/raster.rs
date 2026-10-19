@@ -257,6 +257,59 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
     image
 }
 
+/// Whether [`redacted_image`] changes anything for `step`: it has a blur
+/// annotation, or an on-device blur suggestion.
+pub fn has_redactions(step: &Step) -> bool {
+    step.annotations
+        .iter()
+        .any(|a| matches!(a.shape, Shape::Blur(_)))
+        || step
+            .ai_state
+            .redaction_suggestions
+            .iter()
+            .any(|s| s.source == SuggestionSource::OnDevice)
+}
+
+/// One of the step's stored images (`full`, `crop` or `after`, by its
+/// bundle-relative `path`) with its blur annotations and on-device blur
+/// suggestions burned in, at full size with nothing else drawn: the copy
+/// that leaves the device when a guide syncs. Other annotations stay data.
+///
+/// The crop is placed as [`render_step_image`] places it; if its position
+/// is unknown, the whole crop is blurred rather than risk an unblurred
+/// region. The after frame shares the full screenshot's coordinates.
+pub fn redacted_image(
+    handle: &GuideHandle,
+    step: &Step,
+    path: &str,
+) -> crate::library::Result<RgbaImage> {
+    let image = handle.read_image(path)?;
+    if !has_redactions(step) {
+        return Ok(image);
+    }
+    let is_crop = step.image.crop.as_deref() == Some(path);
+    let origin = if is_crop {
+        quiet_crop_origin(handle, step, &image)
+    } else {
+        Some(ORIGIN)
+    };
+    let mut pixmap = into_pixmap(image);
+    match origin {
+        Some(origin) => burn_in_redactions(&mut pixmap, origin, step, true),
+        None => {
+            let (w, h) = (pixmap.width(), pixmap.height());
+            let whole = Region {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            };
+            blur::burn_in(pixmap.data_mut(), (w, h), whole, BlurMode::Blur, None);
+        }
+    }
+    Ok(from_pixmap(pixmap))
+}
+
 /// `p` (full-screenshot pixels) as fractions of the view at `origin` with
 /// size `(w, h)`; `None` if it is outside the view or not finite.
 fn fraction_point(p: Point, origin: Point, (w, h): (u32, u32)) -> Option<Point> {

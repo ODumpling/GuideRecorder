@@ -3,7 +3,7 @@ export interface Timers {
   clearTimeout(handle: unknown): void;
 }
 
-const realTimers: Timers = {
+export const realTimers: Timers = {
   setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
   clearTimeout: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>),
 };

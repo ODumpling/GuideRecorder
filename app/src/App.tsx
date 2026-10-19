@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronRight, FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
 import { WriteWithAi } from "@/ai/WriteWithAi";
+import { ConflictDialog } from "@/components/ConflictDialog";
 import { ExportDialog } from "@/components/ExportDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
@@ -30,6 +31,7 @@ import { isActive, subscribe } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
 import { UpdateBanner } from "@/updater/UpdateBanner";
 import { updaterStore } from "@/updater/updater";
+import { startSync } from "@/sync/sync";
 
 function ReadOnlyBanner() {
   const doc = useEditor((s) => s.doc);
@@ -214,7 +216,9 @@ export default function App() {
     ];
     // A check may have finished before the listener.
     void updaterStore.getState().load();
+    const stopSync = startSync();
     return () => {
+      stopSync();
       window.removeEventListener("keydown", onKeyDown);
       unsubscribe();
       for (const p of unlisten) void p.then((stop) => stop());
@@ -245,6 +249,7 @@ export default function App() {
         </div>
       </div>
       <LeaveDialog />
+      <ConflictDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <Onboarding />
       {draggingImages && (
