@@ -54,10 +54,15 @@ jobs:
         run: |
           cargo build --release --locked -p guiderecorder-mcp --target aarch64-apple-darwin
           cargo build --release --locked -p guiderecorder-mcp --target x86_64-apple-darwin
-          mkdir -p app/src-tauri/binaries
-          lipo -create -output app/src-tauri/binaries/guiderecorder-mcp-universal-apple-darwin \
-            target/aarch64-apple-darwin/release/guiderecorder-mcp \
-            target/x86_64-apple-darwin/release/guiderecorder-mcp
+          # A universal build compiles each architecture first, and each
+          # step wants the sidecar for its own target triple.
+          bin=app/src-tauri/binaries
+          mkdir -p "$bin"
+          for arch in aarch64 x86_64; do
+            cp "target/$arch-apple-darwin/release/guiderecorder-mcp" "$bin/guiderecorder-mcp-$arch-apple-darwin"
+          done
+          lipo -create -output "$bin/guiderecorder-mcp-universal-apple-darwin" \
+            "$bin/guiderecorder-mcp-aarch64-apple-darwin" "$bin/guiderecorder-mcp-x86_64-apple-darwin"
 
       - name: Release notes
         id: notes
