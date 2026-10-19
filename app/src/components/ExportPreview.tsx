@@ -1,6 +1,6 @@
 import { useStepThumbnail } from "@/components/useStepThumbnail";
-import { isAccent, isFolderFormat } from "@/export/export";
-import type { ExportFormat, Guide, PaperSize, Step } from "@/lib/types";
+import { isAccent, isFolderFormat, isMotionFormat } from "@/export/export";
+import type { ExportFormat, Guide, MotionAspect, PaperSize, Step } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markdownToPlainText } from "@/text/markdown";
 
@@ -43,6 +43,69 @@ function PreviewStep({
   );
 }
 
+const FRAME_RATIOS: Record<MotionAspect, string> = { wide: "16 / 9", square: "1 / 1", vertical: "9 / 16" };
+
+/**
+ * A sketch of a video or GIF frame (the first step with its caption), or
+ * of a step slide.
+ */
+function FramePreview({
+  guide,
+  format,
+  aspect,
+  captions,
+}: {
+  guide: Guide;
+  format: ExportFormat;
+  aspect: MotionAspect;
+  captions: boolean;
+}) {
+  const step = guide.items.find((i): i is Step => i.type === "step");
+  const path = step ? (format === "pptx" && step.image.show === "crop" && step.image.crop) || step.image.full : null;
+  const image = useStepThumbnail(guide.id, path || null);
+  const title = step ? markdownToPlainText(step.title) || "Step 1" : "No steps";
+  if (format === "pptx") {
+    const description = step ? markdownToPlainText(step.description) : "";
+    return (
+      <div
+        aria-label="Export preview"
+        className="flex w-full max-w-[26rem] shrink-0 flex-col gap-2 self-start rounded-[3px] bg-white p-4 text-[#1d1d1f] shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]"
+        style={{ aspectRatio: "16 / 9" }}
+      >
+        <p className="truncate text-[13px] font-bold">1. {title}</p>
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="flex min-w-0 flex-[2] items-center justify-center">
+            {image && <img src={image} alt="" className="max-h-full max-w-full border border-[#d1d1d6]" />}
+          </div>
+          {description && <p className="line-clamp-6 flex-1 text-[8px] leading-normal">{description}</p>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div
+      aria-label="Export preview"
+      className={cn(
+        "flex shrink-0 flex-col self-start overflow-hidden bg-[#18181b] shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]",
+        aspect === "vertical" ? "h-[26rem]" : "w-full max-w-[26rem]",
+      )}
+      style={{ aspectRatio: FRAME_RATIOS[aspect] }}
+    >
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        {image && <img src={image} alt="" className="max-h-full max-w-full" />}
+      </div>
+      {captions && (
+        <div className="flex shrink-0 items-center gap-2 bg-black/35 px-2.5 py-2">
+          <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-[#007aff] text-[8px] font-bold text-white">
+            1
+          </span>
+          <span className="line-clamp-2 text-[10px] font-bold text-white">{title}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * A sketch of the export's first page as the options change: the accent,
  * logo, paper and review details. Not the exporter's own rendering; the
@@ -55,6 +118,8 @@ export function ExportPreview({
   logo,
   accent,
   reviewDetails,
+  aspect = "wide",
+  captions = true,
 }: {
   guide: Guide;
   format: ExportFormat;
@@ -62,7 +127,12 @@ export function ExportPreview({
   logo: string | null;
   accent: string;
   reviewDetails: boolean;
+  aspect?: MotionAspect;
+  captions?: boolean;
 }) {
+  if (format === "pptx" || isMotionFormat(format)) {
+    return <FramePreview guide={guide} format={format} aspect={aspect} captions={captions} />;
+  }
   const color = accent.trim() && isAccent(accent) ? accent.trim() : DEFAULT_ACCENT;
   const web = isFolderFormat(format);
   const steps = guide.items.filter((i): i is Step => i.type === "step");

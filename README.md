@@ -5,7 +5,7 @@
 GuideRecorder watches what you do on your Mac and turns it into a how-to guide:
 one step per click or shortcut, each with a screenshot of the moment you did
 it. You then tidy the guide up in a built-in editor and export it as PDF, Word,
-Markdown or HTML to share with your team, customers or future self.
+Markdown, HTML, slides, a video or a GIF to share with your team, customers or future self.
 
 Everything stays on your machine. AI writing is optional and uses your own
 Anthropic API key, any OpenAI-compatible API, or a local model in Ollama or
@@ -44,6 +44,15 @@ LM Studio, in which case nothing leaves your Mac.
    **HTML**, with your logo if you like. PDF and Word come on A4 or Letter
    paper (the default follows your region). Blurs are applied to the actual pixels
    on export, so hidden information is really gone.
+
+   For a chat, a ticket, a README or a training session, export a **video
+   (MP4)** or an **animated GIF** instead: each step is shown for a few
+   seconds, zooming smoothly into where you clicked, with a cursor, a click
+   marker and the step's title as a caption. Choose the seconds per step,
+   the frame (wide 16:9, square or vertical), and whether to zoom and show
+   captions. Video is encoded on your Mac with AVFoundation. **Slides
+   (PPTX)** give one slide per step with its image, title and description,
+   and the description in the speaker notes.
 
 ## Annotation guides
 
@@ -134,9 +143,11 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <p
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
 
-`export` takes `--format md|html|walkthrough|docx|pdf` (`walkthrough` is an
-interactive click-through `guide.html`), `--out`, and optionally
-`--paper a4|letter` (DOCX and PDF; default A4), `--logo`, `--accent`,
+`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif`
+(`walkthrough` is an interactive click-through `guide.html`; `mp4` needs
+macOS), `--out`, and optionally `--paper a4|letter` (DOCX and PDF; default
+A4), `--seconds-per-step`, `--size wide|square|vertical`, `--no-zoom` and
+`--no-captions` (MP4 and GIF), `--logo`, `--accent`,
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.

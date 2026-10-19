@@ -13,6 +13,7 @@ import type {
   GuideListItem,
   LibraryInfo,
   McpSetup,
+  MotionOptions,
   OpenedGuide,
   PaperSize,
   Permission,
@@ -177,6 +178,8 @@ export interface ExportApi {
     paper: PaperSize,
     /** Show the version, owner and last review day (those set) under the summary, or on the PDF cover. */
     reviewDetails: boolean,
+    /** Used by MP4 and GIF. */
+    motion: MotionOptions,
   ): Promise<ExportResult>;
   /** Shows a file an export wrote in Finder. */
   reveal(path: string): Promise<void>;
@@ -187,8 +190,8 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
 

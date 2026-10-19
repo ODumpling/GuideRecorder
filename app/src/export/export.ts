@@ -1,6 +1,16 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { AppError, ExportBranding, ExportFormat, ExportResult, Item, PaperSize, Step } from "@/lib/types";
+import type {
+  AppError,
+  ExportBranding,
+  ExportFormat,
+  ExportResult,
+  Item,
+  MotionAspect,
+  MotionOptions,
+  PaperSize,
+  Step,
+} from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -12,7 +22,62 @@ export const FORMATS: { format: ExportFormat; label: string; detail: string }[] 
   },
   { format: "docx", label: "Word", detail: "One .docx file" },
   { format: "pdf", label: "PDF", detail: "One .pdf file" },
+  { format: "pptx", label: "Slides", detail: "A PowerPoint deck, one slide per step" },
+  { format: "mp4", label: "Video", detail: "An .mp4 zooming in on each click" },
+  { format: "gif", label: "GIF", detail: "An animated .gif to paste anywhere" },
 ];
+
+export const ASPECTS: { aspect: MotionAspect; label: string; detail: string }[] = [
+  { aspect: "wide", label: "Wide", detail: "16:9" },
+  { aspect: "square", label: "Square", detail: "1:1" },
+  { aspect: "vertical", label: "Vertical", detail: "9:16" },
+];
+
+/** Seconds per step of a video or GIF: the bounds the exporter accepts. */
+export const MIN_SECONDS_PER_STEP = 1;
+export const MAX_SECONDS_PER_STEP = 30;
+
+export const DEFAULT_MOTION: MotionOptions = { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true };
+
+/** The video and GIF options chosen last time (on this Mac). */
+const MOTION_KEY = "guiderecorder.exportMotion";
+
+/** The video and GIF options chosen last time, else the defaults; anything invalid falls back. */
+export function initialMotion(storage: Pick<Storage, "getItem"> = localStorage): MotionOptions {
+  let stored: unknown = null;
+  try {
+    stored = JSON.parse(storage.getItem(MOTION_KEY) ?? "null");
+  } catch {
+    // Unreadable: the defaults apply.
+  }
+  if (!stored || typeof stored !== "object") return { ...DEFAULT_MOTION };
+  const s = stored as Partial<Record<keyof MotionOptions, unknown>>;
+  return {
+    secondsPerStep: isSecondsPerStep(s.secondsPerStep) ? s.secondsPerStep : DEFAULT_MOTION.secondsPerStep,
+    aspect: ASPECTS.some((a) => a.aspect === s.aspect) ? (s.aspect as MotionAspect) : DEFAULT_MOTION.aspect,
+    zoom: typeof s.zoom === "boolean" ? s.zoom : DEFAULT_MOTION.zoom,
+    captions: typeof s.captions === "boolean" ? s.captions : DEFAULT_MOTION.captions,
+  };
+}
+
+/** Remembers the video and GIF options, also after a restart. */
+export function rememberMotion(motion: MotionOptions, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(MOTION_KEY, JSON.stringify(motion));
+  } catch {
+    // Not remembered; the defaults apply next time.
+  }
+}
+
+/** Whether `value` is a seconds-per-step the exporter accepts. */
+export function isSecondsPerStep(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_SECONDS_PER_STEP &&
+    value <= MAX_SECONDS_PER_STEP
+  );
+}
 
 export const PAPERS: { paper: PaperSize; label: string; detail: string }[] = [
   { paper: "a4", label: "A4", detail: "210 × 297 mm" },
@@ -87,7 +152,22 @@ export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setIt
   }
 }
 
-/** Markdown and HTML (either kind) export into a folder; DOCX and PDF into one file. */
+/** MP4 and GIF: a step after the other, zooming in on each click. */
+export function isMotionFormat(format: ExportFormat): boolean {
+  return format === "mp4" || format === "gif";
+}
+
+/** DOCX and PDF come on a paper size. */
+export function isPaperFormat(format: ExportFormat): boolean {
+  return format === "docx" || format === "pdf";
+}
+
+/** The document formats, which show branding and the review details; slides, video and GIF do not. */
+export function isDocumentFormat(format: ExportFormat): boolean {
+  return format !== "pptx" && !isMotionFormat(format);
+}
+
+/** Markdown and HTML (either kind) export into a folder; the other formats into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
   return format === "md" || format === "html" || format === "walkthrough";
 }
@@ -132,7 +212,7 @@ export interface Destination {
   /** For Markdown and HTML: the folder chosen, and the export folder's name in it. */
   folder: string | null;
   name: string;
-  /** For DOCX and PDF: the file chosen in the save dialog. */
+  /** For the one-file formats: the file chosen in the save dialog. */
   file: string | null;
 }
 
@@ -165,6 +245,7 @@ export async function runExport(
     branding: ExportBranding;
     paper: PaperSize;
     reviewDetails: boolean;
+    motion: MotionOptions;
   },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
@@ -175,7 +256,7 @@ export async function runExport(
     };
   }
   try {
-    const { guideId, format, out, overwrite, branding, paper, reviewDetails } = request;
+    const { guideId, format, out, overwrite, branding, paper, reviewDetails, motion } = request;
     const accent = branding.accent?.trim() || null;
     const result = await deps.api.exportGuide(
       guideId,
@@ -185,6 +266,7 @@ export async function runExport(
       { logo: branding.logo, accent },
       paper,
       reviewDetails,
+      motion,
     );
     return { ok: true, result };
   } catch (error) {

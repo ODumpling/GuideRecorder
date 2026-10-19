@@ -118,8 +118,14 @@ export class Backend {
     logo: null,
   };
   /** Every `export_guide` call that succeeded. */
-  readonly exports: { guideId: string; format: string; out: string; overwrite: boolean; branding: ExportBranding }[] =
-    [];
+  readonly exports: {
+    guideId: string;
+    format: string;
+    out: string;
+    overwrite: boolean;
+    branding: ExportBranding;
+    motion?: unknown;
+  }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
@@ -745,7 +751,9 @@ export class Backend {
         return this.dialog.logo;
       case "choose_export_file": {
         const ext = String(args.format);
-        if (ext !== "docx" && ext !== "pdf") fail("invalid", "Markdown and HTML export into a folder");
+        if (!["docx", "pdf", "pptx", "mp4", "gif"].includes(ext)) {
+          fail("invalid", "Markdown and HTML export into a folder");
+        }
         const file = this.dialog.file;
         return file && !file.toLowerCase().endsWith(`.${ext}`) ? `${file}.${ext}` : file;
       }
@@ -757,7 +765,8 @@ export class Backend {
         const overwrite = args.overwrite === true;
         if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
         this.exported.add(out);
-        this.exports.push({ guideId, format, out, overwrite, branding: args.branding as ExportBranding });
+        const record = { guideId, format, out, overwrite, branding: args.branding as ExportBranding };
+        this.exports.push(format === "mp4" || format === "gif" ? { ...record, motion: args.motion } : record);
         const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
         return { files: [main], warnings: [], notes: [] } satisfies ExportResult;
       }

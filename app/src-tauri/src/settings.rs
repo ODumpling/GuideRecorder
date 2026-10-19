@@ -1257,7 +1257,7 @@ mod tests {
 
         // A newer file this version can't decode: defaults, read-only, and
         // the file is neither renamed nor saved over.
-        let newer = br#"{"version":3,"export":{"format":"pptx"}}"#;
+        let newer = br#"{"version":3,"export":{"format":"keynote"}}"#;
         fs::write(&path, newer).unwrap();
         let store = SettingsStore::load(Some(path.clone()));
         let view = store.view();

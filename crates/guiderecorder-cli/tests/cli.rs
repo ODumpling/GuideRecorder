@@ -758,6 +758,8 @@ fn export_each_format() {
         ("walkthrough", "walkthrough", "guide.html"),
         ("docx", "drucker.docx", ""),
         ("pdf", "drucker.pdf", ""),
+        ("pptx", "drucker.pptx", ""),
+        ("gif", "drucker.gif", ""),
     ];
     for (format, out_name, main) in cases {
         let out = fx.out(out_name);
@@ -791,6 +793,10 @@ fn export_each_format() {
     assert!(pdf.starts_with(b"%PDF-"));
     let docx = fs::read(fx.out("drucker.docx")).unwrap();
     assert!(docx.starts_with(b"PK"));
+    let pptx = fs::read(fx.out("drucker.pptx")).unwrap();
+    assert!(pptx.starts_with(b"PK"));
+    let gif = fs::read(fx.out("drucker.gif")).unwrap();
+    assert!(gif.starts_with(b"GIF89a"));
     assert_eq!(fx.snapshot(), before, "export changed the library");
 }
 
@@ -864,6 +870,8 @@ fn export_refuses_to_overwrite_unless_asked() {
         ("html", "html"),
         ("docx", "a.docx"),
         ("pdf", "a.pdf"),
+        ("pptx", "a.pptx"),
+        ("gif", "a.gif"),
     ] {
         let out = fx.out(name);
         fx.export_json(DRUCKER, format, &out, &[]);
@@ -876,6 +884,50 @@ fn export_refuses_to_overwrite_unless_asked() {
         );
         fx.export_json(DRUCKER, format, &out, &["--overwrite"]);
     }
+}
+
+#[test]
+fn export_motion_options() {
+    let fx = Fixture::new();
+    let out = fx.out("square.gif");
+    fx.export_json(
+        DRUCKER,
+        "gif",
+        &out,
+        &[
+            "--size",
+            "square",
+            "--seconds-per-step",
+            "1.5",
+            "--no-zoom",
+            "--no-captions",
+        ],
+    );
+    let gif = fs::read(&out).unwrap();
+    // Logical screen size, little-endian, after the signature.
+    assert_eq!(&gif[6..10], &[0x1c, 0x02, 0x1c, 0x02], "540 × 540");
+    let bad = fx.export(
+        DRUCKER,
+        "gif",
+        &fx.out("bad.gif"),
+        &["--seconds-per-step", "0.5"],
+    );
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(
+        stderr(&bad).contains("--seconds-per-step"),
+        "{}",
+        stderr(&bad)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn export_mp4() {
+    let fx = Fixture::new();
+    let out = fx.out("drucker.mp4");
+    let report = fx.export_json(DRUCKER, "mp4", &out, &["--seconds-per-step", "1"]);
+    assert_eq!(report["format"], "mp4");
+    assert_eq!(&fs::read(&out).unwrap()[4..8], b"ftyp");
 }
 
 #[test]

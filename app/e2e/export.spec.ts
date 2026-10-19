@@ -70,3 +70,41 @@ test("exports Markdown into a named folder with a logo", async ({ page, backend 
     branding: { logo: "/Users/me/logo.png", accent: null },
   });
 });
+
+test("exports a vertical GIF without zoom, remembering the options", async ({ page, backend }) => {
+  await openGuide(page, "Rotate an API key");
+  await page.getByRole("button", { name: "Export…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Export guide" });
+  await dialog.getByRole("radio", { name: /GIF/ }).click();
+  // Paper and branding belong to the documents.
+  await expect(dialog.getByRole("radiogroup", { name: "Paper size" })).toHaveCount(0);
+  await expect(dialog.getByText("Branding (optional)")).toHaveCount(0);
+  await dialog.getByRole("radio", { name: /Vertical/ }).click();
+  await dialog.getByLabel("Zoom in on each click").uncheck();
+
+  const exportButton = dialog.getByRole("button", { name: "Export", exact: true });
+  backend.dialog.file = "/Users/me/Desktop/Rotate an API key";
+  await dialog.getByRole("button", { name: "Choose…" }).click();
+  await expect(dialog.getByText("Rotate an API key.gif")).toBeVisible();
+  const seconds = dialog.getByRole("spinbutton");
+  await seconds.fill("45");
+  await expect(exportButton).toBeDisabled();
+  await seconds.fill("2.5");
+  await exportButton.click();
+
+  await expect(dialog.getByText(/Exported to/)).toBeVisible();
+  expect(backend.exports.at(-1)).toEqual({
+    guideId: API_KEY,
+    format: "gif",
+    out: "/Users/me/Desktop/Rotate an API key.gif",
+    overwrite: false,
+    branding: { logo: null, accent: null },
+    motion: { secondsPerStep: 2.5, aspect: "vertical", zoom: false, captions: true },
+  });
+
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Export…" }).click();
+  await expect(dialog.getByRole("radio", { name: /Vertical/ })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByLabel("Zoom in on each click")).not.toBeChecked();
+  await expect(dialog.getByRole("spinbutton")).toHaveValue("2.5");
+});

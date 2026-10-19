@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, pdf, verify_crop_rect, ExportReport, OutPathError, RenderGuide,
+    docx, html, md, motion, pdf, pptx, verify_crop_rect, ExportReport, OutPathError, RenderGuide,
 };
 use guiderecorder_core::model::StepImage;
 use serde::{Deserialize, Serialize};
@@ -33,21 +33,53 @@ pub enum Format {
     Docx,
     #[default]
     Pdf,
+    /// Slides, one per step.
+    Pptx,
+    /// A video zooming in on each click.
+    Mp4,
+    /// An animated GIF zooming in on each click.
+    Gif,
 }
 
 impl Format {
-    /// Markdown and HTML (either mode) write into a folder; DOCX and PDF
-    /// write one file.
+    /// Markdown and HTML (either mode) write into a folder; the other
+    /// formats write one file.
     pub fn is_folder(self) -> bool {
         matches!(self, Self::Md | Self::Html | Self::Walkthrough)
     }
 
-    /// The file extension of a DOCX or PDF export.
+    /// The file extension of a one-file export.
     pub fn extension(self) -> Option<&'static str> {
         match self {
             Self::Md | Self::Html | Self::Walkthrough => None,
             Self::Docx => Some("docx"),
             Self::Pdf => Some("pdf"),
+            Self::Pptx => Some("pptx"),
+            Self::Mp4 => Some("mp4"),
+            Self::Gif => Some("gif"),
+        }
+    }
+}
+
+/// MP4 and GIF options as the UI sends them; missing fields take the
+/// defaults of [`motion::MotionOptions`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MotionRequest {
+    pub seconds_per_step: f64,
+    pub aspect: motion::Aspect,
+    pub zoom: bool,
+    pub captions: bool,
+}
+
+impl Default for MotionRequest {
+    fn default() -> Self {
+        let d = motion::MotionOptions::default();
+        Self {
+            seconds_per_step: d.seconds_per_step,
+            aspect: d.aspect,
+            zoom: d.zoom,
+            captions: d.captions,
         }
     }
 }
@@ -262,8 +294,21 @@ pub fn export_guide(
     branding: &BrandingRequest,
     paper: docx::Paper,
     review_details: bool,
+    motion_request: &MotionRequest,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
+    if !(motion::MIN_SECONDS_PER_STEP..=motion::MAX_SECONDS_PER_STEP)
+        .contains(&motion_request.seconds_per_step)
+    {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!(
+                "seconds per step must be from {} to {}",
+                motion::MIN_SECONDS_PER_STEP,
+                motion::MAX_SECONDS_PER_STEP
+            ),
+        ));
+    }
     chosen.check_destination(format, out)?;
     // Checked (and the logo decoded) once, before anything is written.
     let logo = match &branding.logo {
@@ -349,6 +394,39 @@ pub fn export_guide(
             };
             pdf::export(&render, &handle, out, &opts).map_err(|e| match e {
                 pdf::PdfError::Exists(path) => exists(&path),
+                e => AppError::new(ErrorKind::Io, e.to_string()),
+            })?
+        }
+        Format::Pptx => {
+            let opts = pptx::PptxOptions {
+                overwrite,
+                timestamp,
+                ..pptx::PptxOptions::default()
+            };
+            pptx::export(&render, out, &opts).map_err(|e| match e {
+                pptx::PptxError::Exists(path) => exists(&path),
+                e => AppError::new(ErrorKind::Io, e.to_string()),
+            })?
+        }
+        Format::Mp4 | Format::Gif => {
+            let opts = motion::MotionOptions {
+                overwrite,
+                seconds_per_step: motion_request.seconds_per_step,
+                aspect: motion_request.aspect,
+                zoom: motion_request.zoom,
+                captions: motion_request.captions,
+                ..motion::MotionOptions::default()
+            };
+            let result = if format == Format::Mp4 {
+                motion::mp4::export(&render, out, &opts)
+            } else {
+                motion::gif::export(&render, out, &opts)
+            };
+            result.map_err(|e| match e {
+                motion::MotionError::Exists(path) => exists(&path),
+                e @ (motion::MotionError::NoSteps | motion::MotionError::Unsupported(_)) => {
+                    AppError::new(ErrorKind::Invalid, e.to_string())
+                }
                 e => AppError::new(ErrorKind::Io, e.to_string()),
             })?
         }
@@ -619,6 +697,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -637,6 +716,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
@@ -650,6 +730,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap();
         assert_eq!(
@@ -662,7 +743,7 @@ mod tests {
             .unwrap()
             .contains("<script>"));
 
-        for format in [Format::Docx, Format::Pdf] {
+        for format in [Format::Docx, Format::Pdf, Format::Pptx] {
             let out = with_extension(dir.join("Guide"), format.extension().unwrap());
             // Not chosen in a save dialog yet.
             assert!(export_guide(
@@ -675,6 +756,7 @@ mod tests {
                 &none,
                 docx::Paper::A4,
                 false,
+                &MotionRequest::default(),
             )
             .is_err());
             chosen.add_file(out.clone());
@@ -688,6 +770,7 @@ mod tests {
                 &none,
                 docx::Paper::A4,
                 false,
+                &MotionRequest::default(),
             )
             .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
@@ -703,6 +786,7 @@ mod tests {
                 &none,
                 docx::Paper::A4,
                 false,
+                &MotionRequest::default(),
             )
             .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
@@ -716,6 +800,7 @@ mod tests {
                 &none,
                 docx::Paper::A4,
                 false,
+                &MotionRequest::default(),
             )
             .unwrap();
         }
@@ -730,6 +815,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -743,6 +829,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap();
     }
@@ -767,6 +854,7 @@ mod tests {
                 &none,
                 paper,
                 false,
+                &MotionRequest::default(),
             )
             .unwrap();
             let pdf = fs::read(&out).unwrap();
@@ -788,6 +876,7 @@ mod tests {
                 &none,
                 paper,
                 false,
+                &MotionRequest::default(),
             )
             .unwrap();
             fs::read(&out).unwrap()
@@ -810,6 +899,7 @@ mod tests {
             &none,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -836,6 +926,7 @@ mod tests {
             &branding,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -854,6 +945,7 @@ mod tests {
             &branding,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -872,6 +964,7 @@ mod tests {
             &bad,
             docx::Paper::A4,
             false,
+            &MotionRequest::default(),
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);
