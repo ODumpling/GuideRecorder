@@ -214,6 +214,13 @@ Then start it with the "Web" process in [Solo](https://soloterm.com)
 comes from `app/.env` (release builds: `https://app.guiderecorder.app`) and
 `app/.env.development`; override it in `app/.env.local`.
 
+### The mobile app
+
+The iPhone and iPad app is in `mobile/` (see [mobile/README.md](mobile/README.md)):
+it reads a workspace's synced guides and adds steps to them with photos from
+the front or back camera. `cd mobile && pnpm start`, then open it in the iOS
+simulator or Expo Go.
+
 ### Project layout
 
 ```
@@ -225,7 +232,8 @@ crates/
 app/                       desktop app: Tauri 2, React, TypeScript, Tailwind
   src-tauri/               the app's Rust side (guiderecorder-app)
 web/                       web app: TanStack Start, Better Auth, Drizzle, Postgres, S3
-packages/                  shared by app and web: guide schema, sync merge, UI
+mobile/                    iPhone and iPad app: Expo, React Native (see mobile/README.md)
+packages/                  shared by app, web and mobile: guide schema, sync merge, UI
 fixtures/guides/           sample guides used by the tests
 docs/                      signing, releasing, capture smoke test, dependency licences
 ```

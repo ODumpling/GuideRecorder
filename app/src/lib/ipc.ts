@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
 import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
-import type { SyncBackend } from "@/sync/engine";
+import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
 export interface EditorApi {
@@ -486,7 +486,7 @@ export const tauriSyncApi: SyncApi = {
   saveState: (state) => invoke("sync_save_state", { state }),
 };
 
-/** What the sync loop needs from the app (`src/sync/engine.ts`). */
+/** What the sync loop needs from the app (`@guiderecorder/sync/engine`). */
 export const tauriSyncBackend: SyncBackend = {
   request: (method, path, body) => invoke("sync_request", { method, path, body: body ?? null }),
   readGuide: (id) => invoke("sync_read_guide", { id }),

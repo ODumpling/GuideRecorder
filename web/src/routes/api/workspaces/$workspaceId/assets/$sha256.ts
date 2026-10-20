@@ -6,7 +6,9 @@ import { canDownload, DOWNLOAD_TTL, downloadUrl } from "@/lib/assets";
 /**
  * Redirects to a short-lived download URL for the image, if the user may
  * see it. The browser may reuse the redirect until shortly before the URL
- * expires, so a page showing an image twice downloads it once.
+ * expires, so a page showing an image twice downloads it once. With
+ * `Accept: application/json` it answers `{ url, expiresIn }` instead, for
+ * clients that can't drop their bearer token on the redirect (the mobile app).
  */
 export const Route = createFileRoute("/api/workspaces/$workspaceId/assets/$sha256")({
   server: {
@@ -17,6 +19,9 @@ export const Route = createFileRoute("/api/workspaces/$workspaceId/assets/$sha25
         const allowed = await canDownload(db(), workspaceId, access.userId, sha256);
         const url = allowed ? await downloadUrl(db(), objectStore(), workspaceId, sha256) : null;
         if (!url) return jsonError(404, "Asset not found.");
+        if (request.headers.get("accept")?.includes("application/json")) {
+          return Response.json({ url, expiresIn: DOWNLOAD_TTL }, { headers: { "cache-control": "no-store" } });
+        }
         return new Response(null, {
           status: 302,
           headers: { location: url, "cache-control": `private, max-age=${DOWNLOAD_TTL - 60}` },

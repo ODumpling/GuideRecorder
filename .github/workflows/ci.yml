@@ -39,6 +39,7 @@ jobs:
       licenses: ${{ steps.full.outputs.all || steps.filter.outputs.licenses }}
       frontend: ${{ steps.full.outputs.all || steps.filter.outputs.frontend }}
       web: ${{ steps.full.outputs.all || steps.filter.outputs.web }}
+      mobile: ${{ steps.full.outputs.all || steps.filter.outputs.mobile }}
     steps:
       - name: Full run?
         id: full
@@ -84,6 +85,14 @@ jobs:
               - web/**
               - packages/**
               - fixtures/**
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+            mobile:
+              - *ci
+              - mobile/**
+              - packages/guide-schema/**
+              - packages/sync/**
               - package.json
               - pnpm-lock.yaml
               - pnpm-workspace.yaml
@@ -187,3 +196,24 @@ jobs:
       - run: pnpm --filter @guiderecorder/web typecheck
       - run: pnpm --filter @guiderecorder/web test
       - run: pnpm --filter @guiderecorder/web build
+
+  mobile:
+    name: Mobile (typecheck, unit, iOS bundle)
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @guiderecorder/mobile typecheck
+      - run: pnpm --filter @guiderecorder/mobile test
+      # Metro bundles the app as a release build would, without Xcode.
+      - run: pnpm --filter @guiderecorder/mobile exec expo export --platform ios --output-dir dist
+        env:
+          CI: "1"

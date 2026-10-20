@@ -14,7 +14,7 @@ import {
   type Resolution,
   type SyncBackend,
   type SyncState,
-} from "@/sync/engine";
+} from "@guiderecorder/sync/engine";
 
 export interface Workspace {
   id: string;

@@ -11,7 +11,7 @@ import { Input } from "@guiderecorder/ui/input";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
-import { canSubmitForReview } from "@/sync/engine";
+import { canSubmitForReview } from "@guiderecorder/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
 import { shareStore, syncStore } from "@/sync/sync";
 
