@@ -31,6 +31,7 @@ use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindow, Webvi
 
 use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result};
+use crate::points;
 use crate::settings::SettingsStore;
 
 /// Label of the region overlay window.
@@ -290,8 +291,9 @@ struct Picked {
 }
 
 /// A window's frame in global points from its physical inner position and
-/// size and its scale factor (as Tauri reports them); `None` for a scale
-/// that is not positive and finite.
+/// size (as Tauri reports them) and the physical pixels per point
+/// ([`points::pixels_per_point`] of its scale); `None` for a scale that is
+/// not positive and finite.
 pub fn measured_frame(x: i32, y: i32, width: u32, height: u32, scale: f64) -> Option<Rect> {
     (scale.is_finite() && scale > 0.0).then(|| Rect {
         x: f64::from(x) / scale,
@@ -482,6 +484,11 @@ fn open_overlay<R: Runtime>(
         .focused(true)
         .accept_first_mouse(true)
         .build()?;
+    if cfg!(windows) {
+        // The builder takes logical pixels; the bounds are physical there.
+        window.set_position(points::position(bounds.x, bounds.y))?;
+        window.set_size(points::size(bounds.width, bounds.height))?;
+    }
     let raised = window.clone();
     app.run_on_main_thread(move || raise_overlay(&raised))?;
     let picker = Arc::clone(picker);
@@ -501,7 +508,13 @@ fn overlay_frame<R: Runtime>(window: &WebviewWindow<R>) -> Option<Rect> {
     let position = window.inner_position().ok()?;
     let size = window.inner_size().ok()?;
     let scale = window.scale_factor().ok()?;
-    measured_frame(position.x, position.y, size.width, size.height, scale)
+    measured_frame(
+        position.x,
+        position.y,
+        size.width,
+        size.height,
+        points::pixels_per_point(scale),
+    )
 }
 
 /// The overlay's answer: a rect in its CSS pixels, or `null` to cancel,
@@ -523,8 +536,15 @@ pub fn finish_region_pick<R: Runtime>(
             "only the region picker can finish a pick",
         ));
     }
+    // The overlay draws in CSS pixels; points may be smaller (Windows).
+    let per_point = points::css_per_point(window.scale_factor().unwrap_or(1.0));
     let picked = result.map(|answer| Picked {
-        local: answer.rect,
+        local: Rect {
+            x: answer.rect.x / per_point,
+            y: answer.rect.y / per_point,
+            width: answer.rect.width / per_point,
+            height: answer.rect.height / per_point,
+        },
         frame: overlay_frame(&window),
     });
     if !picker.finish(pick, picked) && picker.is_open() {

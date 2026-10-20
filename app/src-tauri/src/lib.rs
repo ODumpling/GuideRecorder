@@ -16,6 +16,7 @@ mod hotkeys;
 mod navigation;
 mod pdf;
 mod picker;
+mod points;
 mod recording;
 mod redaction;
 mod settings;

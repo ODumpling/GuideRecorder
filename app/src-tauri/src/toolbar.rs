@@ -32,11 +32,11 @@ use std::time::Duration;
 
 use guiderecorder_core::model::Point;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::editor::{AppError, ErrorKind, Result};
+use crate::points;
 use crate::recording::{Recorder, RecordingStatus};
 
 pub const LABEL: &str = "toolbar";
@@ -213,32 +213,28 @@ fn move_away<R: Runtime>(window: &WebviewWindow<R>, click: Point) -> tauri::Resu
     let Some(monitor) = window.current_monitor()? else {
         return Ok(());
     };
+    // In global points, as the click is (see `points`).
     let scale = window.scale_factor()?;
-    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let per_point = points::pixels_per_point(scale);
     let position = window.outer_position()?;
     let size = window.outer_size()?;
     let bar = Area {
-        x: f64::from(position.x) / scale,
-        y: f64::from(position.y) / scale,
-        width: f64::from(size.width) / scale,
+        x: f64::from(position.x) / per_point,
+        y: f64::from(position.y) / per_point,
+        width: f64::from(size.width) / per_point,
         // Only the bar counts: the panel under it comes and goes.
-        height: HEIGHT,
+        height: HEIGHT / points::css_per_point(scale),
     };
     let work = monitor.work_area();
-    let monitor_scale = monitor.scale_factor();
-    let monitor_scale = if monitor_scale > 0.0 {
-        monitor_scale
-    } else {
-        1.0
-    };
+    let per_point = points::pixels_per_point(monitor.scale_factor());
     let area = Area {
-        x: f64::from(work.position.x) / monitor_scale,
-        y: f64::from(work.position.y) / monitor_scale,
-        width: f64::from(work.size.width) / monitor_scale,
-        height: f64::from(work.size.height) / monitor_scale,
+        x: f64::from(work.position.x) / per_point,
+        y: f64::from(work.position.y) / per_point,
+        width: f64::from(work.size.width) / per_point,
+        height: f64::from(work.size.height) / per_point,
     };
     if let Some((x, y)) = dodge(click, bar, area) {
-        window.set_position(LogicalPosition::new(x, y))?;
+        window.set_position(points::position(x, y))?;
     }
     Ok(())
 }
@@ -246,11 +242,18 @@ fn move_away<R: Runtime>(window: &WebviewWindow<R>, click: Point) -> tauri::Resu
 /// Shows the ring centred on `point`, creating its window the first time,
 /// and hides it [`RING_MS`] later unless another ring showed meanwhile.
 fn show_ring<R: Runtime>(app: &AppHandle<R>, point: Point) -> tauri::Result<()> {
-    let x = point.x - RING_SIZE / 2.0;
-    let y = point.y - RING_SIZE / 2.0;
+    // The ring's size in points on the display clicked (see `points`).
+    let scale = app
+        .monitor_from_point(point.x, point.y)
+        .ok()
+        .flatten()
+        .map_or(1.0, |m| m.scale_factor());
+    let size = RING_SIZE / points::css_per_point(scale);
+    let x = point.x - size / 2.0;
+    let y = point.y - size / 2.0;
     let window = match app.get_webview_window(RING_LABEL) {
         Some(window) => {
-            window.set_position(LogicalPosition::new(x, y))?;
+            window.set_position(points::position(x, y))?;
             // Restarts the animation (`ring.html` has no script of its own).
             window.eval(
                 "document.body.classList.remove('on');void document.body.offsetWidth;document.body.classList.add('on')",
@@ -272,6 +275,10 @@ fn show_ring<R: Runtime>(app: &AppHandle<R>, point: Point) -> tauri::Result<()> 
             .focusable(false)
             .build()?,
     };
+    if cfg!(windows) {
+        // A new window was placed in logical pixels; the point is physical.
+        window.set_position(points::position(x, y))?;
+    }
     window.set_ignore_cursor_events(true)?;
     window.show()?;
     let shown = RING_SHOWN.fetch_add(1, Ordering::SeqCst) + 1;
