@@ -422,14 +422,17 @@ pub fn is_hotkey(value: &str) -> bool {
 
 /// Whether `a` and `b` are the same shortcut (neither empty), with
 /// modifier aliases and order ignored: `Alt+Ctrl+R` and `Control+Option+R`
-/// are both `Ctrl+Alt+R`.
+/// are both `Ctrl+Alt+R`. `CmdOrCtrl` is ⌘ on macOS and Ctrl elsewhere,
+/// where `Super` (the Windows key) is a key of its own.
 fn same_hotkey(a: &str, b: &str) -> bool {
     fn canonical(value: &str) -> Option<(Vec<&'static str>, String)> {
         let mut parts = value.split('+');
         let key = parts.next_back()?.to_ascii_uppercase();
         let mut mods: Vec<&'static str> = parts
             .map(|m| match m {
-                "CmdOrCtrl" | "CommandOrControl" | "Cmd" | "Command" | "Super" => "Cmd",
+                "CmdOrCtrl" | "CommandOrControl" if cfg!(target_os = "macos") => "Cmd",
+                "CmdOrCtrl" | "CommandOrControl" => "Ctrl",
+                "Cmd" | "Command" | "Super" => "Cmd",
                 "Ctrl" | "Control" => "Ctrl",
                 "Alt" | "Option" => "Alt",
                 _ => "Shift",
@@ -1177,7 +1180,16 @@ mod tests {
             assert!(!is_base_url(bad), "{bad}");
         }
         assert!(same_hotkey("Ctrl+Alt+R", "Option+Control+R"));
-        assert!(same_hotkey("CmdOrCtrl+Shift+R", "Shift+Cmd+R"));
+        // CmdOrCtrl is ⌘ on a Mac and Ctrl elsewhere; Super is the Windows key.
+        assert_eq!(
+            same_hotkey("CmdOrCtrl+Shift+R", "Shift+Cmd+R"),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            same_hotkey("CmdOrCtrl+Shift+R", "Shift+Ctrl+R"),
+            !cfg!(target_os = "macos")
+        );
+        assert!(!same_hotkey("Super+R", "Ctrl+R"));
         assert!(!same_hotkey("Ctrl+Alt+R", "Ctrl+Alt+Shift+R"));
         assert!(!same_hotkey("", ""));
         assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));

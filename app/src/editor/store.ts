@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
+import { fileManager } from "@/lib/platform";
 import type { Guide, GuideKind } from "@guiderecorder/guide-schema";
 import type { DetailsEdit, GuideListItem, VersionInfo } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
@@ -630,7 +631,7 @@ export function createEditorStore({
         try {
           await api.reveal(target);
         } catch (error) {
-          get().notify(`Could not show it in Finder: ${errorMessage(error)}`);
+          get().notify(`Could not show it in ${fileManager()}: ${errorMessage(error)}`);
         }
       },
 

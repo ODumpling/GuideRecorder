@@ -143,7 +143,7 @@ export function markdownPreviewDocument(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <style>
-body{margin:0;padding:28px 32px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#1f2328;background:#fff}
+body{margin:0;padding:28px 32px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",sans-serif;color:#1f2328;background:#fff}
 h1,h2,h3{line-height:1.25;margin:1.4em 0 .6em}h1{font-size:2em;border-bottom:1px solid #d1d9e0;padding-bottom:.3em}
 h2{font-size:1.5em;border-bottom:1px solid #d1d9e0;padding-bottom:.3em}h3{font-size:1.25em}
 img{max-width:100%;border:1px solid #d1d9e0;border-radius:4px}a{color:#0969da}

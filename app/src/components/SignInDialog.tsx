@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
 import { Check, Copy, X } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
+import { isWindows, thisComputer } from "@/lib/platform";
 import { Row, Select, Toggle } from "@/components/settings/controls";
 import { WEB_APP_URL, syncStore, useSync } from "@/sync/sync";
 
@@ -33,7 +34,7 @@ export function SignInDialog() {
                 {account?.signedIn ? "Signed in" : "Sign in to sync"}
               </Dialog.Title>
               <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-                Sync guides with your GuideRecorder workspace on the web (Pro and Enterprise). Guides stay on this Mac; only the ones you
+                Sync guides with your GuideRecorder workspace on the web (Pro and Enterprise). Guides stay on {thisComputer()}; only the ones you
                 choose are uploaded, with blurred areas burned into their screenshots.
               </Dialog.Description>
             </div>
@@ -55,7 +56,7 @@ export function SignInDialog() {
 function Start() {
   return (
     <div className="flex items-center justify-between gap-3">
-      <p className="text-xs text-muted-foreground">Your browser opens so you can sign in there and approve this Mac.</p>
+      <p className="text-xs text-muted-foreground">Your browser opens so you can sign in there and approve {thisComputer()}.</p>
       <Button onClick={() => void syncStore.getState().startSignIn(WEB_APP_URL)}>Open browser</Button>
     </div>
   );
@@ -101,7 +102,7 @@ function SignedIn() {
   return (
     <div className="flex flex-col">
       <p className="pb-1 text-sm">
-        This Mac is signed in to <span className="font-mono text-xs break-all">{server}</span>.
+        {isWindows() ? "This PC" : "This Mac"} is signed in to <span className="font-mono text-xs break-all">{server}</span>.
       </p>
       <Row label="Workspace" note="Guides sync with this workspace.">
         <Select

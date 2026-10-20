@@ -20,6 +20,7 @@ import {
   type GuideSort,
 } from "@/editor/library";
 import { initialLibraryView, rememberLibraryView, type LibraryView } from "@/editor/libraryList";
+import { shortcutLabel } from "@/lib/platform";
 import type { CaptureArea } from "@/lib/types";
 import { startFlow, useRecording } from "@/recording/recording";
 import { useSettings } from "@/settings/settings";
@@ -71,7 +72,7 @@ export function LibrarySearch() {
         onKeyDown={(e) => e.key === "Escape" && setQuery("")}
         className="h-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
-      <kbd className="rounded border border-border px-1 text-[10px] text-muted-foreground">⌘F</kbd>
+      <kbd className="rounded border border-border px-1 text-[10px] text-muted-foreground">{shortcutLabel("⌘F")}</kbd>
     </label>
   );
 }

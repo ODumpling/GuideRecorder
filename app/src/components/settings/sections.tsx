@@ -30,6 +30,7 @@ import {
 } from "@/settings/validate";
 import { isAccent } from "@/export/export";
 import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
+import { isWindows, keyStore, thisComputer } from "@/lib/platform";
 import { progressText } from "@/updater/UpdateBanner";
 import { updaterStore, useUpdater } from "@/updater/updater";
 
@@ -198,7 +199,10 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
           onChange={(on) => void setLogin(on)}
         />
       </Row>
-      <Row label="First-run setup" note="Permissions, the library folder and the API key, step by step.">
+      <Row
+        label="First-run setup"
+        note={isWindows() ? "The library folder and the API key, step by step." : "Permissions, the library folder and the API key, step by step."}
+      >
         <Button variant="outline" size="sm" onClick={() => setupStore.getState().open()}>
           Run setup again
         </Button>
@@ -229,9 +233,9 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
         />
         <span className="text-xs text-muted-foreground">days</span>
       </Row>
-      <Row label="Menu bar icon" note="Coming with recording; stored for now.">
+      <Row label={isWindows() ? "Tray icon" : "Menu bar icon"} note="Coming with recording; stored for now.">
         <Toggle
-          label="Menu bar icon"
+          label={isWindows() ? "Tray icon" : "Menu bar icon"}
           checked={settings.general.menuBarIcon}
           disabled={readOnly}
           onChange={(on) => change((s) => ({ ...s, general: { ...s.general, menuBarIcon: on } }))}
@@ -469,7 +473,8 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
       .then(refreshHotkeyErrors);
   };
   const addApp = () => {
-    const id = app.trim();
+    // Executable names are kept in lower case on Windows, as the backend reports them.
+    const id = isWindows() ? app.trim().toLowerCase() : app.trim();
     if (!isBundleId(id) || r.excludedApps.includes(id) || r.excludedApps.length >= MAX_EXCLUDED_APPS) return;
     setRecording({ excludedApps: [...r.excludedApps, id] });
     setApp("");
@@ -548,7 +553,10 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
       <div className="flex flex-col gap-2 py-3">
         <span className="text-sm font-medium">Excluded apps</span>
         <span className="text-xs text-muted-foreground">
-          Nothing is recorded while one of these apps is in front. Use bundle ids, such as com.1password.1password.
+          Nothing is recorded while one of these apps is in front.{" "}
+          {isWindows()
+            ? "Use app executables, such as 1password.exe."
+            : "Use bundle ids, such as com.1password.1password."}
         </span>
         {r.excludedApps.length > 0 && (
           <ul className="flex flex-col gap-1">
@@ -573,8 +581,8 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
         )}
         <div className="flex gap-2">
           <Input
-            aria-label="App bundle id"
-            placeholder="com.example.app"
+            aria-label={isWindows() ? "App executable" : "App bundle id"}
+            placeholder={isWindows() ? "example.exe" : "com.example.app"}
             value={app}
             disabled={readOnly}
             aria-invalid={appError !== null}
@@ -710,7 +718,7 @@ export function PrivacySection() {
   return (
     <Section
       title="Privacy"
-      intro="When a recording stops, GuideRecorder reads the text in its screenshots on this Mac and looks for email addresses, phone numbers, card numbers, IBANs, IP addresses, API keys and tokens, and long numbers. Nothing is uploaded and no API key is needed. Before you export, you are asked to review any suggestions left."
+      intro={`When a recording stops, GuideRecorder reads the text in its screenshots on ${thisComputer()} and looks for email addresses, phone numbers, card numbers, IBANs, IP addresses, API keys and tokens, and long numbers. Nothing is uploaded and no API key is needed. Before you export, you are asked to review any suggestions left.`}
     >
       <Row label="Sensitive text" note={REDACTION_NOTES[r.mode]}>
         <Select
@@ -749,8 +757,8 @@ export function PrivacySection() {
 const PROVIDERS: { value: AiProviderKind; label: string }[] = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openAiCompatible", label: "OpenAI-compatible API" },
-  { value: "ollama", label: "Ollama (on this Mac)" },
-  { value: "lmStudio", label: "LM Studio (on this Mac)" },
+  { value: "ollama", label: `Ollama (on ${thisComputer()})` },
+  { value: "lmStudio", label: `LM Studio (on ${thisComputer()})` },
 ];
 
 /** The local presets' servers, used when the base URL is empty (see `OpenAiConfig` in core). */
@@ -767,13 +775,13 @@ function providerIntro(provider: AiProviderKind): string {
       return "GuideRecorder sends step text, and screenshots if the model takes images, to the API below to write guide text.";
     case "ollama":
     case "lmStudio":
-      return `GuideRecorder writes guide text with ${provider === "ollama" ? "Ollama" : "LM Studio"} on this Mac. Nothing leaves your Mac.`;
+      return `GuideRecorder writes guide text with ${provider === "ollama" ? "Ollama" : "LM Studio"} on ${thisComputer()}. Nothing leaves your ${isWindows() ? "PC" : "Mac"}.`;
     default:
       return "GuideRecorder sends step screenshots and their text to Anthropic to write guide text.";
   }
 }
 
-/** A provider's API key: stored in the Keychain, never shown back. */
+/** A provider's API key: stored in the Keychain (Credential Manager on Windows), never shown back. */
 function ApiKeyField({
   api,
   provider,
@@ -814,12 +822,14 @@ function ApiKeyField({
       <span className="text-sm font-medium">{title}</span>
       <span className="text-xs text-muted-foreground">
         {stored === null
-          ? "Checking the Keychain…"
+          ? isWindows()
+            ? "Checking for a stored key…"
+            : "Checking the Keychain…"
           : stored
-            ? "A key is stored in your Keychain. It is never shown again."
+            ? `A key is stored in ${keyStore()}. It is never shown again.`
             : optional
-              ? "No key stored; only needed if the API asks for one. The key is kept in your Keychain."
-              : "No key stored. The key is kept in your Keychain."}
+              ? `No key stored; only needed if the API asks for one. The key is kept in ${keyStore()}.`
+              : `No key stored. The key is kept in ${keyStore()}.`}
       </span>
       <form
         className="flex gap-2"
@@ -877,7 +887,7 @@ export function AiSection({ api }: { api: SettingsApi }) {
           onChange={(autoRun) => setAi({ autoRun })}
         />
       </Row>
-      <Row label="Provider" note="Ollama and LM Studio run models on this Mac.">
+      <Row label="Provider" note={`Ollama and LM Studio run models on ${thisComputer()}.`}>
         <Select
           label="Provider"
           value={provider}

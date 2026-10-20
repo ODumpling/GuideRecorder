@@ -2,6 +2,7 @@ import { Dialog } from "radix-ui";
 import { X } from "lucide-react";
 import type { Conflict } from "@guiderecorder/sync";
 import { Button } from "@guiderecorder/ui/button";
+import { isWindows } from "@/lib/platform";
 import type { Resolution } from "@guiderecorder/sync/engine";
 import { syncStore, useSync } from "@/sync/sync";
 
@@ -76,7 +77,7 @@ export function ConflictDialog() {
                 <li key={n} className="rounded-lg border border-border p-3">
                   <p className="font-medium">{what}</p>
                   <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                    <dt className="text-muted-foreground">This Mac</dt>
+                    <dt className="text-muted-foreground">{isWindows() ? "This PC" : "This Mac"}</dt>
                     <dd className="break-words whitespace-pre-wrap">{mine}</dd>
                     <dt className="text-muted-foreground">Web</dt>
                     <dd className="break-words whitespace-pre-wrap">{theirs}</dd>

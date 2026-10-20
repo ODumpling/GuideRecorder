@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundleIdError, formatHotkey, hotkeyFromEvent, inRange, isBaseUrl, isBundleId, isHotkey, isLanguage, isModelId, TYPING_IDLE_MS } from "@/settings/validate";
+
+const WINDOWS = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0" };
 
 const key = (code: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) => ({
   code,
@@ -66,6 +68,37 @@ describe("settings checks (mirroring settings.rs)", () => {
   it("shows shortcuts like macOS menus", () => {
     expect(formatHotkey("CmdOrCtrl+Shift+R")).toBe("⇧⌘R");
     expect(formatHotkey("Ctrl+Alt+Space")).toBe("⌃⌥Space");
+    expect(formatHotkey("")).toBe("None");
+  });
+});
+
+describe("settings checks on Windows", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("excluded apps are executables", () => {
+    vi.stubGlobal("navigator", WINDOWS);
+    for (const ok of ["1password.exe", "KeePassXC.exe", "my-app_2.EXE"]) {
+      expect(isBundleId(ok), ok).toBe(true);
+      expect(bundleIdError(ok)).toBeNull();
+    }
+    for (const bad of [".exe", "com.1password.1password", String.raw`C:\apps\x.exe`, "a b.exe", "notepad"]) {
+      expect(isBundleId(bad), bad).toBe(false);
+    }
+    expect(bundleIdError("notepad")).toBe("Use an app's executable, such as 1password.exe.");
+  });
+
+  it("records Ctrl as CmdOrCtrl and the Windows key as Super", () => {
+    vi.stubGlobal("navigator", WINDOWS);
+    expect(hotkeyFromEvent(key("KeyR", { ctrlKey: true, shiftKey: true }))).toBe("CmdOrCtrl+Shift+R");
+    expect(hotkeyFromEvent(key("KeyR", { metaKey: true }))).toBe("Super+R");
+    expect(isHotkey(hotkeyFromEvent(key("KeyQ", { metaKey: true, ctrlKey: true, altKey: true, shiftKey: true }))!)).toBe(true);
+  });
+
+  it("shows shortcuts like Windows menus", () => {
+    vi.stubGlobal("navigator", WINDOWS);
+    expect(formatHotkey("CmdOrCtrl+Shift+R")).toBe("Ctrl+Shift+R");
+    expect(formatHotkey("Shift+Option+Command+9")).toBe("Win+Alt+Shift+9");
+    expect(formatHotkey("Ctrl+CmdOrCtrl+Escape")).toBe("Ctrl+Esc");
     expect(formatHotkey("")).toBe("None");
   });
 });

@@ -1,5 +1,6 @@
 import { RotateCw } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
+import { thisComputer } from "@/lib/platform";
 import { Row, Section, Select, Toggle } from "@/components/settings/controls";
 import { timeAgo } from "@/editor/library";
 import { syncStore, useSync } from "@/sync/sync";
@@ -18,7 +19,7 @@ export function SyncSection() {
   return (
     <Section
       title="Sync"
-      intro="Sync guides with your GuideRecorder workspace on the web (Pro and Enterprise). Guides stay on this Mac; only the ones you choose are uploaded, with blurred areas burned into their screenshots."
+      intro={`Sync guides with your GuideRecorder workspace on the web (Pro and Enterprise). Guides stay on ${thisComputer()}; only the ones you choose are uploaded, with blurred areas burned into their screenshots.`}
     >
       {account?.signedIn ? (
         <>
@@ -52,7 +53,7 @@ export function SyncSection() {
           </Row>
         </>
       ) : (
-        <Row label="Not signed in" note="Sign in opens your browser to approve this Mac.">
+        <Row label="Not signed in" note={`Sign in opens your browser to approve ${thisComputer()}.`}>
           <Button size="sm" onClick={() => store.openSignIn(true)}>
             Sign in…
           </Button>

@@ -10,6 +10,7 @@ import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
+import { fileManager } from "@/lib/platform";
 import type { GuideListItem } from "@/lib/types";
 import { canSubmitForReview } from "@guiderecorder/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
@@ -66,7 +67,7 @@ export async function showGuideMenu(event: MouseEvent, guide: GuideListItem, fol
         { item: "Separator" },
         {
           id: "reveal-guide",
-          text: "Reveal in Finder",
+          text: `Reveal in ${fileManager()}`,
           action: () => void editorStore.getState().reveal({ path: guide.path }),
         },
         { item: "Separator" },
@@ -125,7 +126,7 @@ export async function showFolderMenu(event: MouseEvent, folder: string, onNewFol
         { id: "new-subfolder", text: "New Folder Inside…", action: onNewFolder },
         {
           id: "reveal-folder",
-          text: "Reveal in Finder",
+          text: `Reveal in ${fileManager()}`,
           action: () => void editorStore.getState().reveal({ folder }),
         },
       ],
@@ -181,7 +182,7 @@ export function NameDialog() {
           <Dialog.Description className="text-sm text-muted-foreground">
             {rename
               ? "The guide's folder on disk is renamed to match."
-              : "Folders are plain folders in your library, so Finder and sync tools see them too."}
+              : `Folders are plain folders in your library, so ${fileManager()} and sync tools see them too.`}
           </Dialog.Description>
           <form className="flex flex-col gap-4" onSubmit={(e) => void submit(e)}>
             <Input

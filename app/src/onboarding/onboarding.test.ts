@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { allGranted, setupAtLaunch, setupAtStartup, setupStore } from "@/onboarding/onboarding";
 import type { LibraryInfo, Settings } from "@/lib/types";
 
@@ -55,4 +55,21 @@ it("waits for the library to open before deciding", async () => {
   expect(await setupAtStartup(() => Promise.reject(new Error("x")), () => settings(false), { delayMs: 0 })).toBe(
     "permissions",
   );
+});
+
+it("skips the permissions step on Windows, which asks for none", async () => {
+  vi.stubGlobal("navigator", {
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+  });
+  vi.resetModules();
+  try {
+    const onboarding = await import("@/onboarding/onboarding");
+    expect(onboarding.STEPS).toEqual(["library", "apiKey"]);
+    expect(onboarding.setupAtLaunch(settings(false), library(null))).toBe("library");
+    onboarding.setupStore.getState().open();
+    expect(onboarding.setupStore.getState().step).toBe("library");
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
 });
