@@ -30,33 +30,6 @@ export async function isStaff(db: Database, userId: string): Promise<boolean> {
   return Boolean(row);
 }
 
-/**
- * Makes sure each email has a user who is staff: creates missing users
- * (without a password; they sign in with a magic link or Google, which
- * verifies the address) and adds them to `staff`. Run on every deploy with
- * STAFF_EMAILS (`pnpm staff ensure`). Never removes anyone.
- */
-export async function ensureStaff(db: Database, emails: string[]): Promise<{ email: string; created: boolean }[]> {
-  const result: { email: string; created: boolean }[] = [];
-  for (const raw of emails) {
-    const email = raw.trim().toLowerCase();
-    if (!email) continue;
-    if (!z.email().safeParse(email).success) throw new Error(`Not an email: ${raw}`);
-    const created = await db.transaction(async (tx) => {
-      const [inserted] = await tx
-        .insert(user)
-        .values({ id: crypto.randomUUID(), name: email.split("@")[0]!, email })
-        .onConflictDoNothing({ target: user.email })
-        .returning({ id: user.id });
-      const [found] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email));
-      await tx.insert(staff).values({ userId: found!.id, addedBy: "STAFF_EMAILS" }).onConflictDoNothing();
-      return Boolean(inserted);
-    });
-    result.push({ email, created });
-  }
-  return result;
-}
-
 /** Users whose name, email or id matches, newest first; the newest users without a query. */
 export async function findUsers(db: Database, query = "") {
   const q = query.trim();
