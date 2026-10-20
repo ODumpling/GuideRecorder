@@ -480,16 +480,33 @@ pub fn is_language(value: &str) -> bool {
 /// non-empty dot-separated parts. Exclusion also matches `<id>.` as a
 /// prefix (for helpers), so a shorter entry like `com.apple` would leave
 /// out every Apple app.
+#[cfg(not(windows))]
 pub fn is_bundle_id(value: &str) -> bool {
     has_bundle_id_chars(value)
         && value.split('.').count() >= 3
         && value.split('.').all(|part| !part.is_empty())
 }
 
+/// An app's id on Windows: its executable's file name, such as
+/// `1password.exe` (matched without regard to case).
+#[cfg(windows)]
+pub fn is_bundle_id(value: &str) -> bool {
+    has_bundle_id_chars(value)
+        && value.len() > ".exe".len()
+        && value.to_ascii_lowercase().ends_with(".exe")
+}
+
 /// Made of bundle-id characters and dotted, but not a full bundle id
 /// (`com.apple`, `com..x`): it would exclude far more than one app.
+#[cfg(not(windows))]
 fn is_broad_bundle_id(value: &str) -> bool {
     has_bundle_id_chars(value) && value.contains('.') && !is_bundle_id(value)
+}
+
+/// Never on Windows: an id matches one executable.
+#[cfg(windows)]
+fn is_broad_bundle_id(_value: &str) -> bool {
+    false
 }
 
 fn has_bundle_id_chars(value: &str) -> bool {
@@ -506,6 +523,8 @@ fn bundle_id_error(app: &str) -> String {
             "{app:?} is too broad: it would exclude every app whose id starts with it; \
              use a full bundle id such as com.1password.1password"
         )
+    } else if cfg!(windows) {
+        format!("{app:?} is not an app's executable, such as 1password.exe")
     } else {
         format!("{app:?} is not an app bundle id")
     }
@@ -1163,26 +1182,6 @@ mod tests {
         assert!(!same_hotkey("", ""));
         assert!(is_language("") && is_language("de-CH") && is_language("zh-Hant-TW"));
         assert!(!is_language("en_US") && !is_language("-en"));
-        for ok in [
-            "com.1password.1password",
-            "2BUA8C4S2C.com.agilebits.onepassword7-helper",
-            "com.apple.Safari",
-        ] {
-            assert!(is_bundle_id(ok), "{ok}");
-        }
-        assert!(!is_bundle_id("Safari") && !is_bundle_id("com.x/y"));
-        // Too broad: these would exclude every app under them.
-        for broad in [
-            "com.apple",
-            "com",
-            "com.",
-            ".com.apple",
-            "com..apple",
-            "com.apple.",
-        ] {
-            assert!(!is_bundle_id(broad), "{broad}");
-        }
-        assert!(is_broad_bundle_id("com.apple") && !is_broad_bundle_id("Safari"));
         assert!(is_accent("#abc") && is_accent("#A1B2C3"));
         assert!(!is_accent("abc") && !is_accent("#abcd") && !is_accent("red"));
 
@@ -1195,13 +1194,6 @@ mod tests {
         let mut s = Settings::default();
         s.recording.typing_idle_ms = 50;
         assert!(s.validate().is_err());
-        let mut s = Settings::default();
-        s.recording.excluded_apps = vec!["com.apple.Safari".into(), "nope".into()];
-        assert!(s.validate().unwrap_err().message.contains("nope"));
-        let mut s = Settings::default();
-        s.recording.excluded_apps = vec!["com.apple".into()];
-        let message = s.validate().unwrap_err().message;
-        assert!(message.contains("\"com.apple\" is too broad"), "{message}");
         let mut s = Settings::default();
         s.export.accent = Some("blue".into());
         assert!(s.validate().is_err());
@@ -1362,6 +1354,63 @@ mod tests {
         assert!(store.view().load_error.is_some());
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn excluded_apps_are_full_bundle_ids() {
+        for ok in [
+            "com.1password.1password",
+            "2BUA8C4S2C.com.agilebits.onepassword7-helper",
+            "com.apple.Safari",
+        ] {
+            assert!(is_bundle_id(ok), "{ok}");
+        }
+        assert!(!is_bundle_id("Safari") && !is_bundle_id("com.x/y"));
+        // Too broad: these would exclude every app under them.
+        for broad in [
+            "com.apple",
+            "com",
+            "com.",
+            ".com.apple",
+            "com..apple",
+            "com.apple.",
+        ] {
+            assert!(!is_bundle_id(broad), "{broad}");
+        }
+        assert!(is_broad_bundle_id("com.apple") && !is_broad_bundle_id("Safari"));
+        let mut s = Settings::default();
+        s.recording.excluded_apps = vec!["com.apple.Safari".into(), "nope".into()];
+        assert!(s.validate().unwrap_err().message.contains("nope"));
+        let mut s = Settings::default();
+        s.recording.excluded_apps = vec!["com.apple".into()];
+        let message = s.validate().unwrap_err().message;
+        assert!(message.contains("\"com.apple\" is too broad"), "{message}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn excluded_apps_are_executables() {
+        for ok in ["1password.exe", "KeePassXC.exe", "my-app_2.EXE"] {
+            assert!(is_bundle_id(ok), "{ok}");
+        }
+        for bad in [
+            "1password",
+            ".exe",
+            r"C:\apps\x.exe",
+            "a b.exe",
+            "com.apple.Safari",
+        ] {
+            assert!(!is_bundle_id(bad), "{bad}");
+        }
+        let mut s = Settings::default();
+        s.recording.excluded_apps = vec!["notepad.exe".into(), "nope".into()];
+        let message = s.validate().unwrap_err().message;
+        assert!(
+            message.contains("\"nope\" is not an app's executable"),
+            "{message}"
+        );
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn broad_excluded_apps_are_dropped_on_load() {
         let dir = scratch();

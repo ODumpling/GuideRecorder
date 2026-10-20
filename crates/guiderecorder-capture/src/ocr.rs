@@ -1,5 +1,5 @@
 //! On-device text recognition for redaction (#10): Vision on macOS
-//! (`macos::ocr`), Windows OCR on Windows (`windows_ocr`), unsupported
+//! (`macos::ocr`), Windows OCR on Windows (`windows::ocr`), unsupported
 //! elsewhere. Never uses the network.
 //!
 //! The lines it returns are what `guiderecorder_core::redact` matches
@@ -22,7 +22,7 @@ pub enum OcrError {
 pub fn is_supported() -> bool {
     #[cfg(windows)]
     {
-        crate::windows_ocr::is_available()
+        crate::windows::ocr::is_available()
     }
     #[cfg(not(windows))]
     {
@@ -46,7 +46,7 @@ pub fn recognize_text(rgba: &[u8], width: u32, height: u32) -> Result<Vec<TextLi
     }
     #[cfg(windows)]
     {
-        crate::windows_ocr::recognize(rgba, width, height)
+        crate::windows::ocr::recognize(rgba, width, height)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {

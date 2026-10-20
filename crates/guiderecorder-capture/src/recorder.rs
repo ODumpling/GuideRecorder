@@ -1,6 +1,14 @@
 //! Recording session (M0, todo #336): the event tap, the frame stream and
 //! AX lookups wired together, ending in a `.guiderecorder` bundle.
 //!
+//! Shared by the macOS and Windows backends, each of which supplies its
+//! `event_tap` (input events and the event clock), `frames` (displays,
+//! windows and frame streams), `ax` (element and focus lookups: AX on
+//! macOS, UI Automation on Windows) and `apps` (who a pid is, which app is
+//! frontmost); `backend::session` is this module. The platform specifics
+//! named below are macOS's; `# Windows` says how the Windows backend
+//! differs.
+//!
 //! # Threads
 //!
 //! ```text
@@ -295,22 +303,37 @@
 //!   where the user clicked to focus the window they type in. Typing into
 //!   a window on another display after a keyboard-only switch (⌘Tab)
 //!   snapshots the pointer's display.
+//!
+//! # Windows
+//!
+//! - Events come from low-level mouse and keyboard hooks, aimed at the
+//!   window under the pointer (clicks) or the foreground window (keys);
+//!   lookups use UI Automation, and a password field is UIA's
+//!   `IsPassword`. Apps are identified by their executable's file name
+//!   (`1password.exe`), which stands in for a bundle id everywhere above.
+//! - Frames come from Windows.Graphics.Capture, which has no content
+//!   filter: an excluded app's window behind the frontmost one, or a
+//!   floating panel of one that is not frontmost, can show in a frame.
+//!   Nothing is captured while one is frontmost, as on macOS. This
+//!   process's windows are kept out of the frames by display affinity
+//!   (`WDA_EXCLUDEFROMCAPTURE`).
+//! - App activations are seen through `EVENT_SYSTEM_FOREGROUND`, on the
+//!   observer's own thread, so no main run loop is needed.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use block2::RcBlock;
 use guiderecorder_core::events::{
     AppRef, CaptureEvent, Key, Modifiers, RawElement, TimedEvent, Timestamp,
 };
+use guiderecorder_core::keyboard::{KeyPlatform, NamedKey};
 use guiderecorder_core::library::{
     self, GuideHandle, Library, LibraryError, PixelBuffer, PixelFormat, StepImageVariant,
 };
@@ -319,24 +342,20 @@ use guiderecorder_core::model::{
 };
 use guiderecorder_core::steps::{detect_steps, DraftStep, LiveAction, StepConfig};
 use guiderecorder_core::Ulid;
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2_app_kit::{
-    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
-    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
-};
-use objc2_application_services::{AXError, AXUIElement};
-use objc2_core_foundation::{CFRetained, CFString, CFType};
-use objc2_foundation::{NSNotification, NSObjectProtocol};
 
+pub use crate::backend::apps::{
+    default_excluded_bundle_ids, default_work_dir, DEFAULT_EXCLUDED_BUNDLE_IDS,
+};
 pub use crate::session::*;
 
-use super::ax;
-use super::event_tap::{self, EventTap, TargetedEvent};
-use super::frames::{
+use crate::backend::apps::{self, FrontmostObserver};
+use crate::backend::ax;
+use crate::backend::event_tap::{self, EventTap, TargetedEvent};
+use crate::backend::frames::{
     self, CaptureTarget, FilterHandle, Frame, FrameError, FrameGeometry, FrameReader, FrameStream,
     FrameStreamConfig,
 };
+use crate::cpu::{process_cpu_time, CpuTime};
 
 /// A focus lookup that runs later than this after its key no longer says
 /// where the key went; the key is treated as secure.
@@ -368,40 +387,6 @@ pub const EXCLUDED_FRAME_HEAD_MS: u64 = 250;
 /// frame streams' content filter, after its launch or activation was seen
 /// and a refresh did not list it yet (no window yet). About 16 s in all.
 pub const FILTER_RETRY_MS: &[u64] = &[250, 500, 1000, 2000, 4000, 8000];
-/// The suggested exclusion list (the app's settings default):
-/// 1Password 8, 7 and 6 (6 from the App Store and from AgileBits' own
-/// store, whose ids differ; with the 7 and 6 mini helpers, whose team-id
-/// prefixed ids no `<id>.` rule reaches), Bitwarden, Keychain Access,
-/// Passwords (macOS 15+) and Messages. [`SessionConfig::default`] excludes nothing; the caller
-/// passes the list it wants in [`SessionConfig::excluded_bundle_ids`].
-pub const DEFAULT_EXCLUDED_BUNDLE_IDS: &[&str] = &[
-    "com.1password.1password",
-    "com.agilebits.onepassword7",
-    "com.agilebits.onepassword-osx",
-    "com.agilebits.onepassword4",
-    "2BUA8C4S2C.com.agilebits.onepassword7-helper",
-    "2BUA8C4S2C.com.agilebits.onepassword-osx-helper",
-    "2BUA8C4S2C.com.agilebits.onepassword4-helper",
-    "com.bitwarden.desktop",
-    "com.apple.keychainaccess",
-    "com.apple.Passwords",
-    "com.apple.MobileSMS",
-];
-
-/// [`DEFAULT_EXCLUDED_BUNDLE_IDS`] as owned strings, ready for
-/// [`SessionConfig::excluded_bundle_ids`].
-pub fn default_excluded_bundle_ids() -> Vec<String> {
-    DEFAULT_EXCLUDED_BUNDLE_IDS
-        .iter()
-        .map(|&id| id.to_owned())
-        .collect()
-}
-
-const KEY_RETURN: u16 = 36;
-const KEY_TAB: u16 = 48;
-const KEY_ESCAPE: u16 = 53;
-const KEY_KEYPAD_ENTER: u16 = 76;
-
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("event tap: {0}")]
@@ -426,17 +411,6 @@ fn io_err(path: &Path) -> impl FnOnce(io::Error) -> SessionError + '_ {
     move |source| SessionError::Io {
         path: path.display().to_string(),
         source,
-    }
-}
-
-/// `$HOME/Library/Caches/dev.dufflebear.guiderecorder/sessions`, or the same under the
-/// system temp folder without `$HOME`.
-pub fn default_work_dir() -> PathBuf {
-    match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
-        Some(home) => {
-            PathBuf::from(home).join("Library/Caches/dev.dufflebear.guiderecorder/sessions")
-        }
-        None => std::env::temp_dir().join("dev.dufflebear.guiderecorder/sessions"),
     }
 }
 
@@ -553,8 +527,9 @@ impl RecordingSession {
             run_filter_refresh(refresh_rx, sources)
         })?);
         // Before the tap, so the gate holds from the first event.
+        let front = Arc::clone(&session.front);
         session.observer = Some(FrontmostObserver::start(
-            Arc::clone(&session.front),
+            move |ts, bundle_id| front.activated(ts, bundle_id),
             stream_config(&cfg).excluded_bundle_ids,
             refresh_tx,
         ));
@@ -739,7 +714,7 @@ impl RecordingSession {
             return;
         }
         self.front
-            .activated(event_tap::now(), frontmost_bundle_id().as_deref());
+            .activated(event_tap::now(), apps::frontmost_bundle_id().as_deref());
     }
 
     /// Starts a tap feeding the router (none in a headless test session).
@@ -1614,7 +1589,7 @@ impl Recording {
 #[derive(Debug, Clone, Default)]
 pub struct SessionMetrics {
     pub wall: Duration,
-    /// Process CPU time (getrusage) during the session, all threads,
+    /// Process CPU time during the session, all threads,
     /// including whatever else the host process did.
     pub cpu_user: Duration,
     pub cpu_system: Duration,
@@ -1662,7 +1637,7 @@ pub struct SessionMetrics {
     pub retro_scrubbed: usize,
     /// Focus reads after a click skipped because keys were waiting.
     pub probes_skipped: usize,
-    /// Why ScreenCaptureKit stopped the stream, or why stopping it failed.
+    /// Why the system stopped the stream, or why stopping it failed.
     pub frames_error: Option<String>,
     /// Events dropped for being from while paused (the tap is stopped
     /// first, so normally none), plus any found inside a pause at stop.
@@ -1929,7 +1904,7 @@ impl Router {
         let app = (target_pid > 0).then(|| {
             self.apps
                 .entry(target_pid)
-                .or_insert_with(|| app_for_pid(target_pid))
+                .or_insert_with(|| apps::app_for_pid(target_pid))
                 .clone()
         });
         // Its own app, or whatever app is in front: a key or a click
@@ -2168,24 +2143,6 @@ fn event_point(event: &CaptureEvent) -> Option<Point> {
     }
 }
 
-/// Name and bundle id of a running app.
-fn app_for_pid(pid: i32) -> AppRef {
-    objc2::rc::autoreleasepool(|_| {
-        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
-        AppRef {
-            pid,
-            name: app
-                .as_ref()
-                .and_then(|a| a.localizedName())
-                .map(|s| s.to_string()),
-            bundle_id: app
-                .as_ref()
-                .and_then(|a| a.bundleIdentifier())
-                .map(|s| s.to_string()),
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------
 // AX threads
 
@@ -2326,39 +2283,6 @@ pub fn apply_staleness(verdict: KeyVerdict, lag_ns: u64, max_lag_ns: u64) -> Key
     }
 }
 
-/// A focused-element reference compared with `CFEqual`.
-#[derive(Clone)]
-struct AxRef(CFRetained<AXUIElement>);
-
-impl PartialEq for AxRef {
-    fn eq(&self, other: &Self) -> bool {
-        let a: &CFType = &self.0;
-        let b: &CFType = &other.0;
-        a == b
-    }
-}
-
-/// The system-wide focused element reference (one AX message), or `None`
-/// when there is none or the lookup failed.
-fn focused_ref() -> Option<AxRef> {
-    // SAFETY: no arguments; returns a +1 element wrapped by the binding.
-    let system = unsafe { AXUIElement::new_system_wide() };
-    // SAFETY: valid element. A failure only means the default timeout stays.
-    let _ = unsafe { system.set_messaging_timeout(ax::MESSAGING_TIMEOUT_SECS) };
-    let name = CFString::from_static_str("AXFocusedUIElement");
-    let mut out: *const CFType = std::ptr::null();
-    // SAFETY: valid element and out-pointer; on success `out` is +1.
-    let err = unsafe { system.copy_attribute_value(&name, NonNull::from(&mut out)) };
-    let value = NonNull::new(out.cast_mut())
-        // SAFETY: a non-null `out` holds a +1 reference we now own (also
-        // released this way on failure, which leaves it null in practice).
-        .map(|p| unsafe { CFRetained::from_raw(p) })?;
-    if err != AXError::Success {
-        return None;
-    }
-    value.downcast::<AXUIElement>().ok().map(AxRef)
-}
-
 /// Where the focus thread reads the focus: AX in a session, a script in
 /// tests.
 trait FocusSource {
@@ -2373,10 +2297,10 @@ trait FocusSource {
 struct AxFocus;
 
 impl FocusSource for AxFocus {
-    type Ref = AxRef;
+    type Ref = ax::FocusRef;
 
-    fn focused_ref(&mut self) -> Option<AxRef> {
-        focused_ref()
+    fn focused_ref(&mut self) -> Option<ax::FocusRef> {
+        ax::focused_ref()
     }
 
     fn focused_element(&mut self) -> ax::Result<Option<RawElement>> {
@@ -2389,13 +2313,17 @@ impl FocusSource for AxFocus {
 }
 
 /// True for keys that can move focus: Tab, Return, Enter, Esc and ⌘ or ⌃
-/// shortcuts. Option-only chords (with or without ⇧) are not: on many
-/// layouts they type characters (⌥L is "@" on German), as the step
-/// detector also assumes.
+/// (Win or Ctrl) shortcuts. Option-only chords (with or without ⇧) are
+/// not: on many layouts they type characters (⌥L is "@" on German; the
+/// Windows hook reports AltGr as Alt alone), as the step detector also
+/// assumes.
 pub fn moves_focus(code: u16, modifiers: Modifiers) -> bool {
     modifiers.command
         || modifiers.control
-        || matches!(code, KEY_TAB | KEY_RETURN | KEY_KEYPAD_ENTER | KEY_ESCAPE)
+        || matches!(
+            KeyPlatform::CURRENT.named(code),
+            Some(NamedKey::Tab | NamedKey::Return | NamedKey::Escape)
+        )
 }
 
 /// Fail-closed window after a focus-moving key or a click.
@@ -3451,108 +3379,6 @@ impl Frontmost {
     }
 }
 
-/// The bundle id of the frontmost app now.
-fn frontmost_bundle_id() -> Option<String> {
-    objc2::rc::autoreleasepool(|_| {
-        NSWorkspace::sharedWorkspace()
-            .frontmostApplication()
-            .and_then(|app| app.bundleIdentifier())
-            .map(|id| id.to_string())
-    })
-}
-
-/// Notes every app activation (`NSWorkspaceDidActivateApplicationNotification`)
-/// in a [`Frontmost`] until dropped, and sends the pid of each excluded app
-/// that activates or launches (`NSWorkspaceDidLaunchApplicationNotification`)
-/// to the filter refresh thread ([`run_filter_refresh`]), which ends when
-/// this is dropped. The notifications are posted, and so handled, on the
-/// main thread: they need the main run loop running, as in the app.
-struct FrontmostObserver {
-    tokens: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
-}
-
-// SAFETY: the tokens are only passed to `removeObserver:`, and
-// NSNotificationCenter is thread-safe.
-unsafe impl Send for FrontmostObserver {}
-
-/// The app a workspace notification is about: its bundle id and pid.
-fn notified_app(note: &NSNotification) -> Option<(Option<String>, i32)> {
-    objc2::rc::autoreleasepool(|_| {
-        note.userInfo()
-            // SAFETY: an NSString key, as the dictionary expects.
-            .and_then(|info| unsafe { info.objectForKey(NSWorkspaceApplicationKey) })
-            .and_then(|app| app.downcast::<NSRunningApplication>().ok())
-            .map(|app| {
-                (
-                    app.bundleIdentifier().map(|id| id.to_string()),
-                    app.processIdentifier(),
-                )
-            })
-    })
-}
-
-impl FrontmostObserver {
-    /// `filtered`: the bundle ids the frame streams leave out (the
-    /// session's plus [`SessionConfig::frames`]'), which a launch or
-    /// activation is matched against for a refresh.
-    fn start(front: Arc<Frontmost>, filtered: Vec<String>, refresh: Sender<i32>) -> Self {
-        let filtered = Arc::new(filtered);
-        let filtered_launch = Arc::clone(&filtered);
-        let refresh_launch = refresh.clone();
-        let activated = RcBlock::new(move |note: NonNull<NSNotification>| {
-            let ts = event_tap::now();
-            // SAFETY: the center passes a valid notification for the call.
-            let app = notified_app(unsafe { note.as_ref() });
-            let bundle_id = app.as_ref().and_then(|(id, _)| id.as_deref());
-            front.activated(ts, bundle_id);
-            if let Some((Some(id), pid)) = &app {
-                if frames::bundle_id_matches(id, &filtered) {
-                    let _ = refresh.send(*pid);
-                }
-            }
-        });
-        let launched = RcBlock::new(move |note: NonNull<NSNotification>| {
-            // SAFETY: the center passes a valid notification for the call.
-            if let Some((Some(id), pid)) = notified_app(unsafe { note.as_ref() }) {
-                if frames::bundle_id_matches(&id, &filtered_launch) {
-                    let _ = refresh_launch.send(pid);
-                }
-            }
-        });
-        let center = NSWorkspace::sharedWorkspace().notificationCenter();
-        // SAFETY: no object filter and no queue (handled on the posting
-        // thread); the blocks only touch `Send + Sync` state.
-        let tokens = unsafe {
-            vec![
-                center.addObserverForName_object_queue_usingBlock(
-                    Some(NSWorkspaceDidActivateApplicationNotification),
-                    None,
-                    None,
-                    &activated,
-                ),
-                center.addObserverForName_object_queue_usingBlock(
-                    Some(NSWorkspaceDidLaunchApplicationNotification),
-                    None,
-                    None,
-                    &launched,
-                ),
-            ]
-        };
-        Self { tokens }
-    }
-}
-
-impl Drop for FrontmostObserver {
-    fn drop(&mut self) {
-        let center = NSWorkspace::sharedWorkspace().notificationCenter();
-        for token in &self.tokens {
-            let token: &AnyObject = token.as_ref();
-            // SAFETY: a token this center returned.
-            unsafe { center.removeObserver(token) };
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Content filter refresh
 
@@ -3828,13 +3654,14 @@ impl KeyRunTracker {
                 if *is_repeat {
                     return false;
                 }
+                let named = KeyPlatform::CURRENT.named(key.code);
                 if modifiers.is_shortcut()
-                    || matches!(key.code, KEY_RETURN | KEY_KEYPAD_ENTER | KEY_ESCAPE)
+                    || matches!(named, Some(NamedKey::Return | NamedKey::Escape))
                 {
                     self.last_key = None;
                     return true;
                 }
-                if key.code == KEY_TAB {
+                if named == Some(NamedKey::Tab) {
                     self.last_key = None;
                     return false;
                 }
@@ -4060,60 +3887,14 @@ fn crop_view(rgba: &[u8], width: u32, rect: CropRect) -> PixelBuffer<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CPU time
-
-#[derive(Debug, Clone, Copy)]
-struct CpuTime {
-    user: Duration,
-    system: Duration,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct Timeval {
-    tv_sec: i64,
-    /// `suseconds_t` is `i32` on Darwin.
-    tv_usec: i32,
-}
-
-/// Darwin `struct rusage`: two timevals and 14 longs.
-#[repr(C)]
-#[derive(Default)]
-struct Rusage {
-    ru_utime: Timeval,
-    ru_stime: Timeval,
-    rest: [i64; 14],
-}
-
-const _: () = assert!(std::mem::size_of::<Rusage>() == 144);
-
-const RUSAGE_SELF: i32 = 0;
-
-extern "C" {
-    fn getrusage(who: i32, usage: *mut Rusage) -> i32;
-}
-
-fn process_cpu_time() -> Option<CpuTime> {
-    let mut usage = Rusage::default();
-    // SAFETY: `usage` is a valid, correctly sized out-pointer.
-    if unsafe { getrusage(RUSAGE_SELF, &mut usage) } != 0 {
-        return None;
-    }
-    let dur = |t: &Timeval| {
-        Duration::from_secs(t.tv_sec.max(0) as u64) + Duration::from_micros(t.tv_usec.max(0) as u64)
-    };
-    Some(CpuTime {
-        user: dur(&usage.ru_utime),
-        system: dur(&usage.ru_stime),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use crate::keys::S as KEY_S;
+    use crate::keys::{
+        ESCAPE as KEY_ESCAPE, KEYPAD_ENTER as KEY_KEYPAD_ENTER, RETURN as KEY_RETURN, S as KEY_S,
+        TAB as KEY_TAB,
+    };
 
     use guiderecorder_core::events::MouseButton;
     use guiderecorder_core::model::StepKind;
@@ -5114,7 +4895,12 @@ mod tests {
         assert_eq!(
             seen[0].action,
             Some(LiveAction::Press {
-                label: "⌘S".into()
+                label: if cfg!(target_os = "macos") {
+                    "⌘S"
+                } else {
+                    "Win+S"
+                }
+                .into()
             })
         );
     }
@@ -5842,7 +5628,7 @@ mod tests {
         w.handle(FocusMsg::Resume(Timestamp(200 * MS)), false);
         // After the resume: a full lookup (three reads), the focus reported
         // again, and the guard no longer holds.
-        type_key(&mut w, 300, 8, "c");
+        type_key(&mut w, 300, 0, "c");
         assert_eq!(w.ax.lookups, full + 5);
         let focus_changes: Vec<u64> = w
             .events
@@ -5872,7 +5658,7 @@ mod tests {
         assert!(t.should_snapshot(&key_down(0, 0, "a", mods()), 7));
         assert!(!t.should_snapshot(&key_down(100, 11, "b", mods()), 7));
         t.reset();
-        assert!(t.should_snapshot(&key_down(200, 8, "c", mods()), 7));
+        assert!(t.should_snapshot(&key_down(200, 0, "c", mods()), 7));
     }
 
     #[test]
@@ -5882,7 +5668,7 @@ mod tests {
             key_down(0, 0, "a", mods()),
             key_down(100, 11, "b", mods()),
             key_down(170, 7, "x", mods()),
-            key_down(300, 8, "c", mods()),
+            key_down(300, 0, "c", mods()),
             key_down(400, 2, "d", mods()),
         ];
         let pause = PauseSpan {
@@ -6136,8 +5922,29 @@ mod tests {
         assert!(rec.session_dir().starts_with(&scratch.0));
     }
 
-    const ONE_PASSWORD: &str = "com.1password.1password";
+    /// 1Password's id on this platform: its bundle id, or its executable.
+    const ONE_PASSWORD: &str = if cfg!(target_os = "macos") {
+        "com.1password.1password"
+    } else {
+        "1password.exe"
+    };
 
+    #[cfg(windows)]
+    #[test]
+    fn default_exclusions_cover_password_managers_and_the_credential_prompt() {
+        let ids = default_excluded_bundle_ids();
+        for id in [
+            ONE_PASSWORD,
+            "bitwarden.exe",
+            "keepassxc.exe",
+            "credentialuibroker.exe",
+        ] {
+            assert!(ids.iter().any(|e| e == id), "{id}");
+        }
+        assert!(SessionConfig::default().excluded_bundle_ids.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn default_exclusions_cover_password_managers_and_messages() {
         let ids = default_excluded_bundle_ids();
@@ -6159,7 +5966,7 @@ mod tests {
 
     #[test]
     fn frontmost_log_tracks_excluded_spans() {
-        let excluded = default_excluded_bundle_ids();
+        let excluded = vec![ONE_PASSWORD.to_owned(), "com.apple.MobileSMS".to_owned()];
         let mut log = FrontmostLog::default();
         let at = |ms: u64| Timestamp(ms * MS);
         assert_eq!(
@@ -6204,7 +6011,7 @@ mod tests {
         assert!(!log.frame_excluded(at(leave + EXCLUDED_FRAME_TAIL_MS)));
         assert!(!log.excluded_at(at(leave)), "events get no tail margin");
         // An open span excludes everything after its start.
-        log.activated(at(1000), Some("com.apple.keychainaccess"), &excluded);
+        log.activated(at(1000), Some("com.apple.MobileSMS"), &excluded);
         assert!(log.excluded_at(Timestamp(u64::MAX)));
         // Not in the list: never excluded.
         let mut log = FrontmostLog::default();
@@ -6941,16 +6748,21 @@ mod tests {
         );
         assert_eq!(lost_reason(WINDOW, false), LOST_UNKNOWN);
         assert_eq!(lost_reason(DISPLAY, false), LOST_UNKNOWN);
-        // The error code alone is enough, whatever is listed.
+        // The error alone is enough, whatever is listed.
+        let (gone, locked) = if cfg!(target_os = "macos") {
+            ("x (code -3815)", "x (code -3821)")
+        } else {
+            ("x (source gone)", "x")
+        };
         assert!(source_gone(
             CaptureTarget::Display { display_id: None },
-            "x (code -3815)"
+            gone
         ));
         // The main display is always there; a screen lock is not a loss
         // of it.
         assert!(!source_gone(
             CaptureTarget::Display { display_id: None },
-            "x (code -3821)"
+            locked
         ));
     }
 

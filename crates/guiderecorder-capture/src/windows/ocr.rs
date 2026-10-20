@@ -20,7 +20,6 @@ use windows::Globalization::Language;
 use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::{OcrEngine, OcrLine};
 use windows::Security::Cryptography::CryptographicBuffer;
-use windows::Win32::System::Com::CoIncrementMTAUsage;
 
 use crate::ocr::OcrError;
 
@@ -58,7 +57,7 @@ pub fn recognize(rgba: &[u8], width: u32, height: u32) -> Result<Vec<TextLine>, 
 
 /// An engine for the user's languages, else for [`FALLBACK_LANGUAGE`].
 fn engine() -> Result<OcrEngine, OcrError> {
-    ensure_com();
+    super::ensure_com();
     // Both return null (an error here), not a failure, when no OCR
     // language is installed.
     OcrEngine::TryCreateFromUserProfileLanguages()
@@ -67,19 +66,6 @@ fn engine() -> Result<OcrEngine, OcrError> {
             OcrEngine::TryCreateFromLanguage(&language)
         })
         .map_err(|_| OcrError::Unsupported)
-}
-
-/// Keeps a multithreaded apartment for the whole process, once, so WinRT
-/// works on any thread: one with no apartment joins it implicitly, and one
-/// already in an apartment (say the UI thread) keeps its own.
-fn ensure_com() {
-    static MTA: OnceLock<()> = OnceLock::new();
-    MTA.get_or_init(|| {
-        // SAFETY: no preconditions. The cookie is never released, so the
-        // apartment lasts until the process exits. On failure WinRT calls
-        // fail and say why.
-        let _ = unsafe { CoIncrementMTAUsage() };
-    });
 }
 
 /// A BGRA `SoftwareBitmap` of the pixels (copied), opaque.
