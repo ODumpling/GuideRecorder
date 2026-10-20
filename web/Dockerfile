@@ -14,6 +14,7 @@ COPY app/package.json app/
 COPY web/package.json web/
 COPY packages/guide-schema/package.json packages/guide-schema/
 COPY packages/sync/package.json packages/sync/
+COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile --filter "@guiderecorder/web..."
 COPY packages packages
 COPY web web

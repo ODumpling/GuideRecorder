@@ -35,6 +35,41 @@ the `build` target before rolling out (`pnpm -C web db:migrate`), and run the
 `runtime` target. Migrations are additive within a release, so the old
 version keeps working while they run.
 
+## gr.dufflebear.dev (continuous deployment)
+
+Every push to `main` that passes CI is deployed to https://gr.dufflebear.dev
+by `.github/workflows/deploy.yml` (or run it by hand from the Actions tab):
+
+1. Builds three images and pushes them to GHCR tagged with the commit:
+   `guiderecorder-web` (the app), `guiderecorder-web-build` (runs
+   migrations) and `guiderecorder-export-worker`.
+2. Copies `deploy/compose.yaml` and `deploy/Caddyfile` to
+   `/srv/guiderecorder` on the OVH VPS over SSH, sets `IMAGE_TAG` in its
+   `.env`, pulls and runs `docker compose up -d --wait` (migrations first).
+3. Checks `/api/health`.
+
+The VPS runs Caddy, the app, Postgres, RustFS (images), the export worker,
+the retention job and nightly backups (`/srv/guiderecorder/backups`). The
+host is proxied by Cloudflare with SSL mode Full (strict); Caddy serves
+Cloudflare's origin certificate and drops connections that don't come from
+Cloudflare. The bucket is `storage`, served path-style at
+`https://gr.dufflebear.dev/storage/*` (presigned requests only). RustFS's S3
+API and console are reachable over Tailscale only, on the VPS's tailnet
+address, ports 9000 and 9001.
+
+The `production` environment in the repository settings holds
+`DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` and the variables `DEPLOY_HOST` and
+`DEPLOY_USER`.
+
+New server: run `ssh <host> 'bash -s' < deploy/bootstrap.sh` (installs Tailscale, writes
+`/srv/guiderecorder/.env` with generated secrets and a placeholder
+certificate), run `sudo tailscale up` there, copy the Cloudflare origin certificate to
+`/srv/guiderecorder/certs/origin.pem` and `origin.key`, add the deploy key to
+`~/.ssh/authorized_keys`, and run the workflow. Optional settings (OAuth,
+Stripe, Resend) go in `.env` too. Roll back by setting
+`IMAGE_TAG` in `.env` to an older commit and running `docker compose up -d`
+in `/srv/guiderecorder` (migrations are additive, so older images work).
+
 ## Configuration
 
 Everything in `web/.env.example`, plus:
