@@ -28,17 +28,29 @@ import { cn } from "@guiderecorder/ui/utils";
 
 const SEARCH_DELAY_MS = 200;
 
-/** The library search, in the title bar: filters the grid as you type; ⌘K focuses it. */
+/**
+ * The library search, in the title bar: filters the grid as you type; ⌘F
+ * focuses it (⌘K is the command palette, which can also start a search).
+ */
 export function LibrarySearch() {
   const [query, setQuery] = useState(() => editorStore.getState().query);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
+    if (query === editorStore.getState().query) return;
     const timer = setTimeout(() => void editorStore.getState().setQuery(query), SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
   }, [query]);
+  // A search started from the command palette shows here.
+  useEffect(
+    () =>
+      editorStore.subscribe((state, prev) => {
+        if (state.query !== prev.query) setQuery(state.query);
+      }),
+    [],
+  );
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      if (e.key.toLowerCase() === "f" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         input.current?.focus();
         input.current?.select();
@@ -59,7 +71,7 @@ export function LibrarySearch() {
         onKeyDown={(e) => e.key === "Escape" && setQuery("")}
         className="h-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
-      <kbd className="rounded border border-border px-1 text-[10px] text-muted-foreground">⌘K</kbd>
+      <kbd className="rounded border border-border px-1 text-[10px] text-muted-foreground">⌘F</kbd>
     </label>
   );
 }
