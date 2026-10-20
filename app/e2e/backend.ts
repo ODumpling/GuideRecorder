@@ -142,7 +142,7 @@ export class Backend {
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 2,
-    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic" },
+    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic", matchSystem: false, lightTheme: "paper", darkTheme: "paperDark", accent: null, density: "comfortable", reduceEffects: false },
     recording: {
       hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },
       captureArea: "display",

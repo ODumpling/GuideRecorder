@@ -108,3 +108,50 @@ test("switches the theme, starting from Arctic", async ({ page, backend }) => {
   await expect(html).toHaveAttribute("data-theme", "sage");
   await expect(html).not.toHaveClass(/\bdark\b/);
 });
+
+test("matches the system, with a custom accent, compact density and fewer effects", async ({ page, backend }) => {
+  const html = page.locator("html");
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
+  await expect(page.getByRole("button", { name: /Rotate an API key/ })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Appearance" }).click();
+
+  // Match system: Paper in light mode, Paper Dark (then Nebula) in dark mode.
+  await dialog.getByRole("switch", { name: "Match system" }).click();
+  await expect.poll(() => backend.settings.general.matchSystem).toBe(true);
+  await expect(html).toHaveAttribute("data-theme", "paper");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(html).toHaveAttribute("data-theme", "paperDark");
+  await expect(html).toHaveClass(/\bdark\b/);
+  await dialog.getByRole("radiogroup", { name: "Dark theme" }).getByRole("radio", { name: "Nebula" }).click();
+  await expect.poll(() => backend.settings.general.darkTheme).toBe("nebula");
+  await expect(html).toHaveAttribute("data-theme", "nebula");
+
+  // An accent too dark for Nebula's background is lightened, with a warning.
+  const accent = dialog.getByRole("textbox", { name: "Accent colour", exact: true });
+  await accent.fill("#101030");
+  await accent.press("Enter");
+  await expect.poll(() => backend.settings.general.accent).toBe("#101030");
+  await expect(dialog.getByText(/Too close to the background/)).toBeVisible();
+  const brand = () => html.evaluate((el) => el.style.getPropertyValue("--brand"));
+  await expect.poll(brand).not.toBe("");
+  expect(await brand()).not.toBe("#101030");
+  await dialog.getByRole("button", { name: "Clear" }).click();
+  await expect.poll(() => backend.settings.general.accent).toBe(null);
+  await expect.poll(brand).toBe("");
+
+  await dialog.getByRole("combobox", { name: "Density" }).selectOption("compact");
+  await expect.poll(() => backend.settings.general.density).toBe("compact");
+  await expect(html).toHaveAttribute("data-density", "compact");
+
+  // Reduce transparency and motion: from the setting, or the system's preference.
+  await expect(html).not.toHaveAttribute("data-reduce-effects");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(html).toHaveAttribute("data-reduce-effects");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(html).not.toHaveAttribute("data-reduce-effects");
+  await dialog.getByRole("switch", { name: "Reduce transparency and motion" }).click();
+  await expect.poll(() => backend.settings.general.reduceEffects).toBe(true);
+  await expect(html).toHaveAttribute("data-reduce-effects");
+});

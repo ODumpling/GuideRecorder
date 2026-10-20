@@ -88,7 +88,7 @@ function StartTile({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex items-center gap-3 rounded-xl border p-3.5 text-left transition duration-150 outline-none hover:-translate-y-px hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+        "flex items-center gap-3 rounded-xl border p-3.5 text-left outline-none hover:shadow-md lively:transition lively:duration-150 lively:hover:-translate-y-px focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
         main ? "border-transparent bg-primary text-primary-foreground" : "border-border bg-card text-card-foreground",
       )}
     >

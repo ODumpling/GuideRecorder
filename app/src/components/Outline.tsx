@@ -69,7 +69,7 @@ function ItemIcon({ item }: { item: Item }) {
 function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
   const url = useStepThumbnail(guideId, step.image.crop || step.image.full || null);
   return (
-    <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background">
+    <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background compact:h-6 compact:w-9">
       {url ? <img src={url} alt="" className="size-full object-cover" /> : <ItemIcon item={step} />}
     </span>
   );
@@ -211,8 +211,8 @@ export function Outline() {
               }}
               data-outline-item={item.id}
               className={cn(
-                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-[13px] text-sidebar-foreground/85 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                item.type === "section" && "py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase",
+                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-[13px] compact:py-1 text-sidebar-foreground/85 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                item.type === "section" && "py-1 compact:py-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase",
                 item.type === "note" && "bg-sidebar-foreground/[0.04] text-xs",
                 item.id === selectedId &&
                   "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",

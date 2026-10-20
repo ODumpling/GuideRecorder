@@ -44,7 +44,7 @@ export function GuideCard({
       >
         <span
           className={cn(
-            "relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring",
+            "relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar group-hover:shadow-lg lively:transition lively:duration-200 lively:group-hover:-translate-y-0.5 group-focus-visible:ring-2 group-focus-visible:ring-ring",
             selected && "border-transparent ring-2 ring-[var(--status-info)] group-focus-visible:ring-[var(--status-info)]",
           )}
         >
@@ -71,7 +71,7 @@ export function GuideCard({
             </span>
           )}
         </span>
-        <span className="mt-2.5 flex items-center gap-1.5 px-0.5 text-sm font-semibold tracking-tight">
+        <span className="mt-2.5 flex items-center gap-1.5 px-0.5 text-sm font-semibold tracking-tight compact:mt-1.5 compact:text-[13px]">
           <span className="truncate">{guide.title || "Untitled"}</span>
           {guide.readOnly && <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="Read-only" />}
           <SyncBadge guideId={guide.id} />

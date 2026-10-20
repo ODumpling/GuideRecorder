@@ -92,6 +92,19 @@ pub struct General {
     pub check_for_updates: bool,
     /// The app's colour theme; the windows apply it themselves.
     pub theme: Theme,
+    /// Follow the system's light or dark appearance with `light_theme` and
+    /// `dark_theme` instead of `theme`.
+    pub match_system: bool,
+    pub light_theme: Theme,
+    pub dark_theme: Theme,
+    /// Overrides the theme's accent (main buttons, the outline selection,
+    /// annotation handles); `#rgb` or `#rrggbb`. The windows darken or
+    /// lighten it when it is too close to the background.
+    pub accent: Option<String>,
+    pub density: Density,
+    /// No glow, backdrop blur or card hover animation. The windows also
+    /// reduce them when the system asks for less motion or transparency.
+    pub reduce_effects: bool,
 }
 
 impl Default for General {
@@ -103,8 +116,23 @@ impl Default for General {
             onboarded: false,
             check_for_updates: true,
             theme: Theme::default(),
+            match_system: false,
+            light_theme: Theme::Paper,
+            dark_theme: Theme::PaperDark,
+            accent: None,
+            density: Density::default(),
+            reduce_effects: false,
         }
     }
+}
+
+/// How tightly the outline and the library's cards are laid out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Density {
+    #[default]
+    Comfortable,
+    Compact,
 }
 
 /// The app's colour theme (Settings → Appearance). Settings saved before
@@ -565,6 +593,11 @@ impl Settings {
         if let Some(accent) = self.export.accent.as_deref().filter(|a| !is_accent(a)) {
             return Err(invalid(format!(
                 "accent {accent:?} is not a hex colour (#rgb or #rrggbb)"
+            )));
+        }
+        if let Some(accent) = self.general.accent.as_deref().filter(|a| !is_accent(a)) {
+            return Err(invalid(format!(
+                "the app accent {accent:?} is not a hex colour (#rgb or #rrggbb)"
             )));
         }
         let r = &self.redaction;
@@ -1495,6 +1528,42 @@ mod tests {
         assert_eq!(json["general"]["theme"], "paperDark");
         let back: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(back.general.theme, Theme::PaperDark);
+    }
+
+    #[test]
+    fn appearance_options_default_and_round_trip() {
+        // A settings file from before these options still loads.
+        let old: Settings =
+            serde_json::from_str(r#"{"version":2,"general":{"onboarded":true,"theme":"steel"}}"#)
+                .unwrap();
+        assert_eq!(old.general.theme, Theme::Steel);
+        assert!(!old.general.match_system);
+        assert_eq!(old.general.light_theme, Theme::Paper);
+        assert_eq!(old.general.dark_theme, Theme::PaperDark);
+        assert_eq!(old.general.accent, None);
+        assert_eq!(old.general.density, Density::Comfortable);
+        assert!(!old.general.reduce_effects);
+
+        let mut settings = Settings::default();
+        settings.general.match_system = true;
+        settings.general.light_theme = Theme::Sage;
+        settings.general.dark_theme = Theme::Nebula;
+        settings.general.accent = Some("#0a84ff".into());
+        settings.general.density = Density::Compact;
+        settings.general.reduce_effects = true;
+        assert!(settings.validate().is_ok());
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["general"]["matchSystem"], true);
+        assert_eq!(json["general"]["lightTheme"], "sage");
+        assert_eq!(json["general"]["darkTheme"], "nebula");
+        assert_eq!(json["general"]["accent"], "#0a84ff");
+        assert_eq!(json["general"]["density"], "compact");
+        assert_eq!(json["general"]["reduceEffects"], true);
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back, settings);
+
+        settings.general.accent = Some("blue".into());
+        assert!(settings.validate().is_err());
     }
 
     #[test]
