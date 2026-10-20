@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ApiResponse } from "./engine";
+import type { ApiResponse } from "@guiderecorder/sync/engine";
 import { createShareStore, type ShareLink } from "./share";
 
 const link = (id: string, extra: Partial<ShareLink> = {}): ShareLink => ({

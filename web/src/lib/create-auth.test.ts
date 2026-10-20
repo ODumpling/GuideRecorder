@@ -7,7 +7,7 @@ import { testDb } from "../../test/db";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
 import { subscription } from "@/db/schema";
-import { createAuth, DESKTOP_CLIENT_ID } from "./create-auth";
+import { createAuth, DESKTOP_CLIENT_ID, MOBILE_CLIENT_ID } from "./create-auth";
 import { memberRole } from "./workspace";
 
 let db: Database;
@@ -114,7 +114,8 @@ describe("desktop sign-in", () => {
     expect(session?.user.id).toBe(ada.userId);
   });
 
-  it("only issues codes to the desktop app", async () => {
+  it("only issues codes to the desktop and mobile apps", async () => {
+    expect((await post("/device/code", { client_id: MOBILE_CLIENT_ID })).status).toBe(200);
     expect((await post("/device/code", { client_id: "someone-else" })).status).toBe(400);
   });
 });

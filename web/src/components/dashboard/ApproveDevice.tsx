@@ -7,7 +7,7 @@ import { ErrorText, Field } from "@/components/ui";
 
 type Step = "enter" | "confirm" | "approved" | "denied";
 
-/** Approves the code the desktop app shows, signing the app in as this user. */
+/** Approves the code the desktop or mobile app shows, signing the app in as this user. */
 export function ApproveDevice({ initialCode }: { initialCode: string }) {
   const [code, setCode] = useState(initialCode);
   const [step, setStep] = useState<Step>("enter");
@@ -18,8 +18,8 @@ export function ApproveDevice({ initialCode }: { initialCode: string }) {
     setError(null);
     // Looking the code up while signed in claims it for this user.
     const { data, error } = await authClient.device({ query: { user_code: code.trim() } });
-    if (error || !data) return setError(error?.error_description ?? "That code isn't valid. Check the desktop app.");
-    if (data.status !== "pending") return setError("That code has already been used. Start again in the desktop app.");
+    if (error || !data) return setError(error?.error_description ?? "That code isn't valid. Check the app.");
+    if (data.status !== "pending") return setError("That code has already been used. Start again in the app.");
     setStep("confirm");
   }
 
@@ -33,7 +33,7 @@ export function ApproveDevice({ initialCode }: { initialCode: string }) {
 
   return (
     <Card className="p-6 block w-full max-w-sm">
-      <h1 className="mb-4 font-serif text-3xl">Sign in the desktop app</h1>
+      <h1 className="mb-4 font-serif text-3xl">Sign in the app</h1>
       {step === "enter" ? (
         <form onSubmit={check} className="grid gap-4">
           <Field>
@@ -47,7 +47,7 @@ export function ApproveDevice({ initialCode }: { initialCode: string }) {
       ) : step === "confirm" ? (
         <div className="grid gap-4">
           <p className="text-sm">
-            Let GuideRecorder on your computer sync guides with your workspaces? Only approve this if you started signing in from the app and the
+            Let GuideRecorder on your computer or phone sync guides with your workspaces? Only approve this if you started signing in from the app and the
             code matches: <span className="font-mono font-semibold">{code.trim().toUpperCase()}</span>
           </p>
           <div className="flex gap-2">

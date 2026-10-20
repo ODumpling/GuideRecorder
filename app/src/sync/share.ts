@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage } from "@/lib/ipc";
-import type { ApiResponse, SyncBackend } from "@/sync/engine";
+import type { ApiResponse, SyncBackend } from "@guiderecorder/sync/engine";
 
 // Share links from the desktop app: the web app's share API (`/api/
 // workspaces/:id/shares`), called with the sync sign-in. Only guides the

@@ -1,5 +1,5 @@
 import { Cloud, CloudAlert, CloudOff, CloudUpload } from "lucide-react";
-import type { GuideStatus, GuideSync } from "@/sync/engine";
+import type { GuideStatus, GuideSync } from "@guiderecorder/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
 import { useSync } from "@/sync/sync";
 import { cn } from "@guiderecorder/ui/utils";
