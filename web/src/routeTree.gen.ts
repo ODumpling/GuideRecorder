@@ -24,6 +24,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
 import { Route as StaffIndexRouteImport } from './routes/staff.index'
+import { Route as StaffSettingsRouteImport } from './routes/staff.settings'
 import { Route as AppGuidesGuideIdRouteImport } from './routes/_app.guides.$guideId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiJobsRetentionRouteImport } from './routes/api/jobs/retention'
@@ -116,6 +117,11 @@ const STokenRoute = STokenRouteImport.update({
 const StaffIndexRoute = StaffIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => StaffRoute,
+} as any)
+const StaffSettingsRoute = StaffSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => StaffRoute,
 } as any)
 const AppGuidesGuideIdRoute = AppGuidesGuideIdRouteImport.update({
@@ -241,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff/settings': typeof StaffSettingsRoute
   '/staff/': typeof StaffIndexRoute
   '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -275,6 +282,7 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff/settings': typeof StaffSettingsRoute
   '/staff': typeof StaffIndexRoute
   '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -312,6 +320,7 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff/settings': typeof StaffSettingsRoute
   '/staff/': typeof StaffIndexRoute
   '/_app/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -349,6 +358,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff/settings'
     | '/staff/'
     | '/guides/$guideId'
     | '/api/auth/$'
@@ -383,6 +393,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff/settings'
     | '/staff'
     | '/guides/$guideId'
     | '/api/auth/$'
@@ -419,6 +430,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff/settings'
     | '/staff/'
     | '/_app/guides/$guideId'
     | '/api/auth/$'
@@ -573,6 +585,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/staff/'
       preLoaderRoute: typeof StaffIndexRouteImport
+      parentRoute: typeof StaffRoute
+    }
+    '/staff/settings': {
+      id: '/staff/settings'
+      path: '/settings'
+      fullPath: '/staff/settings'
+      preLoaderRoute: typeof StaffSettingsRouteImport
       parentRoute: typeof StaffRoute
     }
     '/_app/guides/$guideId': {
@@ -736,11 +755,13 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface StaffRouteChildren {
+  StaffSettingsRoute: typeof StaffSettingsRoute
   StaffIndexRoute: typeof StaffIndexRoute
   StaffUsersUserIdRoute: typeof StaffUsersUserIdRoute
 }
 
 const StaffRouteChildren: StaffRouteChildren = {
+  StaffSettingsRoute: StaffSettingsRoute,
   StaffIndexRoute: StaffIndexRoute,
   StaffUsersUserIdRoute: StaffUsersUserIdRoute,
 }

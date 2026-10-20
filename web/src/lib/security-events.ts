@@ -23,7 +23,8 @@ export type SecurityEventType =
   | "retention.run"
   | "staff.licence_issued"
   | "staff.licence_revoked"
-  | "staff.guide_restored";
+  | "staff.guide_restored"
+  | "staff.platform_updated";
 
 export interface SecurityEvent {
   type: SecurityEventType;

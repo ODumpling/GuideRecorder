@@ -817,3 +817,17 @@ export const licenceGrant = pgTable(
   },
   (t) => [index("licence_grant_organization_idx").on(t.organizationId)],
 );
+
+/**
+ * Settings for the whole service, set by staff (see lib/platform.ts). One row,
+ * id `default`; without it, the defaults.
+ */
+export const platformSettings = pgTable("platform_settings", {
+  id: text("id").primaryKey(),
+  /** Anyone can create an account. When off, only invited people and SSO or SCIM users can. */
+  registration: boolean("registration").notNull().default(true),
+  /** Paid plans no one can subscribe to. Existing subscriptions and licence grants keep working. */
+  disabledPlans: text("disabled_plans").array().notNull().default(sql`'{}'::text[]`),
+  updatedBy: text("updated_by"),
+  updatedAt: updatedAt(),
+});

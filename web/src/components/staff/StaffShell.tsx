@@ -1,6 +1,6 @@
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, EllipsisVertical, LogOut, Menu, Users, X } from "lucide-react";
+import { ArrowLeft, EllipsisVertical, LogOut, Menu, Settings, Users, X } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import {
   DropdownMenu,
@@ -67,6 +67,7 @@ function Sidebar({ viewer }: { viewer: Viewer }) {
       </div>
       <nav aria-label="Staff console" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2.5 pt-1">
         <NavItem to="/staff" icon={<Users />} label="Users" current={pathname === "/staff" || pathname.startsWith("/staff/users")} />
+        <NavItem to="/staff/settings" icon={<Settings />} label="Settings" current={pathname === "/staff/settings"} />
       </nav>
       <div className="flex flex-col gap-px border-t border-sidebar-border p-2.5">
         <NavItem to="/library" icon={<ArrowLeft />} label="Back to app" current={false} />
@@ -117,7 +118,7 @@ function AccountMenu({ viewer }: { viewer: Viewer }) {
   );
 }
 
-function NavItem({ to, icon, label, current }: { to: "/staff" | "/library"; icon: ReactNode; label: string; current: boolean }) {
+function NavItem({ to, icon, label, current }: { to: "/staff" | "/staff/settings" | "/library"; icon: ReactNode; label: string; current: boolean }) {
   return (
     <Link
       to={to}

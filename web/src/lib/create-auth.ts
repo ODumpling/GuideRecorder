@@ -11,6 +11,7 @@ import * as schema from "@/db/schema";
 import { auditBilling, membershipAudit } from "./auth-audit";
 import type { SendEmail } from "./email";
 import { enterprisePlugin } from "./enterprise";
+import { platformPlugin } from "./platform";
 import { ac, roles } from "./permissions";
 import { scimPlugin } from "./scim";
 import { ssoPlugin } from "./sso";
@@ -141,6 +142,7 @@ export function createAuth(deps: AuthDeps) {
       workspaces,
       // Before SCIM: refuses SCIM requests from workspaces without `sso`.
       enterprisePlugin(db),
+      platformPlugin(db),
       ssoPlugin(),
       scimPlugin({ credentialHashSecret: deps.scimTokenSecret ?? deriveSecret(deps.secret, "scim-token") }),
       magicLink({

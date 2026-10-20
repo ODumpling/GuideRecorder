@@ -1,6 +1,6 @@
 import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { authFeatures, getSession } from "@/lib/auth";
+import { authFeatures, getSession, plansOnOffer } from "@/lib/auth";
 import { loadDashboard } from "@/lib/dashboard";
 import { roles, type RoleName } from "@/lib/permissions";
 
@@ -18,6 +18,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
     workspaces,
     active,
     billingEnabled: authFeatures().billing,
+    plansOnOffer: await plansOnOffer(),
     can: {
       invite: can({ invitation: ["create"] }),
       manageMembers: can({ member: ["update"] }),

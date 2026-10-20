@@ -57,6 +57,13 @@
       "when": 1792505312390,
       "tag": "0007_staff",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792513193247,
+      "tag": "0008_platform_settings",
+      "breakpoints": true
     }
   ]
 }
