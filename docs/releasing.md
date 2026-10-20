@@ -1,6 +1,7 @@
 # Releasing and updates
 
-GuideRecorder ships as a signed, notarized universal macOS app on
+GuideRecorder ships as a signed, notarized universal macOS app and a
+Windows installer (not code-signed yet) on
 [GitHub Releases](https://github.com/ODumpling/GuideRecorder/releases).
 Installed apps update themselves from there with Tauri's updater.
 
@@ -42,7 +43,19 @@ The tag starts `.github/workflows/release.yml`, which:
    artifacts, the MCP sidecar), signs it with the Developer ID certificate
    and notarizes it;
 4. creates a **draft** release with GitHub's generated notes, the `.dmg`,
-   `GuideRecorder.app.tar.gz` (+ `.sig`) and `latest.json`.
+   `GuideRecorder.app.tar.gz` (+ `.sig`) and `latest.json`;
+5. then, on Windows, builds `guiderecorder-mcp.exe` and the app with
+   `src-tauri/tauri.windows.release.conf.json` merged in (an NSIS
+   installer that installs for the current user, so it needs no admin
+   rights, plus updater artifacts and the MCP sidecar), and adds the
+   installer (+ `.sig`) to the same draft and its entry to `latest.json`.
+
+The Windows installer is not code-signed, so SmartScreen warns the first
+time it runs ("Windows protected your PC" → **More info** → **Run
+anyway**). Signing it needs a certificate on an HSM or Azure Trusted
+Signing, wired in through `bundle.windows.signCommand` in
+`tauri.windows.release.conf.json`. Updates are verified by the updater key
+either way.
 
 Check the draft, edit the notes if you like, and **publish** it. Only a
 published release is "latest", so apps see the update only then. A version
@@ -116,3 +129,22 @@ the dev Keychain service, apart from the installed release's (see
 [signing.md](signing.md#keychain-dev-and-release-builds-keep-separate-entries)).
 Don't set it here: an ad-hoc signature changes with every build, so the
 release's entries would ask for your password each time.
+
+## A Windows build on your PC
+
+Needs the Rust toolchain, Node with pnpm, and the Visual Studio C++ build
+tools. From the repo root, in Git Bash:
+
+```sh
+cargo build --release -p guiderecorder-mcp
+mkdir -p app/src-tauri/binaries
+cp target/release/guiderecorder-mcp.exe \
+  app/src-tauri/binaries/guiderecorder-mcp-x86_64-pc-windows-msvc.exe
+cd app
+pnpm tauri build --config src-tauri/tauri.windows.release.conf.json \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+The installer lands in `target/release/bundle/nsis/`. The second
+`--config` skips the updater artifacts, which need the updater key; with
+the key set as above, leave it out.

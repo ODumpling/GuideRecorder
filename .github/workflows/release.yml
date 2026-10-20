@@ -1,9 +1,10 @@
 name: Release
 
 # Push a tag vX.Y.Z (after `scripts/version.sh set X.Y.Z` and a commit) to
-# build a signed, notarized universal macOS app and attach it, with the
-# updater's latest.json, to a draft GitHub Release. Publishing the draft is
-# what makes installed apps see the update. The full CI suite must pass first. See docs/releasing.md.
+# build a signed, notarized universal macOS app and a Windows installer
+# (not code-signed yet) and attach them, with the updater's latest.json, to
+# a draft GitHub Release. Publishing the draft is what makes installed apps
+# see the update. The full CI suite must pass first. See docs/releasing.md.
 
 on:
   push:
@@ -113,6 +114,63 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: GuideRecorder ${{ steps.version.outputs.version }}
           releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          includeUpdaterJson: true
+
+  # After macOS, so it adds to the draft that job made and merges its entry
+  # into the same latest.json instead of racing it.
+  windows:
+    name: Windows (x64)
+    needs: macos
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag matches the version
+        id: version
+        run: echo "version=$(scripts/version.sh check "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      # Bundled as a sidecar (`externalBin`), next to the app's executable.
+      - name: Build guiderecorder-mcp
+        run: |
+          cargo build --release --locked -p guiderecorder-mcp
+          mkdir -p app/src-tauri/binaries
+          cp target/release/guiderecorder-mcp.exe \
+            app/src-tauri/binaries/guiderecorder-mcp-x86_64-pc-windows-msvc.exe
+
+      # Not code-signed yet: Windows SmartScreen warns on first run. Signing
+      # goes in tauri.windows.release.conf.json (`bundle.windows.signCommand`).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts; pairs with plugins.updater.pubkey.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tauriScript: pnpm tauri
+          args: --config src-tauri/tauri.windows.release.conf.json
+          tagName: ${{ github.ref_name }}
+          releaseName: GuideRecorder ${{ steps.version.outputs.version }}
           releaseDraft: true
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           includeUpdaterJson: true
