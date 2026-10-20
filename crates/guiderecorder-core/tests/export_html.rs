@@ -586,6 +586,44 @@ fn branding_is_off_by_default_and_validated() {
 }
 
 #[test]
+fn og_image_is_the_chosen_cover_only() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    for mode in [HtmlMode::Document, HtmlMode::Walkthrough] {
+        let opts = HtmlOptions {
+            mode,
+            ..HtmlOptions::default()
+        };
+        let (plain, _) = render(guide, handle, &opts);
+        assert!(!plain.contains("og:image"), "{mode:?}");
+
+        let mut chosen = guide.clone();
+        chosen.cover_step_id = Some(guide.steps().last().unwrap().id);
+        let (html, _) = render(&chosen, handle, &opts);
+        assert_eq!(
+            html.matches("<meta property=\"og:image\" content=\"data:image/png;base64,iVBORw0KGgo")
+                .count(),
+            1,
+            "{mode:?}"
+        );
+        // In the head, and the page is otherwise the same.
+        assert!(html.find("og:image").unwrap() < html.find("</head>").unwrap());
+        assert_eq!(
+            strip_data(&html).replace(
+                "<meta property=\"og:image\" content=\"data:image/png;base64,…\">\n",
+                ""
+            ),
+            strip_data(&plain),
+            "{mode:?}"
+        );
+
+        // A cover whose step is gone is ignored.
+        chosen.cover_step_id = Some(Ulid::new());
+        assert_eq!(render(&chosen, handle, &opts).0, plain, "{mode:?}");
+    }
+}
+
+#[test]
 fn review_details_show_only_when_asked() {
     let fixtures = fixtures();
     let (handle, guide) = &fixtures.guides[0];

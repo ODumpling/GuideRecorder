@@ -357,6 +357,32 @@ fn one_image_per_step_sized_to_the_page() {
 }
 
 #[test]
+fn chosen_cover_follows_the_title_on_its_own_page() {
+    let lib = Synthetic::new();
+    let mut guide = Guide::new("Covered", "en");
+    guide.summary = "A summary".into();
+    guide.intro = "The intro".into();
+    guide.items = vec![step("Click A"), step("Click B")];
+    let plain = lib.export(&guide).text("word/document.xml");
+    assert_eq!(plain.matches("<w:drawing>").count(), 2);
+    assert!(!plain.contains("w:type=\"page\""));
+
+    let mut guide = Guide {
+        id: Ulid::new(),
+        ..guide
+    };
+    guide.cover_step_id = Some(guide.items[1].id());
+    let document = lib.export(&guide).text("word/document.xml");
+    assert_eq!(document.matches("<w:drawing>").count(), 3);
+    assert_eq!(document.matches("w:type=\"page\"").count(), 1);
+    // Title and summary, the cover and its page break, then the intro.
+    let at = |needle: &str| document.find(needle).unwrap();
+    assert!(at("A summary") < at("<w:drawing>"));
+    assert!(at("<w:drawing>") < at("w:type=\"page\""));
+    assert!(at("w:type=\"page\"") < at("The intro"));
+}
+
+#[test]
 fn missing_images_become_placeholders_with_warnings() {
     let lib = Synthetic::new();
     let mut guide = Guide::new("Placeholders", "en");

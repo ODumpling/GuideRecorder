@@ -74,10 +74,16 @@ export function stepCount(guide: Guide): number {
   return guide.items.filter((item) => item.type === "step").length;
 }
 
-/** The first step's image, for the library's thumbnails. */
+/**
+ * The cover's image, for the library's thumbnails: the step the author
+ * chose (`coverStepId`), as its cover options ask (annotations aren't drawn
+ * here), else the first step's image.
+ */
 export function coverImage(guide: Guide): string | null {
-  const step = guide.items.find((item): item is Step => item.type === "step");
-  return step ? shownImage(step) : null;
+  const steps = guide.items.filter((item): item is Step => item.type === "step");
+  const chosen = steps.find((step) => step.id === guide.coverStepId && step.image.full);
+  if (chosen) return guide.coverOptions?.image === "crop" ? (chosen.image.crop ?? chosen.image.full) : chosen.image.full;
+  return steps[0] ? shownImage(steps[0]) : null;
 }
 
 /** Markdown reduced to plain text, for one-line titles. */

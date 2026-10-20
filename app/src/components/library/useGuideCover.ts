@@ -30,7 +30,7 @@ function loadCover(guideId: string, updatedAt: string): Promise<string | null> {
   return cover;
 }
 
-/** A blob URL of the guide's first screenshot, scaled down; null while loading or if it has none. */
+/** A blob URL of the guide's cover (see `guideCover`), scaled down; null while loading or if it has none. */
 export function useGuideCover(guideId: string, updatedAt: string): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {

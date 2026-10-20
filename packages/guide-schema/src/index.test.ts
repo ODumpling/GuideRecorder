@@ -31,6 +31,15 @@ describe("guideSchema", () => {
     expect(guideSchema.safeParse(json).success).toBe(false);
   });
 
+  it("keeps the cover and its options", () => {
+    const json = read(join(fixtures, "Rotate an API key.guiderecorder/guide.json"));
+    json.coverStepId = json.items.find((item: { type: string }) => item.type === "step").id;
+    json.coverOptions = { image: "crop", annotations: true };
+    expect(parseGuide(json)).toEqual(json);
+    json.coverOptions.image = "thumbnail";
+    expect(guideSchema.safeParse(json).success).toBe(false);
+  });
+
   it("parses guide.json text", () => {
     const text = readFileSync(join(fixtures, "Rotate an API key.guiderecorder/guide.json"), "utf8");
     expect(parseGuide(text).title).toBe("Rotate an API key");

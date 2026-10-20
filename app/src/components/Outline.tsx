@@ -1,4 +1,5 @@
-import { lazy, Suspense, useMemo, useState, type DragEvent } from "react";
+import { lazy, Suspense, useMemo, useState, type DragEvent, type MouseEvent } from "react";
+import { Menu } from "@tauri-apps/api/menu";
 import {
   ArrowDown,
   ArrowLeft,
@@ -17,10 +18,10 @@ import { aiStore, useAi } from "@/ai/ai";
 import { BUSY_HINT } from "@/ai/controller";
 import { StepStatusBadge, useAiBlocked } from "@/ai/WriteWithAi";
 import { Button } from "@guiderecorder/ui/button";
-import { deleteSelected } from "@/editor/actions";
+import { changeCover, deleteSelected, toggleCover } from "@/editor/actions";
 import { Input } from "@guiderecorder/ui/input";
 import { useStepThumbnail } from "@/components/useStepThumbnail";
-import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
+import { coverOptions, coverStepId, dropTarget, moveItem, renameGuide } from "@/editor/commands";
 import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
 import type { Item, Step } from "@guiderecorder/guide-schema";
 import { cn } from "@guiderecorder/ui/utils";
@@ -76,6 +77,59 @@ function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
 }
 
 /**
+ * The native context menu of a step in the outline: Set as Cover (or
+ * Remove as Cover) and, on the cover, how it is drawn. Each is one undoable
+ * change.
+ */
+async function showStepMenu(event: MouseEvent, step: Step, page: boolean) {
+  event.preventDefault();
+  const { doc } = editorStore.getState();
+  if (!doc || doc.readOnly) return;
+  const isCover = coverStepId(doc.guide) === step.id;
+  const options = coverOptions(doc.guide);
+  const noun = page ? "Page" : "Step";
+  try {
+    const menu = await Menu.new({
+      items: [
+        {
+          id: "toggle-cover",
+          text: isCover ? "Remove as Cover" : "Set as Cover",
+          enabled: !!step.image.full,
+          action: () => toggleCover(editorStore, step.id),
+        },
+        ...(isCover
+          ? [
+              { item: "Separator" as const },
+              {
+                id: "cover-close-up",
+                text: "Cover Shows the Close-up",
+                checked: options.image === "crop",
+                enabled: !!step.image.crop,
+                action: () => changeCover(editorStore, { image: "crop" }),
+              },
+              {
+                id: "cover-full",
+                text: "Cover Shows the Full Screenshot",
+                checked: options.image === "full",
+                action: () => changeCover(editorStore, { image: "full" }),
+              },
+              {
+                id: "cover-annotations",
+                text: `Draw the ${noun}'s Annotations on the Cover`,
+                checked: options.annotations,
+                action: () => changeCover(editorStore, { annotations: !options.annotations }),
+              },
+            ]
+          : []),
+      ],
+    });
+    await menu.popup();
+  } catch (error) {
+    console.error("step menu failed:", error);
+  }
+}
+
+/**
  * Regenerates the guide details (title, intro, prerequisites, summary,
  * tags), edited or not, as one undoable change.
  */
@@ -105,6 +159,7 @@ export function Outline() {
   // Annotation guides have pages, which AI doesn't write.
   const annotated = guide.kind === "annotated";
   const numbers = useMemo(() => stepNumbers(guide.items), [guide.items]);
+  const cover = coverStepId(guide);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
@@ -198,6 +253,7 @@ export function Outline() {
             <button
               type="button"
               onClick={() => select(item.id)}
+              onContextMenu={item.type === "step" && !readOnly ? (e) => void showStepMenu(e, item, annotated) : undefined}
               onKeyDown={(e) => {
                 if (readOnly || (e.key !== "Delete" && e.key !== "Backspace")) return;
                 e.preventDefault();
@@ -238,6 +294,14 @@ export function Outline() {
               <span className={cn(item.type === "step" ? "line-clamp-2 leading-snug" : "truncate")}>
                 {itemLabel(item, annotated)}
               </span>
+              {item.id === cover && (
+                <span
+                  className="shrink-0 rounded-full bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                  title={`This ${annotated ? "page" : "step"}'s screenshot is the guide's cover`}
+                >
+                  Cover
+                </span>
+              )}
               {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
             </button>
             {!readOnly && (

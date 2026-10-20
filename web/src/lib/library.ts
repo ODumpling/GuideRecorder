@@ -41,7 +41,7 @@ export interface LibraryGuide {
   reviewDue: string | null;
   review: ReviewState;
   steps: number;
-  /** The first step's screenshot (an asset's sha256), for its card. */
+  /** The cover step's screenshot (an asset's sha256), for its card: the step the author chose (`coverStepId`), else the first. */
   cover: string | null;
   /** When the head revision was made. */
   updatedAt: string;
@@ -128,7 +128,7 @@ export async function library(
       steps: sql<number>`jsonb_array_length(jsonb_path_query_array(${json}, '$.items[*] ? (@.type == "step")'))`,
       locked: guide.locked,
       owners: sql<string[]>`array(select ${user.name} from ${guideOwner} join ${user} on ${user.id} = ${guideOwner.userId} join ${member} on ${member.userId} = ${guideOwner.userId} and ${member.organizationId} = ${guideOwner.organizationId} where ${guideOwner.organizationId} = ${guide.organizationId} and ${guideOwner.guideId} = ${guide.id} order by ${guideOwner.createdAt})`,
-      cover: sql<string | null>`(select ${revisionAsset.sha256} from ${revisionAsset} where ${revisionAsset.revisionId} = ${revision.id} and ${revisionAsset.path} = jsonb_path_query_first(${json}, '$.items[*] ? (@.type == "step").image.full') #>> '{}')`,
+      cover: sql<string | null>`(select ${revisionAsset.sha256} from ${revisionAsset} where ${revisionAsset.revisionId} = ${revision.id} and ${revisionAsset.path} = coalesce(jsonb_path_query_first(${json}, '$.items[*] ? (@.type == "step" && @.id == $.coverStepId && @.image.full != "").image.full'), jsonb_path_query_first(${json}, '$.items[*] ? (@.type == "step").image.full')) #>> '{}')`,
     })
     .from(guide)
     .innerJoin(revision, eq(revision.id, readsDrafts(reader.role) ? guide.headRevisionId : guide.publishedRevisionId))

@@ -44,6 +44,13 @@
 //! (including any outside the view) for print, touch and screen readers;
 //! popovers are hidden in print.
 //!
+//! # Cover
+//!
+//! When the author chose a cover ([`RenderGuide::cover`]), both page kinds
+//! carry it as an `og:image` meta tag: a PNG data URI at most
+//! [`OG_IMAGE_WIDTH`] wide, so the file still makes no requests. Without
+//! one there is no tag.
+//!
 //! # Branding
 //!
 //! [`CheckedBranding`] (a logo and an accent colour, shared by every writer)
@@ -71,6 +78,9 @@ pub const GUIDE_FILE: &str = "guide.html";
 /// The Content-Security-Policy of every exported page.
 pub const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; \
                        base-uri 'none'; form-action 'none'";
+
+/// Widest `og:image` cover, in pixels: what link previews show.
+pub const OG_IMAGE_WIDTH: u32 = 1200;
 
 const TEMPLATE: &str = include_str!("templates/guide.html.j2");
 const STYLE: &str = include_str!("templates/style.css");
@@ -218,6 +228,7 @@ pub fn render_string(
         language => language_tag(&guide.language),
         csp => CSP,
         title => &guide.title,
+        og_image => og_image(guide, handle, &opts.image),
         summary => &guide.summary,
         details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
         css => Value::from_safe_string(stylesheet(branding)),
@@ -233,6 +244,26 @@ pub fn render_string(
 
     let env = environment("guide.html", TEMPLATE)?;
     Ok((render_template(&env, "guide.html", ctx)?, report))
+}
+
+/// The chosen cover ([`RenderGuide::cover`]) as a PNG data URI for the
+/// `og:image` meta tag, at most [`OG_IMAGE_WIDTH`] wide; `None` without one.
+/// Its warnings are left out: the step reports its own.
+pub(super) fn og_image(
+    guide: &RenderGuide,
+    handle: &GuideHandle,
+    image: &ImageOptions,
+) -> Option<Value> {
+    let cover = guide.cover.as_ref()?;
+    let max_width = image
+        .max_width
+        .map_or(OG_IMAGE_WIDTH, |max| max.min(OG_IMAGE_WIDTH));
+    let opts = ImageOptions {
+        max_width: Some(max_width),
+        ..image.clone()
+    };
+    let png = cover.image(handle, &opts).png;
+    Some(Value::from_safe_string(data_uri("image/png", &png)))
 }
 
 /// A template environment with HTML auto-escaping and `template` added as

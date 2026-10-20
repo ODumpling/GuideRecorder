@@ -187,6 +187,23 @@
       text(size: 14pt, fill: muted, data.summary)
     }
   ]
+  // The chosen cover, sized as step images are, with its own height cap.
+  if data.cover != none {
+    v(1.5em)
+    let (w, h) = (data.cover.width * 0.75pt, data.cover.height * 0.75pt)
+    layout(size => {
+      let width = calc.min(w, size.width)
+      let height = width * (h / w)
+      if height > data.max_cover_height * 1pt {
+        height = data.max_cover_height * 1pt
+        width = height * (w / h)
+      }
+      align(center, block(
+        stroke: 0.5pt + luma(210),
+        image(data.cover.path, width: width, height: height),
+      ))
+    })
+  }
   v(1fr)
   if data.date != none {
     text(fill: muted, data.date)

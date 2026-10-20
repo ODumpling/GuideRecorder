@@ -57,7 +57,7 @@ Without `--writable` the server never writes to the library or the index:
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `kind` (`walkthrough` or `annotated`; an annotation guide's steps are its pages), `hotspot_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. Also `owner`, `status`, `version`, `last_reviewed`, `review_interval_months`, `review_due` (null when unset) and `review_overdue`. |
-| `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set), and optionally step screenshots (at most about 5 MB of images). |
+| `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set, and the cover step when one was chosen), and optionally step screenshots (at most about 5 MB of images). |
 | `get_step` | `guide_id`, `step_id`, `image?` (`"crop"`, `"full"` or `"none"`; default `"crop"`) | The step's text, element, keys and screenshot. |
 | `search_steps` | `query`, `limit?` (20, max 100) | Hits with `guide_id`, `guide_title`, `kind`, `item_id`, `step_number`, `title` and `snippet` (matches in `**bold**`). |
 
@@ -117,6 +117,7 @@ listed nor routed.
 | `add_note` | `guide_id`, `body`, `kind?` (`"tip"`, `"warning"` or `"note"`; default `"note"`), `after_id?` or `before_id?` (default: at the end) | `note_id`. |
 | `reorder_items` | `guide_id`, `item_ids` (every item, once, in the new order) | |
 | `add_tags` / `remove_tags` | `guide_id`, `tags` (case-insensitive) | `added` / `removed`, and `tags`. |
+| `set_cover` | `guide_id`, `step_id?` (default: the current cover) or `clear?`, `image?` (`"crop"` or `"full"`), `annotations?` | `cover_step_id` (null: the first screenshot is the cover), `cover_image`, `cover_annotations`. |
 | `create_guide_from_images` | `paths` (absolute; PNG, JPEG or WebP; at most 100), `title?` (default: the first file's name) | `guide_id`, `title`, `folder`, `step_count`, `step_ids`. |
 
 Every edit also returns `guide_id`, `changed` (false when nothing was

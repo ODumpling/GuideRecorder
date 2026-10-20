@@ -14,8 +14,8 @@ use std::fs;
 use guiderecorder_core::export::ast::{Block, Inline};
 use guiderecorder_core::export::blur::{effective_region, Region};
 use guiderecorder_core::export::{
-    render_step_image, ImageOptions, PlacedHotspot, RenderGuide, RenderItem, RenderWarning,
-    RenderedImage,
+    render_cover_image, render_step_image, ImageOptions, PlacedHotspot, RenderGuide, RenderItem,
+    RenderWarning, RenderedImage,
 };
 use guiderecorder_core::library::{
     step_image_path, GuideHandle, Library, PixelBuffer, StepImageVariant,
@@ -750,6 +750,54 @@ fn hotspot_markers_are_drawn_over_redaction() {
         outline[2] > 200 && outline[0] < 60,
         "hotspot outline is blue: {outline:?}"
     );
+}
+
+#[test]
+fn cover_draws_annotations_only_when_asked_and_always_redacts() {
+    let bundle = Bundle::new();
+    let full = screenshot();
+    let crop = imageops::crop_imm(&full, 40, 30, 80, 40).to_image();
+    let boxed = annotation(Shape::Box(rect(20.0, 20.0, 40.0, 30.0)), Default::default());
+    let blur = annotation(
+        Shape::Blur(rect(100.0, 60.0, 50.0, 30.0)),
+        blur_style(BlurMode::Pixelate, 8.0),
+    );
+    let mut step = bundle.step(&full, Some(&crop), None, vec![boxed, blur]);
+    step.image.crop_rect = Some(rect(40.0, 30.0, 80.0, 40.0));
+    let render = |step: &Step, cover: CoverOptions| {
+        render_cover_image(&bundle.handle, step, &cover, &ImageOptions::default())
+    };
+
+    let plain = render(&step, CoverOptions::default());
+    assert_eq!((plain.width, plain.height), (W, H));
+    let plain = decode(&plain);
+    let drawn = decode(&render(
+        &step,
+        CoverOptions {
+            annotations: true,
+            ..CoverOptions::default()
+        },
+    ));
+    // The box's stroke is only drawn when asked; the blur is burned into both.
+    assert_eq!(plain.get_pixel(20, 35), full.get_pixel(20, 35));
+    assert_ne!(drawn.get_pixel(20, 35), full.get_pixel(20, 35));
+    for image in [&plain, &drawn] {
+        assert_ne!(
+            imageops::crop_imm(image, 100, 60, 50, 30).to_image(),
+            imageops::crop_imm(&full, 100, 60, 50, 30).to_image()
+        );
+    }
+
+    // The close-up, whatever the step itself shows.
+    step.image.show = ImageShow::Full;
+    let close_up = render(
+        &step,
+        CoverOptions {
+            image: ImageShow::Crop,
+            annotations: false,
+        },
+    );
+    assert_eq!((close_up.width, close_up.height), (80, 40));
 }
 
 #[test]

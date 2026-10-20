@@ -23,6 +23,9 @@
 //!   text width wide. The accent colours the `Heading1` and `Heading2`
 //!   styles and the left border of neutral notes; tips and warnings keep
 //!   their green and orange, which carry meaning.
+//! - With a chosen cover ([`RenderGuide::cover`]), its image follows the
+//!   title, summary and review details, sized as step images are, and a
+//!   page break ends the cover page.
 //! - The Markdown subset maps to runs: bold, italic, code (monospace on a
 //!   grey background), hyperlinks (real `w:hyperlink` elements with an
 //!   external relationship), hard breaks, and bullet and numbered lists
@@ -69,7 +72,7 @@ use super::ast::{plain_text, Block, Inline};
 pub use super::md::{Branding, CheckedBranding};
 use super::md::{Labels, Logo};
 use super::raster::{render_step_image, ImageOptions};
-use super::render::{RenderGuide, RenderItem, RenderNote, RenderStep};
+use super::render::{RenderCover, RenderGuide, RenderItem, RenderNote, RenderStep};
 use super::report::ExportReport;
 use crate::library::GuideHandle;
 use crate::model::{GuideKind, NoteKind};
@@ -424,6 +427,9 @@ impl<'a> Writer<'a> {
                 .add_run(text_run(&details).size(20).color("595959"));
             self.push(details);
         }
+        if let Some(cover) = &guide.cover {
+            self.cover(cover);
+        }
         self.blocks(&guide.intro, Context::default());
         if !guide.prerequisites.is_empty() {
             let heading = self.labels.prerequisites.clone();
@@ -525,6 +531,25 @@ impl<'a> Writer<'a> {
             .align(AlignmentType::Center)
             .keep_lines(true)
             .add_run(Run::new().add_image(pic));
+        self.push(p);
+    }
+
+    /// The chosen cover under the title, sized as step images are, then a
+    /// page break, so the title, summary and cover make a cover page. Its
+    /// warnings are left out: the step reports its own.
+    fn cover(&mut self, cover: &RenderCover) {
+        let image = cover.image(self.handle, &self.opts.image);
+        let (width, height) = self.display_size(image.width, image.height);
+        let id = self.next_image;
+        self.next_image += 1;
+        let pic = Pic::new_with_dimensions(image.png, image.width, image.height)
+            .id(format!("rIdImage{id}"))
+            .size(width, height);
+        let p = self
+            .paragraph()
+            .align(AlignmentType::Center)
+            .add_run(Run::new().add_image(pic))
+            .add_run(Run::new().add_break(BreakType::Page));
         self.push(p);
     }
 

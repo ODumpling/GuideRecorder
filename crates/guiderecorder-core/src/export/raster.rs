@@ -63,7 +63,9 @@ use resvg::tiny_skia::{IntSize, Pixmap};
 use super::annotate::{self, Layer};
 use super::blur::{self, Region};
 use crate::library::GuideHandle;
-use crate::model::{Annotation, BlurMode, ImageShow, Point, Rect, Shape, Step, SuggestionSource};
+use crate::model::{
+    Annotation, BlurMode, CoverOptions, ImageShow, Point, Rect, Shape, Step, SuggestionSource,
+};
 
 /// How to render a step image.
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +257,30 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
     let mut image = encode(&pixmap, warnings, hotspots);
     image.point = point;
     image
+}
+
+/// Renders `step` as a guide's cover, as `cover` asks: its close-up or full
+/// screenshot (overriding `opts.show`), with or without its annotations.
+/// Without them, blur and pixelation are still burned in and a crop
+/// annotation still cuts the view; hotspot markers follow `cover` too.
+pub fn render_cover_image(
+    handle: &GuideHandle,
+    step: &Step,
+    cover: &CoverOptions,
+    opts: &ImageOptions,
+) -> RenderedImage {
+    let opts = ImageOptions {
+        show: Some(cover.image),
+        hotspot_markers: opts.hotspot_markers && cover.annotations,
+        ..opts.clone()
+    };
+    if cover.annotations {
+        return render_step_image(handle, step, &opts);
+    }
+    let mut bare = step.clone();
+    bare.annotations
+        .retain(|a| matches!(a.shape, Shape::Blur(_) | Shape::Crop(_)));
+    render_step_image(handle, &bare, &opts)
 }
 
 /// Whether [`redacted_image`] changes anything for `step`: it has a blur
