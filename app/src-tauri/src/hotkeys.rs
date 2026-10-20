@@ -10,7 +10,7 @@
 
 use std::sync::Mutex;
 
-use guiderecorder_capture::macos::session::Hotkey;
+use guiderecorder_capture::session::Hotkey;
 use serde::Serialize;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Runtime};

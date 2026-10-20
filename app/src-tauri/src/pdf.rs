@@ -12,6 +12,7 @@ use guiderecorder_core::library::MAX_WEBP_DIMENSION;
 use image::RgbaImage;
 
 /// Pixels per PDF point: 144 dpi, sharp on a Retina screen.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const PDF_SCALE: f64 = 2.0;
 
 /// Longest side of a rendered page in pixels, as for image pages; larger
@@ -26,11 +27,15 @@ pub enum PdfError {
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     Unsupported,
     /// Not a PDF CoreGraphics can read.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Unreadable,
     /// Encrypted with a password.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Locked,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     NoPages,
     /// The page (1-based) is missing or has no area.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Page(usize),
 }
 
@@ -50,6 +55,7 @@ impl fmt::Display for PdfError {
 /// per point, scaled down so the longer side is at most [`MAX_PAGE_SIDE`]
 /// (and [`MAX_WEBP_DIMENSION`]), each side at least 1. `None` for a page
 /// without area.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn page_pixels(width: f64, height: f64) -> Option<(u32, u32)> {
     let valid = |side: f64| side.is_finite() && side > 0.0;
     if !valid(width) || !valid(height) {

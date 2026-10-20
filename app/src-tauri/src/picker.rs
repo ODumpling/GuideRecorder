@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use guiderecorder_capture::macos::frames::{
+use guiderecorder_capture::backend::frames::{
     self, CaptureTarget, DisplayInfo, FrameError, WindowInfo,
 };
 use guiderecorder_core::model::{Point, Rect};
