@@ -32,7 +32,7 @@ function Layout({ displays, active }: { displays: CaptureDisplay[]; active: numb
           width={Math.max(d.bounds.width - gap, 1)}
           height={Math.max(d.bounds.height - gap, 1)}
           rx={gap}
-          className={d.displayId === active ? "fill-primary" : "fill-muted-foreground/30"}
+          className={d.displayId === active ? "fill-brand" : "fill-muted-foreground/30"}
         />
       ))}
     </svg>

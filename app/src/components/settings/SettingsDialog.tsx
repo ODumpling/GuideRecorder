@@ -19,7 +19,8 @@ import { cn } from "@guiderecorder/ui/utils";
 
 export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp" | "sync";
 
-const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
+/** The pages, in the sidebar and the command palette. */
+export const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "general", label: "General", icon: SlidersHorizontal },
   { page: "appearance", label: "Appearance", icon: Palette },
   { page: "recording", label: "Recording", icon: Keyboard },

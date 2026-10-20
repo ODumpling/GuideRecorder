@@ -3,7 +3,7 @@ import { BookOpen, Camera, ChevronRight, Folder, FolderPlus, Target, TriangleAle
 import { NavHeading, STATUS_COLORS } from "@/components/library/bits";
 import { askName, showFolderMenu } from "@/components/library/menus";
 import { droppedGuides, guidesAt, isGuideDrag } from "@/components/library/selection";
-import { SyncCard } from "@/components/library/SyncCard";
+import { AccountMenu } from "@/components/library/AccountMenu";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   buildTree,
@@ -293,7 +293,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
           </div>
         )}
       </div>
-      <SyncCard onSettings={onSyncSettings} />
+      <AccountMenu onSettings={onSyncSettings} />
     </nav>
   );
 }

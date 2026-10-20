@@ -211,7 +211,7 @@ scripts/dev-domain.sh setup    # trusts a local CA (mkcert), makes the certifica
 
 Then start it with the "Web" process in [Solo](https://soloterm.com)
 (`solo.yml`), or by hand as in web/README.md. The address the app signs in to
-comes from `app/.env` (release builds: `https://app.guiderecorder.app`) and
+comes from `app/.env` (release builds: `https://gr.dufflebear.dev`) and
 `app/.env.development`; override it in `app/.env.local`.
 
 ### The mobile app

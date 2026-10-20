@@ -80,7 +80,7 @@ export function RegionOverlay({ onFinish }: { onFinish(result: { rect: Rect } | 
         <>
           <div
             aria-label="Selected region"
-            className="pointer-events-none absolute border-2 border-white"
+            className="pointer-events-none absolute border-2 border-brand"
             style={{
               left: rect.x,
               top: rect.y,
@@ -92,7 +92,7 @@ export function RegionOverlay({ onFinish }: { onFinish(result: { rect: Rect } | 
           />
           <span
             aria-label="Region size"
-            className="pointer-events-none absolute rounded bg-black/75 px-1.5 py-0.5 font-mono text-xs text-white tabular-nums"
+            className="pointer-events-none absolute rounded bg-brand px-1.5 py-0.5 font-mono text-xs text-brand-foreground tabular-nums"
             style={{
               left: rect.x,
               // Below the selection, or inside its bottom edge near the screen's.
@@ -107,7 +107,7 @@ export function RegionOverlay({ onFinish }: { onFinish(result: { rect: Rect } | 
       )}
       <p
         role="status"
-        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-lg ${hintAtBottom ? "bottom-[15vh]" : "top-[15vh]"} bg-black/75 px-4 py-2 text-center text-sm text-white shadow-lg`}
+        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-lg ${hintAtBottom ? "bottom-[15vh]" : "top-[15vh]"} border border-border bg-popover px-4 py-2 text-center text-sm text-popover-foreground shadow-lg`}
       >
         {tooSmall
           ? `Too small: drag at least ${MIN_REGION_SIDE} × ${MIN_REGION_SIDE}. Esc to cancel.`

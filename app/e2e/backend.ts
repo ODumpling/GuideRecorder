@@ -142,7 +142,7 @@ export class Backend {
   /** The stored settings (the app's defaults to start with). */
   settings: Settings = {
     version: 2,
-    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic" },
+    general: { library: null, launchAtLogin: false, menuBarIcon: false, onboarded: true, checkForUpdates: true, theme: "arctic", matchSystem: false, lightTheme: "paper", darkTheme: "paperDark", accent: null, density: "comfortable", reduceEffects: false },
     recording: {
       hotkeys: { record: "Ctrl+Alt+R", pause: "Ctrl+Alt+P", manualStep: "Ctrl+Alt+S" },
       captureArea: "display",
@@ -1078,6 +1078,8 @@ export class Backend {
       case "sync_sign_out":
         this.sync.signedIn = false;
         return null;
+      case "sync_open_web":
+        return null;
       case "sync_load_state":
         return this.sync.state;
       case "sync_save_state":
@@ -1100,6 +1102,7 @@ export class Backend {
         const body = args.body as { guideId: string; guide: Guide; assets: Record<string, string> };
         let response: unknown;
         if (path === "/api/auth/organization/list") response = [{ id: "ws1", name: "Acme" }];
+        else if (path === "/api/auth/get-session") response = { user: { id: "u1", name: "Dana Ortiz", email: "dana@example.com" } };
         else if (path.includes("/sync/changes")) response = { changes: [], cursor: "0", hasMore: false };
         else if (path.endsWith("/assets/uploads")) response = { present: ["0".repeat(64)], uploads: [] };
         else if (path.endsWith("/sync/push")) {
