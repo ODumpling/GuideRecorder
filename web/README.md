@@ -26,7 +26,7 @@ pnpm dev                      # https://app.guiderecorder.dev:3000
 
 The desktop app's dev build (`pnpm tauri dev`) signs in to
 `https://app.guiderecorder.dev:3000` (`app/.env.development`); release builds
-to `https://app.guiderecorder.app` (`app/.env`). Override either in
+to `https://gr.dufflebear.dev` (`app/.env`). Override either in
 `app/.env.local`. Without the dev domain set up, the dev server serves
 `http://localhost:3000`; set `BETTER_AUTH_URL` and `VITE_WEB_APP_URL` to it.
 

@@ -68,7 +68,7 @@ uses ships with Expo Go); for your own build, `npx expo run:ios` (Xcode) or
 `npx eas-cli@latest build --profile development --platform ios` (no Xcode).
 
 `pnpm start` signs in to `https://app.guiderecorder.dev:3000`
-(`.env.development`), release builds to `https://app.guiderecorder.app`
+(`.env.development`), release builds to `https://gr.dufflebear.dev`
 (`.env`). A phone can't reach the dev domain unless it trusts the local CA
 and resolves the name; otherwise set `EXPO_PUBLIC_WEB_APP_URL` in
 `.env.local` to an address it can reach (and set the web app's

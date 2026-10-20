@@ -34,11 +34,11 @@ function hue(name: string): number {
 }
 
 /** An owner's initials in a coloured circle; the name on hover. */
-export function Avatar({ name, className }: { name: string; className?: string }) {
+export function Avatar({ name, label = `Owner ${name}`, className }: { name: string; label?: string; className?: string }) {
   return (
     <span
       title={name}
-      aria-label={`Owner ${name}`}
+      aria-label={label}
       className={cn(
         "flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white",
         className,
