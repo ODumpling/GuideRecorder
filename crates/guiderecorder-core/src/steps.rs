@@ -54,6 +54,7 @@ use ulid::Ulid;
 use crate::events::{
     AppRef, CaptureEvent, Key, Modifiers, MouseButton, RawElement, TimedEvent, Timestamp,
 };
+use crate::keyboard::{is_printable_char, KeyPlatform, NamedKey};
 use crate::model::{AiState, Point, Rect, Step, StepImage, StepKind};
 
 /// Replaces anything typed into a secure field. Fixed length, so the
@@ -71,6 +72,10 @@ pub struct StepConfig {
     /// How long after a mouse-up a focus change still counts as the result
     /// of the click, for labelling the clicked element.
     pub focus_settle_ms: u64,
+    /// Whose key codes the trace holds and how its shortcuts are written:
+    /// by default the platform this runs on, which recorded the trace.
+    #[serde(skip)]
+    pub keys: KeyPlatform,
 }
 
 impl Default for StepConfig {
@@ -79,6 +84,7 @@ impl Default for StepConfig {
             typing_idle_ms: 1500,
             drag_threshold: 5.0,
             focus_settle_ms: 300,
+            keys: KeyPlatform::CURRENT,
         }
     }
 }
@@ -376,7 +382,7 @@ impl Detector<'_> {
                 return;
             }
             self.flush_typing();
-            let label = shortcut_label(key, modifiers);
+            let label = self.cfg.keys.shortcut_label(key, modifiers);
             let mut step = self.draft(StepKind::Shortcut, ts);
             step.title = format!("Press {}", bold(&label));
             step.keystrokes = Some(label);
@@ -384,8 +390,9 @@ impl Detector<'_> {
             return;
         }
 
-        match key.code {
-            KEY_RETURN | KEY_KEYPAD_ENTER => {
+        let keys = self.cfg.keys;
+        match keys.named(key.code) {
+            Some(NamedKey::Return) => {
                 if is_repeat {
                     return;
                 }
@@ -394,31 +401,30 @@ impl Detector<'_> {
                     typing.last = ts;
                     self.flush_typing();
                 } else {
-                    let label = "↩".to_owned();
                     let mut step = self.draft(StepKind::Shortcut, ts);
                     step.element = self.focus.clone();
-                    step.title = format!("Press {}", bold("Return"));
-                    step.keystrokes = Some(label);
+                    step.title = format!("Press {}", bold(keys.return_name()));
+                    step.keystrokes = Some(keys.key_name(NamedKey::Return));
                     self.steps.push(step);
                 }
                 return;
             }
-            KEY_ESCAPE => {
+            Some(NamedKey::Escape) => {
                 if is_repeat {
                     return;
                 }
                 self.flush_typing();
                 let mut step = self.draft(StepKind::Shortcut, ts);
                 step.title = format!("Press {}", bold("Esc"));
-                step.keystrokes = Some("⎋".to_owned());
+                step.keystrokes = Some(keys.key_name(NamedKey::Escape));
                 self.steps.push(step);
                 return;
             }
-            KEY_TAB => {
+            Some(NamedKey::Tab) => {
                 self.end_run();
                 return;
             }
-            KEY_DELETE => {
+            Some(NamedKey::Backspace) => {
                 if let Some(typing) = &mut self.typing {
                     typing.text.pop();
                     typing.last = ts;
@@ -475,12 +481,12 @@ impl Detector<'_> {
             // Everything typed was deleted again: only the Return remains.
             step.at = typing.last;
             step.kind = StepKind::Shortcut;
-            step.title = format!("Press {}", bold("Return"));
-            step.keystrokes = Some("↩".to_owned());
+            step.title = format!("Press {}", bold(self.cfg.keys.return_name()));
+            step.keystrokes = Some(self.cfg.keys.key_name(NamedKey::Return));
             self.steps.push(step);
             return;
         }
-        step.title = type_title(&step, &shown, typing.submitted);
+        step.title = type_title(&step, &shown, typing.submitted, self.cfg.keys);
         step.keystrokes = Some(shown);
         self.steps.push(step);
         if !typing.secure {
@@ -515,7 +521,7 @@ impl Detector<'_> {
         let step = &mut self.steps[last.index];
         step.element = Some(el.clone());
         step.point = el.frame.map(center);
-        step.title = type_title(step, SECURE_MASK, last.submitted);
+        step.title = type_title(step, SECURE_MASK, last.submitted, self.cfg.keys);
         step.keystrokes = Some(SECURE_MASK.to_owned());
     }
 
@@ -538,7 +544,9 @@ impl Detector<'_> {
             return;
         }
 
-        let (kind, verb, modifiers) = click_verb(press.button, press.click_count, press.modifiers);
+        let keys = self.cfg.keys;
+        let (kind, verb, modifiers) =
+            click_verb(press.button, press.click_count, press.modifiers, keys);
         let right = kind == StepKind::RightClick;
 
         // Later presses of a multi-click merge into the step of the first.
@@ -557,7 +565,7 @@ impl Detector<'_> {
                     if last.element.is_none() {
                         last.element = element;
                     }
-                    last.title = click_title(last, verb, modifiers);
+                    last.title = click_title(last, verb, modifiers, keys);
                     return;
                 }
             }
@@ -566,7 +574,7 @@ impl Detector<'_> {
         let mut step = self.draft(kind, press.at);
         step.point = Some(press.point);
         step.element = element;
-        step.title = click_title(&step, verb, modifiers);
+        step.title = click_title(&step, verb, modifiers, keys);
         self.steps.push(step);
     }
 
@@ -627,14 +635,18 @@ impl Detector<'_> {
 /// A press's step kind, its verb ("Click", "Right-click", "Double-click",
 /// "Triple-click") and the modifiers to show with it. A triple click keeps
 /// kind DoubleClick (the model has no TripleClick) and is told apart only
-/// by its title. Control turns a left click into a right click, and is then
-/// not shown twice.
+/// by its title. On a Mac, control turns a left click into a right click,
+/// and is then not shown twice.
 fn click_verb(
     button: MouseButton,
     click_count: u32,
     modifiers: Modifiers,
+    keys: KeyPlatform,
 ) -> (StepKind, &'static str, Modifiers) {
-    let right = button == MouseButton::Right || (button == MouseButton::Left && modifiers.control);
+    let right = button == MouseButton::Right
+        || (button == MouseButton::Left
+            && modifiers.control
+            && keys.control_click_is_right_click());
     let (kind, verb) = if right {
         (StepKind::RightClick, "Right-click")
     } else if click_count >= 3 {
@@ -658,15 +670,16 @@ fn click_verb(
 /// What took a screenshot while recording, reduced to what a provisional
 /// title needs (see [`LiveAction::title`]). Holds no typed text: a key is
 /// read before the session knows whether its field is secure, so only a
-/// ⌘ or ⌃ shortcut, Return and Esc keep their key.
+/// ⌘ or ⌃ (Win or Ctrl) shortcut, Return and Esc keep their key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveAction {
     /// A press: its verb ("Click", "Double-click", …) with the held
-    /// modifiers, e.g. "⌘-click".
+    /// modifiers, e.g. "⌘-click" or "Ctrl+click".
     Click {
         verb: String,
     },
-    /// A shortcut, Return or Esc, by its label ("⌘S", "Return").
+    /// A shortcut, Return or Esc, by its label ("⌘S", "Return", "Ctrl+S",
+    /// "Enter").
     Press {
         label: String,
     },
@@ -677,8 +690,14 @@ pub enum LiveAction {
 
 impl LiveAction {
     /// The action of an event that can take a snapshot (a press, a key, a
-    /// manual step); `None` for any other.
+    /// manual step); `None` for any other. Keys are read as this
+    /// platform's ([`KeyPlatform::CURRENT`]).
     pub fn of(event: &CaptureEvent) -> Option<Self> {
+        Self::of_on(event, KeyPlatform::CURRENT)
+    }
+
+    /// [`LiveAction::of`], with keys read as `keys`'.
+    pub fn of_on(event: &CaptureEvent, keys: KeyPlatform) -> Option<Self> {
         Some(match event {
             CaptureEvent::MouseDown {
                 button,
@@ -686,29 +705,25 @@ impl LiveAction {
                 modifiers,
                 ..
             } => {
-                let (_, verb, modifiers) = click_verb(*button, *click_count, *modifiers);
-                let held = modifier_symbols(modifiers);
-                let verb = if held.is_empty() {
-                    verb.to_owned()
-                } else {
-                    format!("{held}-{}", verb.to_lowercase())
-                };
-                Self::Click { verb }
+                let (_, verb, modifiers) = click_verb(*button, *click_count, *modifiers, keys);
+                Self::Click {
+                    verb: with_click_prefix(verb, modifiers, keys),
+                }
             }
             CaptureEvent::KeyDown { key, modifiers, .. } => {
                 if modifiers.command || modifiers.control {
                     Self::Press {
-                        label: shortcut_label(key, *modifiers),
+                        label: keys.shortcut_label(key, *modifiers),
                     }
                 } else if modifiers.option {
                     // Option types characters on many layouts.
                     Self::Type
                 } else {
-                    match key.code {
-                        KEY_RETURN | KEY_KEYPAD_ENTER => Self::Press {
-                            label: "Return".to_owned(),
+                    match keys.named(key.code) {
+                        Some(NamedKey::Return) => Self::Press {
+                            label: keys.return_name().to_owned(),
                         },
-                        KEY_ESCAPE => Self::Press {
+                        Some(NamedKey::Escape) => Self::Press {
                             label: "Esc".to_owned(),
                         },
                         _ => Self::Type,
@@ -751,7 +766,7 @@ pub fn plain_title(text: &str) -> String {
     escape(text)
 }
 
-fn type_title(step: &DraftStep, shown: &str, submitted: bool) -> String {
+fn type_title(step: &DraftStep, shown: &str, submitted: bool, keys: KeyPlatform) -> String {
     let mut title = format!("Type {}", code_span(shown));
     match (step.label(), step.app_name()) {
         (Some(label), _) => title.push_str(&format!(" into {}", bold(label))),
@@ -759,18 +774,13 @@ fn type_title(step: &DraftStep, shown: &str, submitted: bool) -> String {
         (None, None) => {}
     }
     if submitted {
-        title.push_str(&format!(" and press {}", bold("Return")));
+        title.push_str(&format!(" and press {}", bold(keys.return_name())));
     }
     title
 }
 
-fn click_title(step: &DraftStep, verb: &str, modifiers: Modifiers) -> String {
-    let held = modifier_symbols(modifiers);
-    let verb = if held.is_empty() {
-        verb.to_owned()
-    } else {
-        format!("{held}-{}", verb.to_lowercase())
-    };
+fn click_title(step: &DraftStep, verb: &str, modifiers: Modifiers, keys: KeyPlatform) -> String {
+    let verb = with_click_prefix(verb, modifiers, keys);
     match (step.label(), step.app_name()) {
         (Some(label), Some(app)) => format!("{verb} {} in {}", bold(label), escape(app)),
         (Some(label), None) => format!("{verb} {}", bold(label)),
@@ -779,79 +789,15 @@ fn click_title(step: &DraftStep, verb: &str, modifiers: Modifiers) -> String {
     }
 }
 
-const KEY_RETURN: u16 = 36;
-const KEY_TAB: u16 = 48;
-const KEY_SPACE: u16 = 49;
-const KEY_DELETE: u16 = 51;
-const KEY_ESCAPE: u16 = 53;
-const KEY_KEYPAD_ENTER: u16 = 76;
-
-fn modifier_symbols(m: Modifiers) -> String {
-    let mut out = String::new();
-    for (held, symbol) in [
-        (m.control, '⌃'),
-        (m.option, '⌥'),
-        (m.shift, '⇧'),
-        (m.command, '⌘'),
-    ] {
-        if held {
-            out.push(symbol);
-        }
+/// `verb` ("Click") with the held modifiers before it: "⌘-click",
+/// "Ctrl+click".
+fn with_click_prefix(verb: &str, modifiers: Modifiers, keys: KeyPlatform) -> String {
+    let held = keys.click_prefix(modifiers);
+    if held.is_empty() {
+        verb.to_owned()
+    } else {
+        format!("{held}{}", verb.to_lowercase())
     }
-    out
-}
-
-/// `⌘S`, `⌃⌥⇧⌘↩` and so on, in macOS menu order.
-fn shortcut_label(key: &Key, modifiers: Modifiers) -> String {
-    let name = match key.code {
-        KEY_RETURN | KEY_KEYPAD_ENTER => "↩".to_owned(),
-        KEY_TAB => "⇥".to_owned(),
-        KEY_SPACE => "Space".to_owned(),
-        KEY_DELETE => "⌫".to_owned(),
-        KEY_ESCAPE => "⎋".to_owned(),
-        117 => "⌦".to_owned(),
-        123 => "←".to_owned(),
-        124 => "→".to_owned(),
-        125 => "↓".to_owned(),
-        126 => "↑".to_owned(),
-        115 => "Home".to_owned(),
-        119 => "End".to_owned(),
-        116 => "Page Up".to_owned(),
-        121 => "Page Down".to_owned(),
-        code => function_key(code).map(str::to_owned).unwrap_or_else(|| {
-            key.characters_ignoring_modifiers
-                .as_deref()
-                .or(key.characters.as_deref())
-                .filter(|s| is_printable(s))
-                .map(str::to_uppercase)
-                .unwrap_or_else(|| format!("Key {code}"))
-        }),
-    };
-    format!("{}{name}", modifier_symbols(modifiers))
-}
-
-fn function_key(code: u16) -> Option<&'static str> {
-    Some(match code {
-        122 => "F1",
-        120 => "F2",
-        99 => "F3",
-        118 => "F4",
-        96 => "F5",
-        97 => "F6",
-        98 => "F7",
-        100 => "F8",
-        101 => "F9",
-        109 => "F10",
-        103 => "F11",
-        111 => "F12",
-        _ => return None,
-    })
-}
-
-/// Text a key inserts: no control characters and no AppKit function-key
-/// characters (U+F700..U+F8FF).
-fn is_printable(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(is_printable_char)
 }
 
 /// The printable part of the text a key inserts: control and function-key
@@ -859,10 +805,6 @@ fn is_printable(s: &str) -> bool {
 /// "a\tb" as one key).
 fn printable(s: &str) -> String {
     s.chars().filter(|&c| is_printable_char(c)).collect()
-}
-
-fn is_printable_char(c: char) -> bool {
-    !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c)
 }
 
 fn distance(a: Point, b: Point) -> f64 {
@@ -926,6 +868,19 @@ mod tests {
     use super::*;
     use crate::markdown;
 
+    /// The default config, reading keys as a Mac's: the traces and the
+    /// key codes below were recorded on one.
+    fn mac() -> StepConfig {
+        StepConfig {
+            keys: KeyPlatform::Mac,
+            ..StepConfig::default()
+        }
+    }
+
+    fn of(event: &CaptureEvent) -> Option<LiveAction> {
+        LiveAction::of_on(event, KeyPlatform::Mac)
+    }
+
     fn trace(name: &str) -> Vec<TimedEvent> {
         let path = format!("{}/testdata/traces/{name}.json", env!("CARGO_MANIFEST_DIR"));
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -933,7 +888,7 @@ mod tests {
     }
 
     fn detect(name: &str) -> Vec<DraftStep> {
-        let steps = detect_steps(&trace(name), &StepConfig::default());
+        let steps = detect_steps(&trace(name), &mac());
         for step in &steps {
             assert_eq!(
                 markdown::normalize(&step.title),
@@ -1148,7 +1103,7 @@ mod tests {
         secure_focus.retain(|ev| ev.ts.0 == 7120 * MS);
         events.extend([click(7080, false), click(7100, true)]);
         events.extend(secure_focus);
-        let steps = detect_steps(&events, &StepConfig::default());
+        let steps = detect_steps(&events, &mac());
         let typed = &steps[steps.len() - 2];
         assert_eq!(typed.keystrokes.as_deref(), Some("zq"));
         assert_eq!(steps.last().unwrap().kind, StepKind::Click);
@@ -1165,7 +1120,7 @@ mod tests {
         }
         let cfg = StepConfig {
             focus_settle_ms: 100,
-            ..Default::default()
+            ..mac()
         };
         let steps = detect_steps(&events, &cfg);
         assert_eq!(steps[3].keystrokes.as_deref(), Some("zq9"));
@@ -1200,7 +1155,7 @@ mod tests {
         let events = trace("typing");
         let mut shuffled = events.clone();
         shuffled.reverse();
-        let cfg = StepConfig::default();
+        let cfg = mac();
         assert_eq!(detect_steps(&shuffled, &cfg), detect_steps(&events, &cfg));
     }
 
@@ -1242,7 +1197,7 @@ mod tests {
                 },
             ),
         ];
-        let steps = detect_steps(&events, &StepConfig::default());
+        let steps = detect_steps(&events, &mac());
         assert_eq!(steps[0].title, "Click in \\*Odd\\* App\\_");
         assert_eq!(markdown::normalize(&steps[0].title), steps[0].title);
     }
@@ -1318,7 +1273,7 @@ mod tests {
         let events = trace("typing");
         let cfg = StepConfig {
             typing_idle_ms: 60_000,
-            ..Default::default()
+            ..mac()
         };
         let steps = detect_steps(&events, &cfg);
         assert!(steps
@@ -1328,7 +1283,7 @@ mod tests {
 
     #[test]
     fn empty_trace() {
-        assert!(detect_steps(&[], &StepConfig::default()).is_empty());
+        assert!(detect_steps(&[], &mac()).is_empty());
     }
 
     #[test]
@@ -1348,16 +1303,16 @@ mod tests {
             control: true,
             ..Modifiers::default()
         };
-        let click = LiveAction::of(&down(MouseButton::Left, 1, Modifiers::default())).unwrap();
+        let click = of(&down(MouseButton::Left, 1, Modifiers::default())).unwrap();
         assert_eq!(
             click.title(Some("Submit report"), Some("Safari")),
             "Click **Submit report** in Safari"
         );
         assert_eq!(click.title(Some("  "), Some("Safari")), "Click in Safari");
         assert_eq!(click.title(None, None), "Click");
-        let right = LiveAction::of(&down(MouseButton::Left, 1, ctrl)).unwrap();
+        let right = of(&down(MouseButton::Left, 1, ctrl)).unwrap();
         assert_eq!(right.title(Some("File"), None), "Right-click **File**");
-        let double = LiveAction::of(&down(MouseButton::Left, 2, cmd)).unwrap();
+        let double = of(&down(MouseButton::Left, 2, cmd)).unwrap();
         assert_eq!(
             double.title(None, Some("Finder")),
             "⌘-double-click in Finder"
@@ -1373,16 +1328,16 @@ mod tests {
             is_repeat: false,
             secure: false,
         };
-        let save = LiveAction::of(&key(1, "s", cmd)).unwrap();
+        let save = of(&key(1, "s", cmd)).unwrap();
         assert_eq!(save.title(None, Some("TextEdit")), "Press **⌘S**");
         assert_eq!(
-            LiveAction::of(&key(KEY_RETURN, "\r", Modifiers::default()))
+            of(&key(36, "\r", Modifiers::default()))
                 .unwrap()
                 .title(None, None),
             "Press **Return**"
         );
         // Typed text never shows: the field may turn out to be secure.
-        let typed = LiveAction::of(&key(0, "p", Modifiers::default())).unwrap();
+        let typed = of(&key(0, "p", Modifiers::default())).unwrap();
         assert_eq!(typed, LiveAction::Type);
         assert_eq!(typed.title(None, Some("Notes")), "Type in Notes");
         assert_eq!(
@@ -1393,18 +1348,15 @@ mod tests {
             option: true,
             ..Modifiers::default()
         };
+        assert_eq!(of(&key(37, "@", option)), Some(LiveAction::Type));
         assert_eq!(
-            LiveAction::of(&key(37, "@", option)),
-            Some(LiveAction::Type)
-        );
-        assert_eq!(
-            LiveAction::of(&CaptureEvent::ManualStep)
+            of(&CaptureEvent::ManualStep)
                 .unwrap()
                 .title(Some("x"), Some("y")),
             "Manual step"
         );
         assert_eq!(
-            LiveAction::of(&CaptureEvent::FlagsChanged {
+            of(&CaptureEvent::FlagsChanged {
                 modifiers: Modifiers::default()
             }),
             None
@@ -1418,6 +1370,86 @@ mod tests {
         assert_eq!(
             markdown::to_plain_text(&plain_title("Click **Submit**")),
             "Click **Submit**"
+        );
+    }
+
+    #[test]
+    fn windows_keys_and_clicks_read_as_windows_writes_them() {
+        let win = StepConfig {
+            keys: KeyPlatform::Windows,
+            ..StepConfig::default()
+        };
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let key = |ms: u64, code: u16, chars: &str, base: &str, modifiers| TimedEvent {
+            ts: Timestamp(ms * MS),
+            event: CaptureEvent::KeyDown {
+                key: Key {
+                    code,
+                    characters: Some(chars.into()),
+                    characters_ignoring_modifiers: Some(base.into()),
+                },
+                modifiers,
+                is_repeat: false,
+                secure: false,
+            },
+        };
+        let press = |ms: u64, modifiers| {
+            let point = Point { x: 5.0, y: 5.0 };
+            [
+                TimedEvent {
+                    ts: Timestamp(ms * MS),
+                    event: CaptureEvent::MouseDown {
+                        point,
+                        button: MouseButton::Left,
+                        click_count: 1,
+                        modifiers,
+                        element: None,
+                    },
+                },
+                TimedEvent {
+                    ts: Timestamp((ms + 50) * MS),
+                    event: CaptureEvent::MouseUp {
+                        point,
+                        button: MouseButton::Left,
+                        click_count: 1,
+                        modifiers,
+                    },
+                },
+            ]
+        };
+        let mut events = vec![
+            key(0, 0x48, "h", "h", Modifiers::default()),
+            key(100, 0x49, "i", "i", Modifiers::default()),
+            // VK_RETURN: 36 would be VK_HOME.
+            key(200, 0x0D, "\r", "\r", Modifiers::default()),
+            // Ctrl types a control character; the label reads the base key.
+            key(3000, 0x53, "\u{13}", "s", ctrl),
+        ];
+        events.extend(press(5000, ctrl));
+        let steps = detect_steps(&events, &win);
+        assert_eq!(
+            summary(&steps),
+            vec![
+                (StepKind::Type, 0, "Type `hi` and press **Enter**"),
+                (StepKind::Shortcut, 3000 * MS, "Press **Ctrl+S**"),
+                // Control does not make a right click on Windows.
+                (StepKind::Click, 5000 * MS, "Ctrl+click"),
+            ]
+        );
+        assert_eq!(
+            LiveAction::of_on(&events[3].event, KeyPlatform::Windows),
+            Some(LiveAction::Press {
+                label: "Ctrl+S".into()
+            })
+        );
+        assert_eq!(
+            LiveAction::of_on(&events[2].event, KeyPlatform::Windows)
+                .unwrap()
+                .title(None, None),
+            "Press **Enter**"
         );
     }
 

@@ -9,6 +9,7 @@ pub mod events;
 pub mod export;
 pub mod history;
 pub mod index;
+pub mod keyboard;
 pub mod library;
 pub mod markdown;
 pub mod migrate;
