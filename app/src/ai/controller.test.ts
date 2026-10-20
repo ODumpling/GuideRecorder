@@ -52,6 +52,8 @@ async function setup({
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
+    saveVersion: vi.fn(async () => ({ id: "V1", createdAt: "", reason: "manual" as const, title: "", stepCount: 0, updatedAt: "" })),
+    restoreVersion: vi.fn(async () => guide()),
     quit: vi.fn(async () => {}),
     cancelQuit: vi.fn(async () => {}),
   };

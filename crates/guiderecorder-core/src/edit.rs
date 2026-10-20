@@ -24,6 +24,9 @@
 //! a guide whose lock names a running process. A lock left behind by an app
 //! that crashed names a process that is gone, and is ignored.
 //!
+//! Before each write the guide as it was is saved in its version history
+//! ([`crate::history`]), so the user can take an edit back.
+//!
 //! The lock is checked before the guide is read and again just before the
 //! write, and the write is refused if `guide.json` changed in between. An
 //! app opening the guide in the few milliseconds of the write itself can
@@ -36,6 +39,7 @@ use std::io;
 use chrono::Utc;
 use ulid::Ulid;
 
+use crate::history::{self, VersionReason};
 use crate::library::{GuideHandle, Library, LibraryError};
 use crate::model::{AiStatus, Guide, GuideField, GuideStatus, Item, Note, NoteKind};
 
@@ -147,6 +151,13 @@ impl Library {
         })?;
         if current != original {
             return Err(LibraryError::ChangedOnDisk(json).into());
+        }
+        // The guide as it was goes into its history first, so the user can
+        // take the edit back. Best effort: history never blocks an edit.
+        if let Err(e) =
+            history::snapshot(&handle, &loaded.guide, VersionReason::BeforeMcpEdit, None)
+        {
+            eprintln!("guiderecorder: cannot save a version of guide {id}: {e}");
         }
         self.save_to(&handle, &guide)?;
         Ok(Edited {
@@ -760,6 +771,12 @@ mod tests {
         let saved = library.read(&handle.path).unwrap().guide;
         assert_eq!(saved, edited.guide);
         assert_eq!(saved.tags, ["reports", "pdf", "new"]);
+        // Only the change saved a version: the guide as it was before it.
+        let versions = history::list(&handle).unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].reason, VersionReason::BeforeMcpEdit);
+        let before = history::read(&library, &handle, versions[0].id).unwrap();
+        assert_eq!(before.guide.tags, ["reports", "pdf"]);
 
         // A failed edit writes nothing.
         let bytes = fs::read(handle.guide_json()).unwrap();

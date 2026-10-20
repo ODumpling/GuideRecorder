@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use guiderecorder_core::edit::DetailsEdit;
 use guiderecorder_core::export::docx::Paper;
+use guiderecorder_core::history::VersionInfo;
 use guiderecorder_core::model::{Guide, NaiveDate, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Emitter, Runtime, State, WebviewWindow};
@@ -25,6 +26,7 @@ use crate::export::{
     self, with_extension, BrandingRequest, ChosenPaths, ExportPreview, ExportResult, Format,
     MotionRequest,
 };
+use crate::settings::SettingsStore;
 
 /// Runs `f` with the session on the blocking pool.
 async fn with_session<T, F>(cell: State<'_, Arc<SessionCell>>, f: F) -> Result<T>
@@ -61,11 +63,72 @@ pub async fn save_guide(cell: State<'_, Arc<SessionCell>>, guide: Guide) -> Resu
     with_session(cell, move |s| s.save_guide(guide)).await
 }
 
-/// Saves nothing: the editor saves first. Forgets the guide and deletes
-/// step images its saved `guide.json` no longer uses.
+/// Saves nothing: the editor saves first. Forgets the guide, keeps its
+/// saved `guide.json` as a version (pruning the history per the settings)
+/// and deletes step images its saved `guide.json` no longer uses.
 #[tauri::command]
-pub async fn close_guide(cell: State<'_, Arc<SessionCell>>, id: String) -> Result<Vec<String>> {
-    with_session(cell, move |s| s.close_guide(&id)).await
+pub async fn close_guide(
+    cell: State<'_, Arc<SessionCell>>,
+    store: State<'_, Arc<SettingsStore>>,
+    id: String,
+) -> Result<Vec<String>> {
+    let retention = store.get().history.retention();
+    with_session(cell, move |s| s.close_guide(&id, &retention)).await
+}
+
+/// A guide's saved versions, newest first.
+#[tauri::command]
+pub async fn list_versions(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+) -> Result<Vec<VersionInfo>> {
+    with_session(cell, move |s| s.list_versions(&guide_id)).await
+}
+
+/// A guide as one of its versions saved it.
+#[tauri::command]
+pub async fn read_version(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    version_id: String,
+) -> Result<Guide> {
+    with_session(cell, move |s| s.read_version(&guide_id, &version_id)).await
+}
+
+/// Raw WebP bytes of an image as a version saved it.
+#[tauri::command]
+pub async fn version_image(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    version_id: String,
+    path: String,
+) -> Result<Response> {
+    let bytes = with_session(cell, move |s| {
+        s.version_image(&guide_id, &version_id, &path)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Saves an open guide as last saved as a version (the editor saves first).
+#[tauri::command]
+pub async fn save_version(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    label: Option<String>,
+) -> Result<VersionInfo> {
+    with_session(cell, move |s| s.save_version(&guide_id, label)).await
+}
+
+/// Makes a version an open guide's current state (keeping the current one
+/// as a version first) and returns the guide as saved.
+#[tauri::command]
+pub async fn restore_version(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    version_id: String,
+) -> Result<Guide> {
+    with_session(cell, move |s| s.restore_version(&guide_id, &version_id)).await
 }
 
 /// Asks to delete the guide at `path` (named `title` in the prompt), then

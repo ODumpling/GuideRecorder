@@ -32,7 +32,14 @@ LM Studio, in which case nothing leaves your Mac.
      and switch between a close-up crop and the full screenshot;
    - review blurs suggested for sensitive text found in the screenshots
      (see Privacy below);
-   - undo and redo everything; changes save automatically.
+   - undo and redo everything; changes save automatically;
+   - go back to an earlier version in **Version history**: a version is
+     saved when you close the guide, before each **Write with AI** run, before
+     an MCP edit and whenever you click **Save version** (with a name if you
+     like). See what changed as a text diff, preview it with its screenshots,
+     and restore it (the guide as it is now is kept as a version first).
+     Settings → General sets how many versions to keep (50 and 90 days by
+     default; named versions are always kept).
 3. **Let AI write it (optional).** With an API key set, **Write with AI** turns
    the raw steps into clear instructions and writes a title, intro,
    prerequisites, summary and tags. It never overwrites text you have edited
@@ -74,7 +81,8 @@ steps too.
 GuideRecorder is built to be safe to leave running:
 
 - **Local-first.** Guides are ordinary folders on your disk (one
-  `.guiderecorder` folder per guide, holding a `guide.json` and its images),
+  `.guiderecorder` folder per guide, holding a `guide.json`, its images and
+  a `.history/` folder of saved versions),
   so they work with any backup or sync tool. Nothing is uploaded.
 - **Password fields are never recorded.** Keystrokes in secure fields are
   masked before they are stored.

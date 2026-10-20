@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -47,11 +47,35 @@ export interface EditorApi {
   newAnnotatedGuide(): Promise<string | null>;
   /** WebP bytes of an image in the guide's bundle, by bundle-relative path. */
   stepImage(guideId: string, path: string): Promise<ArrayBuffer>;
+  /** Saves the open guide as last saved as a version (even if unchanged). */
+  saveVersion(guideId: string, label: string | null): Promise<VersionInfo>;
+  /**
+   * Makes a version the open guide's current state: keeps the state as
+   * last saved as a version, puts the version's images back, saves its
+   * guide and returns it.
+   */
+  restoreVersion(guideId: string, versionId: string): Promise<Guide>;
   /** Exits the app (after the editor has saved). */
   quit(): Promise<void>;
   /** The quit stays open: a held Dock Quit or logout is cancelled now. */
   cancelQuit(): Promise<void>;
 }
+
+/** A guide's version history (see core's `history` and app/src-tauri/src/editor.rs). */
+export interface HistoryApi {
+  /** The guide's versions, newest first. */
+  list(guideId: string): Promise<VersionInfo[]>;
+  /** The guide as a version saved it. */
+  read(guideId: string, versionId: string): Promise<Guide>;
+  /** WebP bytes of an image as a version saved it, by its path in that version's guide. */
+  image(guideId: string, versionId: string, path: string): Promise<ArrayBuffer>;
+}
+
+export const tauriHistoryApi: HistoryApi = {
+  list: (guideId) => invoke("list_versions", { guideId }),
+  read: (guideId, versionId) => invoke("read_version", { guideId, versionId }),
+  image: async (guideId, versionId, path) => toArrayBuffer(await invoke("version_image", { guideId, versionId, path })),
+};
 
 /**
  * WebP bytes of a library guide's first screenshot, for its card; empty if
@@ -82,6 +106,8 @@ export const tauriApi: EditorApi = {
     }),
   newAnnotatedGuide: () => invoke("new_annotated_guide"),
   stepImage: async (guideId, path) => toArrayBuffer(await invoke("step_image", { guideId, path })),
+  saveVersion: (guideId, label) => invoke("save_version", { guideId, label }),
+  restoreVersion: (guideId, versionId) => invoke("restore_version", { guideId, versionId }),
   quit: () => invoke("quit_app"),
   cancelQuit: () => invoke("quit_cancel"),
 };

@@ -2,6 +2,9 @@
 // feedback while typing. Rust checks again when saving.
 
 export const TYPING_IDLE_MS = { min: 300, max: 10_000 };
+/** Version history retention; 0 is no limit. */
+export const KEEP_VERSIONS = { min: 0, max: 1000 };
+export const KEEP_DAYS = { min: 0, max: 3650 };
 export const AFTER_FRAME_DELAY_MS = { min: 0, max: 3_000 };
 export const MAX_EXCLUDED_APPS = 100;
 /** Limits of the redaction rules (core's `redact::detect`). */

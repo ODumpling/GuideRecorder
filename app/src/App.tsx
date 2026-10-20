@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronRight, FileOutput, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
+import { ChevronRight, FileOutput, History, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
 import { WriteWithAi } from "@/ai/WriteWithAi";
 import { ConflictDialog } from "@/components/ConflictDialog";
 import { ExportDialog } from "@/components/ExportDialog";
+import { HistoryDialog } from "@/components/HistoryDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { Onboarding } from "@/components/Onboarding";
@@ -90,6 +91,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
   const canRedo = useEditor((s) => s.redoStack.length > 0 && !s.doc?.readOnly);
   const { undo, redo } = editorStore.getState();
   const [exporting, setExporting] = useState(false);
+  const [history, setHistory] = useState(false);
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
       {!doc && (
@@ -120,6 +122,14 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
         )}
         {/* AI doesn't write annotation guides. */}
         {doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
+        {doc && (
+          <>
+            <Button variant="ghost" size="icon" aria-label="Version history" title="Version history" onClick={() => setHistory(true)}>
+              <History />
+            </Button>
+            <HistoryDialog open={history} onOpenChange={setHistory} />
+          </>
+        )}
         {doc && (
           <>
             <Button

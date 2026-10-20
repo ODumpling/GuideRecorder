@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
 import type { Guide, GuideKind } from "@guiderecorder/guide-schema";
-import type { DetailsEdit, GuideListItem } from "@/lib/types";
+import type { DetailsEdit, GuideListItem, VersionInfo } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
 import { copyTitle, localToday, type GuideSort, type StatusFilter } from "@/editor/library";
@@ -160,6 +160,18 @@ export interface EditorState {
   applyUntracked(patches: Patch[]): boolean;
   undo(): void;
   redo(): void;
+  /**
+   * Saves the open guide (pending changes first) as a version named
+   * `label` in its history. Null if refused or failed (in `notice`).
+   */
+  saveVersion(label?: string): Promise<VersionInfo | null>;
+  /**
+   * Makes version `versionId` the open guide's current state. Pending
+   * changes are saved first, and the backend keeps the state restored over
+   * as a version, so a restore is undone by restoring that. The undo
+   * history starts over. False if refused or failed (in `notice`).
+   */
+  restoreVersion(versionId: string): Promise<boolean>;
   /**
    * Saves pending changes now and waits for any save in flight. Resolves
    * to false if changes are still unsaved (the save failed).
@@ -792,6 +804,55 @@ export function createEditorStore({
           redoStack: redoStack.slice(0, -1),
           ...selection(entry.command.select?.forward),
         });
+      },
+
+      async saveVersion(label) {
+        const doc = get().doc;
+        if (!doc || doc.readOnly || get().busy) return null;
+        set({ busy: true });
+        try {
+          if (!(await flush())) {
+            get().notify("Could not save a version: the guide's changes could not be saved first.");
+            return null;
+          }
+          return await api.saveVersion(doc.guide.id, label?.trim() || null);
+        } catch (error) {
+          get().notify(`Could not save a version: ${errorMessage(error)}`);
+          return null;
+        } finally {
+          idle();
+        }
+      },
+
+      async restoreVersion(versionId) {
+        const doc = get().doc;
+        if (!doc || doc.readOnly || get().busy) return false;
+        set({ busy: true });
+        try {
+          if (!(await flush())) {
+            get().notify("Could not restore the version: the guide's changes could not be saved first.");
+            return false;
+          }
+          autosave.cancel();
+          const guide = await api.restoreVersion(doc.guide.id, versionId);
+          const current = get().doc;
+          if (current?.guide.id !== guide.id) return false;
+          const { selectedId } = get();
+          const keep = selectedId !== null && guide.items.some((item) => item.id === selectedId);
+          const first = guide.items.find((item) => item.type === "step") ?? guide.items[0];
+          set({
+            doc: { ...current, guide },
+            selectedId: keep ? selectedId : (first?.id ?? null),
+            ...cleanHistory,
+          });
+          return true;
+        } catch (error) {
+          get().notify(`Could not restore the version: ${errorMessage(error)}`);
+          return false;
+        } finally {
+          if (!isSaved()) autosave.schedule();
+          idle();
+        }
       },
 
       flush,
