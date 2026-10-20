@@ -8,19 +8,24 @@ import { getSession } from "@/lib/auth";
 import { findUsers, isStaff, issueLicence, licenceInput, restoreDeletedGuide, revokeLicence, userDetail, type StaffActor } from "@/lib/staff";
 
 /** The signed-in staff member; anyone else gets a 404, so the console's existence doesn't show. */
-async function staffActor(next = "/staff"): Promise<StaffActor & { email: string }> {
+async function staffActor(next = "/staff"): Promise<StaffActor & { email: string; name: string }> {
   const session = await getSession();
   if (!session) throw redirect({ to: "/sign-in", search: { next } });
   if (!(await isStaff(db(), session.user.id))) throw notFound();
-  return { userId: session.user.id, email: session.user.email, ...requestMeta(getRequestHeaders() as unknown as Headers) };
+  return {
+    userId: session.user.id,
+    email: session.user.email,
+    name: session.user.name,
+    ...requestMeta(getRequestHeaders() as unknown as Headers),
+  };
 }
 
 /** The staff member, for the console's frame. */
 export const getStaffViewer = createServerFn({ method: "GET" })
   .validator(z.object({ next: z.string() }))
   .handler(async ({ data }) => {
-    const { userId, email } = await staffActor(data.next);
-    return { id: userId, email };
+    const { userId, email, name } = await staffActor(data.next);
+    return { id: userId, email, name };
   });
 
 export const searchUsers = createServerFn({ method: "GET" })
