@@ -1852,7 +1852,9 @@ pub(crate) mod tests {
         // Saved: the editor's next save goes through.
         session.save_guide(restored.clone()).unwrap();
         // Restoring again keeps the state restored over (the old one).
-        session.restore_version(&id, &versions[0].id.to_string()).unwrap();
+        session
+            .restore_version(&id, &versions[0].id.to_string())
+            .unwrap();
         let versions = session.list_versions(&id).unwrap();
         assert_eq!(versions.len(), 3);
         assert_eq!(versions[0].reason, VersionReason::BeforeRestore);
