@@ -188,6 +188,15 @@ export interface Settings {
     /** Check for updates at startup and every few hours. */
     checkForUpdates: boolean;
     theme: Theme;
+    /** Follow the system's appearance with `lightTheme` and `darkTheme` instead of `theme`. */
+    matchSystem: boolean;
+    lightTheme: Theme;
+    darkTheme: Theme;
+    /** Overrides the theme's accent; `#rgb` or `#rrggbb`. */
+    accent: string | null;
+    density: Density;
+    /** No glow, backdrop blur or card hover animation. */
+    reduceEffects: boolean;
   };
   recording: {
     hotkeys: { record: string; pause: string; manualStep: string };
@@ -259,6 +268,9 @@ export interface VersionInfo {
 
 /** The app's colour theme (Settings → Appearance). */
 export type Theme = "arctic" | "paper" | "paperDark" | "sage" | "steel" | "nebula";
+
+/** How tightly the outline and the library's cards are laid out. */
+export type Density = "comfortable" | "compact";
 
 /** What happens to sensitive text found in a new recording's screenshots. */
 export type RedactionMode = "off" | "suggest" | "apply";

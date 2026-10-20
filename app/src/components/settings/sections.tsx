@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, RotateCw, X } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
@@ -8,9 +8,9 @@ import { allGranted, setupStore } from "@/onboarding/onboarding";
 import { switchLibrary } from "@/settings/library";
 import { FORMATS } from "@/export/export";
 import { errorMessage, tauriExportApi, tauriUpdaterApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
-import type { AiEndpoint, AiProviderKind, CaptureArea, HotkeyErrors, LibraryInfo, McpSetup, Permission, PermissionRow, PermissionStatus, RedactionMode, Settings, Theme, UpdateStatus } from "@/lib/types";
+import type { AiEndpoint, AiProviderKind, CaptureArea, Density, HotkeyErrors, LibraryInfo, McpSetup, Permission, PermissionRow, PermissionStatus, RedactionMode, Settings, Theme, UpdateStatus } from "@/lib/types";
 import { useSettings, settingsStore } from "@/settings/settings";
-import { THEMES } from "@/settings/theme";
+import { adjustAccent, normalHex, systemIsDark, themeBackground, themeFor, THEMES } from "@/settings/theme";
 import { cn } from "@guiderecorder/ui/utils";
 import {
   AFTER_FRAME_DELAY_MS,
@@ -242,44 +242,195 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
   );
 }
 
-/** The colour theme: a card per theme, with a small picture of it. */
+const DENSITIES: { value: Density; label: string }[] = [
+  { value: "comfortable", label: "Comfortable" },
+  { value: "compact", label: "Compact" },
+];
+
+/** The colour theme, Match system, the accent, density and effects. */
 export function AppearanceSection() {
-  const theme = useSettings((s) => s.settings!.general.theme);
+  const general = useSettings((s) => s.settings!.general);
   const readOnly = useSettings((s) => s.readOnly);
-  const choose = (value: Theme) =>
-    void settingsStore.getState().change((s) => ({ ...s, general: { ...s.general, theme: value } }));
+  const change = useChange();
+  const set = (patch: Partial<Settings["general"]>) => change((s) => ({ ...s, general: { ...s.general, ...patch } }));
+  // The accent is checked against each background it can show on.
+  const shownThemes = general.matchSystem ? [general.lightTheme, general.darkTheme] : [general.theme];
+  const adjusted = general.accent
+    ? shownThemes.flatMap((theme) => {
+        const { color, adjusted } = adjustAccent(general.accent!, themeBackground(theme));
+        return adjusted ? [{ theme, color }] : [];
+      })
+    : [];
   return (
     <Section title="Appearance" intro="The colours of GuideRecorder's windows. Exported guides keep their own look.">
-      <div role="radiogroup" aria-label="Theme" className="mt-2 grid grid-cols-3 gap-3">
-        {THEMES.map(({ value, label, swatch: [background, sidebar, accent] }) => (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={theme === value}
+      <Row label="Match system" note="Switch between a light and a dark theme with the system's appearance.">
+        <Toggle label="Match system" checked={general.matchSystem} disabled={readOnly} onChange={(on) => set({ matchSystem: on })} />
+      </Row>
+      {general.matchSystem ? (
+        <>
+          <h3 className="mt-3 text-sm font-medium">Light appearance</h3>
+          <ThemeCards
+            label="Light theme"
+            themes={THEMES.filter((t) => !t.dark)}
+            value={general.lightTheme}
             disabled={readOnly}
-            onClick={() => choose(value)}
-            className={cn(
-              "flex flex-col gap-2 rounded-lg border p-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
-              theme === value ? "border-[var(--status-info)] ring-1 ring-[var(--status-info)]" : "border-border hover:bg-accent/60",
-            )}
-          >
-            <span aria-hidden className="flex h-16 overflow-hidden rounded-md border border-black/10" style={{ background }}>
-              <span className="w-1/4" style={{ background: sidebar }} />
-              <span className="flex flex-1 flex-col justify-end gap-1.5 p-2">
-                <span className="h-1.5 w-3/4 rounded-full opacity-25" style={{ background: accent }} />
-                <span className="h-1.5 w-1/2 rounded-full opacity-25" style={{ background: accent }} />
-                <span className="h-3 w-8 rounded" style={{ background: accent }} />
+            onChange={(lightTheme) => set({ lightTheme })}
+          />
+          <h3 className="mt-4 text-sm font-medium">Dark appearance</h3>
+          <ThemeCards
+            label="Dark theme"
+            themes={THEMES.filter((t) => t.dark)}
+            value={general.darkTheme}
+            disabled={readOnly}
+            onChange={(darkTheme) => set({ darkTheme })}
+          />
+        </>
+      ) : (
+        <ThemeCards label="Theme" themes={THEMES} value={general.theme} disabled={readOnly} onChange={(theme) => set({ theme })} />
+      )}
+      <div className="mt-4 flex flex-col">
+        <Row
+          label="Accent colour"
+          note={
+            adjusted.length > 0 ? (
+              <span className="text-[var(--status-warning)]">
+                Too close to the background to read well; shown as{" "}
+                {adjusted.map(({ theme, color }) => `${color} in ${THEMES.find((t) => t.value === theme)!.label}`).join(" and ")}.
               </span>
-            </span>
-            <span className="flex items-center justify-between gap-1 px-0.5">
-              <span className="font-medium">{label}</span>
-              {theme === value && <Check className="size-4 text-[var(--status-info)]" />}
-            </span>
-          </button>
-        ))}
+            ) : (
+              "Main buttons, the outline selection and annotation handles. Empty: the theme's own."
+            )
+          }
+        >
+          <ColourPicker
+            label="Pick an accent colour"
+            value={(general.accent && normalHex(general.accent)) || themeAccent(themeFor(general, systemIsDark()))}
+            disabled={readOnly}
+            onChange={(accent) => set({ accent })}
+          />
+          <CommitInput
+            label="Accent colour"
+            className="w-28"
+            placeholder="Theme's"
+            value={general.accent ?? ""}
+            valid={isAccent}
+            disabled={readOnly}
+            onCommit={(accent) => set({ accent: accent.trim() || null })}
+          />
+          {general.accent && (
+            <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => set({ accent: null })}>
+              Clear
+            </Button>
+          )}
+        </Row>
+        <Row label="Density" note="Outline row height and the size of the library's cards.">
+          <Select label="Density" value={general.density} options={DENSITIES} disabled={readOnly} onChange={(density) => set({ density })} />
+        </Row>
+        <Row
+          label="Reduce transparency and motion"
+          note="No glow, backdrop blur or card hover animation. Also on when the system asks for less motion or transparency."
+        >
+          <Toggle
+            label="Reduce transparency and motion"
+            checked={general.reduceEffects}
+            disabled={readOnly}
+            onChange={(on) => set({ reduceEffects: on })}
+          />
+        </Row>
       </div>
     </Section>
+  );
+}
+
+/**
+ * The system colour picker. Changes once the picker closes (the native
+ * `change` event), not on every colour passed while dragging.
+ */
+function ColourPicker({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  onChange(value: string): void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const latest = useRef(onChange);
+  latest.current = onChange;
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    const changed = () => latest.current(el.value);
+    el.addEventListener("change", changed);
+    return () => el.removeEventListener("change", changed);
+  }, []);
+  useEffect(() => {
+    if (input.current) input.current.value = value;
+  }, [value]);
+  return (
+    <input
+      ref={input}
+      type="color"
+      aria-label={label}
+      disabled={disabled}
+      defaultValue={value}
+      className="h-8 w-10 cursor-pointer rounded-md border border-input bg-transparent p-0.5 disabled:opacity-50"
+    />
+  );
+}
+
+/** The theme's own accent, for the colour picker's starting point. */
+function themeAccent(theme: Theme): string {
+  return (THEMES.find((t) => t.value === theme) ?? THEMES[0]).swatch[2];
+}
+
+/** A card per theme, with a small picture of it. */
+function ThemeCards({
+  label,
+  themes,
+  value: theme,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  themes: typeof THEMES;
+  value: Theme;
+  disabled: boolean;
+  onChange(theme: Theme): void;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="mt-2 grid grid-cols-3 gap-3">
+      {themes.map(({ value, label, swatch: [background, sidebar, accent] }) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={theme === value}
+          disabled={disabled}
+          onClick={() => onChange(value)}
+          className={cn(
+            "flex flex-col gap-2 rounded-lg border p-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+            theme === value ? "border-[var(--status-info)] ring-1 ring-[var(--status-info)]" : "border-border hover:bg-accent/60",
+          )}
+        >
+          <span aria-hidden className="flex h-16 overflow-hidden rounded-md border border-black/10" style={{ background }}>
+            <span className="w-1/4" style={{ background: sidebar }} />
+            <span className="flex flex-1 flex-col justify-end gap-1.5 p-2">
+              <span className="h-1.5 w-3/4 rounded-full opacity-25" style={{ background: accent }} />
+              <span className="h-1.5 w-1/2 rounded-full opacity-25" style={{ background: accent }} />
+              <span className="h-3 w-8 rounded" style={{ background: accent }} />
+            </span>
+          </span>
+          <span className="flex items-center justify-between gap-1 px-0.5">
+            <span className="font-medium">{label}</span>
+            {theme === value && <Check className="size-4 text-[var(--status-info)]" />}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 

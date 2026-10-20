@@ -186,7 +186,7 @@ export function LibraryGuides({
           ref={grid}
           aria-label="Guides"
           aria-multiselectable
-          className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-5 gap-y-6"
+          className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-5 gap-y-6 compact:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] compact:gap-x-4 compact:gap-y-4"
         >
           {rows.map((guide) => (
             <GuideCard

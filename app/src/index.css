@@ -18,3 +18,27 @@
 .app-backdrop {
   background-image: var(--backdrop, none);
 }
+
+/*
+ * Settings → Appearance, beyond the theme (settings/theme.ts sets these on
+ * <html>). `compact:` is for Compact density; `lively:` for motion that
+ * Reduce transparency and motion, or the system's preference, turns off.
+ */
+@custom-variant compact (&:where([data-density="compact"] *));
+@custom-variant lively (&:where(html:not([data-reduce-effects]) *));
+
+/* Reduce transparency and motion: no glow or texture, no blur, solid panes. */
+html[data-reduce-effects] .app-backdrop {
+  background-image: none;
+}
+html[data-reduce-effects] * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html[data-reduce-effects][data-theme="nebula"] {
+  --sidebar: #16112e;
+  --sidebar-accent: #2a2257;
+  --sidebar-border: #2a2350;
+  --border: #2e2758;
+  --input: #3a3270;
+}
