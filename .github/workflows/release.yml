@@ -3,7 +3,7 @@ name: Release
 # Push a tag vX.Y.Z (after `scripts/version.sh set X.Y.Z` and a commit) to
 # build a signed, notarized universal macOS app and attach it, with the
 # updater's latest.json, to a draft GitHub Release. Publishing the draft is
-# what makes installed apps see the update. See docs/releasing.md.
+# what makes installed apps see the update. The full CI suite must pass first. See docs/releasing.md.
 
 on:
   push:
@@ -19,8 +19,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ci:
+    name: CI (full)
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      full: true
+
   macos:
     name: macOS (universal)
+    needs: ci
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
