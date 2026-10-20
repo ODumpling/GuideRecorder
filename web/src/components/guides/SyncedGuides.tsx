@@ -21,7 +21,12 @@ export function SyncedGuides({ guides, trash, canDelete }: Data) {
 
   return (
     <Card>
-      <h2 className="mb-4 text-lg font-semibold">Guides</h2>
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <h2 className="text-lg font-semibold">Guides</h2>
+        <Link to="/library" className="text-sm text-brand hover:underline">
+          Open the library →
+        </Link>
+      </div>
       {guides.length ? (
         <ul className="divide-y divide-border">
           {guides.map((g) => (

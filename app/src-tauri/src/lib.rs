@@ -11,6 +11,7 @@ mod blocking;
 mod commands;
 mod editor;
 mod export;
+mod feed;
 mod hotkeys;
 mod navigation;
 mod pdf;
@@ -190,6 +191,8 @@ pub fn run() {
             commands::duplicate_guide,
             commands::rename_guide,
             commands::mark_guide_reviewed,
+            commands::edit_guide_details,
+            commands::delete_guides,
             commands::move_guide,
             commands::reveal_in_library,
             commands::step_image,
@@ -203,6 +206,8 @@ pub fn run() {
             commands::choose_export_file,
             commands::choose_logo,
             commands::export_guide,
+            commands::preview_export,
+            commands::logo_preview,
             commands::reveal_export,
             commands::verify_crop,
             settings_commands::get_settings,
@@ -230,6 +235,10 @@ pub fn run() {
             recording::recording_status,
             recording::recording_snapshot,
             recording::add_manual_step,
+            feed::delete_capture,
+            feed::rename_capture,
+            toolbar::resize_toolbar,
+            toolbar::set_toolbar_typing,
             picker::list_capture_windows,
             picker::list_capture_displays,
             picker::pick_region,

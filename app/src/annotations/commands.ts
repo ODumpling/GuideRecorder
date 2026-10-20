@@ -2,7 +2,7 @@
 // whole `annotations` array, so the inverse is exact and order is kept.
 
 import { findStep, PatchError, type Command, type Patch } from "@/editor/commands";
-import type { Annotation, AnnotationStyle, Guide, SuggestionReview } from "@/lib/types";
+import type { Annotation, AnnotationStyle, Guide, SuggestionReview } from "@guiderecorder/guide-schema";
 
 const NAMES: Record<Annotation["type"], string> = {
   arrow: "arrow",

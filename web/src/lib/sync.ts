@@ -14,6 +14,7 @@ import type { z } from "zod";
 import type { Database } from "@/db";
 import { asset, guide, revision, revisionAsset } from "@/db/schema";
 import { roles, type RoleName } from "./permissions";
+import { searchVector } from "./search";
 
 // Desktop ⇄ web sync. Each guide is a chain of immutable revisions; a push
 // adds one on top of the head it was made on, or gets the head back (409) to
@@ -41,7 +42,7 @@ export type PushResult =
 const can = (actor: Actor, action: "read" | "create" | "update" | "delete") => roles[actor.role].authorize({ guide: [action] }).success;
 
 /** Who may see a guide: every member, or only its owner if it's private. */
-const visibleTo = (userId: string) => or(eq(guide.visibility, "workspace"), eq(guide.ownerId, userId));
+export const visibleTo = (userId: string) => or(eq(guide.visibility, "workspace"), eq(guide.ownerId, userId));
 
 async function lockWorkspace(tx: Database, organizationId: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`sync:${organizationId}`}))`);
@@ -132,7 +133,7 @@ export async function push(
     }
     await tx
       .update(guide)
-      .set({ headRevisionId: id })
+      .set({ headRevisionId: id, search: searchVector(content) })
       .where(and(eq(guide.organizationId, organizationId), eq(guide.id, request.guideId)));
     await notify(tx, organizationId, next);
     const [created] = await revisions(tx, [id]);
@@ -182,7 +183,7 @@ export async function purgeTrash(db: Database, now = new Date()): Promise<number
   return db.transaction(async (tx) => {
     const expired = await tx
       .update(guide)
-      .set({ headRevisionId: null, publishedRevisionId: null })
+      .set({ headRevisionId: null, publishedRevisionId: null, search: null })
       .where(and(isNotNull(guide.deletedAt), lt(guide.deletedAt, cutoff), isNotNull(guide.headRevisionId)))
       .returning({ organizationId: guide.organizationId, id: guide.id });
     for (const g of expired) {
@@ -249,6 +250,18 @@ export async function getGuide(db: Database, organizationId: string, userId: str
   if (!g?.headRevisionId) return null;
   const [head] = await revisions(db, [g.headRevisionId]);
   return { guide: g, head: head! };
+}
+
+/** One revision of a guide, if the user can see the guide. */
+export async function getRevision(db: Database, organizationId: string, userId: string, guideId: string, revisionId: string) {
+  const [found] = await db
+    .select({ id: revision.id })
+    .from(revision)
+    .innerJoin(guide, and(eq(guide.organizationId, revision.organizationId), eq(guide.id, revision.guideId)))
+    .where(and(eq(revision.organizationId, organizationId), eq(revision.guideId, guideId), eq(revision.id, revisionId), visibleTo(userId)));
+  if (!found) return null;
+  const [r] = await revisions(db, [found.id]);
+  return r ?? null;
 }
 
 /** Revisions by id, with their asset maps. */

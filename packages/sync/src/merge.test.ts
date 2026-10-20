@@ -13,7 +13,7 @@ const guides: Guide[] = readdirSync(fixtures).map((bundle) => JSON.parse(readFil
 const rotate = guides.find((g) => g.title === "Rotate an API key")!;
 
 const clone = <T>(value: T): T => structuredClone(value);
-const itemsOf = (guide: Guide) => (guide.items ?? []) as Item[];
+const itemsOf = (guide: Guide) => guide.items as unknown as Item[];
 const ids = (guide: Guide) => itemsOf(guide).map((item) => item.id);
 const item = (guide: Guide, id: string) => itemsOf(guide).find((i) => i.id === id);
 

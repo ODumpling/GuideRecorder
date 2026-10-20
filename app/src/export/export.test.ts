@@ -24,7 +24,8 @@ import {
   warningLines,
 } from "@/export/export";
 import type { ExportApi } from "@/lib/ipc";
-import type { ExportResult, Item } from "@/lib/types";
+import type { Item } from "@guiderecorder/guide-schema";
+import type { ExportResult } from "@/lib/types";
 
 function api(overrides: Partial<ExportApi> = {}): ExportApi {
   return {
@@ -32,6 +33,8 @@ function api(overrides: Partial<ExportApi> = {}): ExportApi {
     chooseFile: vi.fn(async () => null),
     chooseLogo: vi.fn(async () => null),
     exportGuide: vi.fn(async () => ({ files: ["/out/Guide/guide.md"], warnings: [], notes: [] })),
+    previewExport: vi.fn(async () => ({ kind: "html" as const, html: "<p>Guide</p>" })),
+    logoPreview: vi.fn(async () => "data:image/png;base64,"),
     reveal: vi.fn(async () => {}),
     ...overrides,
   };

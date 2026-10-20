@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 
 export type Frame = "before" | "after";
 

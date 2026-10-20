@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import type { Annotation, Step } from "../src/lib/types";
+import type { Annotation, Step } from "@guiderecorder/guide-schema";
 import type { Backend } from "./backend";
 import { expect, outlineItems, saved, test } from "./fixtures";
 

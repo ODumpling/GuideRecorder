@@ -3,7 +3,7 @@
 // Mac. Pure, so the panel and the export dialog agree.
 
 import type { SuggestionRef } from "@/annotations/commands";
-import type { Item, RedactionSuggestion, Step, SuggestionReview } from "@/lib/types";
+import type { Item, RedactionSuggestion, Step, SuggestionReview } from "@guiderecorder/guide-schema";
 
 /** A blur suggestion with where it is. */
 export interface Finding extends SuggestionRef {

@@ -32,22 +32,23 @@ import {
   type DragPart,
   type Tool,
   type View,
-} from "@/annotations/geometry";
+} from "@guiderecorder/ui/geometry";
 import { afterFrame } from "@/components/annotations/afterFrame";
 import { HotspotPopover, POPOVER_WIDTH, type PopoverAnchor } from "@/components/annotations/HotspotPopover";
 import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
-import { CropMask, Shape, type Backdrop } from "@/components/annotations/Shapes";
+import { useImageSize } from "@guiderecorder/ui/annotated-image";
+import { CropMask, Shape, type Backdrop } from "@guiderecorder/ui/shapes";
 import { StyleBar } from "@/components/annotations/StyleBar";
 import { BeforeAfterSwitch, type Frame } from "@/components/BeforeAfterSwitch";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { IMAGE_SHOW_HINTS, setImageShow, type Command } from "@/editor/commands";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { inspectorStore, useFocusedSuggestion } from "@/editor/inspector";
 import { tauriApi, verifyCrop } from "@/lib/ipc";
-import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
+import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const TOOLS: { tool: Tool | "select"; label: string; hint: string; icon: typeof Square }[] = [
   { tool: "select", label: "Select", hint: "Select: click a shape to move, resize or style it", icon: MousePointer2 },
@@ -90,31 +91,6 @@ type Drag =
   | { mode: "move"; original: Annotation; part: DragPart; start: Point };
 
 type Size = { width: number; height: number };
-
-/**
- * The size of an image, once decoded; `failed` when it can't be decoded
- * (a damaged or unsupported file).
- */
-function useImageSize(url: string | null): { size: Size | null; failed: boolean } {
-  const [result, setResult] = useState<{ url: string; size: Size | null } | null>(null);
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false;
-    const image = new Image();
-    image.onload = () => {
-      if (!cancelled) setResult({ url, size: { width: image.naturalWidth, height: image.naturalHeight } });
-    };
-    image.onerror = () => {
-      if (!cancelled) setResult({ url, size: null });
-    };
-    image.src = url;
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-  const current = result && result.url === url ? result : null;
-  return { size: current?.size ?? null, failed: !!current && !current.size };
-}
 
 /**
  * Whether the step image at `path` can't be decoded: `true` when its bytes

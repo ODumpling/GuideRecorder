@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AppWindow, LoaderCircle, Monitor, ScanLine, Search, Target } from "lucide-react";
-import { GuideCard } from "@/components/library/GuideCard";
+import { AppWindow, LayoutGrid, List, LoaderCircle, Monitor, ScanLine, Search, Target } from "lucide-react";
+import { LibraryGuides } from "@/components/library/LibraryGuides";
 import { NameDialog } from "@/components/library/menus";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   folderName,
   folderPaths,
+  GUIDE_KINDS,
   GUIDE_SORTS,
   GUIDE_STATUSES,
   hasOwner,
@@ -18,11 +19,12 @@ import {
   sortGuides,
   type GuideSort,
 } from "@/editor/library";
+import { initialLibraryView, rememberLibraryView, type LibraryView } from "@/editor/libraryList";
 import type { CaptureArea } from "@/lib/types";
 import { startFlow, useRecording } from "@/recording/recording";
 import { useSettings } from "@/settings/settings";
 import { formatHotkey } from "@/settings/validate";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const SEARCH_DELAY_MS = 200;
 
@@ -156,6 +158,63 @@ function StartRow() {
   );
 }
 
+/** Grid or list, in the library header. */
+function ViewToggle({ view, onChange }: { view: LibraryView; onChange(view: LibraryView): void }) {
+  const options = [
+    { value: "grid" as const, label: "Grid", icon: <LayoutGrid /> },
+    { value: "list" as const, label: "List", icon: <List /> },
+  ];
+  return (
+    <div role="radiogroup" aria-label="View" className="inline-flex rounded-lg bg-foreground/[0.06] p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={view === o.value}
+          aria-label={o.label}
+          title={o.label}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex h-7 w-8 items-center justify-center rounded-md text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4",
+            view === o.value && "bg-card text-foreground shadow-sm",
+          )}
+        >
+          {o.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Quick status filters above the guides (the sidebar's Status filter too). */
+function StatusChips() {
+  const statusFilter = useEditor((s) => s.statusFilter);
+  const chips = [{ value: null, label: "All" }, ...GUIDE_STATUSES];
+  return (
+    <div role="radiogroup" aria-label="Filter by status" className="flex flex-wrap items-center gap-1">
+      {chips.map((c) => {
+        const on = statusFilter === c.value;
+        return (
+          <button
+            key={c.value ?? "all"}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => editorStore.getState().setStatusFilter(c.value)}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              on ? "bg-primary text-primary-foreground" : "text-foreground/80 hover:bg-foreground/[0.06]",
+            )}
+          >
+            {c.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const selectClass =
   "h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
 
@@ -167,11 +226,17 @@ export function LibraryHome() {
   const tag = useEditor((s) => s.tag);
   const statusFilter = useEditor((s) => s.statusFilter);
   const owner = useEditor((s) => s.owner);
+  const kind = useEditor((s) => s.kind);
   const folder = useEditor((s) => s.folder);
   const query = useEditor((s) => s.query.trim());
   const listError = useEditor((s) => s.listError);
   const openError = useEditor((s) => s.openError);
   const today = localToday();
+  const [view, setView] = useState(() => initialLibraryView());
+  const changeView = (next: LibraryView) => {
+    setView(next);
+    rememberLibraryView(next);
+  };
 
   const owners = useMemo(() => libraryOwners(guides), [guides]);
   // A tag or owner that no listed guide has any more (deleted, retagged) filters nothing out.
@@ -183,11 +248,12 @@ export function LibraryHome() {
         (folder === null || inFolder(g, folder)) &&
         (!activeTag || hasTag(g, activeTag)) &&
         (!activeOwner || hasOwner(g, activeOwner)) &&
-        (!statusFilter || matchesStatus(g, statusFilter, today)),
+        (!statusFilter || matchesStatus(g, statusFilter, today)) &&
+        (!kind || g.kind === kind),
     );
     // A search lists best matches first; the sort applies to browsing.
     return query ? filtered : sortGuides(filtered, sort);
-  }, [guides, folder, activeTag, activeOwner, statusFilter, today, query, sort]);
+  }, [guides, folder, activeTag, activeOwner, statusFilter, kind, today, query, sort]);
   const moveTargets = useMemo(() => folderPaths(folders, guides), [folders, guides]);
   const overdue = shown.filter((g) => isReviewOverdue(g, today)).length;
 
@@ -201,8 +267,10 @@ export function LibraryHome() {
           ? GUIDE_STATUSES.find((s) => s.value === statusFilter)!.label
           : activeTag
             ? `#${activeTag}`
-            : "All guides";
-  const filtered = !!(query || folder !== null || statusFilter || activeTag || activeOwner);
+            : kind
+              ? GUIDE_KINDS.find((k) => k.value === kind)!.label
+              : "All guides";
+  const filtered = !!(query || folder !== null || statusFilter || activeTag || activeOwner || kind);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-7 px-9 py-8">
@@ -215,6 +283,7 @@ export function LibraryHome() {
             {overdue > 0 && <span className="text-[var(--status-danger)]"> · {overdue} due for review</span>}
           </p>
         </div>
+        <ViewToggle view={view} onChange={changeView} />
         {owners.length > 0 && (
           <select
             aria-label="Filter by owner"
@@ -254,19 +323,18 @@ export function LibraryHome() {
         </p>
       )}
 
-      {shown.length > 0 ? (
-        <ul aria-label="Guides" className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-5 gap-y-6">
-          {shown.map((guide) => (
-            <GuideCard key={guide.path} guide={guide} folders={moveTargets} />
-          ))}
-        </ul>
-      ) : (
-        !listError && (
-          <p className="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">
-            {filtered ? "No matching guides" : "No guides yet. Record one to get started."}
-          </p>
-        )
-      )}
+      <div className="flex flex-col gap-3">
+        {guides.length > 0 && <StatusChips />}
+        {shown.length > 0 ? (
+          <LibraryGuides shown={shown} folders={moveTargets} view={view} />
+        ) : (
+          !listError && (
+            <p className="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">
+              {filtered ? "No matching guides" : "No guides yet. Record one to get started."}
+            </p>
+          )
+        )}
+      </div>
       <NameDialog />
     </div>
   );

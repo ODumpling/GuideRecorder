@@ -490,6 +490,54 @@ fn letter_paper_is_supported() {
 }
 
 #[test]
+fn preview_draws_the_pages_of_the_export() {
+    let fixtures = Fixtures::new();
+    for (name, loaded) in fixtures.guides() {
+        let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+        for paper in [Paper::A4, Paper::Letter] {
+            let opts = PdfOptions {
+                paper,
+                ..fixture_options(&loaded)
+            };
+            let output = pdf::render(&render, &loaded.handle, &opts).unwrap();
+            let preview = pdf::preview(&render, &loaded.handle, &opts).unwrap();
+            assert_eq!(preview.page_count, output.page_count(), "{name}");
+            assert_eq!(
+                preview.pages.len(),
+                output.page_count().min(pdf::MAX_PREVIEW_PAGES)
+            );
+            assert_eq!(preview.report.warnings, output.report.warnings);
+            let width_pt = if paper == Paper::A4 { 595.2756 } else { 612.0 };
+            for page in &preview.pages {
+                let image = image::load_from_memory(page).unwrap();
+                let expected = (width_pt * pdf::PREVIEW_PIXELS_PER_PT).round() as u32;
+                assert_eq!(image.width(), expected, "{name} {paper:?}");
+                assert!(image.height() > image.width());
+            }
+        }
+    }
+}
+
+#[test]
+fn preview_caps_its_pages() {
+    let lib = Synthetic::new();
+    let mut guide = Guide::new("Long", "en");
+    let long = "word ".repeat(400);
+    guide.items = (0..40)
+        .map(|i| {
+            let Item::Step(mut s) = step(&format!("Step {i}")) else {
+                unreachable!()
+            };
+            s.description = long.clone();
+            Item::Step(s)
+        })
+        .collect();
+    let preview = lib.preview(&guide);
+    assert!(preview.page_count > pdf::MAX_PREVIEW_PAGES);
+    assert_eq!(preview.pages.len(), pdf::MAX_PREVIEW_PAGES);
+}
+
+#[test]
 fn a_long_first_paragraph_flows_across_pages() {
     // 2,500 numbered words as the step's only description paragraph.
     let words: Vec<String> = (1..=2500).map(|i| format!("w{i:04}")).collect();
@@ -943,6 +991,12 @@ impl Synthetic {
 
     fn render_with(&self, guide: &Guide, opts: PdfOptions) -> PdfOutput {
         self.export_with_report(guide, opts).0
+    }
+
+    fn preview(&self, guide: &Guide) -> pdf::PdfPreview {
+        let handle = self.library.create(guide).unwrap();
+        let render = RenderGuide::new(guide, &handle);
+        pdf::preview(&render, &handle, &PdfOptions::default()).unwrap()
     }
 
     /// Exports with `opts` (forcing `overwrite`) and also returns the typeset

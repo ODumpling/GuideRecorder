@@ -5,7 +5,8 @@ import { setGuideField, setItemText } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 import type { AiApi, EditorApi } from "@/lib/ipc";
-import type { AiGuideEvent, AiRewriteResult, AiStepEvent, Guide, Settings, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
+import type { AiGuideEvent, AiRewriteResult, AiStepEvent, Settings } from "@/lib/types";
 
 function fakeEvents() {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
@@ -40,11 +41,13 @@ async function setup({
     saveGuide: vi.fn(async (g: Guide) => void saved.push(g)),
     closeGuide: vi.fn(async () => []),
     deleteGuide: vi.fn(async () => true),
+    deleteGuides: vi.fn(async () => true),
     listFolders: vi.fn(async () => []),
     createFolder: vi.fn(async () => ""),
     duplicateGuide: vi.fn(async () => "G3"),
     renameGuide: vi.fn(async () => ({ path: "", title: "", updatedAt: "" })),
     markGuideReviewed: vi.fn(async () => ({ lastReviewed: "", updatedAt: "" })),
+    editGuideDetails: vi.fn(async () => guide()),
     moveGuide: vi.fn(async () => ""),
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),

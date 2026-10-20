@@ -6,9 +6,9 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import type { SuggestionRef } from "@/annotations/commands";
-import { hotspots } from "@/annotations/geometry";
+import { hotspots } from "@guiderecorder/ui/geometry";
 import { pendingOf } from "@/editor/privacy";
-import type { Step } from "@/lib/types";
+import type { Step } from "@guiderecorder/guide-schema";
 
 export type InspectorTab = "step" | "privacy" | "hotspots";
 

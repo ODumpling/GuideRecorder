@@ -298,9 +298,11 @@ impl GuideRecorderMcp {
 impl GuideRecorderMcp {
     #[tool(
         description = "List guides in the GuideRecorder library, most recently updated first. Returns \
-                       id, title, summary, tags, step_count, updated_at, read_only and folder for \
-                       each. folder is the library subfolder holding the guide (\"Work/Onboarding\"; \
-                       empty at the top level). Also owner, status (draft, inReview, published or \
+                       id, title, summary, tags, step_count, kind, hotspot_count, updated_at, read_only \
+                       and folder for each. kind is walkthrough (recorded steps) or annotated \
+                       (pages explained by hotspots; step_count is then the page count). folder \
+                       is the library subfolder holding the guide (\"Work/Onboarding\"; empty at \
+                       the top level). Also owner, status (draft, inReview, published or \
                        needsUpdate), version, last_reviewed, review_interval_months and review_due \
                        (YYYY-MM-DD dates; null when unset) and review_overdue. \
                        read_only is true when the GuideRecorder app will not edit the guide as it is: \
@@ -584,6 +586,8 @@ fn list_guides(config: &Config, args: &ListGuidesArgs) -> ToolResult<CallToolRes
                 "summary": g.summary,
                 "tags": g.tags,
                 "step_count": g.step_count,
+                "kind": g.kind.as_str(),
+                "hotspot_count": g.hotspot_count,
                 "updated_at": g.updated_at.to_rfc3339(),
                 "read_only": g.read_only,
                 "folder": g.folder,

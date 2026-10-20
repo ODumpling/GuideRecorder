@@ -122,6 +122,14 @@ impl Guide {
             _ => None,
         })
     }
+
+    /// Hotspot annotations across all steps.
+    pub fn hotspot_count(&self) -> usize {
+        self.steps()
+            .flat_map(|step| &step.annotations)
+            .filter(|annotation| matches!(annotation.shape, Shape::Hotspot(_)))
+            .count()
+    }
 }
 
 /// A guide-level field the AI guide pass writes.
@@ -233,6 +241,16 @@ pub enum GuideKind {
     /// Uploaded pages (images, PDF pages), each a `manual` step showing its
     /// full image, explained by [`Shape::Hotspot`] annotations.
     Annotated,
+}
+
+impl GuideKind {
+    /// The name in `guide.json`, e.g. `annotated`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GuideKind::Walkthrough => "walkthrough",
+            GuideKind::Annotated => "annotated",
+        }
+    }
 }
 
 /// Environment the guide was recorded in.

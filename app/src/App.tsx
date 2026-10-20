@@ -16,9 +16,10 @@ import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
+import { ShareDialog } from "@/components/ShareDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
@@ -250,6 +251,7 @@ export default function App() {
       </div>
       <LeaveDialog />
       <ConflictDialog />
+      <ShareDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <Onboarding />
       {draggingImages && (

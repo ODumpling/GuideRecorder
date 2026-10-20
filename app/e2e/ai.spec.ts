@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { Guide, Step } from "../src/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 import type { Backend } from "./backend";
 import { API_KEY, emitEvents, expect, openGuide, outlineItems, record, saved, test } from "./fixtures";
 

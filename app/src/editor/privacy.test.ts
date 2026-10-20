@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { tabCounts } from "@/editor/inspector";
 import { findings, kindKey, kindLabel, pendingOf, scanStatus, sourceLabel } from "@/editor/privacy";
 import { guide } from "@/editor/test-fixtures";
-import type { Guide, RedactionSuggestion, Step } from "@/lib/types";
+import type { Guide, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
 
 const rect = { x: 1, y: 2, width: 3, height: 4 };
 const email: RedactionSuggestion = { rect, reason: "email address", source: "onDevice", preview: "•••@acme.co" };

@@ -9,22 +9,8 @@ import {
   errorMessage,
   type AiApi,
 } from "@/lib/ipc";
-import type {
-  AiEndpoint,
-  AiFinishedEvent,
-  AiGuideEvent,
-  AiProviderKind,
-  AiRewriteResult,
-  AiStartedEvent,
-  AiState,
-  AiStepEvent,
-  Guide,
-  Rect,
-  RedactionSuggestion,
-  RewriteStyleArg,
-  Settings,
-  Step,
-} from "@/lib/types";
+import type { AiState, Guide, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
+import type { AiEndpoint, AiFinishedEvent, AiGuideEvent, AiProviderKind, AiRewriteResult, AiStartedEvent, AiStepEvent, RewriteStyleArg, Settings } from "@/lib/types";
 
 /**
  * Runs AI writing for the open guide (`ai_generate`) and applies its

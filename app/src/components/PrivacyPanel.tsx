@@ -6,7 +6,7 @@ import {
   keepBlurSuggestions,
   type SuggestionRef,
 } from "@/annotations/commands";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import type { Command } from "@/editor/commands";
 import { editorStore, useEditor } from "@/editor/editor";
 import { inspectorStore } from "@/editor/inspector";
@@ -20,9 +20,9 @@ import {
   sourceLabel,
   type Finding,
 } from "@/editor/privacy";
-import type { Guide, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const HEADING = "text-[11px] font-semibold tracking-wide text-muted-foreground uppercase";
 

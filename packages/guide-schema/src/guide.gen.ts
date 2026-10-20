@@ -5,6 +5,12 @@
  */
 export type SuggestionReview = ("blurred" | "kept")
 /**
+ * Where a [`RedactionSuggestion`] came from.
+ */
+export type SuggestionSource = ("ai" | "onDevice")
+export type AiStatus = ("generating" | "template" | "ai" | "edited")
+export type Audience = ("beginner" | "expert")
+/**
  * A guide-level field the AI guide pass writes.
  */
 export type GuideField = ("title" | "intro" | "prerequisites" | "summary" | "tags")
@@ -12,6 +18,48 @@ export type GuideField = ("title" | "intro" | "prerequisites" | "summary" | "tag
  * One entry of [`Guide::items`], tagged by `type`.
  */
 export type Item = (Step | Section | Note)
+/**
+ * An SVG-compatible overlay shape; never baked into source images.
+ * 
+ * Serializes as `{ id, type, geometry, style }`.
+ */
+export type Annotation = ({
+id: string
+style?: AnnotationStyle
+} & Annotation1)
+export type BlurMode = ("blur" | "pixelate")
+export type Annotation1 = ({
+geometry: ArrowGeometry
+type: "arrow"
+} | {
+geometry: Rect
+type: "box"
+} | {
+geometry: Rect
+type: "highlight"
+} | {
+geometry: CalloutGeometry
+type: "callout"
+} | {
+geometry: Rect
+type: "blur"
+} | {
+geometry: Rect
+type: "crop"
+} | {
+geometry: HotspotGeometry
+type: "hotspot"
+})
+/**
+ * Which image the step displays.
+ */
+export type ImageShow = ("crop" | "full")
+export type StepKind = ("click" | "doubleClick" | "rightClick" | "type" | "shortcut" | "drag" | "manual")
+export type NoteKind = ("tip" | "warning" | "note")
+/**
+ * What a guide is made of.
+ */
+export type GuideKind = ("walkthrough" | "annotated")
 /**
  * Where a guide stands in its review cycle.
  */
@@ -22,7 +70,7 @@ export type GuideStatus = (("draft" | "inReview" | "published") | "needsUpdate")
  */
 export interface Guide {
 aiState?: AiState
-audience?: ("beginner" | "expert")
+audience: Audience
 createdAt: string
 /**
  * The guide-level fields the user wrote by hand; the AI guide pass
@@ -35,12 +83,9 @@ id: string
 /**
  * Markdown.
  */
-intro?: string
-items?: Item[]
-/**
- * What the guide is: recorded steps, or uploaded pages with hotspots.
- */
-kind?: ("walkthrough" | "annotated")
+intro: string
+items: Item[]
+kind?: GuideKind
 /**
  * BCP 47 language tag of the guide text, e.g. `en`.
  */
@@ -56,7 +101,7 @@ owner?: (string | null)
 /**
  * Markdown.
  */
-prerequisites?: string
+prerequisites: string
 /**
  * Absent for guides built by hand rather than recorded.
  */
@@ -67,8 +112,8 @@ recording?: (RecordingInfo | null)
 reviewIntervalMonths?: (number | null)
 schemaVersion: number
 status?: (GuideStatus | null)
-summary?: string
-tags?: string[]
+summary: string
+tags: string[]
 title: string
 updatedAt: string
 /**
@@ -76,12 +121,6 @@ updatedAt: string
  */
 version?: (string | null)
 }
-/**
- * Provenance of the guide-level fields (`title`, `intro`,
- * `prerequisites`, `summary`, `tags`). The editor sets `edited` when the
- * user changes any of them, and keeps it while any is in
- * [`Guide::edited_fields`].
- */
 export interface AiState {
 /**
  * Short message from the last failed AI pass; cleared when a later
@@ -109,7 +148,7 @@ redactionSuggestions?: RedactionSuggestion[]
  * not.
  */
 scanned?: boolean
-status?: ("generating" | "template" | "ai" | "edited")
+status: AiStatus
 }
 /**
  * A suggested blur region.
@@ -132,15 +171,8 @@ rect: Rect
  * state blurred into images that leave the device.
  */
 review?: (SuggestionReview | null)
-/**
- * Who suggested it. Absent (the AI) in guides saved before on-device
- * redaction.
- */
-source?: ("ai" | "onDevice")
+source?: SuggestionSource
 }
-/**
- * In full-screenshot pixels.
- */
 export interface Rect {
 height: number
 width: number
@@ -149,12 +181,143 @@ y: number
 }
 export interface Step {
 type: "step"
+aiState: AiState
+annotations: Annotation[]
+/**
+ * Markdown.
+ */
+description: string
+element?: (ElementInfo | null)
+/**
+ * Where a `drag` step ends, in full-screenshot pixels; `point` is its start.
+ */
+endPoint?: (Point | null)
+id: string
+image: StepImage
+/**
+ * Keystrokes with secure-field input already masked.
+ */
+keystrokes?: (string | null)
+kind: StepKind
+/**
+ * Interaction point in full-screenshot pixels.
+ */
+point?: (Point | null)
+/**
+ * Markdown.
+ */
+title: string
+}
+/**
+ * Visual style; unset fields use the app's defaults.
+ */
+export interface AnnotationStyle {
+/**
+ * Blur radius or pixel block size, in image pixels.
+ */
+blurAmount?: (number | null)
+/**
+ * Blur annotations only.
+ */
+blurMode?: (BlurMode | null)
+/**
+ * CSS colour, e.g. `#ff3b30`.
+ */
+color?: (string | null)
+fill?: (string | null)
+fontSize?: (number | null)
+opacity?: (number | null)
+strokeWidth?: (number | null)
+}
+export interface ArrowGeometry {
+from: Point
+to: Point
+}
+export interface Point {
+x: number
+y: number
+}
+export interface CalloutGeometry {
+/**
+ * Point the callout's pointer targets, if any.
+ */
+anchor?: (Point | null)
+height: number
+/**
+ * Plain text.
+ */
+text: string
+width: number
+x: number
+y: number
+}
+/**
+ * A region the reader can hover or click to see its title and
+ * description. Numbered 1, 2, 3, ... in annotation order among the step's
+ * hotspots.
+ */
+export interface HotspotGeometry {
+/**
+ * Plain text; may hold line breaks.
+ */
+description: string
+height: number
+/**
+ * Plain text.
+ */
+title: string
+width: number
+x: number
+y: number
+}
+/**
+ * Accessibility info for the element a step acted on.
+ */
+export interface ElementInfo {
+app?: (string | null)
+bundleId?: (string | null)
+label?: (string | null)
+role?: (string | null)
+window?: (string | null)
+}
+/**
+ * Bundle-relative image paths for a step.
+ */
+export interface StepImage {
+/**
+ * Optional frame captured after the action.
+ */
+after?: (string | null)
+/**
+ * Click crop, e.g. `steps/<id>.crop.webp`. Absent for manual steps
+ * inserted from an image file.
+ */
+crop?: (string | null)
+/**
+ * Where the crop sits inside the full screenshot, in full-screenshot
+ * pixels. Annotation geometry is in full-screenshot pixels, so this is
+ * what maps it into the crop. Absent for older guides or no crop.
+ */
+cropRect?: (Rect | null)
+/**
+ * Full screenshot, e.g. `steps/<id>.webp`.
+ */
+full: string
+show: ImageShow
 }
 export interface Section {
 type: "section"
+id: string
+title: string
 }
 export interface Note {
 type: "note"
+/**
+ * Markdown.
+ */
+body: string
+id: string
+kind: NoteKind
 }
 /**
  * Environment the guide was recorded in.
@@ -167,8 +330,8 @@ appVersion: string
 /**
  * Applications seen during the recording.
  */
-apps?: AppInfo[]
-displays?: DisplayInfo[]
+apps: AppInfo[]
+displays: DisplayInfo[]
 osVersion?: (string | null)
 }
 export interface AppInfo {

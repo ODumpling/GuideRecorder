@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
+import { SharingSettings } from "@/components/dashboard/SharingSettings";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { WorkspaceSwitcher } from "@/components/dashboard/WorkspaceSwitcher";
 import { SyncedGuides } from "@/components/guides/SyncedGuides";
@@ -8,11 +9,12 @@ import { Card } from "@/components/ui";
 import { title } from "@/lib/title";
 import { getDashboard } from "@/server/dashboard";
 import { getSyncedGuides } from "@/server/guides";
+import { getWorkspaceSharing } from "@/server/shares";
 
 export const Route = createFileRoute("/dashboard")({
   loader: async () => {
-    const [dashboard, guides] = await Promise.all([getDashboard(), getSyncedGuides()]);
-    return { ...dashboard, guides };
+    const [dashboard, guides, sharing] = await Promise.all([getDashboard(), getSyncedGuides(), getWorkspaceSharing()]);
+    return { ...dashboard, guides, sharing };
   },
   head: () => title("Dashboard"),
   component: Dashboard,
@@ -27,7 +29,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, workspaces, active, billingEnabled, can, guides } = Route.useLoaderData();
+  const { user, workspaces, active, billingEnabled, can, guides, sharing } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -79,6 +81,7 @@ function Dashboard() {
             canManage={can.manageMembers}
             seatsLeft={active.plan.entitlements.seats - active.members.length - active.invitations.length}
           />
+          {sharing ? <SharingSettings key={active.id} {...sharing} /> : null}
           <Billing workspaceId={active.id} plan={active.plan.plan} enabled={billingEnabled} canManage={can.manageBilling} />
         </>
       ) : (

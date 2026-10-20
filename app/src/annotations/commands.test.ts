@@ -14,7 +14,7 @@ import {
 } from "@/annotations/commands";
 import { applyPatches, coalesce, PatchError, type Command } from "@/editor/commands";
 import { guide } from "@/editor/test-fixtures";
-import type { Annotation, Guide, Step } from "@/lib/types";
+import type { Annotation, Guide, Step } from "@guiderecorder/guide-schema";
 
 const box: Annotation = { id: "B1", type: "box", geometry: { x: 1, y: 2, width: 30, height: 40 } };
 const callout: Annotation = { id: "C1", type: "callout", geometry: { x: 0, y: 0, width: 50, height: 20, text: "" } };

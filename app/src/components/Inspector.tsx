@@ -1,16 +1,16 @@
 import type { ReactNode } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
+import type { AiState, ImageShow, Step, StepKind } from "@guiderecorder/guide-schema";
+import { Button } from "@guiderecorder/ui/button";
+import { hotspots } from "@guiderecorder/ui/geometry";
+import { cn } from "@guiderecorder/ui/utils";
 import { moveHotspot } from "@/annotations/commands";
-import { hotspots } from "@/annotations/geometry";
 import { HotspotBadge } from "@/components/annotations/HotspotPopover";
 import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
 import { PrivacyPanel } from "@/components/PrivacyPanel";
-import { Button } from "@/components/ui/button";
 import { IMAGE_SHOW_HINTS, setImageShow } from "@/editor/commands";
 import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
 import { inspectorStore, tabCounts, useInspector, type InspectorTab } from "@/editor/inspector";
-import type { AiState, ImageShow, Step, StepKind } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 export const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",
