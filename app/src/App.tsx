@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronRight, FileOutput, History, ImagePlus, Lock, Redo2, Settings as SettingsIcon, TriangleAlert, Undo2, X } from "lucide-react";
 import { WriteWithAi } from "@/ai/WriteWithAi";
 import { ConflictDialog } from "@/components/ConflictDialog";
-import { ExportDialog } from "@/components/ExportDialog";
+import { ExportDialog, exportDialogStore, openExport } from "@/components/ExportDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
@@ -15,6 +15,7 @@ import { LibraryNav } from "@/components/library/LibraryNav";
 import { StatusPill } from "@/components/library/bits";
 import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
+import { CommandPalette } from "@/palette/CommandPalette";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
 import { SignInDialog } from "@/components/SignInDialog";
@@ -91,7 +92,8 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
   const canUndo = useEditor((s) => s.undoStack.length > 0 && !s.doc?.readOnly);
   const canRedo = useEditor((s) => s.redoStack.length > 0 && !s.doc?.readOnly);
   const { undo, redo } = editorStore.getState();
-  const [exporting, setExporting] = useState(false);
+  const exporting = exportDialogStore((s) => s.open);
+  const exportFormat = exportDialogStore((s) => s.format);
   const [history, setHistory] = useState(false);
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
@@ -137,11 +139,15 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
               size="sm"
               className="ml-1"
               title="Export this guide as Markdown, HTML, Word or PDF"
-              onClick={() => setExporting(true)}
+              onClick={() => openExport()}
             >
               <FileOutput /> Export…
             </Button>
-            <ExportDialog open={exporting} onOpenChange={setExporting} />
+            <ExportDialog
+              open={exporting}
+              format={exportFormat}
+              onOpenChange={(open) => exportDialogStore.setState({ open })}
+            />
           </>
         )}
         <Button variant="ghost" size="icon" aria-label="Settings" title="Settings (⌘,)" onClick={onSettings}>
@@ -265,6 +271,7 @@ export default function App() {
       <ShareDialog />
       <SignInDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
+      <CommandPalette onSettings={openSettings} />
       <Onboarding />
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">

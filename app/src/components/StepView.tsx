@@ -157,7 +157,8 @@ function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
   );
 }
 
-const REWRITES: { style: RewriteStyleArg; label: string; icon: typeof Minimize2 }[] = [
+/** The rewrite styles under a step, also in the command palette. */
+export const REWRITES: { style: RewriteStyleArg; label: string; icon: typeof Minimize2 }[] = [
   { style: { kind: "shorter" }, label: "Shorter", icon: Minimize2 },
   { style: { kind: "beginner" }, label: "For beginners", icon: GraduationCap },
   { style: { kind: "expert" }, label: "For experts", icon: Rocket },
