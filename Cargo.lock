@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "guiderecorder-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "guiderecorder-capture",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "guiderecorder-capture"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "block2",
  "dispatch2",
@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "guiderecorder-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2357,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "guiderecorder-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "block2",
  "chrono",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "guiderecorder-mcp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",

@@ -3,7 +3,7 @@ import { ApproveDevice } from "@/components/dashboard/ApproveDevice";
 import { title } from "@/lib/title";
 import { getViewer } from "@/server/session";
 
-/** Where the desktop app sends people to approve its sign-in code. */
+/** Where the desktop and mobile apps send people to approve its sign-in code. */
 export const Route = createFileRoute("/device")({
   validateSearch: (search: Record<string, unknown>): { user_code?: string } =>
     typeof search.user_code === "string" ? { user_code: search.user_code } : {},
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/device")({
       throw redirect({ to: "/sign-in", search: { next } });
     }
   },
-  head: () => title("Sign in the desktop app"),
+  head: () => title("Sign in the app"),
   component: Page,
 });
 

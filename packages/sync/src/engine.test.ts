@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { equal, imagePaths, type AssetMap, type Change, type ReviewState, type Revision } from "@guiderecorder/sync";
+import { readFileSync } from "node:fs";
+import { equal, imagePaths, type AssetMap, type Change, type ReviewState, type Revision } from "./index.ts";
 import type { Guide, Step } from "@guiderecorder/guide-schema";
 import {
   emptyState,
@@ -11,10 +12,9 @@ import {
   type ApiResponse,
   type SyncBackend,
   type SyncState,
-} from "./engine";
-import fixtureJson from "../../../fixtures/guides/Rotate an API key.guiderecorder/guide.json?raw";
+} from "./engine.ts";
 
-const fixture: Guide = JSON.parse(fixtureJson);
+const fixture: Guide = JSON.parse(readFileSync(new URL("../../../fixtures/guides/Rotate an API key.guiderecorder/guide.json", import.meta.url), "utf8"));
 const WS = "ws";
 const sha = (path: string) => path.replace(/[^0-9a-f]/g, "").padEnd(64, "0").slice(0, 64);
 

@@ -84,7 +84,8 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   burn redactions into the pixels.
 - Images are served by the asset endpoint, which checks that the member
   uploaded the image or can see a guide that shows it, then redirects to a
-  five-minute signed URL.
+  five-minute signed URL (or, with `Accept: application/json`, answers
+  `{ url, expiresIn }`, for the mobile app).
 - Exports (`src/lib/exports.ts`) are queued per revision and format in
   `export_job`. The worker (`worker/export.ts`) claims jobs with
   `for update skip locked`, rebuilds the bundle from the revision and its

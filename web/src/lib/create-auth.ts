@@ -19,6 +19,8 @@ import { memberRole, seatsTaken, workspacePlan } from "./workspace";
 
 /** The desktop app's client id for device authorization. */
 export const DESKTOP_CLIENT_ID = "guiderecorder-desktop";
+/** The iPhone and iPad app's client id for device authorization. */
+export const MOBILE_CLIENT_ID = "guiderecorder-mobile";
 
 export interface AuthDeps {
   db: Database;
@@ -150,13 +152,13 @@ export function createAuth(deps: AuthDeps) {
           await sendEmail({ to: email, subject: "Sign in to GuideRecorder", text: `Sign in: ${url}` });
         },
       }),
-      // The desktop app signs in with a code shown on /device and then sends
-      // the session token as a bearer token.
+      // The desktop and mobile apps sign in with a code shown on /device and
+      // then send the session token as a bearer token.
       deviceAuthorization({
         verificationUri: "/device",
         expiresIn: "15m",
         interval: "5s",
-        validateClient: (clientId) => clientId === DESKTOP_CLIENT_ID,
+        validateClient: (clientId) => clientId === DESKTOP_CLIENT_ID || clientId === MOBILE_CLIENT_ID,
       }),
       bearer(),
       ...(billing ? [billing] : []),

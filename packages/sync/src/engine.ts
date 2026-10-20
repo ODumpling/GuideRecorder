@@ -1,8 +1,9 @@
-// The sync loop: pulls the workspace's changes, pushes local edits, and
-// merges when both sides changed a guide (`@guiderecorder/sync`). Rust only
-// reads and writes bundles and talks HTTP (src-tauri/src/sync.rs); every
-// decision is made here. Local-first: nothing syncs unless the user turns
-// it on for the library or a guide.
+// The sync loop of the desktop and mobile apps: pulls the workspace's
+// changes, pushes local edits, and merges when both sides changed a guide.
+// Each app supplies a `SyncBackend` that reads and writes its library and
+// talks HTTP (the desktop app's src-tauri/src/sync.rs, the mobile app's
+// src/lib/device.ts); every decision is made here. Local-first: nothing
+// syncs unless the user turns it on for the library or a guide.
 
 import {
   equal,
@@ -15,7 +16,7 @@ import {
   type ReviewState,
   type Revision,
   type Side,
-} from "@guiderecorder/sync";
+} from "./index.ts";
 import type { Guide } from "@guiderecorder/guide-schema";
 
 export interface ApiResponse<T = unknown> {
