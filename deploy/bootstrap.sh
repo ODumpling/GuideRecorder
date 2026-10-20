@@ -41,5 +41,8 @@ if [ ! -f certs/origin.pem ]; then
 fi
 chmod 600 certs/origin.key
 
-# Docker publishes 443 itself, but keep ufw consistent.
-sudo ufw allow 443/tcp >/dev/null
+# ufw-docker filters published ports with `ufw route`: let only Cloudflare
+# reach Caddy (https://www.cloudflare.com/ips/).
+for net in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www.cloudflare.com/ips-v6); do
+  sudo ufw route allow proto tcp from "$net" to any port 443 comment cloudflare >/dev/null
+done
