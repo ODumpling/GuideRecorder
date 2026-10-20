@@ -33,6 +33,8 @@
     "allow-choose-export-file",
     "allow-choose-logo",
     "allow-export-guide",
+    "allow-preview-export",
+    "allow-logo-preview",
     "allow-reveal-export",
     "allow-verify-crop",
     "allow-get-settings",

@@ -42,6 +42,8 @@ const COMMANDS: &[&str] = &[
     "choose_export_file",
     "choose_logo",
     "export_guide",
+    "preview_export",
+    "logo_preview",
     "reveal_export",
     "verify_crop",
     "get_settings",

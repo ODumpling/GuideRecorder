@@ -1,116 +1,318 @@
-import { useStepThumbnail } from "@/components/useStepThumbnail";
-import { isAccent, isFolderFormat, isMotionFormat } from "@/export/export";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { Guide, Step } from "@guiderecorder/guide-schema";
-import type { ExportFormat, MotionAspect, PaperSize } from "@/lib/types";
-import { cn } from "@guiderecorder/ui/utils";
+import { Button } from "@guiderecorder/ui/button";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
+import { cn } from "@guiderecorder/ui/utils";
+import {
+  markdownPreviewDocument,
+  markdownPreviewHtml,
+  pageLabel,
+  previewRequest,
+  PreviewScheduler,
+  type PreviewState,
+} from "@/export/preview";
+import { errorMessage, type ExportApi } from "@/lib/ipc";
+import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize } from "@/lib/types";
 
-/** Steps shown on the preview page. */
-const PREVIEW_STEPS = 3;
-/** The exports' accent when none is set. */
-const DEFAULT_ACCENT = "#1d1c1a";
+const SHADOW = "shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]";
 
-function PreviewStep({
-  guideId,
-  step,
-  number,
-  accent,
-}: {
-  guideId: string;
-  step: Step;
-  number: number;
-  accent: string;
-}) {
-  const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
-  const image = useStepThumbnail(guideId, path || null);
+/** Width the HTML and Markdown previews are laid out at, in CSS pixels, before scaling to fit. */
+const PAGE_WIDTH = 800;
+
+/**
+ * An exported page in a sandboxed frame, laid out at `PAGE_WIDTH` and
+ * scaled to fit. `scripts` lets the walkthrough's own script run (it can
+ * still reach nothing: no same origin, and the page's CSP).
+ */
+function PageFrame({ html, title, scripts }: { html: string; title: string; scripts: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.44);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => el.clientWidth && setScale(el.clientWidth / PAGE_WIDTH));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <div className="flex gap-2.5">
-      <span
-        className="flex size-[18px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
-        style={{ background: accent }}
-      >
-        {number}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[10.5px] leading-snug font-semibold">{markdownToPlainText(step.title) || "Untitled step"}</p>
-        {step.description && (
-          <p className="mt-0.5 line-clamp-2 text-[9.5px] leading-normal text-[#555]">
-            {markdownToPlainText(step.description)}
-          </p>
-        )}
-        {image && <img src={image} alt="" className="mt-1.5 max-h-28 rounded-[3px] border border-[#e6e3dc]" />}
-      </div>
+    <div ref={box} className="relative min-h-0 flex-1 overflow-hidden bg-white">
+      <iframe
+        title={title}
+        srcDoc={html}
+        sandbox={scripts ? "allow-scripts" : ""}
+        className="absolute top-0 left-0 origin-top-left border-0"
+        style={{ width: PAGE_WIDTH, height: `${100 / scale}%`, transform: `scale(${scale})` }}
+      />
     </div>
   );
 }
 
-const FRAME_RATIOS: Record<MotionAspect, string> = { wide: "16 / 9", square: "1 / 1", vertical: "9 / 16" };
-
-/**
- * A sketch of a video or GIF frame (the first step with its caption), or
- * of a step slide.
- */
-function FramePreview({
-  guide,
-  format,
-  aspect,
-  captions,
-}: {
-  guide: Guide;
-  format: ExportFormat;
-  aspect: MotionAspect;
-  captions: boolean;
-}) {
-  const step = guide.items.find((i): i is Step => i.type === "step");
-  const path = step ? (format === "pptx" && step.image.show === "crop" && step.image.crop) || step.image.full : null;
-  const image = useStepThumbnail(guide.id, path || null);
-  const title = step ? markdownToPlainText(step.title) || "Step 1" : "No steps";
-  if (format === "pptx") {
-    const description = step ? markdownToPlainText(step.description) : "";
-    return (
-      <div
-        aria-label="Export preview"
-        className="flex w-full max-w-[26rem] shrink-0 flex-col gap-2 self-start rounded-[3px] bg-white p-4 text-[#1d1d1f] shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]"
-        style={{ aspectRatio: "16 / 9" }}
-      >
-        <p className="truncate text-[13px] font-bold">1. {title}</p>
-        <div className="flex min-h-0 flex-1 gap-3">
-          <div className="flex min-w-0 flex-[2] items-center justify-center">
-            {image && <img src={image} alt="" className="max-h-full max-w-full border border-[#d1d1d6]" />}
-          </div>
-          {description && <p className="line-clamp-6 flex-1 text-[8px] leading-normal">{description}</p>}
-        </div>
+/** A browser window around an HTML or Markdown preview. */
+function BrowserChrome({ name, children }: { name: string; children: React.ReactNode }) {
+  return (
+    <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg bg-white", SHADOW)}>
+      <div className="flex h-6 shrink-0 items-center gap-1 border-b border-[#ececef] bg-[#f4f4f6] px-2.5">
+        {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
+          <span key={c} className="size-2 rounded-full" style={{ background: c }} />
+        ))}
+        <span className="mx-auto truncate text-[9px] text-[#888]">{name}</span>
       </div>
-    );
-  }
+      {children}
+    </div>
+  );
+}
+
+/** "Page 1 of 4" with arrows, and a thumbnail strip. */
+function Pager({
+  noun,
+  index,
+  count,
+  thumbnails,
+  onSelect,
+}: {
+  noun: string;
+  index: number;
+  count: number;
+  thumbnails: string[];
+  onSelect(index: number): void;
+}) {
+  return (
+    <div className="flex shrink-0 flex-col gap-2 pt-3">
+      <div className="flex items-center justify-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Previous ${noun.toLowerCase()}`}
+          disabled={index === 0}
+          onClick={() => onSelect(index - 1)}
+        >
+          <ChevronLeft />
+        </Button>
+        <span className="min-w-24 text-center text-xs text-muted-foreground tabular-nums" aria-live="polite">
+          {pageLabel(noun, index, count)}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Next ${noun.toLowerCase()}`}
+          disabled={index >= thumbnails.length - 1}
+          onClick={() => onSelect(index + 1)}
+        >
+          <ChevronRight />
+        </Button>
+      </div>
+      {thumbnails.length > 1 && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {thumbnails.map((src, i) => (
+            <button
+              key={i}
+              type="button"
+              aria-label={pageLabel(noun, i, count)}
+              aria-current={i === index ? "page" : undefined}
+              onClick={() => onSelect(i)}
+              className={cn(
+                "h-12 shrink-0 overflow-hidden rounded-[3px] border outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                i === index ? "border-foreground ring-1 ring-foreground" : "border-border opacity-70 hover:opacity-100",
+              )}
+            >
+              <img src={src} alt="" className="h-full w-auto" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A slide as the deck lays it out: title, the step image (blurs burned in), description. */
+function Slide({ step, number, image }: { step: Step | undefined; number: number; image: string | undefined }) {
+  const title = step ? markdownToPlainText(step.title) || `Step ${number}` : `Step ${number}`;
+  const description = step ? markdownToPlainText(step.description) : "";
   return (
     <div
-      aria-label="Export preview"
-      className={cn(
-        "flex shrink-0 flex-col self-start overflow-hidden bg-[#18181b] shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]",
-        aspect === "vertical" ? "h-[26rem]" : "w-full max-w-[26rem]",
-      )}
-      style={{ aspectRatio: FRAME_RATIOS[aspect] }}
+      className={cn("flex w-full flex-col gap-2 rounded-[3px] bg-white p-4 text-[#1d1d1f]", SHADOW)}
+      style={{ aspectRatio: "16 / 9" }}
     >
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        {image && <img src={image} alt="" className="max-h-full max-w-full" />}
-      </div>
-      {captions && (
-        <div className="flex shrink-0 items-center gap-2 bg-black/35 px-2.5 py-2">
-          <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-[#007aff] text-[8px] font-bold text-white">
-            1
-          </span>
-          <span className="line-clamp-2 text-[10px] font-bold text-white">{title}</span>
+      <p className="truncate text-[13px] font-bold">
+        {number}. {title}
+      </p>
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="flex min-w-0 flex-[2] items-center justify-center">
+          {image && <img src={image} alt="" className="max-h-full max-w-full border border-[#d1d1d6]" />}
         </div>
-      )}
+        {description && <p className="line-clamp-6 flex-1 text-[8px] leading-normal">{description}</p>}
+      </div>
     </div>
   );
 }
 
+function MarkdownPreview({ markdown, images }: { markdown: string; images: { link: string; src: string }[] }) {
+  const [source, setSource] = useState(false);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div role="radiogroup" aria-label="Markdown view" className="flex shrink-0 justify-center gap-1">
+        {[
+          { label: "Rendered", on: false },
+          { label: "Source", on: true },
+        ].map((v) => (
+          <button
+            key={v.label}
+            type="button"
+            role="radio"
+            aria-checked={source === v.on}
+            onClick={() => setSource(v.on)}
+            className={cn(
+              "rounded-md px-2.5 py-0.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              source === v.on ? "bg-foreground text-background" : "text-muted-foreground hover:bg-foreground/[0.06]",
+            )}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+      <BrowserChrome name="guide.md">
+        {source ? (
+          <pre className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[9.5px] leading-normal break-words whitespace-pre-wrap text-[#1f2328]">
+            {markdown}
+          </pre>
+        ) : (
+          <PageFrame
+            title="Export preview"
+            html={markdownPreviewDocument(markdownPreviewHtml(markdown, images))}
+            scripts={false}
+          />
+        )}
+      </BrowserChrome>
+    </div>
+  );
+}
+
+/** The preview by kind; `index` is the page, slide or scene shown. */
+function PreviewBody({
+  preview,
+  guide,
+  format,
+  index,
+  onSelect,
+}: {
+  preview: ExportPreviewData;
+  guide: Guide;
+  format: ExportFormat;
+  index: number;
+  onSelect(index: number): void;
+}) {
+  switch (preview.kind) {
+    case "html":
+      return (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <BrowserChrome name="guide.html">
+            <PageFrame html={preview.html} title="Export preview" scripts={format === "walkthrough"} />
+          </BrowserChrome>
+          {format === "walkthrough" && (
+            <p className="shrink-0 text-center text-xs text-muted-foreground">Click through it as your readers will.</p>
+          )}
+        </div>
+      );
+    case "markdown":
+      return <MarkdownPreview markdown={preview.markdown} images={preview.images} />;
+    case "pages": {
+      const page = preview.pages[index];
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 items-start justify-center">
+            {page && (
+              <img
+                src={page}
+                alt={pageLabel("Page", index, preview.pageCount)}
+                className={cn("max-h-full max-w-full rounded-[3px] bg-white object-contain", SHADOW)}
+              />
+            )}
+          </div>
+          {preview.approximate && (
+            <p className="shrink-0 pt-2 text-center text-xs text-muted-foreground">
+              Word lays out its own pages; this is the PDF’s layout.
+            </p>
+          )}
+          {preview.pageCount > preview.pages.length && (
+            <p className="shrink-0 pt-1 text-center text-xs text-muted-foreground">
+              Showing the first {preview.pages.length} pages.
+            </p>
+          )}
+          <Pager
+            noun="Page"
+            index={index}
+            count={preview.pageCount}
+            thumbnails={preview.pages}
+            onSelect={onSelect}
+          />
+        </div>
+      );
+    }
+    case "slides": {
+      const steps = guide.items.filter((i): i is Step => i.type === "step");
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 items-start">
+            <Slide step={steps[index]} number={index + 1} image={preview.images[index]} />
+          </div>
+          {preview.images.length > 0 && (
+            <Pager
+              noun="Slide"
+              index={index}
+              count={preview.images.length}
+              thumbnails={preview.images}
+              onSelect={onSelect}
+            />
+          )}
+        </div>
+      );
+    }
+    case "frames": {
+      const frame = preview.frames[index];
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 items-start justify-center">
+            {frame && (
+              <img
+                src={frame}
+                alt={pageLabel("Scene", index, preview.sceneCount)}
+                className={cn("max-h-full max-w-full bg-[#18181b] object-contain", SHADOW)}
+              />
+            )}
+          </div>
+          <Pager
+            noun="Scene"
+            index={index}
+            count={preview.sceneCount}
+            thumbnails={preview.frames}
+            onSelect={onSelect}
+          />
+        </div>
+      );
+    }
+  }
+}
+
+/** How many pages, slides or scenes a preview can show. */
+function shown(preview: ExportPreviewData | null): number {
+  if (!preview) return 0;
+  switch (preview.kind) {
+    case "pages":
+      return preview.pages.length;
+    case "slides":
+      return preview.images.length;
+    case "frames":
+      return preview.frames.length;
+    default:
+      return 1;
+  }
+}
+
 /**
- * A sketch of the export's first page as the options change: the accent,
- * logo, paper and review details. Not the exporter's own rendering; the
- * file is made when you export.
+ * The export as the exporter makes it, from the saved guide: the real
+ * logo, accent, paper, page breaks and layout, with blurs burned in. Made
+ * again (after a short pause) whenever the options change.
  */
 export function ExportPreview({
   guide,
@@ -119,8 +321,9 @@ export function ExportPreview({
   logo,
   accent,
   reviewDetails,
-  aspect = "wide",
-  captions = true,
+  motion,
+  api,
+  flush,
 }: {
   guide: Guide;
   format: ExportFormat;
@@ -128,63 +331,68 @@ export function ExportPreview({
   logo: string | null;
   accent: string;
   reviewDetails: boolean;
-  aspect?: MotionAspect;
-  captions?: boolean;
+  motion: MotionOptions;
+  api: ExportApi;
+  /** Saves the editor's changes, so the preview shows them. */
+  flush(): Promise<boolean>;
 }) {
-  if (format === "pptx" || isMotionFormat(format)) {
-    return <FramePreview guide={guide} format={format} aspect={aspect} captions={captions} />;
-  }
-  const color = accent.trim() && isAccent(accent) ? accent.trim() : DEFAULT_ACCENT;
-  const web = isFolderFormat(format);
-  const steps = guide.items.filter((i): i is Step => i.type === "step");
-  const review = [
-    guide.version && `Version ${guide.version}`,
-    guide.owner && `Owner: ${guide.owner}`,
-    guide.lastReviewed && `Reviewed ${guide.lastReviewed}`,
-  ].filter(Boolean);
+  const [state, setState] = useState<PreviewState>({ preview: null, key: null, loading: false, error: null });
+  const [index, setIndex] = useState(0);
+  const scheduler = useRef<PreviewScheduler | null>(null);
+  const deps = useRef({ api, flush });
+  deps.current = { api, flush };
+
+  useEffect(() => {
+    const s = new PreviewScheduler(
+      async (r) => {
+        await deps.current.flush();
+        return deps.current.api.previewExport(r.guideId, r.format, r.branding, r.paper, r.reviewDetails, r.motion);
+      },
+      setState,
+      errorMessage,
+    );
+    scheduler.current = s;
+    return () => s.dispose();
+  }, []);
+
+  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion });
+  const key = request && JSON.stringify(request);
+  useEffect(() => {
+    scheduler.current?.request(request);
+    // `key` stands for the request.
+  }, [key]);
+
+  // A new preview starts on its first page, and a shorter one keeps the index in range.
+  const count = shown(state.preview);
+  useEffect(() => setIndex(0), [state.key]);
+  const page = Math.min(index, Math.max(0, count - 1));
+
   return (
-    <div
-      aria-label="Export preview"
-      className={cn(
-        "flex w-[22rem] shrink-0 flex-col overflow-hidden bg-white text-[#1d1c1a] shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]",
-        web ? "h-full rounded-lg" : "rounded-[3px]",
-      )}
-      style={web ? undefined : { aspectRatio: paper === "letter" ? "8.5 / 11" : "210 / 297" }}
-    >
-      {web && (
-        <div className="flex h-6 shrink-0 items-center gap-1 border-b border-[#ececef] bg-[#f4f4f6] px-2.5">
-          {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
-            <span key={c} className="size-2 rounded-full" style={{ background: c }} />
-          ))}
-          <span className="mx-auto truncate text-[9px] text-[#888]">guide.html</span>
+    <div aria-label="Export preview" aria-busy={state.loading} className="relative flex h-full w-[22rem] shrink-0 flex-col pb-4">
+      {state.preview && (
+        <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity", state.loading && "opacity-60")}>
+          <PreviewBody
+            preview={state.preview}
+            guide={guide}
+            format={format}
+            index={page}
+            onSelect={setIndex}
+          />
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-7 py-6">
-        {logo && (
-          // Where the logo goes; the file itself is read when exporting.
-          <div className="flex items-center gap-1.5 text-[9px] font-semibold tracking-wider text-[#888] uppercase">
-            <span className="size-3.5 rounded-[3px]" style={{ background: color }} />
-            Logo
-          </div>
-        )}
-        <div>
-          <h1 className="font-serif text-[26px] leading-[1.05]">{guide.title || "Untitled"}</h1>
-          <div className="mt-2 h-0.5 w-10 rounded-full" style={{ background: color }} />
+      {state.loading && (
+        <div className="pointer-events-none absolute inset-x-0 top-1/3 flex justify-center">
+          <span className="flex items-center gap-2 rounded-full bg-card px-3 py-1.5 text-xs text-muted-foreground shadow">
+            <LoaderCircle className="size-3.5 animate-spin" /> Updating preview…
+          </span>
         </div>
-        {reviewDetails && review.length > 0 && <p className="text-[9px] text-[#777]">{review.join(" · ")}</p>}
-        {guide.intro && (
-          <p className="line-clamp-3 text-[10px] leading-normal text-[#444]">{markdownToPlainText(guide.intro)}</p>
-        )}
-        {guide.prerequisites && (
-          <div className="rounded-[4px] bg-[#f6f4ef] px-2.5 py-2 text-[9.5px]">
-            <p className="mb-0.5 text-[8px] font-semibold tracking-wider text-[#8a857b] uppercase">Before you start</p>
-            <p className="line-clamp-2">{markdownToPlainText(guide.prerequisites)}</p>
-          </div>
-        )}
-        {steps.slice(0, PREVIEW_STEPS).map((step, i) => (
-          <PreviewStep key={step.id} guideId={guide.id} step={step} number={i + 1} accent={color} />
-        ))}
-      </div>
+      )}
+      {state.error && !state.loading && (
+        <p role="alert" className="flex shrink-0 items-start gap-2 pt-2 text-xs text-[var(--status-danger)]">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span>No preview: {state.error}</span>
+        </p>
+      )}
     </div>
   );
 }

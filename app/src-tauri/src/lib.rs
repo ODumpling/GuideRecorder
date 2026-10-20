@@ -204,6 +204,8 @@ pub fn run() {
             commands::choose_export_file,
             commands::choose_logo,
             commands::export_guide,
+            commands::preview_export,
+            commands::logo_preview,
             commands::reveal_export,
             commands::verify_crop,
             settings_commands::get_settings,

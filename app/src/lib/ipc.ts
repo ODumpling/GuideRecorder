@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, ExportBranding, ExportFormat, ExportResult, GuideListItem, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
 import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -149,6 +149,17 @@ export interface ExportApi {
     /** Used by MP4 and GIF. */
     motion: MotionOptions,
   ): Promise<ExportResult>;
+  /** A preview of exporting from the saved bundle with these options; writes nothing. */
+  previewExport(
+    guideId: string,
+    format: ExportFormat,
+    branding: ExportBranding,
+    paper: PaperSize,
+    reviewDetails: boolean,
+    motion: MotionOptions,
+  ): Promise<ExportPreviewData>;
+  /** A logo `chooseLogo` returned (PNG or JPEG, up to 2 MB) as a PNG data URI. */
+  logoPreview(path: string): Promise<string>;
   /** Shows a file an export wrote in Finder. */
   reveal(path: string): Promise<void>;
 }
@@ -160,6 +171,9 @@ export const tauriExportApi: ExportApi = {
   chooseLogo: () => invoke("choose_logo"),
   exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion) =>
     invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion }),
+  previewExport: (guideId, format, branding, paper, reviewDetails, motion) =>
+    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion }),
+  logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
 

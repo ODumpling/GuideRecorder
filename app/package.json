@@ -20,6 +20,7 @@
     "@guiderecorder/ui": "workspace:*",
     "@tauri-apps/api": "^2.11.1",
     "lucide-react": "^1.26.0",
+    "markdown-it": "15.0.2",
     "radix-ui": "^1.6.5",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

@@ -256,6 +256,65 @@ pub(super) fn render(
     out.finish()
 }
 
+/// Most scenes [`preview`] draws.
+pub const MAX_PREVIEW_FRAMES: usize = 12;
+
+/// Where in a step [`preview`] takes its still: in the close-up hold,
+/// after the ripple has started.
+const PREVIEW_SHARE: f64 = 0.6;
+
+/// One still per scene of a motion export, for a preview.
+#[derive(Debug, Clone)]
+pub struct MotionPreview {
+    /// PNG frames of the first scenes, at most [`MAX_PREVIEW_FRAMES`]:
+    /// title and section cards as they show, steps in their close-up.
+    pub frames: Vec<Vec<u8>>,
+    /// Scenes in the whole export.
+    pub scene_count: usize,
+    /// The step image warnings; no files.
+    pub report: ExportReport,
+}
+
+/// Draws a still of each scene of `guide` as [`render`] paints it (the
+/// same images, blur burned in, captions and cursor), with a frame whose
+/// short side is `short` pixels, instead of encoding a video.
+pub fn preview(guide: &RenderGuide, opts: &MotionOptions, short: u32) -> Result<MotionPreview> {
+    let labels = opts
+        .labels
+        .clone()
+        .unwrap_or_else(|| Labels::for_language(&guide.language));
+    let scenes = scenes(guide, opts);
+    if !scenes.iter().any(|s| matches!(s.kind, SceneKind::Step(_))) {
+        return Err(MotionError::NoSteps);
+    }
+    let frame = FrameLayout::new(opts.aspect.size(short), opts.captions);
+    let mut report = ExportReport::default();
+    let mut frames = Vec::new();
+    for scene in scenes.iter().take(MAX_PREVIEW_FRAMES) {
+        let (mut painter, share): (Box<dyn ScenePainter>, f64) = match scene.kind {
+            SceneKind::Card { title, subtitle } => {
+                (Box::new(Card::new(&frame, title, subtitle)?), 0.0)
+            }
+            SceneKind::Step(step) => (
+                Box::new(Shot::new(guide, step, opts, &labels, &frame, &mut report)?),
+                PREVIEW_SHARE,
+            ),
+        };
+        let state = painter.state(share, share * scene.seconds, scene.seconds);
+        let pixmap = painter.paint(&state)?;
+        frames.push(
+            pixmap
+                .encode_png()
+                .map_err(|e| MotionError::Encode(e.to_string()))?,
+        );
+    }
+    Ok(MotionPreview {
+        frames,
+        scene_count: scenes.len(),
+        report,
+    })
+}
+
 /// Passes runs of identical frames on as one.
 struct Deduper<'s, 'a> {
     sink: &'s mut Sink<'a>,

@@ -102,6 +102,8 @@ export class Backend {
     branding: ExportBranding;
     motion?: unknown;
   }[] = [];
+  /** Every `preview_export` call. */
+  readonly previews: { format: string; branding: ExportBranding }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
@@ -768,6 +770,28 @@ export class Backend {
         const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
         return { files: [main], warnings: [], notes: [] } satisfies ExportResult;
       }
+      case "preview_export": {
+        this.bundle(String(args.guideId));
+        this.previews.push({ format: String(args.format), branding: args.branding as ExportBranding });
+        const page = (n: number) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="14"><text y="10">${n}</text></svg>`)}`;
+        switch (String(args.format)) {
+          case "md":
+            return { kind: "markdown", markdown: "# Guide\n\n## 1. Step\n", images: [] };
+          case "html":
+          case "walkthrough":
+            return { kind: "html", html: "<!doctype html><title>Guide</title><h1>Guide</h1>" };
+          case "pptx":
+            return { kind: "slides", images: [page(1), page(2)] };
+          case "mp4":
+          case "gif":
+            return { kind: "frames", frames: [page(1), page(2)], sceneCount: 2 };
+          default:
+            return { kind: "pages", pages: [page(1), page(2), page(3)], pageCount: 3, approximate: args.format === "docx" };
+        }
+      }
+      case "logo_preview":
+        if (args.path !== this.dialog.logo) fail("invalid", `${String(args.path)} was not chosen as the logo`);
+        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       case "reveal_export":
         this.revealed.push(String(args.path));
         return null;
