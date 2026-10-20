@@ -1,7 +1,8 @@
 // Fixed-window rate limits in memory. Each server process counts on its own,
 // so behind N instances a client gets up to N times the limit; that's enough
-// to stop runaway clients and scraping without a shared store. Better Auth's
-// endpoints (sign-in and the like) have their own limits, kept in Postgres.
+// to stop runaway clients, scraping and password guessing without a shared
+// store. Better Auth's endpoints (sign-in and the like) have their own
+// limits, kept in Postgres.
 
 export interface RateLimit {
   /** Counts a hit for `key`; false once the window's limit is used up. */
@@ -97,3 +98,10 @@ export async function limitApiRequest(request: Request, rules: ApiRule[], now = 
     { status: 429, headers: { "retry-after": String(retryAfter) } },
   );
 }
+
+/** Opening share pages: per address. */
+export const shareViews = rateLimit({ limit: 60, windowMs: MINUTE });
+/** Share images: a page loads one per step. */
+export const shareAssets = rateLimit({ limit: 1200, windowMs: MINUTE });
+/** Password attempts: per address and link. */
+export const sharePasswords = rateLimit({ limit: 10, windowMs: 15 * MINUTE });

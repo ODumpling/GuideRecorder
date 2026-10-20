@@ -6,7 +6,7 @@
 import { insertItemAfter } from "@/editor/commands";
 import type { EditorStore } from "@/editor/store";
 import { addImageStep, readImageFile } from "@/lib/ipc";
-import type { Step } from "@/lib/types";
+import type { Step } from "@guiderecorder/guide-schema";
 
 /** Core's `MAX_WEBP_DIMENSION`. */
 export const MAX_SIDE = 16383;

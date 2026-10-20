@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testAuth } from "../../test/auth";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
-import { session, ssoProvider, subscription, user } from "@/db/schema";
+import { auditEvent, session, ssoProvider, subscription, user } from "@/db/schema";
 import { loadAdmin, registerSso, verifyDomain, type AdminActor } from "./admin";
 import { setPolicy } from "./policy";
 import { capturingWorkspace, domainCovered, emailDomain, signInDecision } from "./sso";
@@ -132,6 +132,9 @@ describe("sign-in policy", () => {
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as { code: string }).code).toBe("SSO_REQUIRED");
     expect(await sessions()).toBe(before);
+    // Bob is a member only through sign-up's personal workspace; a refused sign-in isn't one.
+    const signIns = (await db.select().from(auditEvent).where(eq(auditEvent.action, "user.signIn"))).filter((e) => e.actorId === bob.userId);
+    expect(signIns).toHaveLength(1);
 
     const ada = await t.auth.api.signInEmail({ body: { email: "ada@acme.com", password: "correct horse battery" }, asResponse: true });
     expect(ada.status).toBe(200);

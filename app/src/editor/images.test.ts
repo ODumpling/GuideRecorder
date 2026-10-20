@@ -3,7 +3,7 @@ import { fitSize, insertImageSteps, isImagePath, MAX_PIXELS, MAX_SIDE, toPng } f
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
 import type { EditorApi } from "@/lib/ipc";
-import type { Step } from "@/lib/types";
+import type { Step } from "@guiderecorder/guide-schema";
 
 const ipc = vi.hoisted(() => ({ addImageStep: vi.fn(), readImageFile: vi.fn() }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({ ...(await importOriginal<object>()), ...ipc }));

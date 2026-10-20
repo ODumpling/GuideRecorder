@@ -108,3 +108,33 @@ test("exports a vertical GIF without zoom, remembering the options", async ({ pa
   await expect(dialog.getByLabel("Zoom in on each click")).not.toBeChecked();
   await expect(dialog.getByRole("spinbutton")).toHaveValue("2.5");
 });
+
+test("previews the export's pages with the chosen logo", async ({ page, backend }) => {
+  await openGuide(page, "Rotate an API key");
+  await page.getByRole("button", { name: "Export…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Export guide" });
+  await dialog.getByRole("radio", { name: /PDF/ }).click();
+  const preview = dialog.getByLabel("Export preview");
+  await expect(preview.getByText("Page 1 of 3")).toBeVisible();
+  await preview.getByRole("button", { name: "Next page" }).click();
+  await expect(preview.getByText("Page 2 of 3")).toBeVisible();
+  await preview.getByRole("button", { name: "Page 3 of 3" }).click();
+  await expect(preview.getByRole("button", { name: "Next page" })).toBeDisabled();
+
+  backend.dialog.logo = "/Users/me/logo.png";
+  await dialog.getByRole("button", { name: "Choose logo…" }).click();
+  await expect
+    .poll(() => backend.previews.at(-1))
+    .toEqual({ format: "pdf", branding: { logo: "/Users/me/logo.png", accent: null } });
+  // Typing an accent makes one preview once it is a colour.
+  const before = backend.previews.length;
+  await dialog.getByPlaceholder(/Accent colour/).pressSequentially("#336699");
+  await expect.poll(() => backend.previews.at(-1)?.branding.accent).toBe("#336699");
+  expect(backend.previews.length - before).toBeLessThanOrEqual(2);
+
+  await dialog.getByRole("radio", { name: /Word/ }).click();
+  await expect(preview.getByText(/this is the PDF’s layout/)).toBeVisible();
+  await dialog.getByRole("radio", { name: /Markdown/ }).click();
+  await preview.getByRole("radio", { name: "Source" }).click();
+  await expect(preview.getByText("## 1. Step")).toBeVisible();
+});

@@ -751,6 +751,7 @@ pub async fn rewrite(
             prompt_version: Some(output.meta.prompt_version),
             error: None,
             redaction_suggestions: step.ai_state.redaction_suggestions.clone(),
+            scanned: step.ai_state.scanned,
         },
     })
 }
@@ -962,6 +963,8 @@ mod tests {
                     },
                     reason: "email address".into(),
                     source: SuggestionSource::Ai,
+                    preview: None,
+                    review: None,
                 }],
                 meta: guiderecorder_core::ai::GenerationMeta {
                     usage: Usage {
@@ -1995,6 +1998,8 @@ mod tests {
             },
             reason: "email address".into(),
             source: SuggestionSource::Ai,
+            preview: None,
+            review: None,
         };
         if let Item::Step(step) = &mut guide.items[1] {
             step.description = "Mine too.".into();

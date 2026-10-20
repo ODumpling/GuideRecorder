@@ -1,16 +1,7 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type {
-  AppError,
-  ExportBranding,
-  ExportFormat,
-  ExportResult,
-  Item,
-  MotionAspect,
-  MotionOptions,
-  PaperSize,
-  Step,
-} from "@/lib/types";
+import type { Item, Step } from "@guiderecorder/guide-schema";
+import type { AppError, ExportBranding, ExportFormat, ExportResult, MotionAspect, MotionOptions, PaperSize } from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -294,7 +285,7 @@ export function unreviewedBlurs(items: Item[]): { stepIds: string[]; steps: numb
   items
     .filter((item): item is Step => item.type === "step")
     .forEach((step, i) => {
-      const n = step.aiState.redactionSuggestions?.length ?? 0;
+      const n = step.aiState.redactionSuggestions?.filter((s) => !s.review).length ?? 0;
       if (!n) return;
       unreviewed.stepIds.push(step.id);
       unreviewed.steps.push(i + 1);

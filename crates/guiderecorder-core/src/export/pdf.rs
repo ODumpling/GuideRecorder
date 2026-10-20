@@ -85,6 +85,7 @@ use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World, WorldExt};
+use typst_layout::PagedDocument;
 use typst_pdf::Timestamp;
 
 use super::annotate::DEFAULT_HOTSPOT_COLOR;
@@ -216,6 +217,98 @@ pub fn export(
 
 /// Typesets `guide` in memory. [`export`] is this plus writing the file.
 pub fn render(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> Result<PdfOutput> {
+    // Typst memoizes across compilations; drop what older exports left, on
+    // every path out of here.
+    let _evict = EvictOnDrop;
+    let Typeset {
+        document,
+        world,
+        report,
+        started,
+    } = typeset(guide, handle, opts)?;
+    let pdf_opts = typst_pdf::PdfOptions {
+        ident: Smart::Custom(guide.id.to_string()),
+        creator: Smart::Custom(Some("GuideRecorder".into())),
+        timestamp: Some(Timestamp::new_utc(world.now)),
+        ..typst_pdf::PdfOptions::default()
+    };
+    let pdf = guard(|| typst_pdf::pdf(&document, &pdf_opts))?
+        .map_err(|e| PdfError::Typst(world.format(&e)))?;
+    let compile_time = started.elapsed();
+    let page_text = document
+        .pages()
+        .iter()
+        .map(|page| page_text(&page.frame))
+        .collect();
+    Ok(PdfOutput {
+        pdf,
+        page_text,
+        report,
+        compile_time,
+    })
+}
+
+/// Most pages [`preview`] draws.
+pub const MAX_PREVIEW_PAGES: usize = 12;
+
+/// Pixels per point of [`preview`]'s page images: about 1.2× an A4 page
+/// 595 pt wide, sharp enough for the Export dialog's preview.
+pub const PREVIEW_PIXELS_PER_PT: f64 = 1.2;
+
+/// The first pages of a typeset guide as images, for a preview.
+#[derive(Debug, Clone)]
+pub struct PdfPreview {
+    /// PNG images of the first pages, at most [`MAX_PREVIEW_PAGES`].
+    pub pages: Vec<Vec<u8>>,
+    /// Pages in the whole document.
+    pub page_count: usize,
+    /// As in [`PdfOutput::report`].
+    pub report: ExportReport,
+}
+
+/// Typesets `guide` as [`render`] does and draws its first
+/// [`MAX_PREVIEW_PAGES`] pages at [`PREVIEW_PIXELS_PER_PT`], instead of
+/// writing a PDF. Blur and pixelate are burned into the step images as in
+/// the export, so the preview shows what the file will.
+pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> Result<PdfPreview> {
+    let _evict = EvictOnDrop;
+    let Typeset {
+        document, report, ..
+    } = typeset(guide, handle, opts)?;
+    let render_opts = typst_render::RenderOptions {
+        pixel_per_pt: typst::utils::Scalar::new(PREVIEW_PIXELS_PER_PT),
+        render_bleed: false,
+    };
+    let pages = document
+        .pages()
+        .iter()
+        .take(MAX_PREVIEW_PAGES)
+        .map(|page| {
+            let pixmap = guard(|| typst_render::render(page, &render_opts))?;
+            pixmap
+                .encode_png()
+                .map_err(|e| PdfError::Io(io::Error::other(e)))
+        })
+        .collect::<Result<_>>()?;
+    Ok(PdfPreview {
+        pages,
+        page_count: document.pages().len(),
+        report,
+    })
+}
+
+/// A compiled guide and the world it was compiled in.
+struct Typeset {
+    document: PagedDocument,
+    world: GuideWorld,
+    report: ExportReport,
+    /// When compiling started, after the step images were rendered.
+    started: Instant,
+}
+
+/// Compiles `guide` with the template; shared by [`render`] and
+/// [`preview`]. The caller holds an [`EvictOnDrop`].
+fn typeset(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> Result<Typeset> {
     let branding = &opts.branding;
     let accent = branding.accent().unwrap_or(DEFAULT_ACCENT);
     let mut report = ExportReport::default();
@@ -243,33 +336,16 @@ pub fn render(guide: &RenderGuide, handle: &GuideHandle, opts: &PdfOptions) -> R
 
     let started = Instant::now();
     let world = GuideWorld::new(files, now);
-    // Typst memoizes across compilations; drop what older exports left, on
-    // every path out of here.
-    let _evict = EvictOnDrop;
-    let warned = guard(|| typst::compile(&world))?;
+    let warned = guard(|| typst::compile::<PagedDocument>(&world))?;
     report.notes.extend(world.format(&warned.warnings));
     let document = warned
         .output
         .map_err(|e| PdfError::Typst(world.format(&e)))?;
-    let pdf_opts = typst_pdf::PdfOptions {
-        ident: Smart::Custom(guide.id.to_string()),
-        creator: Smart::Custom(Some("GuideRecorder".into())),
-        timestamp: Some(Timestamp::new_utc(world.now)),
-        ..typst_pdf::PdfOptions::default()
-    };
-    let pdf = guard(|| typst_pdf::pdf(&document, &pdf_opts))?
-        .map_err(|e| PdfError::Typst(world.format(&e)))?;
-    let compile_time = started.elapsed();
-    let page_text = document
-        .pages()
-        .iter()
-        .map(|page| page_text(&page.frame))
-        .collect();
-    Ok(PdfOutput {
-        pdf,
-        page_text,
+    Ok(Typeset {
+        document,
+        world,
         report,
-        compile_time,
+        started,
     })
 }
 

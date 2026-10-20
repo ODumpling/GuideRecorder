@@ -3,32 +3,8 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type {
-  AiFinishedEvent,
-  AiGuideEvent,
-  AiRewriteResult,
-  AiStepEvent,
-  CaptureArea,
-  CaptureTargetArg,
-  CaptureWindow,
-  ExportBranding,
-  ExportResult,
-  Guide,
-  HotkeyErrors,
-  GuideListItem,
-  OpenedGuide,
-  Rect,
-  RecordingSaved,
-  RecordingSnapshot,
-  RecordingStatus,
-  RedactionSuggestion,
-  RewriteStyleArg,
-  Settings,
-  StampedStatus,
-  Step,
-  StepImage,
-  UpdateStatus,
-} from "../src/lib/types";
+import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -126,6 +102,8 @@ export class Backend {
     branding: ExportBranding;
     motion?: unknown;
   }[] = [];
+  /** Every `preview_export` call. */
+  readonly previews: { format: string; branding: ExportBranding }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
@@ -172,6 +150,7 @@ export class Backend {
       afterFrameDelayMs: 400,
       excludedApps: [...DEFAULT_EXCLUDED_IDS],
       typingIdleMs: 1500,
+      clickRing: false,
     },
     ai: {
       enabled: true,
@@ -572,7 +551,15 @@ export class Backend {
    */
   takeSnapshot(id: string, point: RecordingSnapshot["point"] = null): RecordingSnapshot {
     this.active();
-    const snapshot: RecordingSnapshot = { id, ts: this.snapshots.size * 1_000_000, width: 1600, height: 1000, point };
+    const snapshot: RecordingSnapshot = {
+      id,
+      ts: this.snapshots.size * 1_000_000,
+      width: 1600,
+      height: 1000,
+      point,
+      title: point ? "Click" : "Type",
+      elapsedMs: this.snapshots.size * 1000,
+    };
     this.snapshots.set(id, snapshot);
     this.events.push({ event: "recording://snapshot", payload: structuredClone(snapshot) });
     return snapshot;
@@ -648,11 +635,17 @@ export class Backend {
               summary: bundle.guide.summary,
               tags: bundle.guide.tags,
               stepCount: bundle.guide.items.filter((item) => item.type === "step").length,
+              kind: bundle.guide.kind ?? "walkthrough",
+              hotspotCount: bundle.guide.items
+                .flatMap((item) => (item.type === "step" ? item.annotations : []))
+                .filter((a) => a.type === "hotspot").length,
               createdAt: bundle.guide.createdAt,
               updatedAt: bundle.guide.updatedAt,
               folder: "",
               readOnly: this.readOnly(bundle),
               duplicateOf: null,
+              owner: bundle.guide.owner,
+              status: bundle.guide.status,
             }),
           );
       }
@@ -676,6 +669,19 @@ export class Backend {
         bundle.guide = structuredClone(guide);
         this.saves.push(structuredClone(guide));
         return null;
+      }
+      case "edit_guide_details": {
+        const bundle = this.bundle(String(args.id));
+        const edit = args.edit as DetailsEdit;
+        const guide = bundle.guide;
+        if (edit.status) guide.status = edit.status;
+        if (edit.owner !== undefined) guide.owner = edit.owner.trim() || null;
+        const removed = new Set((edit.removeTags ?? []).map((t) => t.toLowerCase()));
+        guide.tags = guide.tags.filter((t) => !removed.has(t.toLowerCase()));
+        for (const tag of edit.addTags ?? []) {
+          if (!guide.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) guide.tags.push(tag);
+        }
+        return structuredClone(guide);
       }
       case "new_annotated_guide": {
         const n = this.annotatedGuides.length + 1;
@@ -779,6 +785,28 @@ export class Backend {
         const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
         return { files: [main], warnings: [], notes: [] } satisfies ExportResult;
       }
+      case "preview_export": {
+        this.bundle(String(args.guideId));
+        this.previews.push({ format: String(args.format), branding: args.branding as ExportBranding });
+        const page = (n: number) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="14"><text y="10">${n}</text></svg>`)}`;
+        switch (String(args.format)) {
+          case "md":
+            return { kind: "markdown", markdown: "# Guide\n\n## 1. Step\n", images: [] };
+          case "html":
+          case "walkthrough":
+            return { kind: "html", html: "<!doctype html><title>Guide</title><h1>Guide</h1>" };
+          case "pptx":
+            return { kind: "slides", images: [page(1), page(2)] };
+          case "mp4":
+          case "gif":
+            return { kind: "frames", frames: [page(1), page(2)], sceneCount: 2 };
+          default:
+            return { kind: "pages", pages: [page(1), page(2), page(3)], pageCount: 3, approximate: args.format === "docx" };
+        }
+      }
+      case "logo_preview":
+        if (args.path !== this.dialog.logo) fail("invalid", `${String(args.path)} was not chosen as the logo`);
+        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       case "reveal_export":
         this.revealed.push(String(args.path));
         return null;
@@ -910,6 +938,8 @@ export class Backend {
         this.manualSteps += 1;
         return null;
       }
+      case "resize_toolbar":
+        return null;
       case "recording_snapshot": {
         const id = String(args.id);
         if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");

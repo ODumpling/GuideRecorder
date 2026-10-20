@@ -16,9 +16,10 @@ import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
+import { ShareDialog } from "@/components/ShareDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
@@ -243,13 +244,14 @@ export default function App() {
           <main className="flex min-w-0 flex-1 overflow-y-auto">{hasDoc ? <StepView /> : <LibraryHome />}</main>
           {hasDoc && selected && (
             <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-background/40">
-              <Inspector />
+              <Inspector onPrivacySettings={() => openSettings("privacy")} />
             </aside>
           )}
         </div>
       </div>
       <LeaveDialog />
       <ConflictDialog />
+      <ShareDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <Onboarding />
       {draggingImages && (

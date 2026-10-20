@@ -187,7 +187,6 @@ CREATE TABLE "workspace_policy" (
 	"require_sso" boolean DEFAULT false NOT NULL,
 	"provisioning_role" text DEFAULT 'editor' NOT NULL,
 	"revision_retention_days" integer,
-	"audit_retention_days" integer,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "workspace_policy_organization_id_unique" UNIQUE("organization_id")
 );

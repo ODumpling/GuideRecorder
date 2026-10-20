@@ -5,6 +5,7 @@ import {
   copyTitle,
   folderName,
   folderPaths,
+  guideContents,
   addMonths,
   hasOwner,
   hasTag,
@@ -29,6 +30,8 @@ function item(title: string, extra: Partial<GuideListItem> = {}): GuideListItem 
     summary: "",
     tags: [],
     stepCount: 0,
+    kind: "walkthrough",
+    hotspotCount: 0,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     folder: "",
@@ -157,6 +160,13 @@ describe("library cards", () => {
     expect(inFolder({ folder: "Workshop" }, "Work")).toBe(false);
     expect(inFolder({ folder: "" }, "Work")).toBe(false);
     expect(inFolder({ folder: "Work" }, "")).toBe(true);
+  });
+
+  it("counts steps, or pages and hotspots", () => {
+    expect(guideContents({ kind: "walkthrough", stepCount: 7, hotspotCount: 0 })).toBe("7 steps");
+    expect(guideContents({ kind: "walkthrough", stepCount: 1, hotspotCount: 0 })).toBe("1 step");
+    expect(guideContents({ kind: "annotated", stepCount: 4, hotspotCount: 12 })).toBe("4 pages · 12 hotspots");
+    expect(guideContents({ kind: "annotated", stepCount: 1, hotspotCount: 1 })).toBe("1 page · 1 hotspot");
   });
 
   it("says how long ago", () => {

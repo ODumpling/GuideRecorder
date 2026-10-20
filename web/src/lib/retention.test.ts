@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Guide } from "@guiderecorder/guide-schema";
 import { imagePaths, pushRequest } from "@guiderecorder/sync";
 import { testDb } from "../../test/db";
 import { memoryStore } from "../../test/store";
 import type { Database } from "@/db";
-import { asset, guide, organization, revision, session, user } from "@/db/schema";
+import { asset, changeRequest, guide, organization, revision, session, shareLink, user } from "@/db/schema";
 import { assetKey } from "./assets";
 import { setPolicy } from "./policy";
-import { deleteOrphanAssets, pruneRevisions, runRetention, setRetentionHooks } from "./retention";
+import { recordAudit, setAuditRetention } from "./audit";
+import { deleteOrphanAssets, pruneRevisions, runRetention } from "./retention";
 import { push, trashGuide, type Actor } from "./sync";
 
 const fixture: Guide = JSON.parse(
@@ -69,6 +70,21 @@ describe("revision retention", () => {
     await pushed({ ...structuredClone(fixture), title: "Fourth" }, third);
     expect(await pruneRevisions(db, NOW)).toBe(0);
   });
+
+  it("keeps revisions a share link pins or a change request names", async () => {
+    const { first, second, third } = await history();
+    const link = { organizationId: "org", guideId: fixture.id, revisionId: second };
+    await db.insert(shareLink).values({ id: "l", token: "t", ...link });
+    await db.insert(changeRequest).values({ id: "cr", organizationId: "org", guideId: fixture.id, revisionId: second, status: "approved" });
+    await setPolicy(db, "org", { revisionRetentionDays: 30 });
+    expect(await pruneRevisions(db, NOW)).toBe(0);
+
+    // Once neither names it, it goes.
+    await db.update(shareLink).set({ revokedAt: NOW });
+    await db.delete(changeRequest);
+    expect(await pruneRevisions(db, NOW)).toBe(1);
+    expect(await revisionIds()).toEqual([first, third].sort());
+  });
 });
 
 describe("orphan images", () => {
@@ -107,12 +123,9 @@ describe("runRetention", () => {
     expect((await db.select().from(session)).map((s) => s.id)).toEqual(["live"]);
   });
 
-  it("asks the audit log to delete events past the workspace's period", async () => {
-    const auditEvents = vi.fn(async () => 3);
-    setRetentionHooks({ auditEvents });
-    await setPolicy(db, "org", { auditRetentionDays: 365 });
-    expect((await runRetention(db, s3.store, NOW)).auditEvents).toBe(3);
-    expect(auditEvents).toHaveBeenCalledWith(db, "org", new Date(NOW.getTime() - 365 * DAY));
-    setRetentionHooks({ auditEvents: undefined });
+  it("prunes audit events past the workspace's audit retention", async () => {
+    await recordAudit(db, "org", { actorId: "ada", action: "guide.edit", targetType: "guide", targetId: "g", at: new Date(NOW.getTime() - 400 * DAY) });
+    await setAuditRetention(db, "org", { userId: "ada" }, 365);
+    expect((await runRetention(db, s3.store, NOW)).auditEvents).toBe(1);
   });
 });

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { hexToBase64, s3Store } from "./storage";
+import { contentDisposition, hexToBase64, s3Store } from "./storage";
 
 const store = s3Store({
   endpoint: "https://s3.example.com/",
@@ -48,4 +48,10 @@ it("signs server-side encryption into uploads when configured", async () => {
   // Unset (R2, local storage): no SSE headers at all.
   const plain = await store.presignPut("k", { size: 1, contentType: "image/webp", sha256: sha }, 900);
   expect(Object.keys(plain.headers).some((h) => h.startsWith("x-amz-server-side"))).toBe(false);
+});
+
+it("names downloads with a signed Content-Disposition", async () => {
+  const url = new URL(await store.presignGet("orgs/o/exports/r/pdf.pdf", 300, { filename: "Drucker – Fach.pdf" }));
+  expect(url.searchParams.get("response-content-disposition")).toBe(contentDisposition("Drucker – Fach.pdf"));
+  expect(contentDisposition('a"b – c.pdf')).toBe(`attachment; filename="a_b _ c.pdf"; filename*=UTF-8''a%22b%20%E2%80%93%20c.pdf`);
 });

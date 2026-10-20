@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { equal, imagePaths, type AssetMap, type Change, type Revision } from "@guiderecorder/sync";
-import type { Guide as SchemaGuide } from "@guiderecorder/guide-schema";
-import type { Guide, Step } from "@/lib/types";
+import { equal, imagePaths, type AssetMap, type Change, type ReviewState, type Revision } from "@guiderecorder/sync";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 import {
   emptyState,
+  canSubmitForReview,
   resolveConflict,
   setGuideEnabled,
+  submitForReview,
   syncOnce,
   type ApiResponse,
   type SyncBackend,
@@ -23,13 +24,20 @@ class FakeServer {
   guides = new Map<string, { head: Revision; seq: number; deleted: boolean }>();
   assets = new Set<string>();
   pushes = 0;
+  /** Approvals on: pushes are drafts. */
+  gated = false;
+  submitted: string[] = [];
+
+  review(status: ReviewState["status"], changeRequestId: string | null): ReviewState {
+    return { gated: true, status, changeRequestId, approvals: 0, required: 1 };
+  }
 
   commit(id: string, guide: Guide, assets: AssetMap, parentId: string | null, source: "app" | "web" = "web"): Revision {
     const revision: Revision = {
       id: `r${++this.seq}`,
       guideId: id,
       parentId,
-      guide: structuredClone(guide) as unknown as SchemaGuide,
+      guide: structuredClone(guide),
       assets,
       authorId: "u",
       source,
@@ -81,7 +89,14 @@ class FakeServer {
       if (current?.deleted) return { status: 410, body: { error: "trashed" } };
       if (current && equal(current.head.guide, body.guide)) return { status: 200, body: { revision: current.head } };
       if (current && body.baseRevision !== current.head.id) return { status: 409, body: { error: "moved", head: current.head } };
-      return { status: 200, body: { revision: this.commit(body.guideId, body.guide, body.assets, current?.head.id ?? null, "app") } };
+      // A gated guide: the server sets its status, so a push can't publish it.
+      const guide = this.gated ? { ...body.guide, status: "draft" } : body.guide;
+      const revision = this.commit(body.guideId, guide, body.assets, current?.head.id ?? null, "app");
+      return { status: 200, body: { revision, review: this.gated ? this.review("draft", null) : undefined } };
+    }
+    if (url.pathname.endsWith("/review")) {
+      this.submitted.push(body.revisionId);
+      return { status: 200, body: { review: this.review("inReview", "cr1") } };
     }
     return { status: 404, body: { error: "not found" } };
   }
@@ -104,7 +119,7 @@ class FakeLibrary implements SyncBackend {
   }
   async prepareGuide(id: string) {
     const guide = structuredClone(this.guides.get(id)!);
-    const images = imagePaths(guide as unknown as SchemaGuide).map((path) => ({ path, sha256: sha(path), size: 1, contentType: "image/webp" }));
+    const images = imagePaths(guide).map((path) => ({ path, sha256: sha(path), size: 1, contentType: "image/webp" }));
     return { guide, images };
   }
   async upload() {}
@@ -131,8 +146,8 @@ class FakeLibrary implements SyncBackend {
   }
 }
 
-const steps = (guide: Guide | SchemaGuide) => (guide.items as Step[]).filter((i) => i.type === "step");
-const stepTitle = (guide: Guide | SchemaGuide, n: number) => steps(guide)[n]!.title;
+const steps = (guide: Guide) => (guide.items as Step[]).filter((i) => i.type === "step");
+const stepTitle = (guide: Guide, n: number) => steps(guide)[n]!.title;
 const setStepTitle = (n: number, title: string) => (g: Guide) => (steps(g)[n]!.title = title);
 
 let server: FakeServer;
@@ -278,7 +293,7 @@ describe("syncOnce", () => {
 
   it("syncing the library pulls guides made elsewhere and pushes every local guide", async () => {
     const other = { ...structuredClone(fixture), id: "01M4WZCE2000000000000009AA", title: "From elsewhere" };
-    server.commit(other.id, other, Object.fromEntries(imagePaths(other as unknown as SchemaGuide).map((p) => [p, sha(p)])), null);
+    server.commit(other.id, other, Object.fromEntries(imagePaths(other).map((p) => [p, sha(p)])), null);
     state = { ...state, library: true };
     await run();
     expect(library.guides.get(other.id)!.title).toBe("From elsewhere");
@@ -294,6 +309,66 @@ describe("syncOnce", () => {
     expect(library.guides.get(id)).toBeDefined();
     library.edit(id, (g) => (g.title = "Still here"));
     await run();
+    expect(server.pushes).toBe(1);
+  });
+});
+
+describe("approvals", () => {
+  beforeEach(() => {
+    server.gated = true;
+    state = setGuideEnabled(state, id, true);
+  });
+
+  it("takes the server's status for a gated guide: a push doesn't publish it", async () => {
+    library.edit(id, (g) => (g.status = "published"));
+    await run();
+    expect(library.guides.get(id)!.status).toBe("draft");
+    expect(state.guides[id]).toMatchObject({ status: "synced", review: { gated: true, status: "draft" } });
+    // Nothing left to push.
+    await run();
+    expect(server.pushes).toBe(1);
+  });
+
+  it("writes the server's version once the guide closes in the editor", async () => {
+    library.open.add(id);
+    library.edit(id, (g) => (g.status = "published"));
+    await run();
+    expect(library.guides.get(id)!.status).toBe("published");
+    library.open.delete(id);
+    await run();
+    expect(library.guides.get(id)!.status).toBe("draft");
+    expect(server.pushes).toBe(1);
+  });
+
+  it("submits the synced revision for review", async () => {
+    await run();
+    expect(canSubmitForReview(state.guides[id])).toBe(true);
+    const result = await submitForReview(library, state, id, "Please check");
+    expect(result.error).toBeNull();
+    expect(server.submitted).toEqual([state.guides[id]!.revisionId]);
+    expect(result.state.guides[id]!.review).toMatchObject({ status: "inReview", changeRequestId: "cr1" });
+    expect(canSubmitForReview(result.state.guides[id])).toBe(false);
+  });
+
+  it("won't submit changes that haven't synced", async () => {
+    await run();
+    library.edit(id, (g) => (g.title = "Not pushed yet"));
+    expect((await submitForReview(library, state, id)).error).toMatch(/syncing/);
+    expect(server.submitted).toEqual([]);
+  });
+
+  it("hears review steps through the feed", async () => {
+    await run();
+    const g = server.guides.get(id)!;
+    g.seq = ++server.seq;
+    const original = server.handle.bind(server);
+    server.handle = (method, path, body) => {
+      const response = original(method, path, body);
+      if (path.includes("/sync/changes")) for (const c of response.body.changes) c.review = server.review("needsUpdate", "cr1");
+      return response;
+    };
+    await run();
+    expect(state.guides[id]!.review).toMatchObject({ status: "needsUpdate" });
     expect(server.pushes).toBe(1);
   });
 });

@@ -28,6 +28,10 @@ sha2 = "0.10.9"
 docx-rs = "0.4.22"
 typst = "0.15.1"
 typst-pdf = "0.15.1"
+# Low-resolution page images for the Export dialog's preview (`export/pdf.rs`).
+typst-render = "0.15.1"
+# Names the compiled document type (`export/pdf.rs`); typst uses the same version.
+typst-layout = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 # PPTX packages (`export/pptx.rs`); docx-rs uses the same version.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

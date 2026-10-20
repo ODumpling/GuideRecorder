@@ -8,6 +8,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 import type Stripe from "stripe";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
+import { auditBilling, membershipAudit } from "./auth-audit";
 import type { SendEmail } from "./email";
 import { enterprisePlugin } from "./enterprise";
 import { ac, roles } from "./permissions";
@@ -59,6 +60,7 @@ export function createAuth(deps: AuthDeps) {
     // invitation is accepted; pending invitations hold a seat too.
     membershipLimit: async (_user, org) => (await workspacePlan(db, org.id)).entitlements.seats,
     organizationHooks: {
+      ...membershipAudit(db),
       beforeCreateInvitation: async ({ invitation }) => {
         const { seats } = (await workspacePlan(db, invitation.organizationId)).entitlements;
         if ((await seatsTaken(db, invitation.organizationId)) >= seats) {
@@ -183,6 +185,11 @@ function billingPlugin(db: Database, config: NonNullable<AuthDeps["stripe"]>) {
         ...(prices.enterprise ? [{ name: "enterprise", priceId: prices.enterprise }] : []),
       ],
       authorizeReference: async ({ user, referenceId }) => (await memberRole(db, referenceId, user.id)) === "owner",
+      onSubscriptionCreated: ({ subscription, event }) => auditBilling(db, "created", subscription, event),
+      onSubscriptionComplete: ({ subscription, event }) => auditBilling(db, "complete", subscription, event),
+      onSubscriptionUpdate: ({ subscription, event }) => auditBilling(db, "update", subscription, event),
+      onSubscriptionCancel: ({ subscription, event }) => auditBilling(db, "cancel", subscription, event),
+      onSubscriptionDeleted: ({ subscription, event }) => auditBilling(db, "deleted", subscription, event),
     },
   });
 }

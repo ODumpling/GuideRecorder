@@ -95,7 +95,6 @@ Stored in `workspace_policy`; `web/src/lib/policy.ts`.
 | `requireSso` | see above | off |
 | `provisioningRole` | `admin`, `approver`, `editor`, `viewer` | `editor` |
 | `revisionRetentionDays` | 7–3650, or none | none (keep) |
-| `auditRetentionDays` | 30–3650, or none | none (keep) |
 
 ### Sharing policy
 
@@ -105,13 +104,13 @@ The most a guide in the workspace may be shared with:
 - `workspace`: links that only signed-in members of the workspace can open;
 - `off`: nothing beyond the workspace's members.
 
-Share-link code (#55) enforces it with
-`canShare(db, organizationId, audience)` (or `sharingAllows(policy, audience)`
-when it already has the policy), where `audience` is `"public"` or
-`"workspace"`. Check it both when a link is made and **every time a link is
-opened**, so tightening the policy also closes existing links. #55's own
-`shareLinks` setting (anyone / password / off) sits underneath: the policy is
-the ceiling, `shareLinks` how links work within it.
+Share links (`web/src/lib/sharing.ts`) are for anyone, so they need
+`public`: `canShare(db, organizationId, "public")` is checked when a link is
+made and **every time a link is opened**, so tightening the policy also
+closes existing links. The workspace's own `shareLinks` setting (anyone /
+password / off, on the dashboard) sits underneath: the policy is the
+ceiling, `shareLinks` how links work within it. Nothing makes
+`workspace`-only links yet.
 
 ## Retention
 
@@ -121,11 +120,12 @@ hourly) deletes:
 - guides in the trash for 30 days (their revisions; the tombstone stays for
   sync);
 - revisions older than `revisionRetentionDays`, except each guide's head and
-  published revision;
+  published revision, revisions a live share link pins, and revisions a
+  change request names (so approval records stay whole);
 - images no revision names any more, from storage and the database, a day
   after upload at the earliest;
 - expired sessions, verification tokens, device codes and rate-limit
   counters;
-- audit events older than `auditRetentionDays`, through the
-  `setRetentionHooks({ auditEvents })` hook that the audit log (#51)
-  registers.
+- audit events past the workspace's audit retention, which is set on the
+  audit log page (`/audit`, `audit_settings`), with `pruneAudit`; the log
+  records where its chain now starts, so it still verifies.

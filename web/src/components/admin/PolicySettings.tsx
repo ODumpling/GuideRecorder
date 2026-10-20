@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { PROVISIONING_ROLES } from "@/lib/permissions";
 import type { WorkspacePolicy } from "@/lib/policy";
@@ -63,20 +64,14 @@ export function PolicySettings({ policy, hasSso }: { policy: WorkspacePolicy; ha
             onChange={(e) => setDraft({ ...draft, revisionRetentionDays: days(e.target.value) })}
           />
         </Label>
-        <Label>
-          Keep audit events for (days)
-          <Input
-            type="number"
-            min={30}
-            max={3650}
-            placeholder="Forever"
-            value={draft.auditRetentionDays ?? ""}
-            onChange={(e) => setDraft({ ...draft, auditRetentionDays: days(e.target.value) })}
-          />
-        </Label>
       </div>
       <p className="text-xs text-muted-foreground">
-        Each guide&rsquo;s latest and published revisions are always kept. Guides in the trash are deleted after 30 days.
+        Each guide&rsquo;s latest and published revisions, and revisions a share link or review names, are always kept.
+        Guides in the trash are deleted after 30 days. How long audit events are kept is set on the{" "}
+        <Link to="/audit" className="underline-offset-4 hover:underline">
+          audit log
+        </Link>
+        .
       </p>
       <Button className="justify-self-start" disabled={!changed || busy} onClick={() => run(() => saveAdminPolicy({ data: draft }))}>
         {busy ? "Saving…" : "Save"}

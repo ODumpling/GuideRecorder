@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
 import { Circle, ImagePlus, LoaderCircle, Plus, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useEditor } from "@/editor/editor";
 import { startFlow, useRecording } from "@/recording/recording";
 

@@ -1,7 +1,8 @@
-import { and, eq, isNotNull, lt, notExists, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, notExists, or, sql } from "drizzle-orm";
 import type { Database } from "@/db";
-import { asset, deviceCode, guide, rateLimit, revision, revisionAsset, session, verification, workspacePolicy } from "@/db/schema";
+import { asset, changeRequest, deviceCode, guide, rateLimit, revision, revisionAsset, session, shareLink, verification, workspacePolicy } from "@/db/schema";
 import { assetKey } from "./assets";
+import { pruneAudit } from "./audit";
 import { securityEvent } from "./security-events";
 import type { ObjectStore } from "./storage";
 import { purgeTrash } from "./sync";
@@ -10,32 +11,18 @@ import { purgeTrash } from "./sync";
 // see docs/web-deployment.md), that deletes what's past its time:
 // - guides in the trash for over 30 days lose their revisions (sync.ts);
 // - revisions older than the workspace's `revisionRetentionDays`, except
-//   each guide's head and published revision;
+//   each guide's head and published revision, revisions a share link pins
+//   and revisions a change request names (deleting them would take the
+//   link or the approval record with them);
 // - images no revision names any more, from the store and the database;
 // - expired sessions, verification tokens, device codes and rate counters;
-// - audit events older than `auditRetentionDays`, through `retentionHooks`.
+// - audit events past the workspace's audit retention (`pruneAudit`).
 // Every step is idempotent, so a failed run is simply retried next time.
 
 const DAY = 24 * 60 * 60 * 1000;
 /** Uploads not yet named by a revision get this long before they count as orphans. */
 export const ORPHAN_GRACE_MS = DAY;
 const ASSET_BATCH = 500;
-
-export interface RetentionHooks {
-  /**
-   * HOOK (audit log, #51): delete the workspace's audit events created
-   * before `cutoff` and return how many. A hash-chained log should keep a
-   * checkpoint of the last deleted event's hash so the chain still verifies.
-   */
-  auditEvents?: (db: Database, organizationId: string, cutoff: Date) => Promise<number>;
-}
-
-let hooks: RetentionHooks = {};
-
-/** Registers what other modules delete during retention runs (the audit log). */
-export function setRetentionHooks(next: RetentionHooks) {
-  hooks = { ...hooks, ...next };
-}
 
 export interface RetentionReport {
   trashedGuides: number;
@@ -50,7 +37,7 @@ export async function runRetention(db: Database, store: ObjectStore, now = new D
     trashedGuides: await purgeTrash(db, now),
     revisions: await pruneRevisions(db, now),
     assets: 0,
-    auditEvents: await pruneAuditEvents(db, now),
+    auditEvents: await pruneAudit(db, now),
     expired: await deleteExpired(db, now),
   };
   // After revisions, so images they named are orphans in this same run.
@@ -60,7 +47,7 @@ export async function runRetention(db: Database, store: ObjectStore, now = new D
 }
 
 /** Workspaces with a retention period for `column`, with their cutoffs. */
-async function cutoffs(db: Database, column: "revisionRetentionDays" | "auditRetentionDays", now: Date) {
+async function cutoffs(db: Database, column: "revisionRetentionDays", now: Date) {
   const rows = await db
     .select({ organizationId: workspacePolicy.organizationId, days: workspacePolicy[column] })
     .from(workspacePolicy)
@@ -68,7 +55,7 @@ async function cutoffs(db: Database, column: "revisionRetentionDays" | "auditRet
   return rows.map((r) => ({ organizationId: r.organizationId, cutoff: new Date(now.getTime() - r.days! * DAY) }));
 }
 
-/** Deletes old revisions that are neither a guide's head nor its published revision. */
+/** Deletes old revisions that are neither a guide's head, its published revision, pinned by a share link nor under review. */
 export async function pruneRevisions(db: Database, now = new Date()): Promise<number> {
   let deleted = 0;
   for (const { organizationId, cutoff } of await cutoffs(db, "revisionRetentionDays", now)) {
@@ -82,9 +69,31 @@ export async function pruneRevisions(db: Database, now = new Date()): Promise<nu
           or(eq(guide.headRevisionId, revision.id), eq(guide.publishedRevisionId, revision.id)),
         ),
       );
+    const pinned = db
+      .select({ one: sql`1` })
+      .from(shareLink)
+      .where(and(eq(shareLink.revisionId, revision.id), isNull(shareLink.revokedAt)));
+    const reviewed = db
+      .select({ one: sql`1` })
+      .from(changeRequest)
+      .where(
+        or(
+          eq(changeRequest.revisionId, revision.id),
+          eq(changeRequest.baseRevisionId, revision.id),
+          eq(changeRequest.publishedRevisionId, revision.id),
+        ),
+      );
     const rows = await db
       .delete(revision)
-      .where(and(eq(revision.organizationId, organizationId), lt(revision.createdAt, cutoff), notExists(kept)))
+      .where(
+        and(
+          eq(revision.organizationId, organizationId),
+          lt(revision.createdAt, cutoff),
+          notExists(kept),
+          notExists(pinned),
+          notExists(reviewed),
+        ),
+      )
       .returning({ id: revision.id });
     deleted += rows.length;
   }
@@ -118,14 +127,6 @@ export async function deleteOrphanAssets(db: Database, store: ObjectStore, now =
   }
 }
 
-async function pruneAuditEvents(db: Database, now: Date): Promise<number> {
-  if (!hooks.auditEvents) return 0;
-  let deleted = 0;
-  for (const { organizationId, cutoff } of await cutoffs(db, "auditRetentionDays", now)) {
-    deleted += await hooks.auditEvents(db, organizationId, cutoff);
-  }
-  return deleted;
-}
 
 /** Sessions, tokens and counters that can't be used any more. */
 async function deleteExpired(db: Database, now: Date) {

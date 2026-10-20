@@ -1,19 +1,34 @@
-import { BookOpen, Camera, Lock } from "lucide-react";
+import type { ButtonHTMLAttributes } from "react";
+import { BookOpen, Camera, Lock, Target } from "lucide-react";
 import { Avatar, StatusPill } from "@/components/library/bits";
 import { SyncBadge } from "@/components/library/SyncBadge";
 import { askName, showGuideMenu } from "@/components/library/menus";
 import { useGuideCover } from "@/components/library/useGuideCover";
 import { editorStore, useEditor } from "@/editor/editor";
-import { folderName, isReviewOverdue, localToday, reviewDue, timeAgo } from "@/editor/library";
+import { folderName, guideContents, isReviewOverdue, localToday, reviewDue, timeAgo } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
-/** A guide in the library grid: its first screenshot, title, status, folder and owner. */
-export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: string[] }) {
+/**
+ * A guide in the library grid: its first screenshot, title, status, folder
+ * and owner. `itemProps` (selection, keys, dragging) go on its button and
+ * replace its own click and context menu handlers.
+ */
+export function GuideCard({
+  guide,
+  folders,
+  selected = false,
+  itemProps,
+}: {
+  guide: GuideListItem;
+  folders: string[];
+  selected?: boolean;
+  itemProps?: ButtonHTMLAttributes<HTMLButtonElement> & { "data-guide-path"?: string };
+}) {
   const opening = useEditor((s) => s.opening);
   const cover = useGuideCover(guide.id, guide.updatedAt);
   const overdue = isReviewOverdue(guide, localToday());
-  const steps = `${guide.stepCount} ${guide.stepCount === 1 ? "step" : "steps"}`;
+  const KindIcon = guide.kind === "annotated" ? Target : Camera;
   const meta = [guide.folder && folderName(guide.folder), timeAgo(guide.updatedAt)].filter(Boolean).join(" · ");
   return (
     <li className={cn(guide.duplicateOf && "opacity-60")}>
@@ -23,9 +38,16 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
         title={guide.summary || undefined}
         onClick={() => void editorStore.getState().openGuide(guide.id)}
         onContextMenu={(e) => void showGuideMenu(e, guide, folders, () => askName({ kind: "rename", guide }))}
+        aria-selected={selected}
+        {...itemProps}
         className="group flex w-full flex-col rounded-xl text-left outline-none disabled:cursor-progress"
       >
-        <span className="relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring">
+        <span
+          className={cn(
+            "relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring",
+            selected && "border-transparent ring-2 ring-[var(--status-info)] group-focus-visible:ring-[var(--status-info)]",
+          )}
+        >
           {cover ? (
             <img
               src={cover}
@@ -38,7 +60,7 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
             </span>
           )}
           <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur">
-            <Camera className="size-3" /> {steps}
+            <KindIcon className="size-3" /> {guideContents(guide)}
           </span>
           {overdue && (
             <span

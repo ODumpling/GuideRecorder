@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>GuideRecorder Click</title>
+    <!-- The click ring (toolbar.rs `show_ring`): no script; Rust restarts the animation. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      body::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 32px;
+        height: 32px;
+        box-sizing: border-box;
+        border: 3px solid #ff4d3a;
+        border-radius: 50%;
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.5);
+        animation: ring 600ms ease-out;
+      }
+      body.on::after {
+        animation-name: ring-again;
+      }
+      @keyframes ring {
+        0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
+        100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4); }
+      }
+      @keyframes ring-again {
+        0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
+        100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4); }
+      }
+    </style>
+  </head>
+  <body></body>
+</html>

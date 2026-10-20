@@ -1,6 +1,6 @@
 {
-  "id": "24193a1b-ae3a-4e42-83d2-e900c9b2dcfe",
-  "prevId": "72557f43-cdc9-4d58-8201-8a7e96eba998",
+  "id": "26a46b01-1eb5-4c0c-8804-bcca25f65c90",
+  "prevId": "8ec1d46a-9d62-49f7-be69-4be97c91897d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -127,6 +127,108 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.approval_policy": {
+      "name": "approval_policy",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "folder": {
+          "name": "folder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "required_approvals": {
+          "name": "required_approvals",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "approver_ids": {
+          "name": "approver_ids",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "allow_self_approval": {
+          "name": "allow_self_approval",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "reset_on_new_revision": {
+          "name": "reset_on_new_revision",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "approval_policy_organization_id_organization_id_fk": {
+          "name": "approval_policy_organization_id_organization_id_fk",
+          "tableFrom": "approval_policy",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "approval_policy_updated_by_user_id_fk": {
+          "name": "approval_policy_updated_by_user_id_fk",
+          "tableFrom": "approval_policy",
+          "tableTo": "user",
+          "columnsFrom": [
+            "updated_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "approval_policy_organization_id_folder_pk": {
+          "name": "approval_policy_organization_id_folder_pk",
+          "columns": [
+            "organization_id",
+            "folder"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.asset": {
       "name": "asset",
       "schema": "",
@@ -207,6 +309,395 @@
           ]
         }
       },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.audit_event": {
+      "name": "audit_event",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "before_hash": {
+          "name": "before_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "after_hash": {
+          "name": "after_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ip": {
+          "name": "ip",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_agent": {
+          "name": "user_agent",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "prev_hash": {
+          "name": "prev_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "audit_event_created_idx": {
+          "name": "audit_event_created_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "audit_event_action_idx": {
+          "name": "audit_event_action_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "audit_event_organization_id_seq_pk": {
+          "name": "audit_event_organization_id_seq_pk",
+          "columns": [
+            "organization_id",
+            "seq"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.audit_settings": {
+      "name": "audit_settings",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "retention_days": {
+          "name": "retention_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "audit_settings_organization_id_organization_id_fk": {
+          "name": "audit_settings_organization_id_organization_id_fk",
+          "tableFrom": "audit_settings",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.change_request": {
+      "name": "change_request",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "guide_id": {
+          "name": "guide_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_revision_id": {
+          "name": "base_revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "published_revision_id": {
+          "name": "published_revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_by": {
+          "name": "closed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "change_request_guide_idx": {
+          "name": "change_request_guide_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "guide_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "change_request_open_idx": {
+          "name": "change_request_open_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "guide_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status = 'open'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "change_request_revision_id_revision_id_fk": {
+          "name": "change_request_revision_id_revision_id_fk",
+          "tableFrom": "change_request",
+          "tableTo": "revision",
+          "columnsFrom": [
+            "revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "change_request_author_id_user_id_fk": {
+          "name": "change_request_author_id_user_id_fk",
+          "tableFrom": "change_request",
+          "tableTo": "user",
+          "columnsFrom": [
+            "author_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "change_request_closed_by_user_id_fk": {
+          "name": "change_request_closed_by_user_id_fk",
+          "tableFrom": "change_request",
+          "tableTo": "user",
+          "columnsFrom": [
+            "closed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "change_request_organization_id_guide_id_guide_organization_id_id_fk": {
+          "name": "change_request_organization_id_guide_id_guide_organization_id_id_fk",
+          "tableFrom": "change_request",
+          "tableTo": "guide",
+          "columnsFrom": [
+            "organization_id",
+            "guide_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -314,6 +805,170 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.export_job": {
+      "name": "export_job",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "guide_id": {
+          "name": "guide_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "format": {
+          "name": "format",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "requested_by": {
+          "name": "requested_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "export_job_revision_format_idx": {
+          "name": "export_job_revision_format_idx",
+          "columns": [
+            {
+              "expression": "revision_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "format",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "export_job_status_idx": {
+          "name": "export_job_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "export_job_revision_id_revision_id_fk": {
+          "name": "export_job_revision_id_revision_id_fk",
+          "tableFrom": "export_job",
+          "tableTo": "revision",
+          "columnsFrom": [
+            "revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "export_job_requested_by_user_id_fk": {
+          "name": "export_job_requested_by_user_id_fk",
+          "tableFrom": "export_job",
+          "tableTo": "user",
+          "columnsFrom": [
+            "requested_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.guide": {
       "name": "guide",
       "schema": "",
@@ -352,6 +1007,18 @@
         "published_revision_id": {
           "name": "published_revision_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "folder": {
+          "name": "folder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "search": {
+          "name": "search",
+          "type": "tsvector",
           "primaryKey": false,
           "notNull": false
         },
@@ -403,6 +1070,21 @@
           "isUnique": false,
           "concurrently": false,
           "method": "btree",
+          "with": {}
+        },
+        "guide_search_idx": {
+          "name": "guide_search_idx",
+          "columns": [
+            {
+              "expression": "search",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
           "with": {}
         }
       },
@@ -766,6 +1448,112 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.review": {
+      "name": "review",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "change_request_id": {
+          "name": "change_request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reviewer_id": {
+          "name": "reviewer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verdict": {
+          "name": "verdict",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "item_id": {
+          "name": "item_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "review_change_request_idx": {
+          "name": "review_change_request_idx",
+          "columns": [
+            {
+              "expression": "change_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "review_change_request_id_change_request_id_fk": {
+          "name": "review_change_request_id_change_request_id_fk",
+          "tableFrom": "review",
+          "tableTo": "change_request",
+          "columnsFrom": [
+            "change_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "review_reviewer_id_user_id_fk": {
+          "name": "review_reviewer_id_user_id_fk",
+          "tableFrom": "review",
+          "tableTo": "user",
+          "columnsFrom": [
+            "reviewer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2446,6 +3234,172 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.share_link": {
+      "name": "share_link",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "guide_id": {
+          "name": "guide_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "allow_download": {
+          "name": "allow_download",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "views": {
+          "name": "views",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_viewed_at": {
+          "name": "last_viewed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "share_link_guide_idx": {
+          "name": "share_link_guide_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "guide_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "share_link_revision_id_revision_id_fk": {
+          "name": "share_link_revision_id_revision_id_fk",
+          "tableFrom": "share_link",
+          "tableTo": "revision",
+          "columnsFrom": [
+            "revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "share_link_created_by_user_id_fk": {
+          "name": "share_link_created_by_user_id_fk",
+          "tableFrom": "share_link",
+          "tableTo": "user",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "share_link_organization_id_guide_id_guide_organization_id_id_fk": {
+          "name": "share_link_organization_id_guide_id_guide_organization_id_id_fk",
+          "tableFrom": "share_link",
+          "tableTo": "guide",
+          "columnsFrom": [
+            "organization_id",
+            "guide_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "share_link_token_unique": {
+          "name": "share_link_token_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.sso_provider": {
       "name": "sso_provider",
       "schema": "",
@@ -2880,12 +3834,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "audit_retention_days": {
-          "name": "audit_retention_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp",
@@ -2920,6 +3868,59 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.workspace_settings": {
+      "name": "workspace_settings",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "share_links": {
+          "name": "share_links",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'anyone'"
+        },
+        "share_link_max_days": {
+          "name": "share_link_max_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "workspace_settings_organization_id_organization_id_fk": {
+          "name": "workspace_settings_organization_id_organization_id_fk",
+          "tableFrom": "workspace_settings",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

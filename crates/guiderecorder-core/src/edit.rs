@@ -37,7 +37,7 @@ use chrono::Utc;
 use ulid::Ulid;
 
 use crate::library::{GuideHandle, Library, LibraryError};
-use crate::model::{AiStatus, Guide, GuideField, Item, Note, NoteKind};
+use crate::model::{AiStatus, Guide, GuideField, GuideStatus, Item, Note, NoteKind};
 
 /// Marker file in a bundle while the guide is open in the app's editor: the
 /// app's process id in decimal, then a newline.
@@ -324,6 +324,44 @@ pub fn remove_guide_tags(guide: &mut Guide, remove: &[String]) -> Vec<String> {
     removed
 }
 
+/// Changes the library makes to many guides at once (the app's bulk
+/// actions): a status, an owner, tags to add and tags to remove. Unset
+/// fields are left as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DetailsEdit {
+    pub status: Option<GuideStatus>,
+    /// The new owner, trimmed; empty clears it.
+    pub owner: Option<String>,
+    pub add_tags: Vec<String>,
+    pub remove_tags: Vec<String>,
+}
+
+/// Applies `edit` to the guide (tags as [`add_guide_tags`] and
+/// [`remove_guide_tags`], removals first). Returns whether anything changed.
+pub fn apply_details(guide: &mut Guide, edit: &DetailsEdit) -> bool {
+    let before = (
+        guide.review.status,
+        guide.review.owner.clone(),
+        guide.tags.clone(),
+    );
+    if let Some(status) = edit.status {
+        guide.review.status = Some(status);
+    }
+    if let Some(owner) = &edit.owner {
+        let owner = owner.trim();
+        guide.review.owner = (!owner.is_empty()).then(|| owner.to_owned());
+    }
+    remove_guide_tags(guide, &edit.remove_tags);
+    add_guide_tags(guide, &edit.add_tags);
+    before
+        != (
+            guide.review.status,
+            guide.review.owner.clone(),
+            guide.tags.clone(),
+        )
+}
+
 /// Sets a step's title and/or description (Markdown). Returns whether
 /// either changed; if so the step is marked `edited`.
 pub fn set_step_text(
@@ -553,6 +591,45 @@ mod tests {
         let removed = remove_guide_tags(&mut guide, &[" PDF ".into(), "q3".into()]);
         assert_eq!(removed, ["pdf", "Q3"]);
         assert_eq!(guide.tags, ["reports", "Finance"]);
+    }
+
+    #[test]
+    fn details_set_status_owner_and_tags() {
+        let mut guide = sample_guide();
+        let before = guide.clone();
+        assert!(!apply_details(&mut guide, &DetailsEdit::default()));
+        assert_eq!(guide, before);
+
+        let edit = DetailsEdit {
+            status: Some(GuideStatus::Published),
+            owner: Some("  IT team ".into()),
+            add_tags: vec!["Onboarding".into(), "PDF".into()],
+            remove_tags: vec!["pdf".into()],
+        };
+        assert!(apply_details(&mut guide, &edit));
+        assert_eq!(guide.review.status, Some(GuideStatus::Published));
+        assert_eq!(guide.review.owner.as_deref(), Some("IT team"));
+        // Removals go first, so a tag both removed and added stays (as added).
+        assert_eq!(guide.tags, ["reports", "Onboarding", "PDF"]);
+        assert_eq!(guide.edited_fields, [GuideField::Tags]);
+        let same_owner = DetailsEdit {
+            owner: Some("IT team".into()),
+            ..DetailsEdit::default()
+        };
+        assert!(!apply_details(&mut guide, &same_owner));
+
+        let clear = DetailsEdit {
+            owner: Some(" ".into()),
+            ..DetailsEdit::default()
+        };
+        assert!(apply_details(&mut guide, &clear));
+        assert_eq!(guide.review.owner, None);
+
+        let json: DetailsEdit =
+            serde_json::from_str(r#"{"status":"needsUpdate","addTags":["a"]}"#).unwrap();
+        assert_eq!(json.status, Some(GuideStatus::NeedsUpdate));
+        assert_eq!(json.add_tags, ["a"]);
+        assert_eq!(json.owner, None);
     }
 
     #[test]

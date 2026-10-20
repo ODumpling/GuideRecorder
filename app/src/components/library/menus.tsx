@@ -6,13 +6,14 @@ import { Dialog } from "radix-ui";
 import { X } from "lucide-react";
 import { Menu } from "@tauri-apps/api/menu";
 import { create } from "zustand";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
+import { canSubmitForReview } from "@/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
-import { syncStore } from "@/sync/sync";
+import { shareStore, syncStore } from "@/sync/sync";
 
 /** What the name dialog is asking for. */
 export type Naming = { kind: "rename"; guide: GuideListItem } | { kind: "folder"; parent: string };
@@ -83,7 +84,7 @@ export async function showGuideMenu(event: MouseEvent, guide: GuideListItem, fol
   }
 }
 
-/** Sync to Web, and Resolve Sync Conflict while there is one; none until signed in. */
+/** Sync to Web, Resolve Sync Conflict while there is one, and Share… once synced; none until signed in. */
 function syncItems(guide: GuideListItem) {
   const sync = syncStore.getState();
   if (!sync.account?.signedIn || !sync.state.workspaceId) return [];
@@ -100,8 +101,17 @@ function syncItems(guide: GuideListItem) {
       action: () => void syncStore.getState().setGuideEnabled(guide.id, !on),
     });
   }
+  // Approval-gated guides publish on the web, once approved; pushes never publish them.
+  if (canSubmitForReview(sync.state.guides[guide.id])) {
+    items.push({ id: "submit-for-review", text: "Submit for Review", action: () => void syncStore.getState().submitForReview(guide.id) });
+  }
   if (status === "conflict") {
     items.push({ id: "resolve-sync-conflict", text: "Resolve Sync Conflict…", action: () => syncStore.getState().openConflict(guide.id) });
+  }
+  // Share links need the guide on the server.
+  const revisionId = sync.state.guides[guide.id]?.revisionId ?? null;
+  if (revisionId && status !== "deleted") {
+    items.push({ id: "share-guide", text: "Share…", action: () => void shareStore.getState().open(guide.id, revisionId) });
   }
   return items.length > 1 ? items : [];
 }

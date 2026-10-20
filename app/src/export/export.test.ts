@@ -24,7 +24,8 @@ import {
   warningLines,
 } from "@/export/export";
 import type { ExportApi } from "@/lib/ipc";
-import type { ExportResult, Item } from "@/lib/types";
+import type { Item } from "@guiderecorder/guide-schema";
+import type { ExportResult } from "@/lib/types";
 
 function api(overrides: Partial<ExportApi> = {}): ExportApi {
   return {
@@ -32,6 +33,8 @@ function api(overrides: Partial<ExportApi> = {}): ExportApi {
     chooseFile: vi.fn(async () => null),
     chooseLogo: vi.fn(async () => null),
     exportGuide: vi.fn(async () => ({ files: ["/out/Guide/guide.md"], warnings: [], notes: [] })),
+    previewExport: vi.fn(async () => ({ kind: "html" as const, html: "<p>Guide</p>" })),
+    logoPreview: vi.fn(async () => "data:image/png;base64,"),
     reveal: vi.fn(async () => {}),
     ...overrides,
   };
@@ -248,6 +251,14 @@ describe("unreviewed blur suggestions", () => {
     const items: Item[] = [{ type: "section", id: "X", title: "Start" }, ...steps([0, 2, 0, 1])];
     expect(unreviewedBlurs(items)).toEqual({ stepIds: ["S2", "S4"], steps: [2, 4], count: 3 });
     expect(unreviewedBlurs(steps([0, 0]))).toEqual({ stepIds: [], steps: [], count: 0 });
+  });
+
+  it("skips reviewed suggestions", () => {
+    const items = steps([2, 1]);
+    const [first, second] = items as Extract<Item, { type: "step" }>[];
+    first.aiState.redactionSuggestions![0].review = "kept";
+    second.aiState.redactionSuggestions![0].review = "blurred";
+    expect(unreviewedBlurs(items)).toEqual({ stepIds: ["S1"], steps: [1], count: 1 });
   });
 
   it("words the warning", () => {

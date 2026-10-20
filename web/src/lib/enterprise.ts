@@ -4,6 +4,7 @@ import { deleteSessionCookie } from "better-auth/cookies";
 import { eq } from "drizzle-orm";
 import type { Database } from "@/db";
 import { session as sessionTable, ssoProvider } from "@/db/schema";
+import { auditSignIn } from "./auth-audit";
 import { scimTokenWorkspace } from "./scim";
 import { securityEvent } from "./security-events";
 import { joinWorkspace, signInDecision } from "./sso";
@@ -36,7 +37,6 @@ export function enterprisePlugin(db: Database) {
           requireSso: { type: "boolean", required: true },
           provisioningRole: { type: "string", required: true },
           revisionRetentionDays: { type: "number", required: false },
-          auditRetentionDays: { type: "number", required: false },
         },
       },
       subscription: {
@@ -113,6 +113,8 @@ export function enterprisePlugin(db: Database) {
             if (active !== created.session.activeOrganizationId) {
               await db.update(sessionTable).set({ activeOrganizationId: active }).where(eq(sessionTable.id, created.session.id));
             }
+            // Logged once allowed and in its workspaces, so the first sign-in shows in the new one.
+            await auditSignIn(db, created.session);
           }),
         },
         {

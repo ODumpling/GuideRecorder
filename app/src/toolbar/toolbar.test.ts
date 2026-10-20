@@ -7,7 +7,7 @@ import { createManualStepStore, MANUAL_STEP_NOTICE_MS, toolbarView } from "@/too
 const run = { startedAt: "2026-10-15T10:00:00.000Z", title: null, captureAreaFallback: false, pausedMs: 0, excludedApp: null, captureLost: null };
 const recording: RecordingStatus = { state: "recording", ...run };
 const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
-const snap = (id: string): RecordingSnapshot => ({ id, ts: 0, width: 16, height: 10, point: null });
+const snap = (id: string): RecordingSnapshot => ({ id, ts: 0, width: 16, height: 10, point: null, title: "Click", elapsedMs: 0 });
 
 function setup(initial: RecordingStatus = recording) {
   let seq = 0;

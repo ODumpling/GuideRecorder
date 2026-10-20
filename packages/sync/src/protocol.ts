@@ -5,7 +5,7 @@
 // in the guide (e.g. `steps/<id>.webp`) to the SHA-256 of a committed asset.
 
 import { z } from "zod";
-import type { Guide } from "@guiderecorder/guide-schema";
+import type { Guide, GuideStatus } from "@guiderecorder/guide-schema";
 
 export const sha256 = z.string().regex(/^[0-9a-f]{64}$/, "lowercase hex SHA-256");
 export const ulid = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/, "ULID");
@@ -41,7 +41,12 @@ export interface Revision {
 
 /** 200 from push. */
 export interface PushResponse {
+  /**
+   * The new head. For approval-gated guides the server sets `status`,
+   * `lastReviewed` and `version`, so it may differ from what was pushed.
+   */
   revision: Revision;
+  review?: ReviewState;
 }
 
 /** 409 from push: the change wasn't made on the head. Merge with `head` and push again. */
@@ -50,9 +55,33 @@ export interface PushConflict {
   head: Revision;
 }
 
+/**
+ * Where a guide stands in review. In workspaces with approvals, the server
+ * owns a gated guide's `status`, `lastReviewed` and `version`: edits stay
+ * drafts until enough approvers approve them, then the server publishes them.
+ */
+export interface ReviewState {
+  /** Edits wait for approval before they're published. */
+  gated: boolean;
+  status: GuideStatus;
+  /** The open change request, if any. */
+  changeRequestId: string | null;
+  /** Approvals that count toward publishing, and how many it takes. */
+  approvals: number;
+  required: number;
+}
+
+/** `POST /api/workspaces/:id/sync/guides/:guideId/review`: submit the head for review. */
+export const submitReviewRequest = z.object({
+  /** The revision to submit; must be the head. */
+  revisionId: z.string(),
+  note: z.string().max(2000).default(""),
+});
+
 /** One entry of the change feed: the guide's current state. */
 export type Change =
-  | { type: "revision"; guideId: string; seq: string; revision: Revision }
+  /** `review` is where the guide stands in review; review steps move the guide in the feed too. */
+  | { type: "revision"; guideId: string; seq: string; revision: Revision; review?: ReviewState }
   /** Moved to the trash; `purgeAt` is when it's gone for good. */
   | { type: "deleted"; guideId: string; seq: string; deletedAt: string; purgeAt: string };
 

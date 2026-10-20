@@ -11,9 +11,10 @@ import {
   X,
 } from "lucide-react";
 import { ExportPreview } from "@/components/ExportPreview";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
+import { inspectorStore } from "@/editor/inspector";
 import {
   ASPECTS,
   baseName,
@@ -45,7 +46,7 @@ import {
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
 import type { ExportFormat, MotionOptions, PaperSize } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /**
  * Choices made in this dialog while the app runs; until then the dialog
@@ -157,6 +158,21 @@ export function ExportDialog({
   // Exporting with unreviewed blur suggestions takes a second look.
   const [skipReview, setSkipReview] = useState(false);
 
+  // The chosen logo itself, read (and checked) by the Rust side.
+  const [logoImage, setLogoImage] = useState<{ src: string | null; error: string | null }>({ src: null, error: null });
+  useEffect(() => {
+    setLogoImage({ src: null, error: null });
+    if (!open || !logo) return;
+    let gone = false;
+    api.logoPreview(logo).then(
+      (src) => !gone && setLogoImage({ src, error: null }),
+      (error) => !gone && setLogoImage({ src: null, error: errorMessage(error) }),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [open, logo, api]);
+
   // A new guide starts from its own name and a fresh file.
   useEffect(() => {
     setDestination((d) => ({ ...d, name: exportName(title), file: null }));
@@ -197,10 +213,13 @@ export function ExportDialog({
   const reviewText = unreviewedBlursText(unreviewed);
   const canExport = !!guideId && !!out && accentOk && secondsOk && !busy && (!reviewText || skipReview);
 
-  /** Closes the dialog on the first step with suggestions left. */
+  /** Closes the dialog on the privacy review of the first step with suggestions left. */
   const review = () => {
     const first = unreviewed.stepIds[0];
-    if (first) editorStore.getState().select(first);
+    if (first) {
+      editorStore.getState().select(first);
+      inspectorStore.getState().setTab("privacy");
+    }
     onOpenChange(false);
   };
 
@@ -507,7 +526,11 @@ export function ExportDialog({
                 {isDocument && (
                   <Field label="Branding (optional)">
                     <div className="flex items-center gap-2">
-                      <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+                      {logo && logoImage.src ? (
+                        <img src={logoImage.src} alt="" className="size-6 shrink-0 rounded-[3px] object-contain" />
+                      ) : (
+                        <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+                      )}
                       <PathLabel path={logo} empty="No logo" />
                       {logo && (
                         <Button variant="ghost" size="sm" disabled={busy} onClick={() => setLogo(null)}>
@@ -546,6 +569,11 @@ export function ExportDialog({
                         </Button>
                       )}
                     </div>
+                    {logo && logoImage.error && (
+                      <span role="alert" className="text-xs text-[var(--status-danger)]">
+                        {logoImage.error}
+                      </span>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       PNG or JPEG logo, up to 2 MB. Markdown shows the logo but not the accent colour.
                     </span>
@@ -617,8 +645,9 @@ export function ExportDialog({
                 logo={logo}
                 accent={accent}
                 reviewDetails={reviewDetails}
-                aspect={motion.aspect}
-                captions={motion.captions}
+                motion={motion}
+                api={api}
+                flush={() => editorStore.getState().flush()}
               />
             </div>
           )}

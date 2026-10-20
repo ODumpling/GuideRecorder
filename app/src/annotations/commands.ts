@@ -1,8 +1,8 @@
 // Annotation edits as undoable commands (#360). Each replaces the step's
 // whole `annotations` array, so the inverse is exact and order is kept.
 
-import { findStep, PatchError, type Command } from "@/editor/commands";
-import type { Annotation, AnnotationStyle, Guide } from "@/lib/types";
+import { findStep, PatchError, type Command, type Patch } from "@/editor/commands";
+import type { Annotation, AnnotationStyle, Guide, SuggestionReview } from "@guiderecorder/guide-schema";
 
 const NAMES: Record<Annotation["type"], string> = {
   arrow: "arrow",
@@ -112,60 +112,91 @@ export function removeAnnotation(guide: Guide, stepId: string, id: string): Comm
 
 // Blur suggestions, from the AI (#366) or found on this Mac (#10). They
 // live in the step's `aiState` only, so the export never sees them;
-// accepting one makes it a real blur.
+// accepting one makes it a real blur. A reviewed suggestion stays, marked
+// `review`, so the privacy review can show what was decided and a later
+// scan or AI pass does not suggest the same area again.
 
-function suggestionsOf(guide: Guide, stepId: string, index: number) {
-  const step = findStep(guide, stepId);
-  const suggestions = step.aiState.redactionSuggestions ?? [];
-  if (!suggestions[index]) throw new PatchError(`step ${stepId} has no blur suggestion ${index}`);
-  return { step, suggestions };
+/** A blur suggestion: its step and index in the step's `redactionSuggestions`. */
+export interface SuggestionRef {
+  stepId: string;
+  index: number;
 }
 
 /**
- * Accepts the step's blur suggestion `index`: a blur annotation `id` over
- * its rect (full-screenshot pixels, like annotations), and the suggestion
- * goes. One undo step.
+ * Marks the pending suggestions `refs` (of any steps) `review`; for
+ * "blurred", a blur annotation `ids[i]` goes over suggestion `refs[i]`
+ * (full-screenshot pixels, like annotations). One undo step.
  */
+function reviewSuggestions(
+  guide: Guide,
+  refs: SuggestionRef[],
+  review: SuggestionReview,
+  ids: string[],
+  label: string,
+): Command {
+  if (!refs.length) throw new PatchError("no blur suggestions");
+  if (review === "blurred" && ids.length !== refs.length) {
+    throw new PatchError(`${ids.length} ids for ${refs.length} suggestions`);
+  }
+  const byStep = new Map<string, { index: number; id: string }[]>();
+  refs.forEach(({ stepId, index }, i) => byStep.set(stepId, [...(byStep.get(stepId) ?? []), { index, id: ids[i] }]));
+  const forward: Patch[] = [];
+  const inverse: Patch[] = [];
+  for (const [stepId, picks] of byStep) {
+    const step = findStep(guide, stepId);
+    const suggestions = step.aiState.redactionSuggestions ?? [];
+    for (const { index } of picks) {
+      if (!suggestions[index]) throw new PatchError(`step ${stepId} has no blur suggestion ${index}`);
+      if (suggestions[index].review) throw new PatchError(`blur suggestion ${index} of step ${stepId} is reviewed`);
+    }
+    const chosen = new Set(picks.map((p) => p.index));
+    const redactionSuggestions = suggestions.map((s, i) => (chosen.has(i) ? { ...s, review } : s));
+    if (review === "blurred") {
+      const blurs: Annotation[] = picks.map(({ index, id }) => ({ id, type: "blur", geometry: { ...suggestions[index].rect } }));
+      if (blurs.some((b) => step.annotations.some((a) => a.id === b.id))) throw new PatchError("annotation exists");
+      forward.push({ op: "setItem", id: stepId, key: "annotations", value: [...step.annotations, ...blurs] });
+      inverse.unshift({ op: "setItem", id: stepId, key: "annotations", value: step.annotations });
+    }
+    forward.push({ op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions } });
+    inverse.unshift({ op: "setItem", id: stepId, key: "aiState", value: step.aiState });
+  }
+  return { label, forward, inverse };
+}
+
+/** Accepts the step's blur suggestion `index`: a blur annotation `id` goes over it. */
 export function acceptBlurSuggestion(guide: Guide, stepId: string, index: number, id: string): Command {
-  const { step, suggestions } = suggestionsOf(guide, stepId, index);
-  const blur: Annotation = { id, type: "blur", geometry: { ...suggestions[index].rect } };
-  const added = addAnnotation(guide, stepId, blur);
-  return {
-    label: "Accept blur suggestion",
-    forward: [
-      ...added.forward,
-      { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: suggestions.filter((_, i) => i !== index) } },
-    ],
-    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }, ...added.inverse],
-  };
+  return reviewSuggestions(guide, [{ stepId, index }], "blurred", [id], "Accept blur suggestion");
+}
+
+/** Keeps the area of the step's blur suggestion `index` as it is. */
+export function keepBlurSuggestion(guide: Guide, stepId: string, index: number): Command {
+  return reviewSuggestions(guide, [{ stepId, index }], "kept", [], "Keep suggested area");
+}
+
+/** Accepts the pending suggestions `refs`, of any steps: blur `ids[i]` over `refs[i]`. One undo step. */
+export function acceptBlurSuggestions(guide: Guide, refs: SuggestionRef[], ids: string[]): Command {
+  return reviewSuggestions(guide, refs, "blurred", ids, "Accept blur suggestions");
+}
+
+/** Keeps the areas of the pending suggestions `refs`, of any steps. One undo step. */
+export function keepBlurSuggestions(guide: Guide, refs: SuggestionRef[]): Command {
+  return reviewSuggestions(guide, refs, "kept", [], "Keep suggested areas");
 }
 
 /**
- * Accepts every blur suggestion of the step: blur annotations `ids[i]`
- * over suggestion `i`, and the suggestions go. One undo step.
+ * Moves hotspot `id` `by` places among the step's hotspots (their numbers
+ * follow their order); the other annotations keep their places.
  */
-export function acceptAllBlurSuggestions(guide: Guide, stepId: string, ids: string[]): Command {
-  const step = findStep(guide, stepId);
-  const suggestions = step.aiState.redactionSuggestions ?? [];
-  if (!suggestions.length) throw new PatchError(`step ${stepId} has no blur suggestions`);
-  if (ids.length !== suggestions.length) throw new PatchError(`${ids.length} ids for ${suggestions.length} suggestions`);
-  const blurs: Annotation[] = suggestions.map((s, i) => ({ id: ids[i], type: "blur", geometry: { ...s.rect } }));
-  const added = setAnnotations(guide, stepId, [...step.annotations, ...blurs], "Accept blur suggestions");
-  return {
-    ...added,
-    forward: [...added.forward, { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: [] } }],
-    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }, ...added.inverse],
-  };
-}
-
-/** Rejects the step's blur suggestion `index`: it goes, nothing is blurred. */
-export function rejectBlurSuggestion(guide: Guide, stepId: string, index: number): Command {
-  const { step, suggestions } = suggestionsOf(guide, stepId, index);
-  return {
-    label: "Reject blur suggestion",
-    forward: [
-      { op: "setItem", id: stepId, key: "aiState", value: { ...step.aiState, redactionSuggestions: suggestions.filter((_, i) => i !== index) } },
-    ],
-    inverse: [{ op: "setItem", id: stepId, key: "aiState", value: step.aiState }],
-  };
+export function moveHotspot(guide: Guide, stepId: string, id: string, by: number): Command {
+  const annotations = findStep(guide, stepId).annotations;
+  const slots = annotations.flatMap((a, i) => (a.type === "hotspot" ? [i] : []));
+  const from = slots.findIndex((i) => annotations[i].id === id);
+  if (from < 0) throw new PatchError(`hotspot ${id} not found`);
+  const to = from + by;
+  if (to < 0 || to >= slots.length) throw new PatchError(`hotspot ${id} cannot move by ${by}`);
+  const order = slots.map((i) => annotations[i]);
+  order.splice(to, 0, ...order.splice(from, 1));
+  const next = [...annotations];
+  slots.forEach((slot, i) => (next[slot] = order[i]));
+  return setAnnotations(guide, stepId, next, "Move hotspot");
 }

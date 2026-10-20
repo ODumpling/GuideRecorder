@@ -32,8 +32,8 @@ test("toolbar counts screenshots and adds a manual step", async ({ page, backend
   const status = backend.recording;
   if (status.state !== "recording") throw new Error("not recording");
 
-  await emitEvent(page, "recording://snapshot", { id: "0-1", ts: 0, width: 16, height: 10, point: null });
-  await emitEvent(page, "recording://snapshot", { id: "0-2", ts: 1, width: 16, height: 10, point: null });
+  await emitEvent(page, "recording://snapshot", { id: "0-1", ts: 0, width: 16, height: 10, point: null, title: "Click **Save**", elapsedMs: 0 });
+  await emitEvent(page, "recording://snapshot", { id: "0-2", ts: 1, width: 16, height: 10, point: null, title: "Press **Return**", elapsedMs: 1 });
   await expect(toolbar.getByLabel("Screenshots")).toHaveText("2");
 
   await toolbar.getByRole("button", { name: "Add manual step" }).click();

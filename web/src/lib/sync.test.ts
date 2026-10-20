@@ -47,7 +47,7 @@ describe("push", () => {
 
     const second = await pushed(grace, retitled("New title"), first.id);
     expect(second.parentId).toBe(first.id);
-    expect((await getGuide(db, "org", "ada", fixture.id))!.head.guide.title).toBe("New title");
+    expect((await getGuide(db, "org", ada, fixture.id))!.head.guide.title).toBe("New title");
   });
 
   it("returns the head when the change wasn't made on it", async () => {
@@ -96,26 +96,26 @@ describe("push", () => {
 
 describe("changes", () => {
   it("lists each changed guide's head after the cursor", async () => {
-    const empty = await changes(db, "org", "ada", 0n);
+    const empty = await changes(db, "org", ada, 0n);
     expect(empty).toEqual({ changes: [], cursor: "0", hasMore: false });
 
     const first = await pushed(ada, fixture, null);
-    const page = await changes(db, "org", "grace", 0n);
+    const page = await changes(db, "org", grace, 0n);
     expect(page.changes).toMatchObject([{ type: "revision", guideId: fixture.id, revision: { id: first.id } }]);
 
-    expect((await changes(db, "org", "grace", BigInt(page.cursor))).changes).toEqual([]);
+    expect((await changes(db, "org", grace, BigInt(page.cursor))).changes).toEqual([]);
     const second = await pushed(ada, retitled("Edited"), first.id);
-    const next = await changes(db, "org", "grace", BigInt(page.cursor));
+    const next = await changes(db, "org", grace, BigInt(page.cursor));
     expect(next.changes).toMatchObject([{ type: "revision", revision: { id: second.id } }]);
     expect(BigInt(next.cursor)).toBeGreaterThan(BigInt(page.cursor));
   });
 
   it("pages", async () => {
     for (const n of [1, 2, 3]) await pushed(ada, { ...structuredClone(fixture), id: `01M4WZCE200000000000000${n}AA` }, null);
-    const first = await changes(db, "org", "ada", 0n, 2);
+    const first = await changes(db, "org", ada, 0n, 2);
     expect(first.changes).toHaveLength(2);
     expect(first.hasMore).toBe(true);
-    const rest = await changes(db, "org", "ada", BigInt(first.cursor), 2);
+    const rest = await changes(db, "org", ada, BigInt(first.cursor), 2);
     expect(rest.changes).toHaveLength(1);
     expect(rest.hasMore).toBe(false);
   });
@@ -123,26 +123,26 @@ describe("changes", () => {
   it("doesn't show other workspaces' guides", async () => {
     await db.insert(organization).values({ id: "other", name: "Other", slug: "other", createdAt: new Date() });
     await pushed(ada, fixture, null);
-    expect((await changes(db, "other", "ada", 0n)).changes).toEqual([]);
+    expect((await changes(db, "other", ada, 0n)).changes).toEqual([]);
   });
 });
 
 describe("trash", () => {
   it("tombstones deleted guides in the feed and refuses pushes until restored", async () => {
     const first = await pushed(ada, fixture, null);
-    const { cursor } = await changes(db, "org", "ada", 0n);
+    const { cursor } = await changes(db, "org", ada, 0n);
     expect((await trashGuide(db, "org", grace, fixture.id)).status).toBe(403);
     expect((await trashGuide(db, "org", ada, fixture.id, new Date("2026-10-01T00:00:00Z"))).status).toBe(200);
 
-    expect((await changes(db, "org", "ada", BigInt(cursor))).changes).toMatchObject([
+    expect((await changes(db, "org", ada, BigInt(cursor))).changes).toMatchObject([
       { type: "deleted", guideId: fixture.id, deletedAt: "2026-10-01T00:00:00.000Z", purgeAt: "2026-10-31T00:00:00.000Z" },
     ]);
     expect(await push(db, "org", ada, request(retitled("Late"), first.id), "app")).toMatchObject({ status: 410 });
-    expect(await listGuides(db, "org", "ada")).toEqual([]);
-    expect(await listGuides(db, "org", "ada", { trashed: true })).toHaveLength(1);
+    expect(await listGuides(db, "org", ada)).toEqual([]);
+    expect(await listGuides(db, "org", ada, { trashed: true })).toHaveLength(1);
 
     expect((await restoreGuide(db, "org", ada, fixture.id)).status).toBe(200);
-    expect((await changes(db, "org", "ada", BigInt(cursor))).changes).toMatchObject([{ type: "revision", revision: { id: first.id } }]);
+    expect((await changes(db, "org", ada, BigInt(cursor))).changes).toMatchObject([{ type: "revision", revision: { id: first.id } }]);
   });
 
   it("purges revisions after 30 days, keeping the tombstone", async () => {
@@ -150,11 +150,11 @@ describe("trash", () => {
     await trashGuide(db, "org", ada, fixture.id, new Date("2026-10-01T00:00:00Z"));
     expect(await purgeTrash(db, new Date("2026-10-30T00:00:00Z"))).toBe(0);
     expect(await purgeTrash(db, new Date("2026-11-01T00:00:00Z"))).toBe(1);
-    expect(await getGuide(db, "org", "ada", fixture.id)).toBeNull();
-    expect((await changes(db, "org", "ada", 0n)).changes).toMatchObject([{ type: "deleted" }]);
+    expect(await getGuide(db, "org", ada, fixture.id)).toBeNull();
+    expect((await changes(db, "org", ada, 0n)).changes).toMatchObject([{ type: "deleted" }]);
 
     // The guide can be synced again from scratch.
     expect((await pushed(grace, fixture, null)).parentId).toBeNull();
-    expect((await changes(db, "org", "ada", 0n)).changes).toMatchObject([{ type: "revision" }]);
+    expect((await changes(db, "org", ada, 0n)).changes).toMatchObject([{ type: "revision" }]);
   });
 });

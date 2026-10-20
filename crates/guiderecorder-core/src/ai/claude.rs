@@ -679,6 +679,8 @@ pub fn parse_step_output(input: &StepInput, parsed: Parsed) -> Result<StepOutput
                 rect: bbox,
                 reason: r["reason"].as_str().unwrap_or_default().trim().to_owned(),
                 source: SuggestionSource::Ai,
+                preview: None,
+                review: None,
             })
         })
         .collect();
@@ -1087,11 +1089,15 @@ mod tests {
                     rect: rect(1100.0, 550.0, 100.0, 25.0),
                     reason: "email address".into(),
                     source: SuggestionSource::Ai,
+                    preview: None,
+                    review: None,
                 },
                 RedactionSuggestion {
                     rect: rect(2400.0, 1500.0, 160.0, 100.0),
                     reason: "name".into(),
                     source: SuggestionSource::Ai,
+                    preview: None,
+                    review: None,
                 },
             ]
         );

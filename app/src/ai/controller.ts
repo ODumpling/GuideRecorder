@@ -9,21 +9,8 @@ import {
   errorMessage,
   type AiApi,
 } from "@/lib/ipc";
-import type {
-  AiEndpoint,
-  AiFinishedEvent,
-  AiGuideEvent,
-  AiProviderKind,
-  AiRewriteResult,
-  AiStartedEvent,
-  AiState,
-  AiStepEvent,
-  Guide,
-  RedactionSuggestion,
-  RewriteStyleArg,
-  Settings,
-  Step,
-} from "@/lib/types";
+import type { AiState, Guide, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
+import type { AiEndpoint, AiFinishedEvent, AiGuideEvent, AiProviderKind, AiRewriteResult, AiStartedEvent, AiStepEvent, RewriteStyleArg, Settings } from "@/lib/types";
 
 /**
  * Runs AI writing for the open guide (`ai_generate`) and applies its
@@ -203,14 +190,27 @@ function findStep(guide: Guide, id: string): Step | null {
   return item?.type === "step" ? item : null;
 }
 
+/** Whether most of `rect` is under one of `others`, as core's redaction counts it. */
+function covered(rect: Rect, others: Rect[]): boolean {
+  const area = rect.width * rect.height;
+  return others.some((o) => {
+    const w = Math.min(rect.x + rect.width, o.x + o.width) - Math.max(rect.x, o.x);
+    const h = Math.min(rect.y + rect.height, o.y + o.height) - Math.max(rect.y, o.y);
+    return w > 0 && h > 0 && w * h >= 0.9 * area;
+  });
+}
+
 /**
  * The blur suggestions a step gets with an AI result: the live step's
- * on-device ones, which stay until reviewed (also ones the AI run started
- * before, so one rejected meanwhile stays gone), then the AI's own.
+ * on-device ones and the ones the user reviewed (as they are now, so one
+ * reviewed while the AI ran stays reviewed), then the AI's pending ones,
+ * leaving out areas the user already reviewed.
  */
 export function withOnDeviceSuggestions(live: Step, incoming: RedactionSuggestion[] | undefined): RedactionSuggestion[] {
-  const onDevice = (s: RedactionSuggestion) => s.source === "onDevice";
-  return [...(live.aiState.redactionSuggestions ?? []).filter(onDevice), ...(incoming ?? []).filter((s) => !onDevice(s))];
+  const kept = (live.aiState.redactionSuggestions ?? []).filter((s) => s.source === "onDevice" || s.review);
+  const reviewed = kept.filter((s) => s.review).map((s) => s.rect);
+  const fresh = (incoming ?? []).filter((s) => s.source !== "onDevice" && !s.review && !covered(s.rect, reviewed));
+  return [...kept, ...fresh];
 }
 
 /** The patches that apply a step result to the live step; null to leave it. */
@@ -218,8 +218,9 @@ export function stepPatches(live: Step | null, event: AiStepEvent): Patch[] | nu
   if (!live || live.aiState.status === "edited") return null;
   const id = live.id;
   if (event.outcome === "applied" && event.step) {
-    const aiState = {
+    const aiState: AiState = {
       ...event.step.aiState,
+      scanned: live.aiState.scanned,
       redactionSuggestions: withOnDeviceSuggestions(
         live,
         event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,
@@ -375,6 +376,7 @@ export function createAiStore({ api, editor, listen, stopTimeoutMs = 10_000 }: A
             description: event.step.description,
             aiState: {
               ...event.step.aiState,
+              scanned: live.aiState.scanned,
               redactionSuggestions: withOnDeviceSuggestions(
                 live,
                 event.step.aiState.redactionSuggestions ?? event.redactionSuggestions,

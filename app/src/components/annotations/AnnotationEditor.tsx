@@ -13,14 +13,7 @@ import {
   SquareDashedMousePointer,
   Square,
 } from "lucide-react";
-import {
-  acceptAllBlurSuggestions,
-  acceptBlurSuggestion,
-  addAnnotation,
-  rejectBlurSuggestion,
-  removeAnnotation,
-  updateAnnotation,
-} from "@/annotations/commands";
+import { addAnnotation, removeAnnotation, updateAnnotation } from "@/annotations/commands";
 import {
   activeCrop,
   bounds,
@@ -39,21 +32,23 @@ import {
   type DragPart,
   type Tool,
   type View,
-} from "@/annotations/geometry";
+} from "@guiderecorder/ui/geometry";
 import { afterFrame } from "@/components/annotations/afterFrame";
 import { HotspotPopover, POPOVER_WIDTH, type PopoverAnchor } from "@/components/annotations/HotspotPopover";
 import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
-import { CropMask, Shape, type Backdrop } from "@/components/annotations/Shapes";
+import { useImageSize } from "@guiderecorder/ui/annotated-image";
+import { CropMask, Shape, type Backdrop } from "@guiderecorder/ui/shapes";
 import { StyleBar } from "@/components/annotations/StyleBar";
 import { BeforeAfterSwitch, type Frame } from "@/components/BeforeAfterSwitch";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { useStepImage } from "@/components/useStepImage";
 import { IMAGE_SHOW_HINTS, setImageShow, type Command } from "@/editor/commands";
 import { editorStore, useAnnotated } from "@/editor/editor";
+import { inspectorStore, useFocusedSuggestion } from "@/editor/inspector";
 import { tauriApi, verifyCrop } from "@/lib/ipc";
-import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@/lib/types";
+import type { Annotation, Guide, Point, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 const TOOLS: { tool: Tool | "select"; label: string; hint: string; icon: typeof Square }[] = [
   { tool: "select", label: "Select", hint: "Select: click a shape to move, resize or style it", icon: MousePointer2 },
@@ -96,31 +91,6 @@ type Drag =
   | { mode: "move"; original: Annotation; part: DragPart; start: Point };
 
 type Size = { width: number; height: number };
-
-/**
- * The size of an image, once decoded; `failed` when it can't be decoded
- * (a damaged or unsupported file).
- */
-function useImageSize(url: string | null): { size: Size | null; failed: boolean } {
-  const [result, setResult] = useState<{ url: string; size: Size | null } | null>(null);
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false;
-    const image = new Image();
-    image.onload = () => {
-      if (!cancelled) setResult({ url, size: { width: image.naturalWidth, height: image.naturalHeight } });
-    };
-    image.onerror = () => {
-      if (!cancelled) setResult({ url, size: null });
-    };
-    image.src = url;
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-  const current = result && result.url === url ? result : null;
-  return { size: current?.size ?? null, failed: !!current && !current.size };
-}
 
 /**
  * Whether the step image at `path` can't be decoded: `true` when its bytes
@@ -284,7 +254,7 @@ function Layer({
   onToolDone(): void;
   selectedId: string | null;
   select(id: string | null): void;
-  /** The blur suggestion whose row has the pointer or focus, drawn stronger. */
+  /** The blur suggestion (its index) whose row in the inspector has the pointer or focus, drawn stronger. */
   focusedSuggestion: number | null;
 }) {
   // A crop is shown only once the Rust side has checked its `cropRect`
@@ -680,9 +650,10 @@ function Layer({
 }
 
 /**
- * Blur suggestions (from the AI or found on this Mac) as dashed, numbered
- * proposals (full-screenshot pixels, like annotations). Editor-only: they
- * are in `aiState`, never exported.
+ * Pending blur suggestions (from the AI or found on this Mac) as dashed,
+ * numbered proposals (full-screenshot pixels, like annotations), numbered
+ * as in the inspector's privacy review. Editor-only: they are in
+ * `aiState`, never exported.
  */
 function Suggestions({
   suggestions,
@@ -693,20 +664,21 @@ function Suggestions({
   unit: number;
   focused: number | null;
 }) {
-  if (!suggestions.length) return null;
+  const pending = suggestions.flatMap((s, index) => (s.review ? [] : [{ rect: s.rect, index }]));
+  if (!pending.length) return null;
   return (
     <g pointerEvents="none" data-testid="blur-suggestions">
-      {suggestions.map(({ rect }, i) => (
-        <g key={i} data-suggestion={i}>
+      {pending.map(({ rect, index }, i) => (
+        <g key={index} data-suggestion={index}>
           <rect
             x={rect.x}
             y={rect.y}
             width={rect.width}
             height={rect.height}
             fill="var(--status-warning)"
-            fillOpacity={focused === i ? 0.25 : 0.1}
+            fillOpacity={focused === index ? 0.25 : 0.1}
             stroke="var(--status-warning)"
-            strokeWidth={focused === i ? 2.5 : 1.5}
+            strokeWidth={focused === index ? 2.5 : 1.5}
             strokeDasharray="6 4"
             vectorEffect="non-scaling-stroke"
           />
@@ -724,86 +696,6 @@ function Suggestions({
         </g>
       ))}
     </g>
-  );
-}
-
-/** Accept or reject each blur suggestion, or accept them all; all undoable. */
-function SuggestionList({
-  step,
-  readOnly,
-  onFocus,
-}: {
-  step: Step;
-  readOnly: boolean;
-  onFocus(index: number | null): void;
-}) {
-  const suggestions = step.aiState.redactionSuggestions ?? [];
-  if (!suggestions.length) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      <ul className="flex flex-col gap-1 text-sm" aria-label="Blur suggestions">
-        {suggestions.map((suggestion, i) => (
-          <li
-            key={`${i}:${suggestion.rect.x},${suggestion.rect.y}`}
-            className="flex items-center gap-2 rounded-md border border-dashed border-[var(--status-warning)] px-2 py-1"
-            onPointerEnter={() => onFocus(i)}
-            onPointerLeave={() => onFocus(null)}
-            onFocus={() => onFocus(i)}
-            onBlur={() => onFocus(null)}
-          >
-            <span className="text-xs font-semibold text-[var(--status-warning)] tabular-nums">{i + 1}</span>
-            <span
-              className="min-w-0 flex-1 truncate"
-              title={suggestion.source === "onDevice" ? `${suggestion.reason} (found on this Mac)` : suggestion.reason}
-            >
-              Suggested blur: {suggestion.reason || "may be sensitive"}
-            </span>
-            {!readOnly && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  aria-label={`Accept blur suggestion ${i + 1}`}
-                  title="Blur this area"
-                  onClick={() => {
-                    onFocus(null);
-                    run((guide) => acceptBlurSuggestion(guide, step.id, i, ulid()));
-                  }}
-                >
-                  Accept
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Reject blur suggestion ${i + 1}`}
-                  title="Dismiss this suggestion and leave the area as it is"
-                  onClick={() => {
-                    onFocus(null);
-                    run((guide) => rejectBlurSuggestion(guide, step.id, i));
-                  }}
-                >
-                  Reject
-                </Button>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-      {!readOnly && suggestions.length > 1 && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="self-end"
-          title="Blur every suggested area"
-          onClick={() => {
-            onFocus(null);
-            run((guide) => acceptAllBlurSuggestions(guide, step.id, suggestions.map(() => ulid())));
-          }}
-        >
-          Accept all {suggestions.length}
-        </Button>
-      )}
-    </div>
   );
 }
 
@@ -869,7 +761,8 @@ function Handles({
  * The step image with its annotation layer: tools above it, the selected
  * annotation's style below. All edits are undoable commands. On a page of
  * an annotation guide the hotspot tool is ready, and walkthrough-only
- * controls (Before/After, click crop, blur suggestions) are left out.
+ * controls (Before/After, click crop, blur suggestions) are left out. Blur
+ * suggestions are reviewed in the inspector's Privacy tab.
  */
 export default function AnnotationEditor({ guideId, step, readOnly }: { guideId: string; step: Step; readOnly: boolean }) {
   const annotated = useAnnotated();
@@ -891,7 +784,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
     },
     [step.id],
   );
-  const [focusedSuggestion, setFocusedSuggestion] = useState<number | null>(null);
+  const focusedSuggestion = useFocusedSuggestion(step.id);
   // View-only, never part of the guide; a new step starts at Before (the
   // editor is keyed by step).
   const [chosenFrame, setFrame] = useState<Frame>("before");
@@ -904,7 +797,7 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
     if (next === "after") {
       setTool("select");
       select(null);
-      setFocusedSuggestion(null);
+      inspectorStore.getState().focus(null);
     }
   };
   const togglePreview = () => {
@@ -1000,7 +893,6 @@ export default function AnnotationEditor({ guideId, step, readOnly }: { guideId:
         focusedSuggestion={focusedSuggestion}
         frame={frame}
       />
-      {!after && !annotated && <SuggestionList step={step} readOnly={readOnly} onFocus={setFocusedSuggestion} />}
       {editing && selected && (
         <StyleBar
           key={selected.id}

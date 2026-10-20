@@ -2,8 +2,10 @@ import "@tanstack/react-start/server-only";
 import { z } from "zod";
 import { db } from "@/db";
 import { checkAccess, type BooleanEntitlement, type Permission } from "./access";
+import { requestMeta } from "./audit";
 import { auth } from "./auth";
 import { env } from "./env";
+import { shareUrl, type ShareLinkInfo } from "./sharing";
 import { s3Store, type ObjectStore } from "./storage";
 
 export function jsonError(status: number, error: string, extra?: object) {
@@ -20,7 +22,7 @@ export async function authorize(
   const session = await auth().api.getSession({ headers: request.headers });
   const access = await checkAccess(db(), session?.user.id, organizationId, permission, feature);
   if (!access.ok) return { error: jsonError(access.status, access.error) } as const;
-  return { userId: session!.user.id, ...access } as const;
+  return { userId: session!.user.id, ...requestMeta(request.headers), ...access } as const;
 }
 
 /** Parses a JSON body with `schema`; returns an error Response on failure. */
@@ -44,4 +46,9 @@ export function objectStore(): ObjectStore {
     sse: e.S3_SSE === "aws:kms" ? { algorithm: "aws:kms", kmsKeyId: e.S3_SSE_KMS_KEY_ID } : e.S3_SSE ? { algorithm: e.S3_SSE } : undefined,
   });
   return store;
+}
+
+/** A share link with its public URL. */
+export function withUrl(link: ShareLinkInfo) {
+  return { ...link, url: shareUrl(env().BETTER_AUTH_URL, link.token) };
 }

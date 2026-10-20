@@ -29,8 +29,6 @@ export const policySchema = z.object({
   provisioningRole: z.enum(PROVISIONING_ROLES),
   /** Revisions older than this are deleted, except each guide's head and published revision. Null keeps them forever. */
   revisionRetentionDays: z.number().int().min(7).max(3650).nullable(),
-  /** Audit events older than this are deleted. Null keeps them forever. Enforced once the audit log lands. */
-  auditRetentionDays: z.number().int().min(30).max(3650).nullable(),
 });
 
 export type WorkspacePolicy = z.infer<typeof policySchema>;
@@ -40,7 +38,6 @@ export const DEFAULT_POLICY: WorkspacePolicy = {
   requireSso: false,
   provisioningRole: "editor",
   revisionRetentionDays: null,
-  auditRetentionDays: null,
 };
 
 export async function getPolicy(db: Database, organizationId: string): Promise<WorkspacePolicy> {
@@ -51,7 +48,6 @@ export async function getPolicy(db: Database, organizationId: string): Promise<W
     requireSso: row.requireSso,
     provisioningRole: row.provisioningRole as WorkspacePolicy["provisioningRole"],
     revisionRetentionDays: row.revisionRetentionDays,
-    auditRetentionDays: row.auditRetentionDays,
   };
 }
 
