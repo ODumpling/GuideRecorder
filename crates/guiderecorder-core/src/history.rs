@@ -800,6 +800,7 @@ mod tests {
         assert!(!copy.path.join(HISTORY_DIR).exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_history_is_refused() {
         let (tmp, lib) = library();

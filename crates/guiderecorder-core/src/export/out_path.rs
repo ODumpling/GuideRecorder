@@ -216,7 +216,13 @@ mod tests {
     #[test]
     fn the_library_is_refused_with_or_without_a_trailing_slash() {
         let fx = Fx::new();
-        let slash = PathBuf::from(format!("{}/", fx.library.display()));
+        // The platform's separator: in the `\\?\` paths Windows
+        // canonicalizes to, `/` is part of the name.
+        let slash = PathBuf::from(format!(
+            "{}{}",
+            fx.library.display(),
+            std::path::MAIN_SEPARATOR
+        ));
         for library in [fx.library.clone(), slash] {
             for out in [fx.library.join("x.pdf"), fx.library.join("md/folder")] {
                 let err = check_out_path(&out, &fx.bundle, Some(&library)).unwrap_err();
@@ -244,12 +250,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn dotdot_after_a_missing_folder_is_refused() {
         let fx = Fx::new();
         let out = fx.exports.join("missing/../x.pdf");
         let err = fx.check(&out).unwrap_err();
         assert!(matches!(&err, OutPathError::DotDotAfterMissing(p) if *p == out));
         assert!(err.to_string().contains("`..`"), "{err}");
+    }
+
+    /// Windows takes `..` off a path by its text before any folder is
+    /// looked up, so `missing/..` names no folder at all.
+    #[test]
+    #[cfg(windows)]
+    fn dotdot_after_a_missing_folder_is_dropped_on_windows() {
+        let fx = Fx::new();
+        let out = fx.exports.join("missing/../x.pdf");
+        assert_eq!(fx.check(&out).unwrap(), fx.exports.join("x.pdf"));
     }
 
     #[test]

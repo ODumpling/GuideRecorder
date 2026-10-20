@@ -73,6 +73,7 @@ impl PendingReply {
 #[derive(Default)]
 pub struct AppKitWait(AtomicBool);
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl AppKitWait {
     /// The delegate answered `reply`.
     pub fn answered(&self, reply: TerminateReply) {

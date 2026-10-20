@@ -190,14 +190,7 @@ impl Default for Recording {
 /// Passwords and Messages (the capture crate's
 /// `DEFAULT_EXCLUDED_BUNDLE_IDS`). Empty where there is no capture backend.
 pub fn default_excluded_apps() -> Vec<String> {
-    #[cfg(target_os = "macos")]
-    {
-        guiderecorder_capture::macos::session::default_excluded_bundle_ids()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Vec::new()
-    }
+    guiderecorder_capture::backend::session::default_excluded_bundle_ids()
 }
 
 /// Who writes the guide text. Settings saved before there was a choice

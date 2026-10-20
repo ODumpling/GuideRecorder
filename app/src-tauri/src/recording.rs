@@ -72,10 +72,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::{DateTime, Local, SecondsFormat, Utc};
-use guiderecorder_capture::macos::frames::CaptureTarget;
-use guiderecorder_capture::macos::session::{
+use guiderecorder_capture::backend::session::{RecordingSession, SessionError};
+use guiderecorder_capture::frames::CaptureTarget;
+use guiderecorder_capture::keys;
+use guiderecorder_capture::session::{
     AfterFrames, CaptureEdits, CaptureLostSink, ExclusionSink, Hotkey, LivePress, PressSink,
-    RecordingSession, SessionConfig, SessionError, SnapshotSink, UndoSink,
+    SessionConfig, SnapshotSink, UndoSink,
 };
 use guiderecorder_core::events::Modifiers;
 use guiderecorder_core::model::Point;
@@ -492,80 +494,13 @@ fn default_title() -> String {
     format!("Recording {}", Local::now().format("%Y-%m-%d %H:%M"))
 }
 
-/// Virtual key codes (`kVK_*`) of every key the settings accept as a
-/// shortcut key (see `settings::is_hotkey`): the ANSI letters and digits,
-/// `F1` to `F20`, and the named keys.
-const KEY_CODES: &[(&str, u16)] = &[
-    ("A", 0),
-    ("S", 1),
-    ("D", 2),
-    ("F", 3),
-    ("H", 4),
-    ("G", 5),
-    ("Z", 6),
-    ("X", 7),
-    ("C", 8),
-    ("V", 9),
-    ("B", 11),
-    ("Q", 12),
-    ("W", 13),
-    ("E", 14),
-    ("R", 15),
-    ("Y", 16),
-    ("T", 17),
-    ("1", 18),
-    ("2", 19),
-    ("3", 20),
-    ("4", 21),
-    ("6", 22),
-    ("5", 23),
-    ("9", 25),
-    ("7", 26),
-    ("8", 28),
-    ("0", 29),
-    ("O", 31),
-    ("U", 32),
-    ("I", 34),
-    ("P", 35),
-    ("L", 37),
-    ("J", 38),
-    ("K", 40),
-    ("N", 45),
-    ("M", 46),
-    ("Enter", 36),
-    ("Tab", 48),
-    ("Space", 49),
-    ("Backspace", 51),
-    ("Escape", 53),
-    ("F17", 64),
-    ("F18", 79),
-    ("F19", 80),
-    ("F20", 90),
-    ("F5", 96),
-    ("F6", 97),
-    ("F7", 98),
-    ("F3", 99),
-    ("F8", 100),
-    ("F9", 101),
-    ("F11", 103),
-    ("F13", 105),
-    ("F16", 106),
-    ("F14", 107),
-    ("F10", 109),
-    ("F12", 111),
-    ("F15", 113),
-    ("Delete", 117),
-    ("F4", 118),
-    ("F2", 120),
-    ("F1", 122),
-];
-
 /// Parses a shortcut as the settings store it (`CmdOrCtrl+Shift+M`: Tauri
 /// modifier names joined by `+`, then one key) into a capture [`Hotkey`].
 ///
-/// `CmdOrCtrl`, `CommandOrControl`, `Cmd`, `Command` and `Super` are
-/// Command on macOS; `Ctrl` and `Control` are Control; `Alt` and `Option`
-/// are Option. The key is any key the settings accept (a letter in either
+/// `CmdOrCtrl` and `CommandOrControl` are Command on macOS and Control
+/// elsewhere, as for the global shortcuts; `Cmd`, `Command` and `Super` are
+/// Command (the Windows key on Windows); `Ctrl` and `Control` are Control;
+/// `Alt` and `Option` are Option. The key is any key the settings accept (a letter in either
 /// case, a digit, `F1` to `F20`, `Space`, `Enter`, `Tab`, `Escape`,
 /// `Backspace` or `Delete`) and at least one modifier is required (a bare
 /// key would swallow every press of it). Anything else is `None`.
@@ -576,9 +511,11 @@ pub fn parse_hotkey(value: &str) -> Option<Hotkey> {
     let mut count = 0;
     for part in parts {
         match part {
-            "CmdOrCtrl" | "CommandOrControl" | "Cmd" | "Command" | "Super" => {
+            "CmdOrCtrl" | "CommandOrControl" if cfg!(target_os = "macos") => {
                 modifiers.command = true
             }
+            "CmdOrCtrl" | "CommandOrControl" => modifiers.control = true,
+            "Cmd" | "Command" | "Super" => modifiers.command = true,
             "Ctrl" | "Control" => modifiers.control = true,
             "Alt" | "Option" => modifiers.option = true,
             "Shift" => modifiers.shift = true,
@@ -589,14 +526,8 @@ pub fn parse_hotkey(value: &str) -> Option<Hotkey> {
     if count == 0 {
         return None;
     }
-    let key = key.to_ascii_uppercase();
-    let (_, code) = KEY_CODES
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(&key))?;
-    Some(Hotkey {
-        code: *code,
-        modifiers,
-    })
+    let code = keys::code(key)?;
+    Some(Hotkey { code, modifiers })
 }
 
 /// The manual-step hotkey from the settings: `None` when the setting is
@@ -1250,13 +1181,18 @@ mod tests {
         }
     }
 
+    fn code(name: &str) -> u16 {
+        keys::code(name).unwrap()
+    }
+
     #[test]
     fn parses_settings_style_hotkeys() {
+        let mac = cfg!(target_os = "macos");
         assert_eq!(
             parse_hotkey("CmdOrCtrl+Shift+M"),
             Some(Hotkey {
-                code: 46,
-                modifiers: mods(true, false, false, true)
+                code: code("M"),
+                modifiers: mods(true, !mac, false, mac)
             })
         );
         assert_eq!(parse_hotkey("Ctrl+Alt+S"), Some(Hotkey::MANUAL_STEP));
@@ -1264,26 +1200,27 @@ mod tests {
         assert_eq!(
             parse_hotkey("Command+1"),
             Some(Hotkey {
-                code: 18,
+                code: code("1"),
                 modifiers: mods(false, false, false, true)
             })
         );
         assert_eq!(
             parse_hotkey("Super+Shift+0"),
             Some(Hotkey {
-                code: 29,
+                code: code("0"),
                 modifiers: mods(true, false, false, true)
             })
         );
         assert_eq!(
             parse_hotkey("CommandOrControl+Ctrl+Alt+Shift+Z"),
             Some(Hotkey {
-                code: 6,
-                modifiers: mods(true, true, true, true)
+                code: code("Z"),
+                modifiers: mods(true, true, true, mac)
             })
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parses_function_and_named_keys() {
         for (value, code) in [
@@ -1301,6 +1238,24 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn parses_function_and_named_keys() {
+        for (value, code) in [
+            ("CmdOrCtrl+F5", 0x74),
+            ("Cmd+f1", 0x70),
+            ("Ctrl+F20", 0x83),
+            ("Cmd+Space", 0x20),
+            ("Cmd+Enter", 0x0D),
+            ("Cmd+Tab", 0x09),
+            ("Cmd+Escape", 0x1B),
+            ("Cmd+Backspace", 0x08),
+            ("Cmd+Delete", 0x2E),
+        ] {
+            assert_eq!(parse_hotkey(value).map(|h| h.code), Some(code), "{value}");
+        }
+    }
+
     /// Every key `settings::is_hotkey` accepts maps to a distinct code, so
     /// no stored shortcut falls back to the default.
     #[test]
@@ -1312,13 +1267,13 @@ mod tests {
                 .iter()
                 .map(|k| k.to_string()),
         );
-        assert_eq!(keys.len(), KEY_CODES.len());
+        assert_eq!(keys.len(), super::keys::NAMED.len());
         for key in &keys {
             let value = format!("CmdOrCtrl+{key}");
             assert!(crate::settings::is_hotkey(&value), "{value}");
             let hotkey = parse_hotkey(&value).unwrap_or_else(|| panic!("{value}"));
             assert_eq!(
-                KEY_CODES
+                super::keys::NAMED
                     .iter()
                     .filter(|(_, code)| *code == hotkey.code)
                     .count(),
@@ -1352,7 +1307,10 @@ mod tests {
     fn manual_hotkey_falls_back() {
         assert_eq!(manual_hotkey(""), None);
         assert_eq!(manual_hotkey("Cmd+Home"), Some(Hotkey::MANUAL_STEP));
-        assert_eq!(manual_hotkey("CmdOrCtrl+Shift+M").map(|h| h.code), Some(46));
+        assert_eq!(
+            manual_hotkey("CmdOrCtrl+Shift+M").map(|h| h.code),
+            keys::code("M")
+        );
     }
 
     #[test]
