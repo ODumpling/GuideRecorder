@@ -5,14 +5,18 @@ import {
   CalendarClock,
   Check,
   ChevronsUpDown,
+  EllipsisVertical,
   Folder,
   FolderOpen,
+  LayoutDashboard,
   LogOut,
   Menu,
   ScrollText,
   Search,
   Settings,
   Shield,
+  Sparkles,
+  UserRound,
   X,
 } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
@@ -32,7 +36,8 @@ import type { getShell } from "@/server/shell";
 
 // The signed-in pages' frame, laid out like the desktop app's library
 // window: the library's sidebar (guides by status and folder) on the left,
-// a search bar on top. Workspace settings sit at the sidebar's foot.
+// a search bar on top. Workspace settings and the account menu sit at the
+// sidebar's foot.
 
 export type Shell = Awaited<ReturnType<typeof getShell>>;
 
@@ -191,13 +196,16 @@ function Sidebar({ shell }: { shell: Shell }) {
       <div className="flex flex-col gap-px border-t border-sidebar-border p-2.5">
         <NavItem to="/dashboard" icon={<Settings />} label="Workspace" current={location.pathname === "/dashboard"} />
         {shell.can.readAudit ? <NavItem to="/audit" icon={<ScrollText />} label="Audit log" current={location.pathname === "/audit"} /> : null}
-        {shell.can.manageWorkspace ? <NavItem to="/admin" icon={<Shield />} label="Admin" current={location.pathname === "/admin"} /> : null}
+        {shell.can.admin ? <NavItem to="/admin" icon={<Shield />} label="Admin" current={location.pathname === "/admin"} /> : null}
+      </div>
+      <div className="p-2.5 pt-0">
+        <ProfileMenu shell={shell} />
       </div>
     </>
   );
 }
 
-/** The active workspace; switches workspace and signs out. */
+/** The active workspace; switches workspace. */
 function WorkspaceMenu({ shell }: { shell: Shell }) {
   const router = useRouter();
   const name = shell.active?.name ?? "No workspace";
@@ -223,16 +231,8 @@ function WorkspaceMenu({ shell }: { shell: Shell }) {
         <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel className="flex items-center gap-2 font-normal">
-          <Avatar name={shell.user.name || shell.user.email} label={shell.user.email} className="size-6 text-[10px]" />
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium">{shell.user.name}</span>
-            <span className="truncate text-xs text-muted-foreground">{shell.user.email}</span>
-          </span>
-        </DropdownMenuLabel>
         {shell.workspaces.length > 1 ? (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Workspaces</DropdownMenuLabel>
             {shell.workspaces.map((w) => (
               <DropdownMenuItem key={w.id} onSelect={() => w.id !== shell.active?.id && void switchTo(w.id)}>
@@ -240,14 +240,68 @@ function WorkspaceMenu({ shell }: { shell: Shell }) {
                 {w.id === shell.active?.id ? <Check /> : null}
               </DropdownMenuItem>
             ))}
+            <DropdownMenuSeparator />
           </>
         ) : null}
-        <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link to="/dashboard">
             <Settings /> Workspace settings
           </Link>
         </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The signed-in user: their profile, the workspace's plan, signing out. */
+function ProfileMenu({ shell }: { shell: Shell }) {
+  const router = useRouter();
+  const name = shell.user.name || shell.user.email;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="Account menu"
+        className="flex h-11 w-full items-center gap-2.5 rounded-lg px-2 text-left outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring data-[state=open]:bg-sidebar-foreground/5"
+      >
+        <Avatar name={name} label={shell.user.email} className="size-7 rounded-md text-[11px]" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-semibold">{shell.user.name || shell.user.email}</span>
+          <span className="truncate text-[11px] text-muted-foreground">{shell.user.email}</span>
+        </span>
+        <EllipsisVertical className="size-4 shrink-0 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="right" align="end" sideOffset={8} className="w-64">
+        <DropdownMenuLabel className="flex items-center gap-2 font-normal">
+          <Avatar name={name} label={shell.user.email} className="size-8 text-[11px]" />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium">{shell.user.name}</span>
+            <span className="truncate text-xs text-muted-foreground">{shell.user.email}</span>
+          </span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/profile">
+            <UserRound /> Profile
+          </Link>
+        </DropdownMenuItem>
+        {shell.staff ? (
+          <DropdownMenuItem asChild>
+            <Link to="/staff">
+              <LayoutDashboard /> Admin dashboard
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
+        {shell.active ? (
+          <DropdownMenuItem asChild>
+            <Link to="/dashboard" hash="plan">
+              <Sparkles />
+              <span className="flex-1">{shell.active.plan === "enterprise" ? "Plan and billing" : "Upgrade plan"}</span>
+              <span className="text-xs text-muted-foreground">{PLAN_LABEL[shell.active.plan]}</span>
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={async () => {
             await authClient.signOut();

@@ -39,7 +39,8 @@ const result = <T extends { ok: boolean }>(r: T) => {
 export const getAdmin = createServerFn({ method: "GET" }).handler(async () => {
   const me = await actor();
   const loaded = await loadAdmin(db(), auth(), me);
-  if (!loaded.ok) throw redirect({ to: "/dashboard" });
+  // Members are managed from the dashboard; the console itself is Enterprise.
+  if (!loaded.ok || !loaded.enterprise) throw redirect({ to: "/dashboard" });
   return {
     ...loaded,
     workspaceId: me.organizationId,

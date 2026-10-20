@@ -3,7 +3,6 @@ import { PolicySettings } from "@/components/admin/PolicySettings";
 import { ScimConnections } from "@/components/admin/ScimConnections";
 import { SsoProviders } from "@/components/admin/SsoProviders";
 import { Members } from "@/components/dashboard/Members";
-import { Card } from "@guiderecorder/ui/card";
 import { title } from "@/lib/title";
 import { getAdmin } from "@/server/admin";
 
@@ -15,7 +14,7 @@ export const Route = createFileRoute("/_app/admin")({
 
 function Admin() {
   const data = Route.useLoaderData();
-  const { enterprise, seats } = data;
+  const { seats } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-7 px-5 py-8 md:px-9">
@@ -36,20 +35,9 @@ function Admin() {
         seatsLeft={seats.total - seats.used}
       />
 
-      {enterprise ? (
-        <>
-          <SsoProviders providers={data.sso} baseURL={data.baseURL} />
-          <ScimConnections connections={data.scim} endpoint={`${data.baseURL}/api/auth/scim/v2`} />
-          <PolicySettings policy={data.policy} hasSso={data.sso.some((p) => p.domainVerified)} />
-        </>
-      ) : (
-        <Card className="block p-6">
-          <h2 className="text-lg font-semibold">Single sign-on, provisioning and policies</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            SSO with your identity provider (OIDC or SAML), SCIM provisioning, sharing policy and data retention come with Enterprise.
-          </p>
-        </Card>
-      )}
+      <SsoProviders providers={data.sso} baseURL={data.baseURL} />
+      <ScimConnections connections={data.scim} endpoint={`${data.baseURL}/api/auth/scim/v2`} />
+      <PolicySettings policy={data.policy} hasSso={data.sso.some((p) => p.domainVerified)} />
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppAuditRouteImport } from './routes/_app.audit'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppLibraryRouteImport } from './routes/_app.library'
+import { Route as AppProfileRouteImport } from './routes/_app.profile'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
@@ -90,6 +91,11 @@ const AppDashboardRoute = AppDashboardRouteImport.update({
 const AppLibraryRoute = AppLibraryRouteImport.update({
   id: '/library',
   path: '/library',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
   getParentRoute: () => AppRoute,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -231,6 +237,7 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AppAuditRoute
   '/dashboard': typeof AppDashboardRoute
   '/library': typeof AppLibraryRoute
+  '/profile': typeof AppProfileRoute
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
@@ -264,6 +271,7 @@ export interface FileRoutesByTo {
   '/audit': typeof AppAuditRoute
   '/dashboard': typeof AppDashboardRoute
   '/library': typeof AppLibraryRoute
+  '/profile': typeof AppProfileRoute
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
@@ -300,6 +308,7 @@ export interface FileRoutesById {
   '/_app/audit': typeof AppAuditRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/library': typeof AppLibraryRoute
+  '/_app/profile': typeof AppProfileRoute
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
@@ -336,6 +345,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/dashboard'
     | '/library'
+    | '/profile'
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
@@ -369,6 +379,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/dashboard'
     | '/library'
+    | '/profile'
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
@@ -404,6 +415,7 @@ export interface FileRouteTypes {
     | '/_app/audit'
     | '/_app/dashboard'
     | '/_app/library'
+    | '/_app/profile'
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
@@ -526,6 +538,13 @@ declare module '@tanstack/react-router' {
       path: '/library'
       fullPath: '/library'
       preLoaderRoute: typeof AppLibraryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/profile': {
+      id: '/_app/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
       parentRoute: typeof AppRoute
     }
     '/api/health': {
@@ -697,6 +716,7 @@ interface AppRouteChildren {
   AppAuditRoute: typeof AppAuditRoute
   AppDashboardRoute: typeof AppDashboardRoute
   AppLibraryRoute: typeof AppLibraryRoute
+  AppProfileRoute: typeof AppProfileRoute
   AppGuidesGuideIdRoute: typeof AppGuidesGuideIdRoute
   AppGuidesGuideIdEditRoute: typeof AppGuidesGuideIdEditRoute
   AppGuidesGuideIdReviewRoute: typeof AppGuidesGuideIdReviewRoute
@@ -707,6 +727,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAuditRoute: AppAuditRoute,
   AppDashboardRoute: AppDashboardRoute,
   AppLibraryRoute: AppLibraryRoute,
+  AppProfileRoute: AppProfileRoute,
   AppGuidesGuideIdRoute: AppGuidesGuideIdRoute,
   AppGuidesGuideIdEditRoute: AppGuidesGuideIdEditRoute,
   AppGuidesGuideIdReviewRoute: AppGuidesGuideIdReviewRoute,
