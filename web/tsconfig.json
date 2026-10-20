@@ -18,5 +18,5 @@
     "noUnusedParameters": true,
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src", "test", "worker", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts"]
+  "include": ["src", "test", "worker", "scripts", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts"]
 }
