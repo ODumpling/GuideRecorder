@@ -7,13 +7,17 @@ Installed apps update themselves from there with Tauri's updater.
 ## CI
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull
-request:
+request, but only the jobs whose files changed (the `changes` job maps paths
+to jobs; editing `ci.yml` runs everything). The full suite runs nightly at
+04:00 UTC, on manual dispatch, and before every release build:
 
 | Job | Runner | What |
 | --- | --- | --- |
 | Rust | macOS | versions agree (`scripts/version.sh`), `cargo fmt --check`, `clippy -D warnings`, `cargo test` |
 | Dependency licences | Ubuntu | `cargo deny check licenses` (policy in `deny.toml`) |
+| Rust on Windows | Windows | `clippy -D warnings`, `cargo test` |
 | Frontend | Ubuntu | `pnpm test`, `pnpm build`, Playwright e2e |
+| Web | Ubuntu | guide types current, typecheck and test the packages and web app, build |
 
 Tests that need TCC permissions or the login Keychain are `#[ignore]`d, so
 CI never prompts.

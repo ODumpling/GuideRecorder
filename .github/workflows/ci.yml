@@ -1,24 +1,97 @@
 name: CI
 
+# PRs and pushes to main run only the jobs whose files changed (see the
+# `changes` job). Everything runs nightly, on manual dispatch, and before a
+# release (release.yml calls this workflow with `full: true`).
+
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # 04:00 UTC (GitHub cron is UTC-only): 4am GMT, 5am BST.
+    - cron: "0 4 * * *"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      full:
+        description: Run every job regardless of what changed
+        type: boolean
+        default: true
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.full.outputs.all || steps.filter.outputs.rust }}
+      licenses: ${{ steps.full.outputs.all || steps.filter.outputs.licenses }}
+      frontend: ${{ steps.full.outputs.all || steps.filter.outputs.frontend }}
+      web: ${{ steps.full.outputs.all || steps.filter.outputs.web }}
+    steps:
+      - name: Full run?
+        id: full
+        if: inputs.full || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: echo "all=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        if: steps.full.outcome == 'skipped'
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: steps.full.outcome == 'skipped'
+        with:
+          # A change to this workflow runs everything.
+          filters: |
+            ci: &ci
+              - .github/workflows/ci.yml
+            rust:
+              - *ci
+              - crates/**
+              - app/src-tauri/**
+              - Cargo.toml
+              - Cargo.lock
+              - rust-toolchain.toml
+              - fixtures/**
+              - packages/guide-schema/guide.schema.json
+              # scripts/version.sh compares these.
+              - scripts/version.sh
+              - app/package.json
+            licenses:
+              - *ci
+              - deny.toml
+              - Cargo.lock
+              - "**/Cargo.toml"
+            frontend:
+              - *ci
+              - app/**
+              - packages/**
+              - fixtures/**
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+            web:
+              - *ci
+              - web/**
+              - packages/**
+              - fixtures/**
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+
   rust:
     name: Rust (fmt, clippy, test)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # The capture crate is macOS-only.
     runs-on: macos-latest
     steps:
@@ -35,6 +108,8 @@ jobs:
 
   rust-windows:
     name: Rust on Windows (clippy, test)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # Capture is stubbed on Windows for now (#14); everything else builds
     # and is tested. Formatting is checked by the macOS job.
     runs-on: windows-latest
@@ -48,6 +123,8 @@ jobs:
 
   licenses:
     name: Dependency licences
+    needs: changes
+    if: needs.changes.outputs.licenses == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -57,6 +134,8 @@ jobs:
 
   frontend:
     name: Frontend (unit, build, e2e)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -83,6 +162,8 @@ jobs:
 
   web:
     name: Web (guide schema, sync, ui, typecheck, unit, build)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
