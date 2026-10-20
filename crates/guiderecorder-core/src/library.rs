@@ -57,7 +57,7 @@
 //! a newer app are listed and open read-only; saves refuse to overwrite them.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -1839,10 +1839,19 @@ fn temp_file_in(dir: &Path, name: &str) -> Result<tempfile::NamedTempFile> {
     builder.tempfile_in(dir).map_err(io_err(dir))
 }
 
+/// Makes the entries of `dir` durable. Windows can't open a folder as a
+/// file (access denied) and has no folder fsync: NTFS journals its
+/// metadata, so there is nothing to do.
+#[cfg(unix)]
 fn sync_dir(dir: &Path) -> Result<()> {
-    File::open(dir)
+    fs::File::open(dir)
         .and_then(|f| f.sync_all())
         .map_err(io_err(dir))
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> Result<()> {
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2223,7 +2232,19 @@ mod tests {
     }
 
     fn set_mtime(path: &Path, time: SystemTime) {
-        File::open(path).unwrap().set_modified(time).unwrap();
+        #[cfg(unix)]
+        let file = fs::File::open(path);
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open
+            // a folder.
+            fs::File::options()
+                .access_mode(0x100)
+                .custom_flags(0x0200_0000)
+                .open(path)
+        };
+        file.unwrap().set_modified(time).unwrap();
     }
 
     #[test]
@@ -2521,6 +2542,8 @@ mod tests {
         let guide = Guide::new("Title", "en");
         let handle = lib.create(&guide).unwrap();
         let older = duplicate(&handle, lib.root(), "B elsewhere.guiderecorder");
+        // NTFS stamps creation times from a clock that ticks every few ms.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let newer = duplicate(&handle, lib.root(), "A elsewhere.guiderecorder");
         let delete = Library::open(lib.root()).unwrap();
         delete.delete(&handle).unwrap();

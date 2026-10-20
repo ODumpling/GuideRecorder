@@ -1196,7 +1196,10 @@ fn export_refuses_other_bundles_and_the_library() {
     assert!(!fx.dir.path().join("Elsewhere.guiderecorder").exists());
 }
 
+/// Unix only: Windows takes `..` off a path by its text, so there
+/// `missing/..` names no folder at all.
 #[test]
+#[cfg(unix)]
 fn export_refuses_dotdot_after_a_missing_folder() {
     let fx = Fixture::new();
     let out = fx.out("missing/../x.pdf");

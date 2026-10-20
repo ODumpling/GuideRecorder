@@ -1055,7 +1055,11 @@ fn guides_in_folders_are_indexed_listed_and_searched() {
         assert_eq!(titles(&listed), ["Water the plants"]);
         assert_eq!(listed[0].folder, "Work/Team");
         assert_eq!(listed[0].path, handle.path);
-        assert_eq!(listed[0].created_at, guide.created_at);
+        // The index keeps microseconds; Windows clocks tick in 100 ns.
+        assert_eq!(
+            listed[0].created_at.timestamp_micros(),
+            guide.created_at.timestamp_micros()
+        );
     }
     assert_eq!(
         search_library(&fx.library, "watering", 10).unwrap().len(),

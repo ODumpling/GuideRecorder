@@ -280,6 +280,7 @@ pub(crate) mod tests {
 
     /// A black square `side` points wide with its top-left corner at the
     /// top-left of a page `height` points high.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn top_left_square(height: u32, side: u32) -> String {
         format!("0 0 0 rg 0 {} {side} {side} re f", height - side)
     }

@@ -185,6 +185,7 @@ pub fn retry_failed<R: Runtime>(app: &AppHandle<R>, hotkeys: &Hotkeys) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use guiderecorder_capture::keys;
     use tauri_plugin_global_shortcut::{Code, Modifiers};
 
     fn hotkeys(record: &str, pause: &str) -> Hotkeys {
@@ -225,11 +226,16 @@ mod tests {
     #[test]
     fn bindings_follow_the_settings() {
         let bound = registered(&hotkeys("CmdOrCtrl+Shift+F5", "Option+Command+9"));
+        let cmd_or_ctrl = if cfg!(target_os = "macos") {
+            Modifiers::SUPER
+        } else {
+            Modifiers::CONTROL
+        };
         assert_eq!(
             bound,
             [
                 (
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::F5),
+                    Shortcut::new(Some(cmd_or_ctrl | Modifiers::SHIFT), Code::F5),
                     Control::ToggleRecording
                 ),
                 (
@@ -294,8 +300,11 @@ mod tests {
     #[test]
     fn capture_hotkeys_are_the_registered_ones() {
         let hotkeys = capture_hotkeys(&hotkeys("Ctrl+Alt+R", "Ctrl+Alt+P"));
-        // kVK_ANSI_R and kVK_ANSI_P with exactly ⌃⌥, as ⌃⌥S has.
-        assert_eq!(hotkeys.iter().map(|h| h.code).collect::<Vec<_>>(), [15, 35]);
+        // R and P with exactly ⌃⌥, as ⌃⌥S has.
+        assert_eq!(
+            hotkeys.iter().map(|h| h.code).collect::<Vec<_>>(),
+            [keys::code("R").unwrap(), keys::code("P").unwrap()]
+        );
         assert!(hotkeys
             .iter()
             .all(|h| h.modifiers == Hotkey::MANUAL_STEP.modifiers));
@@ -305,7 +314,13 @@ mod tests {
     #[test]
     fn capture_hotkeys_follow_the_settings() {
         let dropped = capture_hotkeys(&hotkeys("CmdOrCtrl+Shift+F5", ""));
-        assert_eq!(dropped, [recording::parse_hotkey("Cmd+Shift+F5").unwrap()]);
+        // As registered: Command on macOS, Control elsewhere.
+        let same = if cfg!(target_os = "macos") {
+            "Cmd+Shift+F5"
+        } else {
+            "Ctrl+Shift+F5"
+        };
+        assert_eq!(dropped, [recording::parse_hotkey(same).unwrap()]);
         assert!(capture_hotkeys(&hotkeys("", "")).is_empty());
     }
 
