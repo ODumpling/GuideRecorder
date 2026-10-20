@@ -17,6 +17,7 @@ import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
 import { SaveIndicator } from "@/components/SaveIndicator";
 import { SettingsDialog, type SettingsPage } from "@/components/settings/SettingsDialog";
+import { SignInDialog } from "@/components/SignInDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { StepView } from "@/components/StepView";
 import { useImageDrop } from "@/components/useImageDrop";
@@ -241,7 +242,7 @@ export default function App() {
       <aside
         className={`flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground ${hasDoc ? "w-72" : "w-60"}`}
       >
-        {hasDoc ? <Outline /> : <LibraryNav />}
+        {hasDoc ? <Outline /> : <LibraryNav onSyncSettings={() => openSettings("sync")} />}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <Toolbar onSettings={() => openSettings()} />
@@ -262,6 +263,7 @@ export default function App() {
       <LeaveDialog />
       <ConflictDialog />
       <ShareDialog />
+      <SignInDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <Onboarding />
       {draggingImages && (

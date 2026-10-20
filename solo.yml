@@ -40,9 +40,16 @@ processes:
     working_dir: app
     auto_start: false
 
+  "Setup: dev domain":
+    # Once: https://app.guiderecorder.dev:3000 for the web app (local CA,
+    # certificate, hosts entry). Asks for your password.
+    command: scripts/dev-domain.sh setup
+    auto_start: false
+
   "Web":
     # Starts Postgres and storage (web/compose.yaml), migrates, seeds dev accounts
-    # (web/scripts/seed.ts), runs the Vite dev server.
+    # (web/scripts/seed.ts), runs the Vite dev server: https://app.guiderecorder.dev:3000
+    # once "Setup: dev domain" ran.
     # Needs web/.env.local (copy web/.env.example).
     command: "set -e; docker compose up -d --wait postgres storage; docker compose up storage-setup; pnpm db:migrate; pnpm db:seed; pnpm dev"
     working_dir: web

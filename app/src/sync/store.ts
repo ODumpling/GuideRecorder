@@ -25,6 +25,8 @@ export interface SyncStoreState {
   account: SyncAccount | null;
   state: SyncState;
   workspaces: Workspace[];
+  /** Whether the sign-in dialog is open. */
+  signInOpen: boolean;
   /** While signing in: the code to show. */
   signIn: DeviceCode | null;
   running: boolean;
@@ -35,6 +37,8 @@ export interface SyncStoreState {
   resolving: string | null;
 
   load(): Promise<void>;
+  /** Opens the sign-in dialog; closing it cancels a sign-in under way. */
+  openSignIn(open: boolean): void;
   startSignIn(server: string): Promise<void>;
   cancelSignIn(): void;
   signOut(): Promise<void>;
@@ -96,6 +100,7 @@ export function createSyncStore({
       account: null,
       state: emptyState(),
       workspaces: [],
+      signInOpen: false,
       signIn: null,
       running: false,
       error: null,
@@ -110,6 +115,11 @@ export function createSyncStore({
         } catch (error) {
           set({ error: errorMessage(error) });
         }
+      },
+
+      openSignIn(open) {
+        if (!open) get().cancelSignIn();
+        set({ signInOpen: open, error: null });
       },
 
       async startSignIn(server) {

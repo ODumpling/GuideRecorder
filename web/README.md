@@ -15,13 +15,20 @@ desktop app.
 ## Run locally
 
 ```sh
+../scripts/dev-domain.sh setup  # once: https://app.guiderecorder.dev:3000 (local CA, hosts entry)
 docker compose up -d          # Postgres and S3-compatible storage (RustFS)
 cp .env.example .env.local    # then set BETTER_AUTH_SECRET
 pnpm install
 pnpm db:migrate
 pnpm db:seed                  # dev accounts, password "password123" (scripts/seed.ts)
-pnpm dev                      # http://localhost:3000
+pnpm dev                      # https://app.guiderecorder.dev:3000
 ```
+
+The desktop app's dev build (`pnpm tauri dev`) signs in to
+`https://app.guiderecorder.dev:3000` (`app/.env.development`); release builds
+to `https://app.guiderecorder.app` (`app/.env`). Override either in
+`app/.env.local`. Without the dev domain set up, the dev server serves
+`http://localhost:3000`; set `BETTER_AUTH_URL` and `VITE_WEB_APP_URL` to it.
 
 Production: `pnpm build`, then `node .output/server/index.mjs` with the
 environment set (`.env.local` is only read in development), or the Docker
