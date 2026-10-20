@@ -88,6 +88,28 @@ impl Kind {
             Kind::Secret => "possible secret",
         }
     }
+
+    /// A masked hint of `text` (what was found) for the editor's privacy
+    /// review: the last four characters of a number, the domain of an
+    /// email address. It is kept in `guide.json`, which syncs, so never
+    /// more: `None` for keys, tokens, secrets and the user's own rules,
+    /// and for text too short to hide anything.
+    pub fn preview(self, text: &str) -> Option<String> {
+        match self {
+            Kind::Email => {
+                let (_, domain) = text.trim().rsplit_once('@')?;
+                (!domain.is_empty()).then(|| format!("•••@{domain}"))
+            }
+            Kind::CardNumber | Kind::Iban | Kind::IdNumber | Kind::Phone | Kind::LongNumber => {
+                let chars: Vec<char> = text.chars().filter(char::is_ascii_alphanumeric).collect();
+                (chars.len() >= 8).then(|| {
+                    let last: String = chars[chars.len() - 4..].iter().collect();
+                    format!("•••• {last}")
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Sensitive text at `range` (bytes) of the text searched.
@@ -651,6 +673,38 @@ mod tests {
 
     fn kinds(text: &str) -> Vec<Kind> {
         found(text).into_iter().map(|(_, k)| k).collect()
+    }
+
+    #[test]
+    fn previews_show_only_what_is_safe_to_keep() {
+        assert_eq!(
+            Kind::Email.preview("jane@example.com").as_deref(),
+            Some("•••@example.com")
+        );
+        assert_eq!(Kind::Email.preview("jane@"), None);
+        assert_eq!(
+            Kind::CardNumber.preview("4111 1111 1111 4417").as_deref(),
+            Some("•••• 4417")
+        );
+        assert_eq!(
+            Kind::Iban.preview("GB82 WEST 1234 5698 7654 32").as_deref(),
+            Some("•••• 5432")
+        );
+        assert_eq!(
+            Kind::Phone.preview("+1 555 010 0100"),
+            Some("•••• 0100".into())
+        );
+        // Too short to hide anything, or nothing safe to show.
+        assert_eq!(Kind::LongNumber.preview("1234567"), None);
+        for kind in [
+            Kind::ApiKey,
+            Kind::Secret,
+            Kind::Credential,
+            Kind::Word,
+            Kind::Pattern,
+        ] {
+            assert_eq!(kind.preview("sk-abcdefgh12345678"), None);
+        }
     }
 
     #[test]

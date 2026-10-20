@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aiReady, autoRun, createAiStore, NO_KEY_MESSAGE, summary, type Listen } from "@/ai/controller";
-import { acceptBlurSuggestion, rejectBlurSuggestion } from "@/annotations/commands";
+import { aiReady, autoRun, createAiStore, NO_KEY_MESSAGE, summary, withOnDeviceSuggestions, type Listen } from "@/ai/controller";
+import { acceptBlurSuggestion, keepBlurSuggestion } from "@/annotations/commands";
 import { setGuideField, setItemText } from "@/editor/commands";
 import { createEditorStore } from "@/editor/store";
 import { guide } from "@/editor/test-fixtures";
@@ -478,7 +478,7 @@ describe("explicit AI actions", () => {
     expect(await ai.getState().regenerateStep("A")).toBe(true);
   });
 
-  it("Accept and Reject of a blur suggestion are undo steps in the editor", async () => {
+  it("Accept and Keep of a blur suggestion are undo steps in the editor", async () => {
     const { e, ai, events } = await setup();
     const suggestions = [
       { rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email" },
@@ -492,17 +492,23 @@ describe("explicit AI actions", () => {
 
     expect(e().dispatch(acceptBlurSuggestion(e().doc!.guide, "A", 0, "BL1"))).toBe(true);
     expect(stepOf(e().doc!.guide, "A").annotations).toEqual([{ id: "BL1", type: "blur", geometry: suggestions[0].rect }]);
-    expect(e().dispatch(rejectBlurSuggestion(e().doc!.guide, "A", 0))).toBe(true);
-    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([]);
+    expect(e().dispatch(keepBlurSuggestion(e().doc!.guide, "A", 1))).toBe(true);
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([
+      { ...suggestions[0], review: "blurred" },
+      { ...suggestions[1], review: "kept" },
+    ]);
 
     e().undo();
-    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([suggestions[1]]);
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([
+      { ...suggestions[0], review: "blurred" },
+      suggestions[1],
+    ]);
     e().undo();
     expect(stepOf(e().doc!.guide, "A").annotations).toEqual([]);
     expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual(suggestions);
   });
 
-  it("keeps on-device blur suggestions, and one rejected during the run stays gone", async () => {
+  it("keeps on-device blur suggestions, and one kept during the run stays kept", async () => {
     const { e, ai, events } = await setup();
     const found = [
       { rect: { x: 1, y: 2, width: 3, height: 4 }, reason: "email address", source: "onDevice" as const },
@@ -511,14 +517,26 @@ describe("explicit AI actions", () => {
     const aiState = { ...stepOf(e().doc!.guide, "A").aiState, redactionSuggestions: found };
     e().applyUntracked([{ op: "setItem", id: "A", key: "aiState", value: aiState }]);
     await ai.getState().start();
-    // Rejected while the AI writes; the run's copy still has it.
-    expect(e().dispatch(rejectBlurSuggestion(e().doc!.guide, "A", 0))).toBe(true);
+    // Kept while the AI writes; the run's copy has it pending.
+    expect(e().dispatch(keepBlurSuggestion(e().doc!.guide, "A", 0))).toBe(true);
     const fromAi = { rect: { x: 9, y: 9, width: 9, height: 9 }, reason: "name" };
     const event = stepEvent(7, "A");
     event.step!.aiState.redactionSuggestions = [...found, fromAi];
     events.emit("ai://step", event);
     events.emit("ai://finished", finished(7));
-    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([found[1], fromAi]);
+    expect(stepOf(e().doc!.guide, "A").aiState.redactionSuggestions).toEqual([
+      { ...found[0], review: "kept" },
+      found[1],
+      fromAi,
+    ]);
+  });
+
+  it("an AI result keeps reviewed suggestions and does not suggest their areas again", () => {
+    const reviewed = { rect: { x: 0, y: 0, width: 10, height: 10 }, reason: "name", review: "kept" as const };
+    const live = { ...stepOf(guide(), "A"), aiState: { status: "ai" as const, redactionSuggestions: [reviewed] } };
+    const again = { rect: { x: 0, y: 0, width: 10, height: 10 }, reason: "a name" };
+    const fresh = { rect: { x: 50, y: 50, width: 10, height: 10 }, reason: "email" };
+    expect(withOnDeviceSuggestions(live, [{ ...reviewed }, again, fresh])).toEqual([reviewed, fresh]);
   });
 
   it("a failed Regenerate records its error without dropping undo history", async () => {

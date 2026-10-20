@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  acceptAllBlurSuggestions,
   acceptBlurSuggestion,
+  acceptBlurSuggestions,
   addAnnotation,
-  rejectBlurSuggestion,
+  keepBlurSuggestion,
+  keepBlurSuggestions,
+  moveHotspot,
   removeAnnotation,
   setAnnotationStyle,
   setCalloutText,
@@ -112,6 +114,7 @@ describe("annotation commands", () => {
   });
 });
 
+
 describe("blur suggestions", () => {
   const suggestions = [
     { rect: { x: 10, y: 20, width: 30, height: 40 }, reason: "email" },
@@ -119,46 +122,82 @@ describe("blur suggestions", () => {
   ];
   function withSuggestions(): Guide {
     const g = withAnnotations(box);
-    const step = g.items[1] as Step;
-    step.aiState = { status: "edited", redactionSuggestions: suggestions };
+    (g.items[1] as Step).aiState = { status: "edited", redactionSuggestions: suggestions };
+    (g.items[2] as Step).aiState = { status: "ai", redactionSuggestions: [suggestions[0]] };
     return g;
   }
-  const stepOf = (g: Guide) => g.items[1] as Step;
+  const stepOf = (g: Guide, i = 1) => g.items[i] as Step;
 
-  it("Accept adds a blur over the suggestion and removes it, undoably", () => {
+  it("Accept adds a blur over the suggestion and marks it blurred, undoably", () => {
     const g = withSuggestions();
     const command = acceptBlurSuggestion(g, "A", 1, "BL1");
     const after = roundTrip(g, command);
     expect(stepOf(after).annotations).toEqual([box, { id: "BL1", type: "blur", geometry: suggestions[1].rect }]);
-    // Only the suggestion goes; the text status stays.
-    expect(stepOf(after).aiState).toEqual({ status: "edited", redactionSuggestions: [suggestions[0]] });
+    // The text status stays.
+    expect(stepOf(after).aiState).toEqual({
+      status: "edited",
+      redactionSuggestions: [suggestions[0], { ...suggestions[1], review: "blurred" }],
+    });
     expect(command.label).toBe("Accept blur suggestion");
   });
 
-  it("Reject removes the suggestion only, undoably", () => {
+  it("Keep marks the suggestion kept only, undoably", () => {
     const g = withSuggestions();
-    const after = roundTrip(g, rejectBlurSuggestion(g, "A", 0));
+    const after = roundTrip(g, keepBlurSuggestion(g, "A", 0));
     expect(stepOf(after).annotations).toEqual([box]);
-    expect(stepOf(after).aiState.redactionSuggestions).toEqual([suggestions[1]]);
+    expect(stepOf(after).aiState.redactionSuggestions).toEqual([{ ...suggestions[0], review: "kept" }, suggestions[1]]);
   });
 
-  it("refuses a suggestion that is not there", () => {
-    expect(() => rejectBlurSuggestion(withSuggestions(), "A", 2)).toThrow(PatchError);
+  it("refuses a suggestion that is not there or already reviewed", () => {
+    expect(() => keepBlurSuggestion(withSuggestions(), "A", 2)).toThrow(PatchError);
     expect(() => acceptBlurSuggestion(guide(), "A", 0, "X")).toThrow(PatchError);
-    expect(() => acceptAllBlurSuggestions(guide(), "A", [])).toThrow(PatchError);
-    expect(() => acceptAllBlurSuggestions(withSuggestions(), "A", ["X"])).toThrow(PatchError);
+    expect(() => acceptBlurSuggestions(guide(), [], [])).toThrow(PatchError);
+    expect(() => acceptBlurSuggestions(withSuggestions(), [{ stepId: "A", index: 0 }], [])).toThrow(PatchError);
+    const g = withSuggestions();
+    const kept = applyPatches(g, keepBlurSuggestion(g, "A", 0).forward);
+    expect(() => acceptBlurSuggestion(kept, "A", 0, "X")).toThrow(PatchError);
+    expect(() => acceptBlurSuggestion(g, "A", 0, "B1")).toThrow(PatchError);
   });
 
-  it("Accept all blurs every suggestion as one undo step", () => {
+  it("bulk review spans steps as one undo step", () => {
     const g = withSuggestions();
-    const command = acceptAllBlurSuggestions(g, "A", ["BL1", "BL2"]);
+    const refs = [
+      { stepId: "A", index: 0 },
+      { stepId: "B", index: 0 },
+      { stepId: "A", index: 1 },
+    ];
+    const command = acceptBlurSuggestions(g, refs, ["BL1", "BL2", "BL3"]);
     const after = roundTrip(g, command);
     expect(stepOf(after).annotations).toEqual([
       box,
       { id: "BL1", type: "blur", geometry: suggestions[0].rect },
-      { id: "BL2", type: "blur", geometry: suggestions[1].rect },
+      { id: "BL3", type: "blur", geometry: suggestions[1].rect },
     ]);
-    expect(stepOf(after).aiState).toEqual({ status: "edited", redactionSuggestions: [] });
+    expect(stepOf(after, 2).annotations).toEqual([{ id: "BL2", type: "blur", geometry: suggestions[0].rect }]);
+    expect(stepOf(after).aiState.redactionSuggestions!.every((s) => s.review === "blurred")).toBe(true);
     expect(command.label).toBe("Accept blur suggestions");
+
+    const kept = roundTrip(g, keepBlurSuggestions(g, [{ stepId: "B", index: 0 }]));
+    expect(stepOf(kept, 2).aiState.redactionSuggestions).toEqual([{ ...suggestions[0], review: "kept" }]);
+    expect(stepOf(kept, 2).annotations).toEqual([]);
+  });
+});
+
+describe("moveHotspot", () => {
+  const hotspot = (id: string): Annotation => ({
+    id,
+    type: "hotspot",
+    geometry: { x: 0, y: 0, width: 5, height: 5, title: id, description: "" },
+  });
+
+  it("reorders hotspots among themselves, leaving other annotations in place", () => {
+    const g = withAnnotations(hotspot("H1"), box, hotspot("H2"), hotspot("H3"));
+    const ids = (c: Command) => annotationsOf(roundTrip(g, c)).map((a) => a.id);
+    expect(ids(moveHotspot(g, "A", "H1", 1))).toEqual(["H2", "B1", "H1", "H3"]);
+    expect(ids(moveHotspot(g, "A", "H3", -2))).toEqual(["H3", "B1", "H1", "H2"]);
+    expect(moveHotspot(g, "A", "H1", 1).label).toBe("Move hotspot");
+    expect(() => moveHotspot(g, "A", "H1", -1)).toThrow(PatchError);
+    expect(() => moveHotspot(g, "A", "H3", 1)).toThrow(PatchError);
+    expect(() => moveHotspot(g, "A", "B1", 1)).toThrow(PatchError);
   });
 });

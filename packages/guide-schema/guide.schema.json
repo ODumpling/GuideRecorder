@@ -167,6 +167,10 @@
             "$ref": "#/$defs/RedactionSuggestion"
           }
         },
+        "scanned": {
+          "description": "Whether the step's screenshot was scanned for sensitive text on this\ndevice ([`crate::redact`]), so the editor can say which steps were\nnot.",
+          "type": "boolean"
+        },
         "status": {
           "$ref": "#/$defs/AiStatus",
           "default": "template"
@@ -800,6 +804,13 @@
       "description": "A suggested blur region.",
       "type": "object",
       "properties": {
+        "preview": {
+          "description": "A masked hint of the text found, e.g. `•••• 4417`, for the editor's\nprivacy review. Only as much as is safe to keep in `guide.json`\n(which syncs): never the text itself. Absent for the AI's and for\nkinds with nothing safe to show.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reason": {
           "description": "Why it looks sensitive, e.g. `email address`.",
           "type": "string"
@@ -807,6 +818,17 @@
         "rect": {
           "description": "In full-screenshot pixels.",
           "$ref": "#/$defs/Rect"
+        },
+        "review": {
+          "description": "What the user decided. Absent: not reviewed yet (pending), the only\nstate blurred into images that leave the device.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SuggestionReview"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "source": {
           "description": "Who suggested it. Absent (the AI) in guides saved before on-device\nredaction.",
@@ -966,6 +988,21 @@
         "shortcut",
         "drag",
         "manual"
+      ]
+    },
+    "SuggestionReview": {
+      "description": "The user's decision on a [`RedactionSuggestion`].",
+      "oneOf": [
+        {
+          "description": "Accepted: a blur annotation now covers it.",
+          "type": "string",
+          "const": "blurred"
+        },
+        {
+          "description": "Left as it is.",
+          "type": "string",
+          "const": "kept"
+        }
       ]
     },
     "SuggestionSource": {

@@ -185,6 +185,14 @@ test("shows hotspot text on pointing, picks hotspots from the list, and previews
   await page.getByRole("button", { name: "Preview" }).click();
   await expect(tooltip).toHaveCount(0);
   await page.getByRole("button", { name: "Preview" }).click();
+
+  // The list reorders them; their numbers follow, undoably.
+  await list.getByRole("listitem").first().hover();
+  await page.getByRole("button", { name: "Move hotspot 1 down" }).click();
+  await expect(list).toHaveText("1Garden2Hall");
+  await expect(layer(page).locator("[data-hotspot] text")).toHaveText(["1", "2"]);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(list).toHaveText("1Hall2Garden");
 });
 
 test("a cancelled or failed new annotation guide opens nothing", async ({ page, backend }) => {

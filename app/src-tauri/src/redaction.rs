@@ -65,7 +65,9 @@ fn redact_with(
         eprintln!("guiderecorder: redaction: step {step}: {error}");
     }
     let unscanned = summary.failures.len();
-    if summary.found == 0 {
+    // Nothing found and nothing scanned: no change to save. (A scan that
+    // found nothing still marks its steps scanned.)
+    if summary.found == 0 && summary.steps == 0 {
         return Redacted {
             unscanned,
             ..Redacted::default()
@@ -206,6 +208,10 @@ mod tests {
                 ..Redacted::default()
             }
         );
+        let scanned: Vec<bool> = guide.steps().map(|s| s.ai_state.scanned).collect();
+        assert_eq!(scanned, [true, false, true]);
+        let saved = library.read(&handle.path).unwrap().guide;
+        assert_eq!(saved.steps().filter(|s| s.ai_state.scanned).count(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

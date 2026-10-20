@@ -104,6 +104,8 @@ export interface AiState {
    * this Mac; never applied by themselves.
    */
   redactionSuggestions?: RedactionSuggestion[];
+  /** The screenshot was scanned for sensitive text on this Mac. */
+  scanned?: boolean;
 }
 
 /** A suggested blur region; `rect` in full-screenshot pixels, like annotations. */
@@ -112,7 +114,14 @@ export interface RedactionSuggestion {
   reason: string;
   /** Who suggested it; absent: the AI. "onDevice": text found on this Mac. */
   source?: "ai" | "onDevice";
+  /** A masked hint of the text found, e.g. "•••• 4417"; never the text. */
+  preview?: string;
+  /** What the user decided; absent: pending. */
+  review?: SuggestionReview;
 }
+
+/** "blurred": accepted, a blur annotation covers it. "kept": left as it is. */
+export type SuggestionReview = "blurred" | "kept";
 
 export interface Step {
   type: "step";

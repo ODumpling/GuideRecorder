@@ -16,10 +16,11 @@
 //!   [`AiState::error`]; a later successful pass clears it. A cancelled step
 //!   is left as it was. Either way the rest of the run carries on.
 //! - Redaction suggestions are stored in [`AiState::redaction_suggestions`]
-//!   as suggestions only (Q9), replacing the AI's earlier ones and keeping
-//!   those found on the device ([`crate::redact`]); they never become
-//!   annotations without the user.
-//! - Images are sent with the step's blurs and on-device suggestions burned
+//!   as suggestions only (Q9), replacing the AI's earlier pending ones and
+//!   keeping those found on the device ([`crate::redact`]) and those the
+//!   user reviewed (not suggested again); they never become annotations
+//!   without the user.
+//! - Images are sent with the step's blurs and pending on-device suggestions burned
 //!   in ([`burn_in_redactions`]), so what was found sensitive on the device
 //!   never leaves it.
 //! - Guide-level fields (title, intro, prerequisites, summary, tags) are
@@ -52,7 +53,7 @@ use super::{
 use crate::export::raster::locate_crop;
 use crate::library::GuideHandle;
 use crate::model::{AiState, AiStatus, Guide, GuideField, Item, Point, Rect, Step};
-use crate::redact::burn_in_redactions;
+use crate::redact::{burn_in_redactions, covered};
 
 /// Reads a step image by its bundle-relative path (e.g. `steps/<id>.webp`).
 pub trait ImageSource: Send + Sync {
@@ -485,14 +486,20 @@ pub fn apply_step_output(
         .ai_state
         .redaction_suggestions
         .iter()
-        .filter(on_device)
+        .filter(|s| on_device(s) || !s.is_pending())
         .cloned()
+        .collect();
+    // What the user already reviewed is not suggested again.
+    let reviewed: Vec<Rect> = redaction_suggestions
+        .iter()
+        .filter(|s| !s.is_pending())
+        .map(|s| s.rect)
         .collect();
     redaction_suggestions.extend(
         output
             .redaction_suggestions
             .iter()
-            .filter(|s| !on_device(s))
+            .filter(|s| !on_device(s) && !covered(&s.rect, &reviewed))
             .cloned(),
     );
     step.ai_state = AiState {
@@ -501,6 +508,7 @@ pub fn apply_step_output(
         prompt_version: Some(output.meta.prompt_version.clone()),
         error: None,
         redaction_suggestions,
+        scanned: step.ai_state.scanned,
     };
     Some(StepOutcome::Applied)
 }
@@ -765,7 +773,7 @@ mod tests {
     use crate::ai::{
         fits_api_limit, prompts, AiFuture, GenerationMeta, RewriteInput, RewriteOutput, StepEdit,
     };
-    use crate::model::{ElementInfo, ImageShow, StepImage, StepKind};
+    use crate::model::{ElementInfo, ImageShow, StepImage, StepKind, SuggestionReview};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -970,6 +978,8 @@ mod tests {
             },
             reason: reason.into(),
             source: SuggestionSource::Ai,
+            preview: None,
+            review: None,
         }
     }
 
@@ -1180,6 +1190,8 @@ mod tests {
                         },
                         reason: "email address".into(),
                         source: SuggestionSource::Ai,
+                        preview: None,
+                        review: None,
                     }],
                     meta: GenerationMeta {
                         usage: Usage {
@@ -1395,11 +1407,15 @@ mod tests {
                 rect: at(350.0, 250.0),
                 reason: "email address".into(),
                 source: SuggestionSource::OnDevice,
+                preview: None,
+                review: None,
             },
             RedactionSuggestion {
                 rect: at(10.0, 10.0),
                 reason: "name".into(),
                 source: SuggestionSource::Ai,
+                preview: None,
+                review: None,
             },
         ];
         let mut input = step_input_text(&guide(vec![s.clone()]), 0).unwrap();
@@ -1424,6 +1440,8 @@ mod tests {
         let mut s = step("a", AiStatus::Template);
         let found = RedactionSuggestion {
             source: SuggestionSource::OnDevice,
+            preview: None,
+            review: None,
             ..suggestion("card number")
         };
         s.ai_state.redaction_suggestions = vec![suggestion("old"), found.clone()];
@@ -1441,6 +1459,39 @@ mod tests {
         );
         let kept = &g.steps().next().unwrap().ai_state.redaction_suggestions;
         assert_eq!(kept, &[found, suggestion("new")]);
+    }
+
+    #[test]
+    fn reviewed_suggestions_survive_an_ai_pass_and_are_not_suggested_again() {
+        let mut s = step("a", AiStatus::Template);
+        s.ai_state.scanned = true;
+        let kept = RedactionSuggestion {
+            review: Some(SuggestionReview::Kept),
+            ..suggestion("name")
+        };
+        s.ai_state.redaction_suggestions = vec![suggestion("old"), kept.clone()];
+        let id = s.id;
+        let mut g = guide(vec![s]);
+        let elsewhere = RedactionSuggestion {
+            rect: Rect {
+                x: 500.0,
+                y: 400.0,
+                width: 50.0,
+                height: 10.0,
+            },
+            ..suggestion("other")
+        };
+        let out = StepOutput {
+            title: "New".into(),
+            description: None,
+            // The same area again, and a new one.
+            redaction_suggestions: vec![suggestion("name again"), elsewhere.clone()],
+            meta: mock_meta("step.v1"),
+        };
+        apply_step_output(&mut g, id, &out);
+        let state = &g.steps().next().unwrap().ai_state;
+        assert_eq!(state.redaction_suggestions, [kept, elsewhere]);
+        assert!(state.scanned);
     }
 
     /// Delegates to a [`MockProvider`] after a delay, tracking calls in flight.

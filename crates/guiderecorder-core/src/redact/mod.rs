@@ -152,7 +152,7 @@ fn padded(rect: Rect, (w, h): (u32, u32)) -> Option<Rect> {
 }
 
 /// Whether one of `others` covers most of `rect`.
-fn covered(rect: &Rect, others: &[Rect]) -> bool {
+pub(crate) fn covered(rect: &Rect, others: &[Rect]) -> bool {
     let area = rect.width * rect.height;
     others.iter().any(|o| {
         let w = (rect.x + rect.width).min(o.x + o.width) - rect.x.max(o.x);
@@ -205,6 +205,8 @@ pub fn redact_step(
                         rect,
                         reason: finding.kind.reason().to_owned(),
                         source: SuggestionSource::OnDevice,
+                        preview: finding.kind.preview(&line.text[finding.range.clone()]),
+                        review: None,
                     });
             }
             added += 1;
@@ -230,7 +232,9 @@ pub struct RedactSummary {
 /// full screenshot. Steps whose screenshot files are identical (copies of
 /// one frame) share one recognition; up to [`MAX_WORKERS`] screenshots are
 /// recognised at a time. A step whose image can't be read or recognised is
-/// left as it was and reported. Nothing happens for [`RedactionMode::Off`].
+/// left as it was and reported; the others are marked
+/// [`AiState::scanned`](crate::model::AiState::scanned). Nothing happens for
+/// [`RedactionMode::Off`].
 pub fn redact_guide(
     handle: &GuideHandle,
     guide: &mut Guide,
@@ -304,6 +308,7 @@ pub fn redact_guide(
             match &result {
                 Ok((lines, size)) => {
                     summary.steps += 1;
+                    step.ai_state.scanned = true;
                     summary.found += redact_step(step, lines, detector, mode, *size);
                 }
                 Err(e) => summary.failures.push((step.id, e.clone())),
@@ -313,11 +318,11 @@ pub fn redact_guide(
     summary
 }
 
-/// Burns `step`'s blur annotations and on-device blur suggestions into
+/// Burns `step`'s blur annotations and pending on-device blur suggestions into
 /// `image`, a view of its full screenshot whose top-left corner is at
 /// `origin` (full-screenshot pixels), as the export burns blurs. For
 /// images about to leave the device: text found here as sensitive is never
-/// sent, reviewed or not.
+/// sent unless the user kept it (an accepted one is a blur annotation).
 pub fn burn_in_redactions(image: &mut RgbaImage, origin: Point, step: &Step) {
     let size = image.dimensions();
     let blurs = step.annotations.iter().filter_map(|a| match &a.shape {
@@ -332,7 +337,7 @@ pub fn burn_in_redactions(image: &mut RgbaImage, origin: Point, step: &Step) {
         .ai_state
         .redaction_suggestions
         .iter()
-        .filter(|s| s.source == SuggestionSource::OnDevice)
+        .filter(|s| s.source == SuggestionSource::OnDevice && s.is_pending())
         .map(|s| (s.rect, BlurMode::Blur, None));
     for (rect, mode, amount) in blurs.chain(suggested) {
         if let Some(r) = region(&rect, origin, size) {
@@ -346,7 +351,7 @@ mod tests {
     use super::*;
     use crate::export::{render_step_image, ImageOptions};
     use crate::library::{Library, PixelBuffer, StepImageVariant};
-    use crate::model::{AiState, ImageShow, StepImage, StepKind};
+    use crate::model::{AiState, ImageShow, StepImage, StepKind, SuggestionReview};
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {
@@ -492,6 +497,13 @@ mod tests {
                 ("card number", SuggestionSource::OnDevice)
             ]
         );
+        let previews: Vec<_> = s
+            .ai_state
+            .redaction_suggestions
+            .iter()
+            .map(|s| s.preview.as_deref())
+            .collect();
+        assert_eq!(previews, [Some("•••@example.com"), Some("•••• 1111")]);
         assert!(s.annotations.is_empty());
         // Again: everything is covered already.
         assert_eq!(
@@ -628,6 +640,8 @@ mod tests {
             assert_eq!(found[0].rect, rect(0.0, 6.0, 64.0, 28.0));
         }
         assert!(steps[2].ai_state.redaction_suggestions.is_empty());
+        let scanned: Vec<bool> = steps.iter().map(|s| s.ai_state.scanned).collect();
+        assert_eq!(scanned, [true, true, false, false]);
 
         // Off scans nothing.
         let summary = redact_guide(
@@ -699,11 +713,15 @@ mod tests {
                 rect: rect(10.0, 10.0, 20.0, 20.0),
                 reason: "API key".into(),
                 source: SuggestionSource::OnDevice,
+                preview: None,
+                review: None,
             },
             RedactionSuggestion {
                 rect: rect(60.0, 60.0, 20.0, 20.0),
                 reason: "name".into(),
                 source: SuggestionSource::Ai,
+                preview: None,
+                review: None,
             },
         ];
         let render = |burn_on_device_suggestions| {
@@ -738,11 +756,15 @@ mod tests {
                 rect: rect(40.0, 40.0, 20.0, 20.0),
                 reason: "email address".into(),
                 source: SuggestionSource::OnDevice,
+                preview: None,
+                review: None,
             },
             RedactionSuggestion {
                 rect: rect(70.0, 70.0, 20.0, 20.0),
                 reason: "name".into(),
                 source: SuggestionSource::Ai,
+                preview: None,
+                review: None,
             },
         ];
         let mut full = original.clone();
@@ -751,6 +773,13 @@ mod tests {
         assert!(changed(&original, &full, rect(40.0, 40.0, 20.0, 20.0)));
         assert!(!changed(&original, &full, rect(70.0, 70.0, 20.0, 20.0)));
         assert!(!changed(&original, &full, rect(20.0, 20.0, 20.0, 20.0)));
+
+        // One the user kept is left as it is.
+        let mut kept = s.clone();
+        kept.ai_state.redaction_suggestions[0].review = Some(SuggestionReview::Kept);
+        let mut full = original.clone();
+        burn_in_redactions(&mut full, Point { x: 0.0, y: 0.0 }, &kept);
+        assert!(!changed(&original, &full, rect(40.0, 40.0, 20.0, 20.0)));
 
         // A crop whose top-left is at (40, 40): the suggestion is at its corner.
         let mut crop = stripes(30, 30);
