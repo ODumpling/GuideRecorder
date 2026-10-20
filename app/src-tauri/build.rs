@@ -29,6 +29,8 @@ const COMMANDS: &[&str] = &[
     "duplicate_guide",
     "rename_guide",
     "mark_guide_reviewed",
+    "edit_guide_details",
+    "delete_guides",
     "move_guide",
     "reveal_in_library",
     "step_image",

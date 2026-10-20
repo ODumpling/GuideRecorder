@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use guiderecorder_core::edit::DetailsEdit;
 use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
 use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
@@ -650,6 +651,28 @@ impl Session {
         };
         self.follow(&handle, &handle, Some(guide));
         Ok(result)
+    }
+
+    /// Sets the status, owner and tags of the guide at `path` (see
+    /// [`Library::edit_details`]) and returns it as saved. An open guide
+    /// from that bundle takes the saved copy; the editor saves it first and
+    /// takes the new fields from the result.
+    pub fn edit_guide_details(
+        &self,
+        guide_id: &str,
+        path: &Path,
+        edit: &DetailsEdit,
+    ) -> Result<Guide> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let handle = GuideHandle {
+            id,
+            path: path.to_path_buf(),
+        };
+        let guide = self.library.edit_details(&handle, edit)?;
+        self.follow(&handle, &handle, Some(guide.clone()));
+        Ok(guide)
     }
 
     /// Moves the guide at `path` into `folder` (`""`: the top) and returns
@@ -1321,6 +1344,46 @@ pub(crate) mod tests {
         assert_eq!(row(&session).review.owner.as_deref(), Some("IT"));
         assert!(session
             .mark_guide_reviewed(&id, &root.join("Nope.guiderecorder"), day)
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit_details_lists_the_fields_and_keeps_an_open_guide_saving() {
+        let root = library();
+        let session = Session::start(&root, Some(root.join("index.sqlite"))).unwrap();
+        let id = fixture_id(&root);
+        let row = |session: &Session| {
+            session
+                .list_guides(None)
+                .unwrap()
+                .into_iter()
+                .find(|g| g.id == id)
+                .unwrap()
+        };
+        let path = row(&session).path;
+        let opened = session.open_guide(&id).unwrap();
+        let edit = DetailsEdit {
+            status: Some(guiderecorder_core::model::GuideStatus::Published),
+            owner: Some("IT".into()),
+            add_tags: vec!["security".into()],
+            ..DetailsEdit::default()
+        };
+        let saved = session.edit_guide_details(&id, &path, &edit).unwrap();
+        assert_eq!(saved.review.owner.as_deref(), Some("IT"));
+        let listed = row(&session);
+        assert_eq!(listed.review.owner.as_deref(), Some("IT"));
+        assert!(listed.tags.iter().any(|t| t == "security"));
+
+        // The open guide saves on with the fields the editor took over.
+        let mut guide = opened.guide;
+        guide.review = saved.review.clone();
+        guide.tags = saved.tags.clone();
+        guide.title = "Edited".into();
+        session.save_guide(guide).unwrap();
+        assert_eq!(row(&session).title, "Edited");
+        assert!(session
+            .edit_guide_details(&id, &root.join("Nope.guiderecorder"), &edit)
             .is_err());
         fs::remove_dir_all(root).unwrap();
     }

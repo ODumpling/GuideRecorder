@@ -1,3 +1,4 @@
+import type { ButtonHTMLAttributes } from "react";
 import { BookOpen, Camera, Lock, Target } from "lucide-react";
 import { Avatar, StatusPill } from "@/components/library/bits";
 import { SyncBadge } from "@/components/library/SyncBadge";
@@ -8,8 +9,22 @@ import { folderName, guideContents, isReviewOverdue, localToday, reviewDue, time
 import type { GuideListItem } from "@/lib/types";
 import { cn } from "@guiderecorder/ui/utils";
 
-/** A guide in the library grid: its first screenshot, title, status, folder and owner. */
-export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: string[] }) {
+/**
+ * A guide in the library grid: its first screenshot, title, status, folder
+ * and owner. `itemProps` (selection, keys, dragging) go on its button and
+ * replace its own click and context menu handlers.
+ */
+export function GuideCard({
+  guide,
+  folders,
+  selected = false,
+  itemProps,
+}: {
+  guide: GuideListItem;
+  folders: string[];
+  selected?: boolean;
+  itemProps?: ButtonHTMLAttributes<HTMLButtonElement> & { "data-guide-path"?: string };
+}) {
   const opening = useEditor((s) => s.opening);
   const cover = useGuideCover(guide.id, guide.updatedAt);
   const overdue = isReviewOverdue(guide, localToday());
@@ -23,9 +38,16 @@ export function GuideCard({ guide, folders }: { guide: GuideListItem; folders: s
         title={guide.summary || undefined}
         onClick={() => void editorStore.getState().openGuide(guide.id)}
         onContextMenu={(e) => void showGuideMenu(e, guide, folders, () => askName({ kind: "rename", guide }))}
+        aria-selected={selected}
+        {...itemProps}
         className="group flex w-full flex-col rounded-xl text-left outline-none disabled:cursor-progress"
       >
-        <span className="relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring">
+        <span
+          className={cn(
+            "relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring",
+            selected && "border-transparent ring-2 ring-[var(--status-info)] group-focus-visible:ring-[var(--status-info)]",
+          )}
+        >
           {cover ? (
             <img
               src={cover}

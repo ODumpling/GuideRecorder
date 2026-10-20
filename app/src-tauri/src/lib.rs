@@ -191,6 +191,8 @@ pub fn run() {
             commands::duplicate_guide,
             commands::rename_guide,
             commands::mark_guide_reviewed,
+            commands::edit_guide_details,
+            commands::delete_guides,
             commands::move_guide,
             commands::reveal_in_library,
             commands::step_image,

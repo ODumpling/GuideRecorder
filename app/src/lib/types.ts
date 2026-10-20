@@ -1,7 +1,7 @@
 // The app's IPC types. The guide.json model comes from
 // `@guiderecorder/guide-schema`, generated from guiderecorder_core::model.
 
-import type { AiState, Guide, GuideField, GuideKind, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
+import type { AiState, Guide, GuideField, GuideKind, GuideStatus, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
 
 export type Ulid = string;
 
@@ -34,6 +34,21 @@ export interface GuideListItem extends ReviewFields {
 export interface ReviewedGuide {
   lastReviewed: string;
   updatedAt: string;
+}
+
+/** `edit_guide_details`'s changes (the library's bulk actions); unset fields are left as they are. */
+export interface DetailsEdit {
+  status?: GuideStatus;
+  /** Trimmed; empty clears the owner. */
+  owner?: string;
+  addTags?: string[];
+  removeTags?: string[];
+}
+
+/** A listed guide a library action works on. */
+export interface GuideTarget {
+  id: Ulid;
+  path: string;
 }
 
 /** `rename_guide`'s result. */
