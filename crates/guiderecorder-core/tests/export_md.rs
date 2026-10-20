@@ -56,11 +56,12 @@ fn export(guide: &Guide, handle: &GuideHandle, out: &Path, opts: &MdOptions) -> 
     md::export(&render, handle, out, opts).unwrap()
 }
 
+/// `path` under `out`, with `/` between names as in Markdown links.
 fn relative(out: &Path, path: &Path) -> String {
     path.strip_prefix(out)
         .unwrap()
         .to_string_lossy()
-        .into_owned()
+        .replace('\\', "/")
 }
 
 fn decode_png(path: &Path) -> Pixmap {

@@ -224,8 +224,39 @@ fn process_is_running(pid: u32) -> bool {
     sent || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+#[cfg(windows)]
+fn process_is_running(pid: u32) -> bool {
+    use std::ffi::c_void;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    // SAFETY: plain Win32 calls; the handle is checked, only read through
+    // `GetExitCodeProcess` into a local, and closed once.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            // Access denied means it runs, as another user or elevated.
+            return io::Error::last_os_error().raw_os_error() == Some(ERROR_ACCESS_DENIED);
+        }
+        let mut code = 0;
+        let read = GetExitCodeProcess(process, &mut code) != 0;
+        CloseHandle(process);
+        // An exited process keeps its handle (and pid) while one is open.
+        !read || code == STILL_ACTIVE
+    }
+}
+
 /// Without a way to check, a lock always counts.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn process_is_running(_pid: u32) -> bool {
     true
 }
@@ -862,7 +893,13 @@ mod tests {
         let handle = library.find(guide.id).unwrap().unwrap();
         let lock = handle.path.join(EDITOR_LOCK_FILE);
         // A process that has exited: its pid is free.
+        #[cfg(unix)]
         let mut child = std::process::Command::new("true").spawn().unwrap();
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .unwrap();
         let dead = child.id();
         child.wait().unwrap();
         for stale in [format!("{dead}\n"), "garbage".into(), "0\n".into()] {

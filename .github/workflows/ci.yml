@@ -33,6 +33,19 @@ jobs:
       # Tests that need TCC permissions or the login Keychain are #[ignore]d.
       - run: cargo test --workspace --locked
 
+  rust-windows:
+    name: Rust on Windows (clippy, test)
+    # Capture is stubbed on Windows for now (#14); everything else builds
+    # and is tested. Formatting is checked by the macOS job.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
   licenses:
     name: Dependency licences
     runs-on: ubuntu-latest

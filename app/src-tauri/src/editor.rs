@@ -1242,6 +1242,8 @@ pub(crate) mod tests {
             hits.first().map(|g| g.title.as_str()),
             Some("Rotate an API key")
         );
+        // Windows can't remove the index while it is open.
+        drop((session, indexed));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1263,6 +1265,8 @@ pub(crate) mod tests {
         let hits = session.list_guides(Some("renamed".into())).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, id);
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1319,6 +1323,8 @@ pub(crate) mod tests {
         let err = session.delete_guide(&id, &other.path).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Conflict);
         assert!(other.path.exists());
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1398,6 +1404,8 @@ pub(crate) mod tests {
         assert!(session
             .check_bundle(&root.join("Nope.guiderecorder"))
             .is_err());
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1434,6 +1442,8 @@ pub(crate) mod tests {
         assert!(session
             .mark_guide_reviewed(&id, &root.join("Nope.guiderecorder"), day)
             .is_err());
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1474,6 +1484,8 @@ pub(crate) mod tests {
         assert!(session
             .edit_guide_details(&id, &root.join("Nope.guiderecorder"), &edit)
             .is_err());
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 

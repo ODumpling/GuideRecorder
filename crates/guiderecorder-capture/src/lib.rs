@@ -1,11 +1,28 @@
 //! Platform capture backends. See design scratchpad #440.
 //!
-//! `CaptureBackend` is implemented per platform; macOS lives in `macos`.
+//! The types every backend shares live in [`frames`], [`session`] and
+//! [`keys`]; [`backend`] is the one compiled for this platform. macOS lives
+//! in `macos`; every other platform gets `unsupported`, which builds and
+//! refuses to record.
 
+pub mod frames;
+pub mod keys;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod ocr;
 pub mod permissions;
+pub mod session;
+#[cfg(not(target_os = "macos"))]
+pub mod unsupported;
+
+/// The capture backend compiled for this platform: its `frames` module
+/// lists displays and windows, its `session` module records.
+#[cfg(target_os = "macos")]
+pub use macos as backend;
+/// The capture backend compiled for this platform: its `frames` module
+/// lists displays and windows, its `session` module records.
+#[cfg(not(target_os = "macos"))]
+pub use unsupported as backend;
 
 pub use permissions::{Permission, PermissionReport, PermissionStatus};
 

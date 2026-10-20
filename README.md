@@ -11,8 +11,10 @@ Everything stays on your machine. AI writing is optional and uses your own
 Anthropic API key, any OpenAI-compatible API, or a local model in Ollama or
 LM Studio, in which case nothing leaves your Mac.
 
-> **Status:** early and in active development. macOS only for now (Windows is
-> planned). Download the latest version from
+> **Status:** early and in active development. macOS only for now. Windows
+> support is under way ([#14](https://github.com/ODumpling/GuideRecorder/issues/14)):
+> the app, CLI and MCP server build and pass their tests there, but the app
+> can't record or import PDFs yet. Download the latest version from
 > [Releases](https://github.com/ODumpling/GuideRecorder/releases) (it updates
 > itself), or build it from source (see [Build from source](#build-from-source)).
 
@@ -217,7 +219,7 @@ comes from `app/.env` (release builds: `https://app.guiderecorder.app`) and
 ```
 crates/
   guiderecorder-core/      guide format, library, search index, step detection, export, AI
-  guiderecorder-capture/   screen and input capture (macOS backend)
+  guiderecorder-capture/   screen and input capture (macOS backend; a stub elsewhere)
   guiderecorder-mcp/       read-only MCP server (binary: guiderecorder-mcp)
   guiderecorder-cli/       command line tool (binary: guiderecorder)
 app/                       desktop app: Tauri 2, React, TypeScript, Tailwind
@@ -236,8 +238,8 @@ cd app && pnpm test && pnpm e2e        # frontend unit and end-to-end tests
 pnpm --filter @guiderecorder/web test  # web app
 ```
 
-CI runs these on every pull request. To publish a release, see
-[docs/releasing.md](docs/releasing.md).
+CI runs these on every pull request, the Rust tests on both macOS and
+Windows. To publish a release, see [docs/releasing.md](docs/releasing.md).
 
 ## Licence
 

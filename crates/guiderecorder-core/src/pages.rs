@@ -260,13 +260,18 @@ pub fn decode_image(
 /// on the open file and the read is capped, so a file that grows meanwhile
 /// is refused too.
 pub fn read_file(path: &Path) -> Result<Vec<u8>, PageError> {
-    let file = std::fs::File::open(path).map_err(|e| file_error(path, e))?;
+    let not_a_file = || PageError::Invalid(format!("{} is not a file", path.display()));
+    let file = std::fs::File::open(path).map_err(|e| {
+        // Windows refuses to open a folder at all.
+        if path.is_dir() {
+            not_a_file()
+        } else {
+            file_error(path, e)
+        }
+    })?;
     let meta = file.metadata().map_err(|e| file_error(path, e))?;
     if !meta.is_file() {
-        return Err(PageError::Invalid(format!(
-            "{} is not a file",
-            path.display()
-        )));
+        return Err(not_a_file());
     }
     let too_large = || {
         PageError::Invalid(format!(

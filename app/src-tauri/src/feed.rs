@@ -18,7 +18,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use guiderecorder_capture::macos::session::{CaptureEdits, LivePress, LiveSnapshot};
+use guiderecorder_capture::session::{CaptureEdits, LivePress, LiveSnapshot};
 use guiderecorder_core::events::Timestamp;
 use guiderecorder_core::steps::{plain_title, LiveAction};
 use serde::Serialize;
@@ -275,7 +275,7 @@ pub fn rename_capture<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use guiderecorder_capture::macos::session::FrameKey;
+    use guiderecorder_capture::session::FrameKey;
     use guiderecorder_core::model::Point;
     use std::path::PathBuf;
 
