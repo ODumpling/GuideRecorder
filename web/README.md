@@ -19,6 +19,7 @@ docker compose up -d          # Postgres and S3-compatible storage (RustFS)
 cp .env.example .env.local    # then set BETTER_AUTH_SECRET
 pnpm install
 pnpm db:migrate
+pnpm db:seed                  # dev accounts, password "password123" (scripts/seed.ts)
 pnpm dev                      # http://localhost:3000
 ```
 
