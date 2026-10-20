@@ -2,12 +2,12 @@ import { expect, it } from "vitest";
 import { safeNext } from "./redirect";
 
 it.each([
-  [undefined, "/dashboard"],
+  [undefined, "/library"],
   ["/invitations/abc", "/invitations/abc"],
   [["/a", "/b"], "/a"],
-  ["https://evil.example", "/dashboard"],
-  ["//evil.example", "/dashboard"],
-  ["/\\evil.example", "/dashboard"],
+  ["https://evil.example", "/library"],
+  ["//evil.example", "/library"],
+  ["/\\evil.example", "/library"],
 ])("safeNext(%j) is %j", (input, expected) => {
   expect(safeNext(input)).toBe(expected);
 });

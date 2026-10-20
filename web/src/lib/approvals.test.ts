@@ -5,7 +5,7 @@ import type { Guide } from "@guiderecorder/guide-schema";
 import { imagePaths, pushRequest } from "@guiderecorder/sync";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
-import { asset, member, organization, subscription, user } from "@/db/schema";
+import { asset, guide, guideOwner, member, organization, subscription, user } from "@/db/schema";
 import { getReview, reviewChange, savePolicy, submitForReview, withdrawChange } from "./approvals";
 import { listAudit, verifyWorkspaceChain } from "./audit";
 import { today } from "./review";
@@ -23,12 +23,13 @@ const grace: Actor = { userId: "grace", role: "editor" };
 const alan: Actor = { userId: "alan", role: "approver" };
 const bob: Actor = { userId: "bob", role: "approver" };
 const vic: Actor = { userId: "vic", role: "viewer" };
+const eve: Actor = { userId: "eve", role: "editor" };
 
 beforeEach(async () => {
   db = await testDb();
   const now = new Date();
   await db.insert(organization).values({ id: "org", name: "Acme", slug: "acme", createdAt: now });
-  for (const a of [ada, grace, alan, bob, vic]) {
+  for (const a of [ada, grace, alan, bob, vic, eve]) {
     await db.insert(user).values({ id: a.userId, name: a.userId, email: `${a.userId}@example.com` });
     await db.insert(member).values({ id: `m-${a.userId}`, organizationId: "org", userId: a.userId, role: a.role, createdAt: now });
   }
@@ -38,6 +39,12 @@ beforeEach(async () => {
 });
 
 const enterprise = () => db.insert(subscription).values({ id: "sub", plan: "enterprise", referenceId: "org", status: "active", seats: 10 });
+
+/** Locks the fixture guide before it's first pushed, owned by `owners` (and whoever pushes it first). */
+async function locked(owners = ["alan", "bob"]) {
+  await db.insert(guide).values({ organizationId: "org", id: fixture.id, locked: true });
+  if (owners.length) await db.insert(guideOwner).values(owners.map((userId) => ({ organizationId: "org", guideId: fixture.id, userId })));
+}
 
 async function pushed(actor: Actor, guide: Guide, base: string | null) {
   const result = await push(db, "org", actor, pushRequest.parse({ guideId: guide.id, baseRevision: base, guide, assets: assetsFor(guide) }), "app");
@@ -72,7 +79,10 @@ describe("without approvals", () => {
 });
 
 describe("with approvals", () => {
-  beforeEach(enterprise);
+  beforeEach(async () => {
+    await enterprise();
+    await locked();
+  });
 
   it("keeps a new guide a draft that viewers can't see", async () => {
     const { revision, review } = await pushed(grace, { ...structuredClone(fixture), status: "published", lastReviewed: "2026-01-01" }, null);
@@ -147,12 +157,28 @@ describe("with approvals", () => {
     expect(await approve(bob, id)).toMatchObject({ published: true });
   });
 
-  it("only counts the named approvers", async () => {
-    await savePolicy(db, "org", ada, { folder: "", requiredApprovals: 1, approverIds: ["bob"] });
+  it("only counts the guide's owners", async () => {
+    await db.delete(guideOwner);
+    await db.insert(guideOwner).values({ organizationId: "org", guideId: fixture.id, userId: "bob" });
     await pushed(grace, fixture, null);
     const id = await submitted();
-    expect(await approve(alan, id)).toMatchObject({ status: 403, error: expect.stringMatching(/approver/) });
+    expect(await approve(alan, id)).toMatchObject({ status: 403, error: expect.stringMatching(/owners/) });
+    expect(await approve(alan, id, "reject")).toMatchObject({ status: 403 });
     expect(await approve(bob, id)).toMatchObject({ published: true });
+  });
+
+  it("lets an owner with the editor role approve", async () => {
+    await db.insert(guideOwner).values({ organizationId: "org", guideId: fixture.id, userId: "eve" });
+    await pushed(grace, fixture, null);
+    expect(await approve(eve, await submitted())).toMatchObject({ published: true });
+  });
+
+  it("falls back to roles that can approve for a guide without owners", async () => {
+    await pushed(grace, fixture, null);
+    await db.delete(guideOwner);
+    const id = await submitted();
+    expect(await approve(eve, id)).toMatchObject({ status: 403 });
+    expect(await approve(alan, id)).toMatchObject({ published: true });
   });
 
   it("refuses self-approval unless the policy allows it", async () => {
@@ -199,11 +225,10 @@ describe("with approvals", () => {
     expect(await submitted()).toBe(await submitted());
   });
 
-  it("publishes straight away in folders whose policy needs no approvals", async () => {
+  it("needs one approval for a locked guide even where the folder's policy needs none", async () => {
     await savePolicy(db, "org", ada, { folder: "", requiredApprovals: 0 });
-    const { revision, review } = await pushed(grace, fixture, null);
-    expect(review.gated).toBe(false);
-    expect((await seenBy(vic))?.id).toBe(revision.id);
+    const { review } = await pushed(grace, fixture, null);
+    expect(review).toMatchObject({ gated: true, required: 1 });
   });
 
   it("shows the review page what changed since the published revision", async () => {
@@ -223,16 +248,31 @@ describe("with approvals", () => {
   });
 });
 
-describe("permissions", () => {
+describe("unlocked guides", () => {
   beforeEach(enterprise);
 
-  it("gates each step on the role", async () => {
+  it("publish every push, even with approvals", async () => {
+    const { revision, review } = await pushed(grace, fixture, null);
+    expect(review.gated).toBe(false);
+    expect((await seenBy(vic))?.id).toBe(revision.id);
+    expect(await submitForReview(db, "org", grace, fixture.id, { revisionId: revision.id })).toMatchObject({ status: 400 });
+  });
+});
+
+describe("permissions", () => {
+  beforeEach(async () => {
+    await enterprise();
+    await locked();
+  });
+
+  it("gates each step on the role and ownership", async () => {
     await pushed(grace, fixture, null);
     const revisionId = (await head()).guide.headRevisionId!;
     expect(await submitForReview(db, "org", vic, fixture.id, { revisionId })).toMatchObject({ status: 403 });
     const id = await submitted();
     expect(await approve(grace, id)).toMatchObject({ status: 403 });
-    expect(await approve(grace, id, "reject")).toMatchObject({ status: 403 });
+    expect(await approve(eve, id, "reject")).toMatchObject({ status: 403 });
+    expect(await withdrawChange(db, "org", eve, id)).toMatchObject({ status: 403 });
     expect(await approve(vic, id, "comment", "hi")).toMatchObject({ status: 403 });
     expect(await savePolicy(db, "org", grace, { folder: "", requiredApprovals: 2 })).toMatchObject({ status: 403 });
     expect(await savePolicy(db, "org", ada, { folder: "", requiredApprovals: 2, approverIds: ["grace"] })).toMatchObject({ status: 400 });

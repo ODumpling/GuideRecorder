@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 @import "@fontsource-variable/inter";
 @import "@fontsource/instrument-serif";
 
@@ -7,6 +8,12 @@
 
 @theme inline {
   --color-success: var(--status-success);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
 }
 
 body {

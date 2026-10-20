@@ -13,10 +13,10 @@ import {
 } from "@guiderecorder/sync";
 import type { z } from "zod";
 import type { Database } from "@/db";
-import { asset, changeRequest, guide, revision, revisionAsset } from "@/db/schema";
+import { asset, changeRequest, guide, guideOwner, revision, revisionAsset } from "@/db/schema";
 import { recordAudit, type RequestMeta } from "./audit";
 import { roles, type RoleName } from "./permissions";
-import { evaluate, gate, loadApprovals, openRequests, reviewStates, sameContent, withServerFields } from "./review";
+import { evaluate, gate, loadApprovals, openRequests, ownersOf, reviewStates, sameContent, withServerFields } from "./review";
 import { searchVector } from "./search";
 
 // Desktop ⇄ web sync. Each guide is a chain of immutable revisions; a push
@@ -123,7 +123,8 @@ export async function push(
       return { status: 410, error: "The guide is in the trash.", ...trashDates(row.deletedAt) } as const;
     }
 
-    const policy = gate(await loadApprovals(tx, organizationId), row ?? {});
+    const owners = row ? ((await ownersOf(tx, organizationId, [row.id])).get(row.id) ?? []) : [];
+    const policy = gate(await loadApprovals(tx, organizationId), row ?? {}, owners);
     const head = exists ? (await revisions(tx, [row.headRevisionId!]))[0]! : null;
     if (head) {
       // Nothing new (or a retried push that already landed): the head as is.
@@ -155,6 +156,8 @@ export async function push(
     } else {
       await tx.insert(guide).values({ organizationId, id: request.guideId, ownerId: actor.userId, seq: next });
     }
+    // Whoever syncs a guide first owns it.
+    if (!exists) await tx.insert(guideOwner).values({ organizationId, guideId: request.guideId, userId: actor.userId }).onConflictDoNothing();
     await tx.insert(revision).values({
       id,
       organizationId,

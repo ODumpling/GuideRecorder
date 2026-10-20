@@ -45,9 +45,12 @@ beforeEach(async () => {
 
 describe("library", () => {
   it("lists the workspace's guides, newest change first, with what the list shows", async () => {
-    const { guides, tags } = await library(db, "org", vic, {}, today);
+    const { guides, tags, counts } = await library(db, "org", vic, {}, today);
     expect(guides.map((g) => g.title)).toEqual(["Kurzanleitung Drucker", "Office floor plan", "Rotate an API key"]);
-    expect(guides[2]).toMatchObject({ steps: 5, tags: ["security", "api", "console"], owner: "Ada Lovelace", status: null, review: null, private: false });
+    const firstStep = apiKey.items?.find((i) => i.type === "step");
+    expect(guides[2]!.cover).toBe(hash(firstStep!.type === "step" ? firstStep!.image.full : ""));
+    expect(counts).toEqual({ all: 3, reviewDue: 1, unfiled: 3, statuses: { draft: 0, inReview: 0, published: 0, needsUpdate: 1 } });
+    expect(guides[2]).toMatchObject({ locked: false, steps: 5, tags: ["security", "api", "console"], owner: "Ada Lovelace", status: null, review: null, private: false });
     expect(guides[0]).toMatchObject({ owner: "IT", status: "needsUpdate", reviewDue: "2026-09-01", review: "overdue" });
     expect(tags.map((t) => t.name)).toEqual(["api", "console", "Drucker", "office", "security"]);
   });
@@ -90,13 +93,15 @@ describe("library", () => {
     expect(await titles(ada, { query: "rotate" })).toEqual([]);
   });
 
-  it("shows viewers the published revision when approvals gate a guide", async () => {
+  it("shows viewers the published revision when a guide is locked", async () => {
     await db.insert(subscription).values({ id: "sub", plan: "enterprise", referenceId: "org", status: "active", seats: 10 });
+    await db.update(guide).set({ locked: true }).where(eq(guide.id, printer.id));
     const head = (await getGuide(db, "org", ada, printer.id))!.head;
     await push(db, "org", ada, pushRequest.parse({ guideId: printer.id, baseRevision: head.id, guide: { ...head.guide, title: "Entwurf" }, assets: head.assets }), "web");
     expect(await titles(ada)).toContain("Entwurf");
     expect(await titles(vic)).toContain("Kurzanleitung Drucker");
     expect(await titles(vic)).not.toContain("Entwurf");
+    expect((await library(db, "org", ada)).guides.find((g) => g.id === printer.id)).toMatchObject({ locked: true, owners: [] });
   });
 
   it("keeps the search document current with the head revision", async () => {

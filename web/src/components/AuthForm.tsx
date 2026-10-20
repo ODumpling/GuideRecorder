@@ -1,7 +1,10 @@
 import { Link, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth-client";
-import { Button, Card, ErrorText, Input, Label } from "./ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
 export interface AuthFormProps {
   mode: "sign-in" | "sign-up";
@@ -17,7 +20,7 @@ const ERRORS: Record<string, string> = {
   SSO_NOT_AVAILABLE: "Single sign-on isn't available for this workspace's plan.",
 };
 
-export function AuthForm({ mode, providers, next = "/dashboard", error: initialError }: AuthFormProps) {
+export function AuthForm({ mode, providers, next = "/library", error: initialError }: AuthFormProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(initialError ? (ERRORS[initialError] ?? "Sign-in failed. Try again.") : null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -67,23 +70,23 @@ export function AuthForm({ mode, providers, next = "/dashboard", error: initialE
     run(() => authClient.signIn.social({ provider, callbackURL: next }), () => {});
 
   return (
-    <Card className="w-full max-w-sm">
+    <Card className="p-6 block w-full max-w-sm">
       <h1 className="mb-1 font-serif text-3xl">{mode === "sign-in" ? "Sign in" : "Create your account"}</h1>
       <p className="mb-6 text-sm text-muted-foreground">
         {mode === "sign-in" ? "Welcome back to GuideRecorder." : "Share and sync your guides."}
       </p>
       <form onSubmit={submit} className="grid gap-4">
         {mode === "sign-up" && (
-          <Label>
+          <Field>
             Name
             <Input name="name" autoComplete="name" required />
-          </Label>
+          </Field>
         )}
-        <Label>
+        <Field>
           Email
           <Input name="email" type="email" autoComplete="email" required />
-        </Label>
-        <Label>
+        </Field>
+        <Field>
           Password
           <Input
             name="password"
@@ -92,19 +95,19 @@ export function AuthForm({ mode, providers, next = "/dashboard", error: initialE
             minLength={10}
             required
           />
-        </Label>
+        </Field>
         <ErrorText>{error}</ErrorText>
         {notice && <p className="text-sm text-success">{notice}</p>}
-        <Button type="submit" disabled={busy}>
+        <Button variant="brand" size="lg" type="submit" disabled={busy}>
           {mode === "sign-in" ? "Sign in" : "Create account"}
         </Button>
         {mode === "sign-in" && (
-          <Button type="button" variant="secondary" disabled={busy} onClick={magicLink}>
+          <Button type="button" variant="outline" size="lg" disabled={busy} onClick={magicLink}>
             Email me a sign-in link
           </Button>
         )}
         {mode === "sign-in" && (
-          <Button type="button" variant="secondary" disabled={busy} onClick={singleSignOn}>
+          <Button type="button" variant="outline" size="lg" disabled={busy} onClick={singleSignOn}>
             Sign in with SSO
           </Button>
         )}
@@ -112,12 +115,12 @@ export function AuthForm({ mode, providers, next = "/dashboard", error: initialE
       {(providers.google || providers.microsoft) && (
         <div className="mt-4 grid gap-2 border-t border-border pt-4">
           {providers.google && (
-            <Button variant="secondary" disabled={busy} onClick={() => social("google")}>
+            <Button variant="outline" size="lg" disabled={busy} onClick={() => social("google")}>
               Continue with Google
             </Button>
           )}
           {providers.microsoft && (
-            <Button variant="secondary" disabled={busy} onClick={() => social("microsoft")}>
+            <Button variant="outline" size="lg" disabled={busy} onClick={() => social("microsoft")}>
               Continue with Microsoft
             </Button>
           )}

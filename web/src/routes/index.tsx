@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Button } from "@guiderecorder/ui/button";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -13,12 +14,12 @@ function Home() {
         current.
       </p>
       <div className="flex gap-3">
-        <Link to="/sign-up" className="inline-flex h-10 items-center rounded-lg bg-brand px-5 text-sm font-medium text-brand-foreground hover:bg-brand/90">
-          Get started
-        </Link>
-        <Link to="/sign-in" className="inline-flex h-10 items-center rounded-lg border border-border bg-card px-5 text-sm font-medium hover:bg-muted">
-          Sign in
-        </Link>
+        <Button asChild variant="brand" size="lg" className="h-10 px-5">
+          <Link to="/sign-up">Get started</Link>
+        </Button>
+        <Button asChild variant="outline" size="lg" className="h-10 px-5">
+          <Link to="/sign-in">Sign in</Link>
+        </Button>
       </div>
     </main>
   );

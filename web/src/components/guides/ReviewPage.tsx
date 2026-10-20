@@ -5,7 +5,11 @@ import type { Revision } from "@guiderecorder/sync";
 import { AnnotatedImage } from "@guiderecorder/ui/annotated-image";
 import type { ItemDiff } from "@/lib/diff";
 import { reviewGuideChange, submitGuideForReview, withdrawGuideChange, type getGuideReview } from "@/server/reviews";
-import { Button, Card, ErrorText } from "../ui";
+import { Textarea } from "@guiderecorder/ui/textarea";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@guiderecorder/ui/table";
+import { ErrorText } from "@/components/ui";
 
 // The review page of a gated guide: what its change request changes against
 // the published revision, item by item (matched by ULID) with the old and
@@ -80,7 +84,7 @@ export function ReviewPage(data: Data) {
   const general = reviews.filter((r) => !r.itemId);
 
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-6 p-6">
+    <div className="mx-auto grid w-full max-w-5xl gap-7 px-5 py-8 md:px-9">
       <header className="flex items-center justify-between gap-4">
         <Link to="/guides/$guideId" params={{ guideId }} className="text-sm text-muted-foreground hover:underline">
           ← {after.guide.title}
@@ -88,16 +92,16 @@ export function ReviewPage(data: Data) {
         <StatusBadge status={state.status} />
       </header>
 
-      <Card className="grid gap-3">
+      <Card className="p-6 grid gap-3">
         <h1 className="font-serif text-3xl">Review changes</h1>
         {!data.enabled ? (
           <p className="text-sm text-muted-foreground">Your plan doesn&rsquo;t include approvals.</p>
         ) : !data.gated ? (
-          <p className="text-sm text-muted-foreground">This guide&rsquo;s folder doesn&rsquo;t need approval: edits publish straight away.</p>
+          <p className="text-sm text-muted-foreground">This guide is unlocked: edits publish straight away.</p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Publishing needs {policy.requiredApprovals} {policy.requiredApprovals === 1 ? "approval" : "approvals"}
-            {data.approvers.length ? ` from ${data.approvers.map((a) => a.name).join(", ")}` : ""}
+            This guide is locked. Publishing needs {policy.requiredApprovals} {policy.requiredApprovals === 1 ? "approval" : "approvals"}
+            {data.approvers.length ? ` from its owners (${data.approvers.map((a) => a.name).join(", ")})` : ""}
             {policy.allowSelfApproval ? "" : "; authors can't approve their own changes"}
             {policy.resetOnNewRevision ? "; new edits reset approvals" : ""}.
           </p>
@@ -125,7 +129,7 @@ export function ReviewPage(data: Data) {
         {can.submit ? <Submit guideId={guideId} revisionId={after.id} onDone={() => router.invalidate()} /> : null}
         {open && can.withdraw ? (
           <div>
-            <Button variant="secondary" disabled={busy} onClick={() => act(() => withdrawGuideChange({ data: { guideId, changeRequestId: cr!.id } }))}>
+            <Button variant="outline" size="lg" disabled={busy} onClick={() => act(() => withdrawGuideChange({ data: { guideId, changeRequestId: cr!.id } }))}>
               Withdraw
             </Button>
           </div>
@@ -133,31 +137,31 @@ export function ReviewPage(data: Data) {
       </Card>
 
       {diff.fields.length ? (
-        <Card className="grid gap-2">
+        <Card className="p-6 grid gap-2">
           <h2 className="text-lg font-semibold">Guide details</h2>
-          <table className="w-full table-fixed text-sm">
-            <thead className="text-left text-muted-foreground">
-              <tr>
-                <th className="w-40 py-1 font-medium">Field</th>
-                <th className="py-1 font-medium">Published</th>
-                <th className="py-1 font-medium">This change</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
+          <Table className="table-fixed">
+            <TableHeader className="[&_th]:text-muted-foreground">
+              <TableRow>
+                <TableHead className="w-40 py-1">Field</TableHead>
+                <TableHead className="py-1">Published</TableHead>
+                <TableHead className="py-1">This change</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {diff.fields.map((f) => (
-                <tr key={f.field} className="align-top">
-                  <td className="py-2 font-medium">{f.field}</td>
-                  <td className="py-2 whitespace-pre-wrap text-muted-foreground line-through decoration-destructive/40">{show(f.before)}</td>
-                  <td className="py-2 whitespace-pre-wrap">{show(f.after)}</td>
-                </tr>
+                <TableRow key={f.field} className="align-top">
+                  <TableCell className="py-2 font-medium">{f.field}</TableCell>
+                  <TableCell className="py-2 whitespace-pre-wrap text-muted-foreground line-through decoration-destructive/40">{show(f.before)}</TableCell>
+                  <TableCell className="py-2 whitespace-pre-wrap">{show(f.after)}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </Card>
       ) : null}
 
       <section className="grid gap-4" aria-label="Changes by item">
-        {!diff.changed ? <Card className="text-sm text-muted-foreground">No changes against the published guide.</Card> : null}
+        {!diff.changed ? <Card className="p-6 block text-sm text-muted-foreground">No changes against the published guide.</Card> : null}
         {visible.map((d) => (
           <ItemChange
             key={d.id}
@@ -177,7 +181,7 @@ export function ReviewPage(data: Data) {
         ) : null}
       </section>
 
-      <Card className="grid gap-4">
+      <Card className="p-6 grid gap-4">
         <h2 className="text-lg font-semibold">Reviews</h2>
         {general.length ? (
           <ul className="grid gap-3">
@@ -198,30 +202,30 @@ export function ReviewPage(data: Data) {
                 </button>
               </p>
             ) : null}
-            <textarea
+            <Textarea
               aria-label="Review comment"
+              className="min-h-24"
               placeholder={itemId ? "Your comment on this item" : "Leave a comment, or say what needs to change"}
-              className="min-h-24 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
             <div className="flex flex-wrap gap-2">
               {can.approve ? (
-                <Button disabled={busy || !!itemId} onClick={() => verdict("approve")}>
+                <Button variant="brand" size="lg" disabled={busy || !!itemId} onClick={() => verdict("approve")}>
                   Approve
                 </Button>
               ) : null}
               {can.reject ? (
                 <>
-                  <Button variant="secondary" disabled={busy || !!itemId || !body.trim()} onClick={() => verdict("requestChanges")}>
+                  <Button variant="outline" size="lg" disabled={busy || !!itemId || !body.trim()} onClick={() => verdict("requestChanges")}>
                     Request changes
                   </Button>
-                  <Button variant="danger" disabled={busy || !!itemId} onClick={() => verdict("reject")}>
+                  <Button variant="destructive" size="lg" disabled={busy || !!itemId} onClick={() => verdict("reject")}>
                     Reject
                   </Button>
                 </>
               ) : null}
-              <Button variant="secondary" disabled={busy || !body.trim()} onClick={() => verdict("comment")}>
+              <Button variant="outline" size="lg" disabled={busy || !body.trim()} onClick={() => verdict("comment")}>
                 Comment
               </Button>
             </div>
@@ -248,15 +252,14 @@ function Submit({ guideId, revisionId, onDone }: { guideId: string; revisionId: 
   }
   return (
     <div className="grid gap-2">
-      <textarea
+      <Textarea
         aria-label="Note for reviewers"
         placeholder="What changed, for the reviewers (optional)"
-        className="min-h-16 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
         value={note}
         onChange={(e) => setNote(e.target.value)}
       />
       <div>
-        <Button disabled={busy} onClick={submit}>
+        <Button variant="brand" size="lg" disabled={busy} onClick={submit}>
           Submit for review
         </Button>
       </div>
@@ -302,7 +305,7 @@ function ItemChange({
   const src = (assets: Revision["assets"]) => (path: string) => (assets[path] ? `/api/workspaces/${workspaceId}/assets/${assets[path]}` : null);
   const changedImage = d.fields.includes("image") || d.fields.includes("annotations") || d.change === "added" || d.change === "removed";
   return (
-    <Card className="grid gap-3" aria-label={name}>
+    <Card className="p-6 grid gap-3" aria-label={name}>
       <div className="flex items-center gap-2">
         <span className="text-[11px] font-semibold tracking-[0.08em] text-brand uppercase">{name}</span>
         <span className="text-xs text-muted-foreground">

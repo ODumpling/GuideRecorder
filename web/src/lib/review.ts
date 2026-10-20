@@ -2,13 +2,17 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Guide, GuideStatus } from "@guiderecorder/guide-schema";
 import { equal, type ReviewState, type Revision } from "@guiderecorder/sync";
 import type { Database } from "@/db";
-import { approvalPolicy, changeRequest, member, review } from "@/db/schema";
+import { approvalPolicy, changeRequest, guideOwner, member, review } from "@/db/schema";
 import { roles, type RoleName } from "./permissions";
 import { workspacePlan } from "./workspace";
 
 // Approval rules (Enterprise): which guides are gated, whose approvals
 // count, and the review status of a guide. Pure, apart from loading a
 // workspace's policies; `approvals.ts` runs the workflow on top.
+//
+// A guide is gated while it's locked. Its folder's policy says how many
+// approvals it needs, whether authors may approve and whether new edits
+// reset approvals; its owners are the ones who approve.
 //
 // The status flow maps onto guide.json's `GuideStatus`: `draft` (the head
 // has changes nobody has submitted), `inReview` (a change request is open),
@@ -75,11 +79,30 @@ export function toPolicy(row: typeof approvalPolicy.$inferSelect): Policy {
   return { folder, requiredApprovals, approverIds, allowSelfApproval, resetOnNewRevision };
 }
 
-/** The policy gating a guide, or null if its edits publish straight away. */
-export function gate(approvals: Approvals, row: object): Policy | null {
-  if (!approvals.enabled) return null;
+/**
+ * The policy gating a guide, or null if its edits publish straight away:
+ * null unless the guide is locked. Its owners approve (with none, anyone
+ * whose role has `guide:approve`); it needs at least one approval, and
+ * never more than it has owners.
+ */
+export function gate(approvals: Approvals, row: object, owners: string[]): Policy | null {
+  if (!approvals.enabled || !(row as { locked?: boolean }).locked) return null;
   const policy = policyFor(approvals.policies, folderOf(row));
-  return policy.requiredApprovals > 0 ? policy : null;
+  const most = Math.max(1, owners.length);
+  return { ...policy, approverIds: owners, requiredApprovals: Math.min(most, Math.max(1, policy.requiredApprovals)) };
+}
+
+/** The owners of these guides, by guide id. */
+export async function ownersOf(db: Database, organizationId: string, guideIds: string[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>(guideIds.map((id) => [id, []]));
+  if (!guideIds.length) return result;
+  const rows = await db
+    .select({ guideId: guideOwner.guideId, userId: guideOwner.userId })
+    .from(guideOwner)
+    .where(and(eq(guideOwner.organizationId, organizationId), inArray(guideOwner.guideId, guideIds)))
+    .orderBy(guideOwner.createdAt);
+  for (const r of rows) result.get(r.guideId)?.push(r.userId);
+  return result;
 }
 
 export interface ReviewRecord {
@@ -103,9 +126,9 @@ export interface Evaluation {
  * Counts a change request's approvals under `policy`. A reviewer's latest
  * approve or request-changes is their verdict; with `resetOnNewRevision`
  * only verdicts on the revision now under review count. Approvals count if
- * the reviewer may still approve (`canApprove`: their role has
- * `guide:approve`), is one of the policy's approvers (if it names any), and
- * isn't an author unless self-approval is allowed.
+ * the reviewer is one of the policy's approvers (the guide's owners, if
+ * it has any), may still approve (`canApprove`, see `canApproveGuide`),
+ * and isn't an author unless self-approval is allowed.
  */
 export function evaluate(
   policy: Policy,
@@ -141,8 +164,8 @@ export function approvalProblem(
   authors: (string | null)[],
   canApprove: (userId: string) => boolean,
 ): string | null {
+  if (policy.approverIds.length && !policy.approverIds.includes(userId)) return "Only the guide's owners can approve.";
   if (!canApprove(userId)) return "Your role doesn't allow approving.";
-  if (policy.approverIds.length && !policy.approverIds.includes(userId)) return "You aren't an approver for this folder.";
   if (!policy.allowSelfApproval && authors.includes(userId)) return "You can't approve your own change.";
   return null;
 }
@@ -207,12 +230,29 @@ export async function openRequests(db: Database, organizationId: string, guideId
   return new Map(requests.map((request) => [request.guideId, { request, reviews: reviews.filter((r) => r.changeRequestId === request.id) }]));
 }
 
-/** The members whose role has `guide:approve`. */
-export async function approverIds(db: Database, organizationId: string): Promise<Set<string>> {
+/** Who may approve which guides in a workspace. */
+export interface Approvers {
+  /** Members whose role has `guide:approve`. */
+  byRole: Set<string>;
+  /** Members whose role can edit guides: an owner among them approves their own guides. */
+  editors: Set<string>;
+}
+
+export async function loadApprovers(db: Database, organizationId: string): Promise<Approvers> {
   const members = await db.select({ userId: member.userId, role: member.role }).from(member).where(eq(member.organizationId, organizationId));
-  return new Set(
-    members.filter((m) => m.role in roles && roles[m.role as RoleName].authorize({ guide: ["approve"] }).success).map((m) => m.userId),
-  );
+  const allows = (role: string, action: "approve" | "update") => role in roles && roles[role as RoleName].authorize({ guide: [action] }).success;
+  return {
+    byRole: new Set(members.filter((m) => allows(m.role, "approve")).map((m) => m.userId)),
+    editors: new Set(members.filter((m) => allows(m.role, "update")).map((m) => m.userId)),
+  };
+}
+
+/**
+ * `evaluate`'s `canApprove` for a guide: its owners who can still edit
+ * guides; a guide without owners falls back to roles with `guide:approve`.
+ */
+export function canApproveGuide(approvers: Approvers, owners: string[]) {
+  return (userId: string) => (owners.length ? owners.includes(userId) && approvers.editors.has(userId) : approvers.byRole.has(userId));
 }
 
 /** Who wrote a change: whoever submitted it and whoever made the revision under review. */
@@ -220,7 +260,7 @@ export function authorsOf(request: { authorId: string | null }, head: { authorId
   return [request.authorId, head?.authorId ?? null].filter(Boolean);
 }
 
-type GuideRow = { id: string; headRevisionId: string | null; publishedRevisionId: string | null };
+type GuideRow = { id: string; headRevisionId: string | null; publishedRevisionId: string | null; locked: boolean };
 
 /**
  * Where each guide stands in review. `revisions` holds the revisions the
@@ -235,13 +275,14 @@ export async function reviewStates(
   const result = new Map<string, ReviewState>();
   if (!rows.length) return result;
   const approvals = await loadApprovals(db, organizationId);
+  const owners = approvals.enabled ? await ownersOf(db, organizationId, rows.filter((r) => r.locked).map((r) => r.id)) : new Map<string, string[]>();
   const gated = rows.flatMap((row) => {
-    const policy = gate(approvals, row);
+    const policy = gate(approvals, row, owners.get(row.id) ?? []);
     return policy ? [{ row, policy }] : [];
   });
   const [open, approvers] = gated.length
-    ? await Promise.all([openRequests(db, organizationId, gated.map((g) => g.row.id)), approverIds(db, organizationId)])
-    : [new Map<string, OpenRequest>(), new Set<string>()];
+    ? await Promise.all([openRequests(db, organizationId, gated.map((g) => g.row.id)), loadApprovers(db, organizationId)])
+    : [new Map<string, OpenRequest>(), { byRole: new Set<string>(), editors: new Set<string>() }];
   for (const row of rows) {
     const shown = revisions.get(row.headRevisionId ?? "") ?? revisions.get(row.publishedRevisionId ?? "");
     result.set(row.id, { gated: false, status: shown?.guide.status ?? "draft", changeRequestId: null, approvals: 0, required: 0 });
@@ -249,8 +290,11 @@ export async function reviewStates(
   for (const { row, policy } of gated) {
     const o = open.get(row.id);
     const evaluation = o
-      ? evaluate(policy, { revisionId: o.request.revisionId, authors: authorsOf(o.request, revisions.get(o.request.revisionId)) }, o.reviews, (id) =>
-          approvers.has(id),
+      ? evaluate(
+          policy,
+          { revisionId: o.request.revisionId, authors: authorsOf(o.request, revisions.get(o.request.revisionId)) },
+          o.reviews,
+          canApproveGuide(approvers, owners.get(row.id) ?? []),
         )
       : null;
     result.set(row.id, {

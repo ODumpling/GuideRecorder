@@ -224,6 +224,8 @@ export const guide = pgTable(
     publishedRevisionId: text("published_revision_id"),
     /** The library folder it's filed in, set on the web; null: unfiled. Not part of guide.json. */
     folder: text("folder"),
+    /** Locked: edits wait for an owner's approval (Enterprise); unlocked: they publish straight away. */
+    locked: boolean("locked").notNull().default(false),
     /** The head revision's title, tags, steps and notes, for library search. */
     search: tsvector("search"),
     /** Position in the workspace's change feed. */
@@ -238,6 +240,29 @@ export const guide = pgTable(
     primaryKey({ columns: [t.organizationId, t.id] }),
     index("guide_organization_seq_idx").on(t.organizationId, t.seq),
     index("guide_search_idx").using("gin", t.search),
+  ],
+);
+
+/**
+ * The members who own a guide: they approve changes to it while it's
+ * locked, and with workspace admins manage its owners and lock. Whoever
+ * syncs a guide first owns it.
+ */
+export const guideOwner = pgTable(
+  "guide_owner",
+  {
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    addedBy: text("added_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.organizationId, t.guideId, t.userId] }),
+    foreignKey({ columns: [t.organizationId, t.guideId], foreignColumns: [guide.organizationId, guide.id] }).onDelete("cascade"),
+    index("guide_owner_user_idx").on(t.organizationId, t.userId),
   ],
 );
 

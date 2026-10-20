@@ -1,6 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth-client";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
 type Step = "enter" | "confirm" | "approved" | "denied";
 
@@ -29,15 +32,15 @@ export function ApproveDevice({ initialCode }: { initialCode: string }) {
   }
 
   return (
-    <Card className="w-full max-w-sm">
+    <Card className="p-6 block w-full max-w-sm">
       <h1 className="mb-4 font-serif text-3xl">Sign in the desktop app</h1>
       {step === "enter" ? (
         <form onSubmit={check} className="grid gap-4">
-          <Label>
+          <Field>
             Code shown in the app
             <Input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" className="font-mono uppercase tracking-widest" />
-          </Label>
-          <Button type="submit" disabled={!code.trim()}>
+          </Field>
+          <Button variant="brand" size="lg" type="submit" disabled={!code.trim()}>
             Continue
           </Button>
         </form>
@@ -48,8 +51,8 @@ export function ApproveDevice({ initialCode }: { initialCode: string }) {
             code matches: <span className="font-mono font-semibold">{code.trim().toUpperCase()}</span>
           </p>
           <div className="flex gap-2">
-            <Button onClick={() => respond(true)}>Approve</Button>
-            <Button variant="secondary" onClick={() => respond(false)}>
+            <Button variant="brand" size="lg" onClick={() => respond(true)}>Approve</Button>
+            <Button variant="outline" size="lg" onClick={() => respond(false)}>
               Deny
             </Button>
           </div>

@@ -1,7 +1,12 @@
 import { useRouter } from "@tanstack/react-router";
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { createShare, revokeShare, type getShareLinks } from "@/server/shares";
-import { Button, ErrorText, Input, Label } from "../ui";
+import { NativeSelect } from "@guiderecorder/ui/native-select";
+import { Share2 } from "lucide-react";
+import { Button } from "@guiderecorder/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@guiderecorder/ui/dialog";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
 // Share links for a guide: make one (latest or this version, expiry,
 // password, download), copy it, see its views, revoke it.
@@ -21,33 +26,27 @@ interface Props {
 }
 
 export function ShareLinks({ guideId, revisionId, shares }: Props) {
-  const dialog = useRef<HTMLDialogElement>(null);
   // Members whose role can't share don't see the button.
   if (!shares.available && !shares.upgrade) return null;
 
   return (
-    <>
-      <Button variant="secondary" onClick={() => dialog.current?.showModal()}>
-        Share…
-      </Button>
-      <dialog
-        ref={dialog}
-        className="m-auto w-full max-w-xl rounded-xl border border-border bg-card p-6 text-card-foreground shadow-xl backdrop:bg-black/30"
-        onClick={(e) => e.target === dialog.current && dialog.current.close()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Share with a link</h2>
-          <Button variant="secondary" className="h-8 px-3" onClick={() => dialog.current?.close()}>
-            Close
-          </Button>
-        </div>
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="ghost">
+          <Share2 /> Share…
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Share with a link</DialogTitle>
+        </DialogHeader>
         {shares.available ? (
           <SharePanel guideId={guideId} revisionId={revisionId} links={shares.links} settings={shares.settings} />
         ) : (
           <p className="text-sm text-muted-foreground">{shares.reason}</p>
         )}
-      </dialog>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -110,10 +109,9 @@ function SharePanel({ guideId, revisionId, links, settings }: PanelProps) {
             </label>
           </fieldset>
           <div className="grid grid-cols-2 gap-3">
-            <Label>
+            <Field>
               Expires
-              <select
-                className="h-9 rounded-lg border border-input bg-card px-3 text-sm"
+              <NativeSelect
                 value={days ?? ""}
                 onChange={(e) => setDays(e.target.value ? Number(e.target.value) : null)}
               >
@@ -123,17 +121,17 @@ function SharePanel({ guideId, revisionId, links, settings }: PanelProps) {
                     In {d} {d === 1 ? "day" : "days"}
                   </option>
                 ))}
-              </select>
-            </Label>
-            <Label>
+              </NativeSelect>
+            </Field>
+            <Field>
               Password{needsPassword ? "" : " (optional)"}
               <Input type="password" autoComplete="new-password" minLength={4} required={needsPassword} value={password} onChange={(e) => setPassword(e.target.value)} />
-            </Label>
+            </Field>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={allowDownload} onChange={(e) => setAllowDownload(e.target.checked)} /> Allow downloading
           </label>
-          <Button type="submit" disabled={busy} className="justify-self-start">
+          <Button variant="brand" size="lg" type="submit" disabled={busy} className="justify-self-start">
             {busy ? "Creating…" : "Create link"}
           </Button>
         </form>
@@ -145,10 +143,10 @@ function SharePanel({ guideId, revisionId, links, settings }: PanelProps) {
             <li key={link.id} className="grid gap-2 py-3">
               <div className="flex gap-2">
                 <Input readOnly value={link.url} onFocus={(e) => e.target.select()} aria-label="Link" className={link.state === "active" ? "" : "line-through opacity-60"} />
-                <Button variant="secondary" onClick={() => void navigator.clipboard?.writeText(link.url)}>
+                <Button variant="outline" size="lg" onClick={() => void navigator.clipboard?.writeText(link.url)}>
                   Copy
                 </Button>
-                <Button variant="danger" onClick={() => revoke(link)}>
+                <Button variant="destructive" size="lg" onClick={() => revoke(link)}>
                   Revoke
                 </Button>
               </div>

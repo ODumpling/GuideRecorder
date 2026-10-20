@@ -1,7 +1,9 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { Button, Card, ErrorText } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { ErrorText } from "@/components/ui";
 
 export function AcceptInvitation({ invitationId }: { invitationId: string }) {
   const router = useRouter();
@@ -17,11 +19,11 @@ export function AcceptInvitation({ invitationId }: { invitationId: string }) {
   }
 
   return (
-    <Card className="w-full max-w-sm">
+    <Card className="p-6 block w-full max-w-sm">
       <h1 className="mb-4 font-serif text-3xl">Join the workspace?</h1>
       <div className="flex gap-2">
-        <Button onClick={() => respond(true)}>Accept</Button>
-        <Button variant="secondary" onClick={() => respond(false)}>
+        <Button variant="brand" size="lg" onClick={() => respond(true)}>Accept</Button>
+        <Button variant="outline" size="lg" onClick={() => respond(false)}>
           Decline
         </Button>
       </div>

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { addScimConnection, endScimConnection, revokeScim, rotateScim } from "@/server/admin";
-import { Button, Card, ErrorText } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { ErrorText } from "@/components/ui";
 import { useAction } from "./useAction";
 
 interface Connection {
@@ -18,7 +20,7 @@ export function ScimConnections({ connections, endpoint }: { connections: Connec
   const [token, setToken] = useState<string | null>(null);
 
   return (
-    <Card className="grid gap-4">
+    <Card className="p-6 grid gap-4">
       <div>
         <h2 className="text-lg font-semibold">SCIM provisioning</h2>
         <p className="text-sm text-muted-foreground">
@@ -42,8 +44,7 @@ export function ScimConnections({ connections, endpoint }: { connections: Connec
             </span>
             <span className="flex gap-2">
               <Button
-                variant="secondary"
-                className="h-8 px-3"
+                variant="outline"
                 disabled={busy}
                 onClick={async () => {
                   const result = await run(() => rotateScim({ data: { connectionId: c.connectionId } }));
@@ -52,7 +53,7 @@ export function ScimConnections({ connections, endpoint }: { connections: Connec
               >
                 New token
               </Button>
-              <Button variant="danger" className="h-8 px-3" disabled={busy} onClick={() => run(() => endScimConnection({ data: { connectionId: c.connectionId } }))}>
+              <Button variant="destructive" disabled={busy} onClick={() => run(() => endScimConnection({ data: { connectionId: c.connectionId } }))}>
                 Disconnect
               </Button>
             </span>
@@ -64,7 +65,7 @@ export function ScimConnections({ connections, endpoint }: { connections: Connec
                   Token expires {day(k.expiresAt)}, last used {day(k.lastUsedAt)}
                 </span>
                 <Button
-                  variant="secondary"
+                  variant="outline" size="lg"
                   className="h-7 px-2"
                   disabled={busy}
                   onClick={() => run(() => revokeScim({ data: { connectionId: c.connectionId, credentialId: k.credentialId } }))}
@@ -77,7 +78,7 @@ export function ScimConnections({ connections, endpoint }: { connections: Connec
         </div>
       ))}
 
-      <Button
+      <Button variant="brand" size="lg"
         className="justify-self-start"
         disabled={busy}
         onClick={async () => {

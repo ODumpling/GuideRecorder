@@ -1,7 +1,7 @@
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { GuideStatus } from "@guiderecorder/guide-schema";
 import type { Database } from "@/db";
-import { guide, revision, user } from "@/db/schema";
+import { guide, guideOwner, member, revision, revisionAsset, user } from "@/db/schema";
 import { GUIDE_STATUSES } from "./library-search";
 import { roles } from "./permissions";
 import { prefixQuery } from "./search";
@@ -41,16 +41,30 @@ export interface LibraryGuide {
   reviewDue: string | null;
   review: ReviewState;
   steps: number;
+  /** The first step's screenshot (an asset's sha256), for its card. */
+  cover: string | null;
   /** When the head revision was made. */
   updatedAt: string;
   source: string;
   /** Only its owner sees it. */
   private: boolean;
+  /** Edits wait for an owner's approval. */
+  locked: boolean;
+  /** The names of its owners who are still in the workspace. */
+  owners: string[];
 }
 
 export interface Facet {
   name: string;
   count: number;
+}
+
+/** How many of the visible guides each sidebar entry holds. */
+export interface LibraryCounts {
+  all: number;
+  reviewDue: number;
+  unfiled: number;
+  statuses: Record<GuideStatus, number>;
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -86,14 +100,14 @@ export function reviewState(due: string | null, today: Date): ReviewState {
 
 const json = revision.guideJson;
 
-/** The guides the user can see in the workspace, filtered, with folder and tag counts over all of them. */
+/** The guides the user can see in the workspace, filtered, with folder, tag and status counts over all of them. */
 export async function library(
   db: Database,
   organizationId: string,
   reader: Reader,
   filter: LibraryFilter = {},
   today = new Date(),
-): Promise<{ guides: LibraryGuide[]; folders: Facet[]; tags: Facet[] }> {
+): Promise<{ guides: LibraryGuide[]; folders: Facet[]; tags: Facet[]; counts: LibraryCounts }> {
   const visible = and(eq(guide.organizationId, organizationId), visibleTo(reader.userId), isNotNull(guide.headRevisionId), isNull(guide.deletedAt));
   const rows = await db
     .select({
@@ -112,6 +126,9 @@ export async function library(
       reviewIntervalMonths: sql<unknown>`${json}->'reviewIntervalMonths'`,
       createdAt: sql<string | null>`${json}->>'createdAt'`,
       steps: sql<number>`jsonb_array_length(jsonb_path_query_array(${json}, '$.items[*] ? (@.type == "step")'))`,
+      locked: guide.locked,
+      owners: sql<string[]>`array(select ${user.name} from ${guideOwner} join ${user} on ${user.id} = ${guideOwner.userId} join ${member} on ${member.userId} = ${guideOwner.userId} and ${member.organizationId} = ${guideOwner.organizationId} where ${guideOwner.organizationId} = ${guide.organizationId} and ${guideOwner.guideId} = ${guide.id} order by ${guideOwner.createdAt})`,
+      cover: sql<string | null>`(select ${revisionAsset.sha256} from ${revisionAsset} where ${revisionAsset.revisionId} = ${revision.id} and ${revisionAsset.path} = jsonb_path_query_first(${json}, '$.items[*] ? (@.type == "step").image.full') #>> '{}')`,
     })
     .from(guide)
     .innerJoin(revision, eq(revision.id, readsDrafts(reader.role) ? guide.headRevisionId : guide.publishedRevisionId))
@@ -136,9 +153,12 @@ export async function library(
       reviewDue: due,
       review: reviewState(due, today),
       steps: Number(r.steps),
+      cover: r.cover,
       updatedAt: r.updatedAt.toISOString(),
       source: r.source,
       private: r.visibility !== "workspace",
+      locked: r.locked,
+      owners: r.owners ?? [],
     };
   });
 
@@ -162,7 +182,18 @@ export async function library(
     guides = guides.filter((g) => ranks.has(g.id)).sort((x, y) => ranks.get(y.id)! - ranks.get(x.id)!);
   }
 
-  return { guides, folders: facets(all.map((g) => g.folder).filter((f) => f !== null)), tags: facets(all.flatMap((g) => g.tags)) };
+  const statuses = Object.fromEntries(GUIDE_STATUSES.map((s) => [s, all.filter((g) => g.status === s).length])) as Record<GuideStatus, number>;
+  return {
+    guides,
+    folders: facets(all.map((g) => g.folder).filter((f) => f !== null)),
+    tags: facets(all.flatMap((g) => g.tags)),
+    counts: {
+      all: all.length,
+      reviewDue: all.filter((g) => g.review !== null).length,
+      unfiled: all.filter((g) => g.folder === null).length,
+      statuses,
+    },
+  };
 }
 
 function facets(names: string[]): Facet[] {

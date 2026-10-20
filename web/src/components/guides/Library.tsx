@@ -1,221 +1,351 @@
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { BookOpen, Camera, EllipsisVertical, EyeOff, FolderInput, LayoutGrid, List, Lock, Target, Trash2 } from "lucide-react";
+import { Button } from "@guiderecorder/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@guiderecorder/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@guiderecorder/ui/dropdown-menu";
+import { Input } from "@guiderecorder/ui/input";
+import { cn } from "@guiderecorder/ui/utils";
+import { ErrorText } from "@/components/ui";
 import type { LibraryGuide } from "@/lib/library";
 import { GUIDE_STATUSES, STATUS_LABEL, type LibrarySearch } from "@/lib/library-search";
-import { setGuideFolder, type getLibrary } from "@/server/guides";
-import { Button, Card, ErrorText, Input } from "../ui";
+import { setGuideFolder, setGuideTrashed, type getLibrary } from "@/server/guides";
+import { Avatar, StatusPill, timeAgo } from "./bits";
 
 // The cloud library: the workspace's synced guides, searched and filtered
-// by folder, tag, status and review date. Filters live in the URL.
+// by folder, tag, status and review date (filters live in the URL; the
+// sidebar sets most of them). Laid out like the desktop app's library.
 
 type Data = Extract<Awaited<ReturnType<typeof getLibrary>>, { available: true }>;
+type View = "grid" | "list";
 
+const VIEW_KEY = "guiderecorder.libraryView";
 const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+
+function heading(search: LibrarySearch) {
+  if (search.status) return STATUS_LABEL[search.status];
+  if (search.review) return "Review due";
+  if (search.folder !== undefined) return search.folder || "Unfiled";
+  if (search.tag) return `#${search.tag}`;
+  return "All guides";
+}
 
 export function Library({ data, search }: { data: Data; search: LibrarySearch }) {
   const navigate = useNavigate({ from: "/library" });
-  const [query, setQuery] = useState(search.q ?? "");
-  const filtered = Boolean(search.q || search.folder !== undefined || search.tag || search.status || search.review);
   const set = (change: Partial<LibrarySearch>) => navigate({ search: (prev) => ({ ...prev, ...change }) });
+  const [view, setView] = useState<View>("grid");
+  const [moving, setMoving] = useState<LibraryGuide | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  useEffect(() => {
+    if (localStorage.getItem(VIEW_KEY) === "list") setView("list");
+  }, []);
+  const changeView = (v: View) => {
+    setView(v);
+    localStorage.setItem(VIEW_KEY, v);
+  };
+  const filtered = Boolean(search.q || search.folder !== undefined || search.tag || search.status || search.review);
+  const overdue = data.guides.filter((g) => g.review === "overdue").length;
+  const cover = (g: LibraryGuide) => (g.cover ? `/api/workspaces/${data.workspaceId}/assets/${g.cover}` : null);
+
+  async function trash(g: LibraryGuide) {
+    setError(null);
+    const result = await setGuideTrashed({ data: { guideId: g.id, trashed: true } });
+    if (!result.ok) setError(result.error);
+    else await router.invalidate();
+  }
+  const actions = (g: LibraryGuide) =>
+    data.canOrganize || data.canDelete ? (
+      <GuideMenu guide={g} onMove={data.canOrganize ? () => setMoving(g) : undefined} onTrash={data.canDelete ? () => trash(g) : undefined} />
+    ) : null;
 
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-6 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-baseline gap-4">
-          <Link to="/dashboard" className="text-sm text-muted-foreground hover:underline">
-            ← Dashboard
-          </Link>
-          <h1 className="font-serif text-3xl">Library</h1>
-        </div>
-        <form
-          role="search"
-          className="flex w-full max-w-md gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            set({ q: query.trim() || undefined });
-          }}
-        >
-          <Input type="search" aria-label="Search guides" placeholder="Search titles, steps, notes and tags" value={query} onChange={(e) => setQuery(e.target.value)} />
-          <Button type="submit">Search</Button>
-        </form>
-      </header>
-
-      <div className="grid gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
-        <aside className="grid content-start gap-5 text-sm">
-          <Facet title="Folders">
-            <FacetLink active={search.folder === undefined} onClick={() => set({ folder: undefined })}>
-              All guides
-            </FacetLink>
-            {data.folders.map((f) => (
-              <FacetLink key={f.name} active={search.folder === f.name} count={f.count} onClick={() => set({ folder: f.name })}>
-                {f.name}
-              </FacetLink>
-            ))}
-            {data.folders.length ? (
-              <FacetLink active={search.folder === ""} onClick={() => set({ folder: "" })}>
-                Unfiled
-              </FacetLink>
-            ) : null}
-          </Facet>
-          <Facet title="Status">
-            {GUIDE_STATUSES.map((s) => (
-              <FacetLink key={s} active={search.status === s} onClick={() => set({ status: search.status === s ? undefined : s })}>
-                {STATUS_LABEL[s]}
-              </FacetLink>
-            ))}
-            <FacetLink active={search.review === "due"} onClick={() => set({ review: search.review ? undefined : "due" })}>
-              Review due
-            </FacetLink>
-          </Facet>
-          {data.tags.length ? (
-            <Facet title="Tags">
-              <div className="flex flex-wrap gap-1.5">
-                {data.tags.map((t) => (
-                  <button
-                    key={t.name}
-                    type="button"
-                    aria-pressed={search.tag === t.name}
-                    onClick={() => set({ tag: search.tag === t.name ? undefined : t.name })}
-                    className={`rounded-full border px-2.5 py-0.5 text-xs ${search.tag === t.name ? "border-brand bg-brand text-brand-foreground" : "border-border bg-card hover:bg-muted"}`}
-                  >
-                    {t.name} <span className="opacity-70">{t.count}</span>
-                  </button>
-                ))}
-              </div>
-            </Facet>
-          ) : null}
-        </aside>
-
-        <Card className="p-0">
-          <div className="flex items-center justify-between gap-4 border-b border-border px-6 py-3 text-sm text-muted-foreground">
-            <span>
-              {data.guides.length} {data.guides.length === 1 ? "guide" : "guides"}
-              {search.q ? ` matching “${search.q}”` : ""}
-            </span>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-7 px-5 py-8 md:px-9">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-serif text-[40px] leading-none tracking-tight">{search.q ? "Search" : heading(search)}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {search.q && <>Results for “{search.q}” · </>}
+            {data.guides.length} {data.guides.length === 1 ? "guide" : "guides"}
+            {overdue > 0 && <span className="text-[var(--status-danger)]"> · {overdue} due for review</span>}
             {filtered ? (
-              <Link to="/library" search={{}} onClick={() => setQuery("")} className="hover:underline">
-                Clear filters
-              </Link>
+              <>
+                {" · "}
+                <Link to="/library" search={{}} className="hover:text-foreground hover:underline">
+                  Clear filters
+                </Link>
+              </>
             ) : null}
-          </div>
-          {data.guides.length ? (
-            <ul className="divide-y divide-border">
-              {data.guides.map((g) => (
-                <GuideRow key={g.id} guide={g} folders={data.folders.map((f) => f.name)} canOrganize={data.canOrganize} onTag={(tag) => set({ tag })} />
-              ))}
-            </ul>
-          ) : (
-            <p className="p-6 text-sm text-muted-foreground">
-              {filtered ? "No guides match." : "No synced guides yet. In the desktop app, sign in from Settings → Sync and turn sync on for a guide."}
-            </p>
-          )}
-        </Card>
+          </p>
+        </div>
+        <ViewToggle view={view} onChange={changeView} />
       </div>
+
+      <div className="flex flex-col gap-3">
+        {data.counts.all > 0 ? (
+          <div className="flex flex-wrap items-center gap-1">
+            <Chip on={!search.status} onClick={() => set({ status: undefined })}>
+              All
+            </Chip>
+            {GUIDE_STATUSES.map((s) => (
+              <Chip key={s} on={search.status === s} onClick={() => set({ status: search.status === s ? undefined : s })}>
+                {STATUS_LABEL[s]}
+              </Chip>
+            ))}
+            {data.tags.length ? <span className="mx-1 h-4 w-px bg-border" /> : null}
+            {data.tags.map((t) => (
+              <Chip key={t.name} on={search.tag === t.name} onClick={() => set({ tag: search.tag === t.name ? undefined : t.name })}>
+                #{t.name}
+              </Chip>
+            ))}
+          </div>
+        ) : null}
+        <ErrorText>{error}</ErrorText>
+        {data.guides.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">
+            {filtered
+              ? "No matching guides"
+              : "No guides yet. Record one in the desktop app, then turn on sync for it from Settings → Sync."}
+          </p>
+        ) : view === "grid" ? (
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-5 gap-y-6">
+            {data.guides.map((g) => (
+              <GuideCard key={g.id} guide={g} cover={cover(g)} actions={actions(g)} />
+            ))}
+          </ul>
+        ) : (
+          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+            {data.guides.map((g) => (
+              <GuideRow key={g.id} guide={g} cover={cover(g)} actions={actions(g)} />
+            ))}
+          </ul>
+        )}
+      </div>
+      <MoveDialog guide={moving} folders={data.folders.map((f) => f.name)} onClose={() => setMoving(null)} />
     </div>
   );
 }
 
-function Facet({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="grid gap-1">
-      <h2 className="px-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function FacetLink({ active, count, onClick, children }: { active: boolean; count?: number; onClick: () => void; children: ReactNode }) {
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
-      aria-pressed={active}
+      aria-pressed={on}
       onClick={onClick}
-      className={`flex items-center justify-between gap-2 rounded-md px-2 py-1 text-left ${active ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+      className={cn(
+        "rounded-full px-2.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        on ? "bg-primary text-primary-foreground" : "text-foreground/80 hover:bg-foreground/[0.06]",
+      )}
     >
-      <span className="truncate">{children}</span>
-      {count !== undefined ? <span className="tabular-nums text-xs">{count}</span> : null}
+      {children}
     </button>
   );
 }
 
-const STATUS_STYLE = {
-  draft: "bg-muted text-muted-foreground",
-  inReview: "bg-brand/10 text-brand",
-  published: "bg-success/10 text-success",
-  needsUpdate: "bg-destructive/10 text-destructive",
-} as const;
-
-function Badge({ className, children }: { className: string; children: ReactNode }) {
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${className}`}>{children}</span>;
+function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => void }) {
+  const options = [
+    { value: "grid" as const, label: "Grid", icon: <LayoutGrid /> },
+    { value: "list" as const, label: "List", icon: <List /> },
+  ];
+  return (
+    <div role="radiogroup" aria-label="View" className="inline-flex rounded-lg bg-foreground/[0.06] p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={view === o.value}
+          aria-label={o.label}
+          title={o.label}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex h-7 w-8 items-center justify-center rounded-md text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4",
+            view === o.value && "bg-card text-foreground shadow-sm",
+          )}
+        >
+          {o.icon}
+        </button>
+      ))}
+    </div>
+  );
 }
 
-function GuideRow({ guide: g, folders, canOrganize, onTag }: { guide: LibraryGuide; folders: string[]; canOrganize: boolean; onTag: (tag: string) => void }) {
-  const router = useRouter();
-  const [moving, setMoving] = useState(false);
-  const [folder, setFolder] = useState(g.folder ?? "");
-  const [error, setError] = useState<string | null>(null);
+const contents = (g: LibraryGuide) => `${g.steps} ${g.steps === 1 ? "step" : "steps"}`;
 
-  async function move(e: React.FormEvent) {
-    e.preventDefault();
+/** A guide as a card: its first screenshot, title, status, folder and owner (the desktop app's GuideCard). */
+function GuideCard({ guide: g, cover, actions }: { guide: LibraryGuide; cover: string | null; actions: React.ReactNode }) {
+  const meta = [g.folder, timeAgo(g.updatedAt)].filter(Boolean).join(" · ");
+  return (
+    <li className="group relative">
+      <Link to="/guides/$guideId" params={{ guideId: g.id }} title={g.summary || undefined} className="flex flex-col rounded-xl outline-none">
+        <span className="relative block aspect-[16/10] overflow-hidden rounded-xl border border-border bg-sidebar transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-has-[a:focus-visible]:ring-2 group-has-[a:focus-visible]:ring-ring">
+          {cover ? (
+            <img src={cover} alt="" loading="lazy" className="absolute top-[11%] left-[8%] w-full rounded-tl-lg border-t border-l border-black/5 shadow-md" />
+          ) : (
+            <span className="flex size-full items-center justify-center text-muted-foreground/50">
+              <BookOpen className="size-8" strokeWidth={1.5} />
+            </span>
+          )}
+          <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur">
+            <Camera className="size-3" /> {contents(g)}
+          </span>
+          {g.review === "overdue" ? (
+            <span
+              title={`Review was due ${date(g.reviewDue!)}`}
+              className="absolute top-2.5 right-2.5 rounded-md bg-[var(--status-danger)] px-2 py-0.5 text-[11px] font-semibold text-white"
+            >
+              Review overdue
+            </span>
+          ) : null}
+        </span>
+        <span className="mt-2.5 flex items-center gap-1.5 px-0.5 pr-8 text-sm font-semibold tracking-tight">
+          <span className="truncate">{g.title}</span>
+          <GuideFlags guide={g} />
+        </span>
+        <span className="mt-1 flex min-w-0 items-center gap-2 px-0.5 text-xs text-muted-foreground">
+          {g.status ? <StatusPill status={g.status} /> : null}
+          <span className="truncate">{meta}</span>
+          <Owners guide={g} className="ml-auto" />
+        </span>
+      </Link>
+      {actions ? <div className="absolute right-0 bottom-6">{actions}</div> : null}
+    </li>
+  );
+}
+
+/** A guide as a list row (the desktop app's list view). */
+function GuideRow({ guide: g, cover, actions }: { guide: LibraryGuide; cover: string | null; actions: React.ReactNode }) {
+  return (
+    <li className="relative flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50">
+      <span className="relative h-10 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-sidebar">
+        {cover ? (
+          <img src={cover} alt="" loading="lazy" className="absolute top-[12%] left-[10%] w-full rounded-tl-sm" />
+        ) : (
+          <Target className="m-auto mt-2.5 size-4 text-muted-foreground/50" />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <Link to="/guides/$guideId" params={{ guideId: g.id }} className="truncate text-sm font-semibold after:absolute after:inset-0">
+          {g.title}
+          <GuideFlags guide={g} className="ml-1.5 inline-flex" />
+        </Link>
+        <span className="truncate text-xs text-muted-foreground">{g.summary || contents(g)}</span>
+      </span>
+      <span className="hidden w-28 shrink-0 md:block">{g.status ? <StatusPill status={g.status} /> : null}</span>
+      <span className="hidden w-32 shrink-0 truncate text-xs text-muted-foreground lg:block">{g.folder ?? "—"}</span>
+      <span
+        className={cn("hidden w-28 shrink-0 text-xs text-muted-foreground sm:block", g.review === "overdue" && "font-medium text-[var(--status-danger)]")}
+        title={g.reviewDue ? `Review due ${date(g.reviewDue)}` : undefined}
+      >
+        {g.review === "overdue" ? "Review overdue" : timeAgo(g.updatedAt)}
+      </span>
+      <span className="flex w-12 shrink-0 justify-end">
+        <Owners guide={g} />
+      </span>
+      <span className="relative w-7 shrink-0">{actions}</span>
+    </li>
+  );
+}
+
+/** Locked and private marks after a guide's title. */
+function GuideFlags({ guide: g, className }: { guide: LibraryGuide; className?: string }) {
+  return (
+    <span className={cn("flex shrink-0 items-center gap-1 text-muted-foreground [&_svg]:size-3", className)}>
+      {g.locked ? <Lock aria-label="Locked: changes need an owner's approval" /> : null}
+      {g.private ? <EyeOff aria-label="Private" /> : null}
+    </span>
+  );
+}
+
+/** A guide's owners as overlapping avatars; guide.json's free-text owner without any. */
+function Owners({ guide: g, className }: { guide: LibraryGuide; className?: string }) {
+  const names = g.owners.length ? g.owners : g.owner ? [g.owner] : [];
+  if (!names.length) return null;
+  return (
+    <span className={cn("flex -space-x-1.5", className)} title={`Owned by ${names.join(", ")}`}>
+      {names.slice(0, 3).map((n) => (
+        <Avatar key={n} name={n} label={`Owner ${n}`} className="ring-2 ring-background" />
+      ))}
+    </span>
+  );
+}
+
+function GuideMenu({ guide, onMove, onTrash }: { guide: LibraryGuide; onMove?: () => void; onTrash?: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label={`Actions for ${guide.title}`} className="relative text-muted-foreground">
+          <EllipsisVertical />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {onMove ? (
+          <DropdownMenuItem onSelect={onMove}>
+            <FolderInput /> {guide.folder ? "Move to folder…" : "Add to folder…"}
+          </DropdownMenuItem>
+        ) : null}
+        {onMove && onTrash ? <DropdownMenuSeparator /> : null}
+        {onTrash ? (
+          <DropdownMenuItem variant="destructive" onSelect={onTrash}>
+            <Trash2 /> Move to trash
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Files a guide in a folder (a new name makes one), or takes it out of its folder. */
+function MoveDialog({ guide, folders, onClose }: { guide: LibraryGuide | null; folders: string[]; onClose: () => void }) {
+  const router = useRouter();
+  const [folder, setFolder] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setFolder(guide?.folder ?? "");
     setError(null);
-    const result = await setGuideFolder({ data: { guideId: g.id, folder: folder.trim() || null } });
+  }, [guide]);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (!guide) return;
+    setError(null);
+    const result = await setGuideFolder({ data: { guideId: guide.id, folder: folder.trim() || null } });
     if (!result.ok) return setError(result.error);
-    setMoving(false);
+    onClose();
     await router.invalidate();
   }
 
   return (
-    <li className="grid gap-1.5 px-6 py-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Link to="/guides/$guideId" params={{ guideId: g.id }} className="font-medium hover:underline">
-          {g.title}
-        </Link>
-        {g.status ? <Badge className={STATUS_STYLE[g.status]}>{STATUS_LABEL[g.status]}</Badge> : null}
-        {g.review === "overdue" ? (
-          <Badge className="bg-destructive/10 text-destructive">Review overdue since {date(g.reviewDue!)}</Badge>
-        ) : g.review === "soon" ? (
-          <Badge className="bg-amber-500/15 text-amber-700">Review due {date(g.reviewDue!)}</Badge>
-        ) : null}
-        {g.private ? <Badge className="bg-muted text-muted-foreground">Private</Badge> : null}
-      </div>
-      {g.summary ? <p className="text-sm text-muted-foreground">{g.summary}</p> : null}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        {g.folder ? <span>Folder: {g.folder}</span> : null}
-        {g.owner ? <span>Owner: {g.owner}</span> : null}
-        <span>
-          {g.steps} {g.steps === 1 ? "step" : "steps"}
-        </span>
-        <span>
-          Updated {date(g.updatedAt)} {g.source === "web" ? "on the web" : "in the app"}
-        </span>
-        {g.tags.map((t) => (
-          <button key={t} type="button" onClick={() => onTag(t)} className="rounded-full border border-border px-2 py-px hover:bg-muted">
-            {t}
-          </button>
-        ))}
-        {canOrganize && !moving ? (
-          <button type="button" onClick={() => setMoving(true)} className="hover:underline">
-            {g.folder ? "Move" : "Add to folder"}
-          </button>
-        ) : null}
-      </div>
-      {moving ? (
-        <form onSubmit={move} className="flex max-w-md items-center gap-2">
-          <Input aria-label="Folder" list={`folders-${g.id}`} placeholder="Folder (empty: none)" value={folder} onChange={(e) => setFolder(e.target.value)} autoFocus />
-          <datalist id={`folders-${g.id}`}>
+    <Dialog open={guide !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <form onSubmit={save} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Move “{guide?.title}”</DialogTitle>
+            <DialogDescription>Pick a folder or type a new one. Leave it empty to unfile the guide.</DialogDescription>
+          </DialogHeader>
+          <Input aria-label="Folder" list="library-folders" placeholder="Folder" value={folder} onChange={(e) => setFolder(e.target.value)} autoFocus />
+          <datalist id="library-folders">
             {folders.map((f) => (
               <option key={f} value={f} />
             ))}
           </datalist>
-          <Button type="submit" className="h-8 px-3">
-            Save
-          </Button>
-          <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => setMoving(false)}>
-            Cancel
-          </Button>
+          <ErrorText>{error}</ErrorText>
+          <DialogFooter>
+            <Button variant="outline" size="lg" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="brand" size="lg" type="submit">
+              Move
+            </Button>
+          </DialogFooter>
         </form>
-      ) : null}
-      <ErrorText>{error}</ErrorText>
-    </li>
+      </DialogContent>
+    </Dialog>
   );
 }

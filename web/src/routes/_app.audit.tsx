@@ -1,11 +1,10 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AuditLog } from "@/components/audit/AuditLog";
-import { Card } from "@/components/ui";
 import { auditFilters, type AuditSearch } from "@/lib/audit-filters";
 import { title } from "@/lib/title";
 import { getAuditLog } from "@/server/audit";
 
-export const Route = createFileRoute("/audit")({
+export const Route = createFileRoute("/_app/audit")({
   validateSearch: (search: Record<string, unknown>): AuditSearch => {
     const parsed = auditFilters.safeParse(search);
     return parsed.success ? parsed.data : {};
@@ -21,14 +20,9 @@ function Page() {
   const search = Route.useSearch();
   if (!data.allowed) {
     return (
-      <div className="mx-auto grid w-full max-w-3xl gap-6 p-6">
-        <Card className="grid gap-3">
-          <h1 className="font-serif text-3xl">Audit log</h1>
-          <p className="text-sm text-muted-foreground">{data.error}</p>
-          <Link to="/dashboard" className="text-sm text-brand hover:underline">
-            Back to the dashboard
-          </Link>
-        </Card>
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-7 px-5 py-8 md:px-9">
+        <h1 className="font-serif text-[40px] leading-none tracking-tight">Audit log</h1>
+        <p className="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">{data.error}</p>
       </div>
     );
   }

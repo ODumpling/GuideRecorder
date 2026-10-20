@@ -1,20 +1,23 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { deleteApprovalPolicy, saveApprovalPolicy, type getApprovalSettings } from "@/server/reviews";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
-// Approval policies per library folder (Enterprise; admins). A guide follows
-// its folder's nearest policy; folders without one follow the workspace's.
+// Approval rules per library folder (Enterprise; admins), for locked guides:
+// a locked guide follows its folder's nearest policy (folders without one
+// follow the workspace's), and its owners approve.
 
 type Data = Extract<Awaited<ReturnType<typeof getApprovalSettings>>, { available: true }>;
 type Policy = Data["policies"][number];
 
-export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
+export function ApprovalPolicies({ policies, defaultPolicy }: Data) {
   const router = useRouter();
   const [editing, setEditing] = useState<Policy | null>(null);
   const [error, setError] = useState<string | null>(null);
   const workspace = policies.find((p) => p.folder === "");
-  const name = (id: string) => approvers.find((a) => a.id === id)?.name ?? id;
 
   async function remove(folder: string) {
     setError(null);
@@ -24,23 +27,22 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
   }
 
   const describe = (p: Policy) =>
-    p.requiredApprovals === 0
-      ? "No approval needed"
-      : `${p.requiredApprovals} of ${p.approverIds.length ? p.approverIds.map(name).join(", ") : "any approver"}` +
-        `${p.allowSelfApproval ? ", self-approval allowed" : ""}${p.resetOnNewRevision ? ", reset on new edits" : ""}`;
+    `${Math.max(1, p.requiredApprovals)} owner ${Math.max(1, p.requiredApprovals) === 1 ? "approval" : "approvals"}` +
+    `${p.allowSelfApproval ? ", self-approval allowed" : ""}${p.resetOnNewRevision ? ", reset on new edits" : ""}`;
 
   return (
-    <Card>
+    <Card className="block p-6">
       <h2 className="mb-1 text-lg font-semibold">Approvals</h2>
       <p className="mb-4 text-sm text-muted-foreground">
-        Edits to guides wait for approval before viewers and share links see them. A folder follows its nearest policy.
+        Edits to locked guides wait for their owners&rsquo; approval before viewers and share links see them; unlocked guides
+        publish straight away. Lock a guide from its page. A folder follows its nearest policy.
       </p>
       <ul className="divide-y divide-border">
         <li className="flex items-center justify-between gap-4 py-2 text-sm">
           <span>
             <span className="font-medium">Whole workspace</span> <span className="text-muted-foreground">{describe(workspace ?? defaultPolicy)}</span>
           </span>
-          <Button variant="secondary" className="h-8 px-3" onClick={() => setEditing(workspace ?? defaultPolicy)}>
+          <Button variant="outline" onClick={() => setEditing(workspace ?? defaultPolicy)}>
             Edit
           </Button>
         </li>
@@ -52,10 +54,10 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
                 <span className="font-medium">{p.folder}</span> <span className="text-muted-foreground">{describe(p)}</span>
               </span>
               <span className="flex gap-2">
-                <Button variant="secondary" className="h-8 px-3" onClick={() => setEditing(p)}>
+                <Button variant="outline" onClick={() => setEditing(p)}>
                   Edit
                 </Button>
-                <Button variant="danger" className="h-8 px-3" onClick={() => remove(p.folder)}>
+                <Button variant="destructive" onClick={() => remove(p.folder)}>
                   Remove
                 </Button>
               </span>
@@ -64,9 +66,9 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
       </ul>
       <div className="mt-4">
         {editing ? (
-          <PolicyForm key={editing.folder} policy={editing} approvers={approvers} onDone={() => setEditing(null)} />
+          <PolicyForm key={editing.folder} policy={editing} onDone={() => setEditing(null)} />
         ) : (
-          <Button variant="secondary" onClick={() => setEditing({ ...defaultPolicy, folder: "new" })}>
+          <Button variant="outline" size="lg" onClick={() => setEditing({ ...defaultPolicy, folder: "new" })}>
             Add a folder policy
           </Button>
         )}
@@ -76,7 +78,7 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
   );
 }
 
-function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: Data["approvers"]; onDone: () => void }) {
+function PolicyForm({ policy, onDone }: { policy: Policy; onDone: () => void }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const isNew = policy.folder === "new";
@@ -89,7 +91,6 @@ function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: 
       data: {
         folder: isNew ? String(form.get("folder") ?? "") : policy.folder,
         requiredApprovals: Number(form.get("requiredApprovals")),
-        approverIds: form.getAll("approverIds").map(String),
         allowSelfApproval: form.get("allowSelfApproval") === "on",
         resetOnNewRevision: form.get("resetOnNewRevision") === "on",
       },
@@ -102,26 +103,17 @@ function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: 
   return (
     <form onSubmit={save} className="grid gap-3 rounded-lg border border-border p-4 text-sm">
       {isNew ? (
-        <Label>
+        <Field>
           Folder
           <Input name="folder" placeholder="e.g. HR/Payroll" required />
-        </Label>
+        </Field>
       ) : (
         <p className="font-medium">{policy.folder || "Whole workspace"}</p>
       )}
-      <Label>
-        Approvals needed (0: publish without review)
-        <Input name="requiredApprovals" type="number" min={0} max={20} defaultValue={policy.requiredApprovals} className="w-24" />
-      </Label>
-      <fieldset className="grid gap-1">
-        <legend className="mb-1 font-medium">Approvers (none ticked: anyone whose role can approve)</legend>
-        {approvers.map((a) => (
-          <label key={a.id} className="flex items-center gap-2">
-            <input type="checkbox" name="approverIds" value={a.id} defaultChecked={policy.approverIds.includes(a.id)} />
-            {a.name} <span className="text-muted-foreground">{a.email}</span>
-          </label>
-        ))}
-      </fieldset>
+      <Field>
+        Owner approvals needed (at most as many as a guide has owners)
+        <Input name="requiredApprovals" type="number" min={1} max={20} defaultValue={Math.max(1, policy.requiredApprovals)} className="w-24" />
+      </Field>
       <label className="flex items-center gap-2">
         <input type="checkbox" name="allowSelfApproval" defaultChecked={policy.allowSelfApproval} />
         Authors may approve their own changes
@@ -131,8 +123,8 @@ function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: 
         New edits reset approvals
       </label>
       <span className="flex gap-2">
-        <Button type="submit">Save</Button>
-        <Button type="button" variant="secondary" onClick={onDone}>
+        <Button variant="brand" size="lg" type="submit">Save</Button>
+        <Button type="button" variant="outline" size="lg" onClick={onDone}>
           Cancel
         </Button>
       </span>
