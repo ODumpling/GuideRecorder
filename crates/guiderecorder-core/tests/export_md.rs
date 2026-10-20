@@ -304,6 +304,30 @@ fn markdown_images_resolve_to_written_files() {
 }
 
 #[test]
+fn preview_is_the_export_without_files() {
+    let fixtures = fixtures();
+    for opts in [MdOptions::default(), branded()] {
+        for (handle, guide) in &fixtures.guides {
+            let out = tempfile::tempdir().unwrap();
+            let report = export(guide, handle, out.path(), &opts);
+            let render = RenderGuide::new(guide, handle);
+            let preview = md::preview(&render, handle, &opts);
+
+            let markdown = fs::read_to_string(&report.files[0]).unwrap();
+            assert_eq!(preview.markdown, markdown, "{}", guide.title);
+            assert_eq!(preview.report.warnings, report.warnings);
+            assert!(preview.report.files.is_empty());
+            // Every image the document links, with the bytes the export wrote.
+            let links: Vec<&str> = preview.images.iter().map(|(l, _)| l.as_str()).collect();
+            assert_eq!(links, image_urls(&markdown), "{}", guide.title);
+            for (link, png) in &preview.images {
+                assert!(fs::read(out.path().join(link)).unwrap() == *png, "{link}");
+            }
+        }
+    }
+}
+
+#[test]
 fn output_is_deterministic() {
     let fixtures = fixtures();
     let (handle, guide) = &fixtures.guides[0];

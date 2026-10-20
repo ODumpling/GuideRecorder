@@ -505,7 +505,7 @@ fn push_inlines(inlines: &[Inline], out: &mut String) {
 // Data URIs
 
 /// `data:<mime>;base64,<bytes>`.
-pub(super) fn data_uri(mime: &str, bytes: &[u8]) -> String {
+pub fn data_uri(mime: &str, bytes: &[u8]) -> String {
     let mut out = format!("data:{mime};base64,");
     base64_into(bytes, &mut out);
     out

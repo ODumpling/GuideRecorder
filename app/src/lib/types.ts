@@ -272,6 +272,23 @@ export interface ExportBranding {
   accent: string | null;
 }
 
+/**
+ * The Export dialog's preview, made by the format's own exporter (Rust
+ * `export::ExportPreview`). Images are PNG data URIs with the blurs burned
+ * in, as in the file.
+ */
+export type ExportPreviewData =
+  /** The exported HTML or walkthrough page, self-contained. */
+  | { kind: "html"; html: string }
+  /** The exported `guide.md` and the images it links, by link. */
+  | { kind: "markdown"; markdown: string; images: { link: string; src: string }[] }
+  /** The PDF's first pages; Word is approximated with them (`approximate`). */
+  | { kind: "pages"; pages: string[]; pageCount: number; approximate: boolean }
+  /** Each step's slide image, in step order. */
+  | { kind: "slides"; images: string[] }
+  /** A still of each of the first scenes of a video or GIF. */
+  | { kind: "frames"; frames: string[]; sceneCount: number };
+
 /** What an export wrote and what degraded along the way. */
 export interface ExportResult {
   /** Files written, the main document first. */

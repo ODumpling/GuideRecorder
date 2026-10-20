@@ -96,6 +96,29 @@ fn gif_shows_title_sections_and_steps_for_their_time() {
 }
 
 #[test]
+fn preview_has_a_still_per_scene() {
+    let fixtures = Fixtures::new();
+    // 5 steps, 2 sections.
+    let loaded = fixtures.guide("Share a calendar event");
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    for (aspect, captions, scenes) in [(Aspect::Wide, true, 8), (Aspect::Vertical, false, 5)] {
+        let opts = MotionOptions {
+            aspect,
+            captions,
+            ..MotionOptions::default()
+        };
+        let preview = motion::preview(&render, &opts, 180).unwrap();
+        assert_eq!(preview.scene_count, scenes);
+        assert_eq!(preview.frames.len(), scenes);
+        assert!(preview.report.files.is_empty());
+        for frame in &preview.frames {
+            let image = image::load_from_memory(frame).unwrap();
+            assert_eq!((image.width(), image.height()), aspect.size(180));
+        }
+    }
+}
+
+#[test]
 fn without_captions_there_are_no_cards() {
     let fixtures = Fixtures::new();
     let loaded = fixtures.guide("Share a calendar event");
