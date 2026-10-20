@@ -30,6 +30,7 @@ const DEFAULTS: Settings = {
   export: { format: "pdf", folder: null, logo: null, accent: null },
   redaction: { mode: "suggest", patterns: [], words: [] },
   mcp: { writable: false },
+  history: { keepVersions: 50, keepDays: 90 },
 };
 
 function api(overrides: Partial<SettingsApi> = {}): SettingsApi {

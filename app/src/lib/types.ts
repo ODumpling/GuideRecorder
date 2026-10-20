@@ -232,6 +232,29 @@ export interface Settings {
     /** The setup command passes `--writable`, so MCP clients may edit and create guides. */
     writable: boolean;
   };
+  /** How many saved versions each guide keeps; 0 is no limit. Labelled versions and the newest are always kept. */
+  history: {
+    keepVersions: number;
+    keepDays: number;
+  };
+}
+
+/** Why a guide version was saved. `other`: by a newer app, for a reason this one does not know. */
+export type VersionReason = "closed" | "beforeAi" | "manual" | "beforeRestore" | "beforeMcpEdit" | "other";
+
+/** A saved version of a guide (its `.history/`), without the guide itself. */
+export interface VersionInfo {
+  id: string;
+  /** When the version was saved. */
+  createdAt: string;
+  reason: VersionReason;
+  /** The user's name for it; such versions are never pruned. */
+  label?: string;
+  /** The guide's title then. */
+  title: string;
+  stepCount: number;
+  /** The guide's `updatedAt` then. */
+  updatedAt: string;
 }
 
 /** The app's colour theme (Settings → Appearance). */

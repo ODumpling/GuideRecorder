@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus } from "../src/lib/types";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -167,6 +167,7 @@ export class Backend {
     export: { format: "pdf", folder: null, logo: null, accent: null },
     redaction: { mode: "suggest", patterns: [], words: [] },
     mcp: { writable: false },
+    history: { keepVersions: 50, keepDays: 90 },
   };
   /** Whether an API key is "stored"; the key itself is never kept. */
   apiKeyStored = false;
@@ -253,6 +254,9 @@ export class Backend {
   readonly aiRewrites: { guideId: string; stepId: string; style: RewriteStyleArg }[] = [];
   /** Guides opened and not closed since, as the Rust session tracks them. */
   private openGuides = new Set<string>();
+  /** Saved versions by guide id, oldest first (core's `history`). */
+  private versions = new Map<string, { info: VersionInfo; guide: Guide; files: Map<string, Buffer> }[]>();
+  private versionCount = 0;
   /** Run ids `ai_cancel` was called with. */
   readonly aiCancels: number[] = [];
 
@@ -323,6 +327,31 @@ export class Backend {
     return this.bundles.get(id) ?? fail("notFound", `no guide ${id}`);
   }
 
+  /** Saves the bundle's guide as a version, unless unchanged since the last one (except `manual`). */
+  private saveVersion(bundle: Bundle, reason: VersionReason, label?: string): VersionInfo | null {
+    const list = this.versions.get(bundle.guide.id) ?? [];
+    const content = (g: Guide) => JSON.stringify({ ...g, updatedAt: "" });
+    const last = list.at(-1);
+    if (reason !== "manual" && last && content(last.guide) === content(bundle.guide)) return null;
+    const info: VersionInfo = {
+      id: `01M5V${String(++this.versionCount).padStart(21, "0")}`,
+      createdAt: new Date(Date.UTC(2026, 9, 20, 9, this.versionCount)).toISOString(),
+      reason,
+      ...(label && { label }),
+      title: bundle.guide.title,
+      stepCount: bundle.guide.items.filter((item) => item.type === "step").length,
+      updatedAt: bundle.guide.updatedAt,
+    };
+    list.push({ info, guide: structuredClone(bundle.guide), files: new Map(bundle.files) });
+    this.versions.set(bundle.guide.id, list);
+    return info;
+  }
+
+  private version(guideId: string, versionId: string) {
+    const list = this.versions.get(this.bundle(guideId).guide.id) ?? [];
+    return list.find((v) => v.info.id === versionId) ?? fail("notFound", `version ${versionId} not found`);
+  }
+
   private readOnly(bundle: Bundle): boolean {
     return bundle.guide.schemaVersion > SCHEMA_VERSION;
   }
@@ -382,6 +411,7 @@ export class Backend {
       if (!steps.some((step) => step.id === id)) fail("invalid", `step ${id} is not in the saved guide`);
     }
     if (this.aiRun?.guideId === guideId) fail("invalid", "Already writing this guide.");
+    this.saveVersion(bundle, "beforeAi");
     const runId = ++this.aiRuns;
     this.aiGenerations.push(options ? { guideId, runId, options: structuredClone(options) } : { guideId, runId });
     const wanted = (step: Step) => !options?.stepIds || options.stepIds.includes(step.id);
@@ -719,10 +749,39 @@ export class Backend {
         if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
         return this.pickPages(bundle) ?? [];
       }
-      case "close_guide":
-        this.bundle(String(args.id));
-        this.openGuides.delete(String(args.id));
+      case "close_guide": {
+        const bundle = this.bundle(String(args.id));
+        if (this.openGuides.delete(bundle.guide.id) && !this.readOnly(bundle)) this.saveVersion(bundle, "closed");
         return [];
+      }
+      case "list_versions":
+        return (this.versions.get(this.bundle(String(args.guideId)).guide.id) ?? []).map((v) => v.info).reverse();
+      case "read_version":
+        return structuredClone(this.version(String(args.guideId), String(args.versionId)).guide);
+      case "version_image": {
+        const path = String(args.path);
+        const bytes = this.version(String(args.guideId), String(args.versionId)).files.get(path) ?? fail("invalid", `no image ${path}`);
+        return [...bytes];
+      }
+      case "save_version": {
+        const guideId = String(args.guideId);
+        if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
+        const bundle = this.bundle(guideId);
+        if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
+        const label = typeof args.label === "string" ? args.label.trim() : "";
+        return this.saveVersion(bundle, "manual", label || undefined)!;
+      }
+      case "restore_version": {
+        const guideId = String(args.guideId);
+        if (!this.openGuides.has(guideId)) fail("notOpen", `guide ${guideId} is not open`);
+        const bundle = this.bundle(guideId);
+        if (this.readOnly(bundle)) fail("readOnly", `guide ${guideId} is read-only`);
+        const version = this.version(guideId, String(args.versionId));
+        this.saveVersion(bundle, "beforeRestore");
+        for (const [path, bytes] of version.files) bundle.files.set(path, bytes);
+        bundle.guide = { ...structuredClone(version.guide), updatedAt: new Date().toISOString() };
+        return structuredClone(bundle.guide);
+      }
       case "step_image": {
         const path = String(args.path);
         const bytes = this.bundle(String(args.guideId)).files.get(path) ?? fail("notFound", `no image ${path}`);

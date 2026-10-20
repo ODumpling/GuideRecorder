@@ -467,7 +467,7 @@ mod tests {
         assert!(err.message.starts_with("bad.webp: "), "{}", err.message);
         let stray = fs::read_dir(bundle.join("steps")).unwrap().count() - steps_before.len();
         assert_eq!(stray, 1);
-        let removed = session.close_guide(&id).unwrap();
+        let removed = session.close_guide(&id, &Default::default()).unwrap();
         // The three unsaved pages and the stray one.
         assert_eq!(removed.len(), 4);
         assert_eq!(

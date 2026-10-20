@@ -32,6 +32,7 @@ use guiderecorder_core::ai::{
     keychain, AiError, AiProvider, ApiKey, CancelToken, ImageSource, PipelineEvent,
     PipelineOptions, PipelineSummary, RedactionSuggestion, RewriteInput, RewriteStyle,
 };
+use guiderecorder_core::history::VersionReason;
 use guiderecorder_core::library::GuideHandle;
 use guiderecorder_core::model::{AiState, AiStatus, Guide, GuideField, GuideKind, Item, Step};
 use guiderecorder_core::Ulid;
@@ -786,7 +787,10 @@ pub async fn ai_generate<R: Runtime>(
         let ai = ai.clone();
         move || {
             let key = check_ready(&ai, keychain::get_key)?;
-            let (guide, handle) = ai_guide(&*cell.get()?, id)?;
+            let session = cell.get()?;
+            let (guide, handle) = ai_guide(&session, id)?;
+            // The guide before the run, so its results can be taken back.
+            session.save_version_for(id, VersionReason::BeforeAi);
             Ok((key, guide, handle))
         }
     })

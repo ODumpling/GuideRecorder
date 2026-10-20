@@ -7,6 +7,7 @@ pub mod ai;
 pub mod edit;
 pub mod events;
 pub mod export;
+pub mod history;
 pub mod index;
 pub mod library;
 pub mod markdown;

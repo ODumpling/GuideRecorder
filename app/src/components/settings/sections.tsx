@@ -21,6 +21,8 @@ import {
   isHotkey,
   isLanguage,
   isModelId,
+  KEEP_DAYS,
+  KEEP_VERSIONS,
   MAX_EXCLUDED_APPS,
   MAX_REDACTION_PATTERNS,
   MAX_REDACTION_WORDS,
@@ -202,6 +204,31 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
         </Button>
       </Row>
       <UpdatesRow />
+      <Row
+        label="Version history"
+        note="Versions each guide keeps (0: no limit). Older ones are deleted when a guide closes; named versions and the newest are always kept."
+      >
+        <CommitInput
+          label="Versions to keep"
+          type="number"
+          className="w-20"
+          value={String(settings.history.keepVersions)}
+          valid={(v) => v !== "" && inRange(Number(v), KEEP_VERSIONS)}
+          disabled={readOnly}
+          onCommit={(v) => change((s) => ({ ...s, history: { ...s.history, keepVersions: Number(v) } }))}
+        />
+        <span className="text-xs text-muted-foreground">versions, up to</span>
+        <CommitInput
+          label="Days to keep versions"
+          type="number"
+          className="w-20"
+          value={String(settings.history.keepDays)}
+          valid={(v) => v !== "" && inRange(Number(v), KEEP_DAYS)}
+          disabled={readOnly}
+          onCommit={(v) => change((s) => ({ ...s, history: { ...s.history, keepDays: Number(v) } }))}
+        />
+        <span className="text-xs text-muted-foreground">days</span>
+      </Row>
       <Row label="Menu bar icon" note="Coming with recording; stored for now.">
         <Toggle
           label="Menu bar icon"

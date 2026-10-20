@@ -12,7 +12,7 @@ import {
   setItemTitle,
 } from "@/editor/commands";
 import { createEditorStore, createQuitFlow, type QuitSteps } from "@/editor/store";
-import { guide } from "@/editor/test-fixtures";
+import { guide, step } from "@/editor/test-fixtures";
 
 function fakeApi(opened: Partial<OpenedGuide> = {}) {
   const saved: Guide[] = [];
@@ -72,6 +72,16 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
     stepImage: vi.fn(async () => new ArrayBuffer(0)),
+    saveVersion: vi.fn(async (_id: string, label: string | null) => ({
+      id: "V1",
+      createdAt: "2026-10-20T00:00:00Z",
+      reason: "manual" as const,
+      ...(label ? { label } : {}),
+      title: "Guide",
+      stepCount: 3,
+      updatedAt: "2026-10-20T00:00:00Z",
+    })),
+    restoreVersion: vi.fn(async (id: string) => ({ ...guide(), id, title: "Restored", items: [step("A")] })),
     quit: vi.fn(async () => {}),
     cancelQuit: vi.fn(async () => {}),
   };
@@ -1027,5 +1037,59 @@ describe("history after untracked changes", () => {
     s().dispatch(setItemTitle(s().doc!.guide, "B", "Mine"));
     s().applyUntracked([{ op: "setItem", id: "A", key: "title", value: "AI title" }]);
     expect(s().undoStack).toHaveLength(1);
+  });
+});
+
+describe("version history", () => {
+  it("saves pending changes before saving a version", async () => {
+    const { api, s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Mine"));
+    const info = await s().saveVersion("  Before review ");
+    expect(info).toMatchObject({ id: "V1", label: "Before review" });
+    expect(vi.mocked(api.saveGuide).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.saveVersion).mock.invocationCallOrder[0]!,
+    );
+    expect(api.saveVersion).toHaveBeenCalledWith("G1", "Before review");
+    expect(await s().saveVersion("")).not.toBeNull();
+    expect(api.saveVersion).toHaveBeenLastCalledWith("G1", null);
+  });
+
+  it("restores a version as the saved guide and starts the undo history over", async () => {
+    const { api, s } = await opened();
+    s().dispatch(setItemTitle(s().doc!.guide, "B", "Mine"));
+    s().select("B");
+    expect(await s().restoreVersion("V0")).toBe(true);
+    expect(api.saveGuide).toHaveBeenCalledTimes(1);
+    expect(api.restoreVersion).toHaveBeenCalledWith("G1", "V0");
+    expect(s().doc!.guide).toMatchObject({ title: "Restored", items: [{ id: "A" }] });
+    // B is gone in that version: the first step is selected.
+    expect(s().selectedId).toBe("A");
+    expect(s().undoStack).toHaveLength(0);
+    expect(s().saveStatus).toBe("saved");
+    await vi.runAllTimersAsync();
+    expect(api.saveGuide).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores nothing when the changes cannot be saved first, or it fails", async () => {
+    const { api, s } = await opened();
+    api.saveGuide = vi.fn(async () => Promise.reject({ kind: "io", message: "disk full" }));
+    s().dispatch(setItemTitle(s().doc!.guide, "A", "Mine"));
+    expect(await s().restoreVersion("V0")).toBe(false);
+    expect(api.restoreVersion).not.toHaveBeenCalled();
+    expect(s().notice).toMatch(/could not be saved first/);
+
+    api.saveGuide = vi.fn(async () => {});
+    api.restoreVersion = vi.fn(async () => Promise.reject({ kind: "notFound", message: "version V0 not found" }));
+    expect(await s().restoreVersion("V0")).toBe(false);
+    expect(s().notice).toBe("Could not restore the version: version V0 not found");
+    expect(s().doc!.guide.items[1]).toMatchObject({ id: "A", title: "Mine" });
+  });
+
+  it("refuses read-only guides", async () => {
+    const { api, s } = await opened({ readOnly: true });
+    expect(await s().restoreVersion("V0")).toBe(false);
+    expect(await s().saveVersion("x")).toBeNull();
+    expect(api.restoreVersion).not.toHaveBeenCalled();
+    expect(api.saveVersion).not.toHaveBeenCalled();
   });
 });

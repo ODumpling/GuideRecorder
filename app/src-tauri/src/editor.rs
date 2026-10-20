@@ -9,6 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use guiderecorder_core::edit::DetailsEdit;
+use guiderecorder_core::history::{self, Retention, VersionInfo, VersionReason};
 use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
 use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
@@ -63,13 +64,14 @@ impl AppError {
 impl From<LibraryError> for AppError {
     fn from(e: LibraryError) -> Self {
         let kind = match &e {
-            LibraryError::NotFound(_) => ErrorKind::NotFound,
+            LibraryError::NotFound(_) | LibraryError::VersionNotFound(_) => ErrorKind::NotFound,
             LibraryError::NewerSchema { .. } | LibraryError::NotMigrated { .. } => {
                 ErrorKind::ReadOnly
             }
             LibraryError::IdMismatch { .. }
             | LibraryError::Unverifiable { .. }
             | LibraryError::ChangedOnDisk(_)
+            | LibraryError::DamagedHistory(_)
             | LibraryError::Json { .. }
             | LibraryError::NotABundle(_) => ErrorKind::Conflict,
             LibraryError::InvalidRelativePath(_)
@@ -521,12 +523,13 @@ impl Session {
         })
     }
 
-    /// Forgets an opened guide and deletes the step images that its saved
-    /// `guide.json` no longer uses. Editing keeps every image (undo may
+    /// Forgets an opened guide, saves its saved `guide.json` as a version
+    /// (core's `history`, then pruned to `retention`) and deletes the step
+    /// images that it no longer uses. Editing keeps every image (undo may
     /// bring a deleted step back); closing is the point where they can go.
     /// The editor saves (or discards) its changes first. Returns the
     /// removed files' bundle-relative paths.
-    pub fn close_guide(&self, guide_id: &str) -> Result<Vec<String>> {
+    pub fn close_guide(&self, guide_id: &str, retention: &Retention) -> Result<Vec<String>> {
         let guide_id = parse_id(guide_id)?;
         let lock = self.guide_lock(guide_id);
         let _guard = lock.lock().unwrap();
@@ -544,7 +547,93 @@ impl Session {
         if saved.read_only || saved.guide.id != guide_id {
             return Ok(Vec::new());
         }
+        // Best effort: history never keeps a guide from closing.
+        let kept = history::snapshot(&entry.handle, &saved.guide, VersionReason::Closed, None)
+            .and_then(|_| history::prune(&entry.handle, retention, chrono::Utc::now()));
+        if let Err(e) = kept {
+            eprintln!("guiderecorder: cannot save a version of guide {guide_id}: {e}");
+        }
         sweep_step_images(&entry.handle)
+    }
+
+    /// The versions of a guide (open or not), newest first.
+    pub fn list_versions(&self, guide_id: &str) -> Result<Vec<VersionInfo>> {
+        let id = parse_id(guide_id)?;
+        Ok(history::list(&self.bundle(id)?)?)
+    }
+
+    /// The guide as version `version_id` saved it, for a preview.
+    pub fn read_version(&self, guide_id: &str, version_id: &str) -> Result<Guide> {
+        let id = parse_id(guide_id)?;
+        let version = parse_id(version_id)?;
+        Ok(history::read(&self.library, &self.bundle(id)?, version)?.guide)
+    }
+
+    /// The WebP bytes of an image as version `version_id` saved it, by the
+    /// bundle-relative path in its guide.
+    pub fn version_image(&self, guide_id: &str, version_id: &str, path: &str) -> Result<Vec<u8>> {
+        let id = parse_id(guide_id)?;
+        let version = parse_id(version_id)?;
+        check_image_path(path)?;
+        Ok(history::image(&self.bundle(id)?, version, path)?)
+    }
+
+    /// Saves an open guide as last saved as a version named `label` (the
+    /// editor saves first). Saved even if nothing changed since the last
+    /// version: the user asked for it.
+    pub fn save_version(&self, guide_id: &str, label: Option<String>) -> Result<VersionInfo> {
+        let id = parse_id(guide_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let handle = self.writable_handle(id)?;
+        let saved = self.library.read(&handle.path)?;
+        let info = history::snapshot(
+            &handle,
+            &saved.guide,
+            VersionReason::Manual,
+            label.as_deref(),
+        )?;
+        info.ok_or_else(|| AppError::new(ErrorKind::Io, "the version was not saved"))
+    }
+
+    /// Saves an open guide as last saved as a version for `reason`, unless
+    /// it is the same as the newest one. Best effort: a failure is logged.
+    pub(crate) fn save_version_for(&self, id: Ulid, reason: VersionReason) {
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let saved = self
+            .writable_handle(id)
+            .and_then(|handle| Ok((self.library.read(&handle.path)?, handle)));
+        let result = saved.and_then(|(saved, handle)| {
+            Ok(history::snapshot(&handle, &saved.guide, reason, None)?)
+        });
+        if let Err(e) = result {
+            eprintln!(
+                "guiderecorder: cannot save a version of guide {id}: {}",
+                e.message
+            );
+        }
+    }
+
+    /// Makes version `version_id` an open guide's current state, as a new
+    /// change: the guide as last saved is kept as a version first (the
+    /// editor saves first), then the version's images are put back and its
+    /// guide is saved. Returns the guide as saved, for the editor to show.
+    pub fn restore_version(&self, guide_id: &str, version_id: &str) -> Result<Guide> {
+        let id = parse_id(guide_id)?;
+        let version = parse_id(version_id)?;
+        let lock = self.guide_lock(id);
+        let _guard = lock.lock().unwrap();
+        let handle = self.writable_handle(id)?;
+        let current = self.library.read(&handle.path)?;
+        history::snapshot(&handle, &current.guide, VersionReason::BeforeRestore, None)?;
+        let guide = history::restore(&self.library, &handle, version)?;
+        self.library.save_to(&handle, &guide)?;
+        self.index_bundle(&handle);
+        if let Some(entry) = self.open.lock().unwrap().get_mut(&id) {
+            entry.guide = guide.clone();
+        }
+        Ok(guide)
     }
 
     /// Deletes a guide's bundle at `path` (a listing row's, so a duplicate
@@ -1195,7 +1284,7 @@ pub(crate) mod tests {
             edit,
             Err(guiderecorder_core::edit::EditError::OpenInEditor { .. })
         ));
-        session.close_guide(&id).unwrap();
+        session.close_guide(&id, &Retention::default()).unwrap();
         assert_eq!(session.library().editor_lock_holder(&handle), None);
         assert!(!handle
             .path
@@ -1662,7 +1751,10 @@ pub(crate) mod tests {
             .join(FIXTURE)
             .join(format!("steps/{}.webp", Ulid::new()));
         fs::write(&orphan, b"x").unwrap();
-        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(session
+            .close_guide(&id, &Retention::default())
+            .unwrap()
+            .is_empty());
         assert!(orphan.exists());
         assert_eq!(
             fs::read_dir(root.join(FIXTURE).join("steps"))
@@ -1701,7 +1793,7 @@ pub(crate) mod tests {
             fs::write(bundle.join(other), b"x").unwrap();
         }
 
-        let mut removed = session.close_guide(&id).unwrap();
+        let mut removed = session.close_guide(&id, &Retention::default()).unwrap();
         removed.sort();
         let mut expected = vec![dropped.image.full.clone(), stale.clone()];
         expected.sort();
@@ -1717,7 +1809,64 @@ pub(crate) mod tests {
         // Closed: images are no longer served, and closing again is a no-op.
         let err = session.step_image(&id, &kept.image.full).unwrap_err();
         assert_eq!(err.kind, ErrorKind::NotOpen);
-        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(session
+            .close_guide(&id, &Retention::default())
+            .unwrap()
+            .is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn close_saves_a_version_that_restore_brings_back() {
+        let root = library();
+        let bundle = root.join(FIXTURE);
+        let (session, id, step) = session_with_saved_image_step(&root);
+        session.close_guide(&id, &Retention::default()).unwrap();
+        let versions = session.list_versions(&id).unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].reason, VersionReason::Closed);
+        let old = versions[0].id.to_string();
+
+        // The step is deleted, and its image swept at the next close.
+        let mut guide = session.open_guide(&id).unwrap().guide;
+        guide.items.retain(|item| item.id() != step.id);
+        session.save_guide(guide).unwrap();
+        session.close_guide(&id, &Retention::default()).unwrap();
+        assert!(!bundle.join(&step.image.full).exists());
+        let versions = session.list_versions(&id).unwrap();
+        assert_eq!(versions.len(), 2);
+        let image = session.version_image(&id, &old, &step.image.full).unwrap();
+        assert!(!image.is_empty());
+        let preview = session.read_version(&id, &old).unwrap();
+        assert!(preview.steps().any(|s| s.id == step.id));
+
+        // Restoring needs the guide open, and keeps its current state first.
+        let err = session.restore_version(&id, &old).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotOpen);
+        session.open_guide(&id).unwrap();
+        let restored = session.restore_version(&id, &old).unwrap();
+        assert!(restored.steps().any(|s| s.id == step.id));
+        assert_eq!(fs::read(bundle.join(&step.image.full)).unwrap(), image);
+        // The state restored over was saved at the close already.
+        assert_eq!(session.list_versions(&id).unwrap().len(), 2);
+        // Saved: the editor's next save goes through.
+        session.save_guide(restored.clone()).unwrap();
+        // Restoring again keeps the state restored over (the old one).
+        session
+            .restore_version(&id, &versions[0].id.to_string())
+            .unwrap();
+        let versions = session.list_versions(&id).unwrap();
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].reason, VersionReason::BeforeRestore);
+
+        // Asked for, a version is saved even when nothing changed.
+        let saved = session.save_version(&id, Some(" Audit ".into())).unwrap();
+        assert_eq!(saved.label.as_deref(), Some("Audit"));
+        assert_eq!(session.list_versions(&id).unwrap().len(), 4);
+        let err = session
+            .restore_version(&id, &Ulid::new().to_string())
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotFound);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1754,7 +1903,10 @@ pub(crate) mod tests {
         // The sweep runs: an unmentioned image goes.
         let orphan = format!("steps/{}.webp", Ulid::new());
         fs::write(bundle.join(&orphan), b"x").unwrap();
-        assert_eq!(session.close_guide(&id).unwrap(), vec![orphan]);
+        assert_eq!(
+            session.close_guide(&id, &Retention::default()).unwrap(),
+            vec![orphan]
+        );
         assert!(bundle.join(&step.image.full).exists());
         assert!(bundle.join(format!("steps/{crop}.crop.webp")).exists());
         fs::remove_dir_all(root).unwrap();
@@ -1778,7 +1930,7 @@ pub(crate) mod tests {
         .unwrap();
         session.open_guide(&id).unwrap();
         assert_eq!(
-            session.close_guide(&id).unwrap(),
+            session.close_guide(&id, &Retention::default()).unwrap(),
             vec![format!("steps/{orphan}.webp")]
         );
         assert!(bundle.join(format!("steps/{old}.webp")).exists());
@@ -1787,7 +1939,10 @@ pub(crate) mod tests {
         fs::write(bundle.join(format!("steps/{orphan}.webp")), b"x").unwrap();
         fs::write(bundle.join(".backup/guide.v00.json"), b"{not json").unwrap();
         session.open_guide(&id).unwrap();
-        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(session
+            .close_guide(&id, &Retention::default())
+            .unwrap()
+            .is_empty());
         assert!(bundle.join(format!("steps/{orphan}.webp")).exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1810,7 +1965,10 @@ pub(crate) mod tests {
         fs::remove_dir_all(bundle.join("steps")).unwrap();
         std::os::unix::fs::symlink(&other, bundle.join("steps")).unwrap();
         session.open_guide(&id).unwrap();
-        assert!(session.close_guide(&id).unwrap().is_empty());
+        assert!(session
+            .close_guide(&id, &Retention::default())
+            .unwrap()
+            .is_empty());
         for path in before {
             assert!(path.exists(), "{}", path.display());
         }
@@ -1830,7 +1988,10 @@ pub(crate) mod tests {
         let orphan = format!("steps/{}.webp", Ulid::new());
         fs::write(bundle.join(&orphan), b"x").unwrap();
         session.open_guide(&id).unwrap();
-        assert_eq!(session.close_guide(&id).unwrap(), vec![orphan]);
+        assert_eq!(
+            session.close_guide(&id, &Retention::default()).unwrap(),
+            vec![orphan]
+        );
         assert!(target.exists() && fs::symlink_metadata(&link).is_ok());
         fs::remove_dir_all(root).unwrap();
     }

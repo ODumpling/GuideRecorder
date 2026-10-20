@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use guiderecorder_core::ai::claude::{DEFAULT_GUIDE_MODEL, DEFAULT_STEP_MODEL};
+use guiderecorder_core::history::Retention;
 use guiderecorder_core::library::{write_atomic, Durability};
 use guiderecorder_core::model::Audience;
 use guiderecorder_core::redact::{self, RedactionMode};
@@ -55,6 +56,7 @@ pub struct Settings {
     pub export: ExportDefaults,
     pub redaction: Redaction,
     pub mcp: Mcp,
+    pub history: History,
 }
 
 impl Default for Settings {
@@ -67,6 +69,7 @@ impl Default for Settings {
             export: ExportDefaults::default(),
             redaction: Redaction::default(),
             mcp: Mcp::default(),
+            history: History::default(),
         }
     }
 }
@@ -327,10 +330,40 @@ pub struct Mcp {
     pub writable: bool,
 }
 
+/// How many saved versions each guide keeps (core's `history`). A version
+/// goes once it is outside either limit; 0 is no limit. Versions with a
+/// label, and each guide's newest, are always kept.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct History {
+    pub keep_versions: u32,
+    pub keep_days: u32,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            keep_versions: 50,
+            keep_days: 90,
+        }
+    }
+}
+
+impl History {
+    pub fn retention(&self) -> Retention {
+        Retention {
+            max_versions: (self.keep_versions > 0).then_some(self.keep_versions as usize),
+            max_age: (self.keep_days > 0).then(|| chrono::Duration::days(self.keep_days.into())),
+        }
+    }
+}
+
 /// Limits for the stored values.
 pub const TYPING_IDLE_MS: std::ops::RangeInclusive<u32> = 300..=10_000;
 pub const AFTER_FRAME_DELAY_MS: std::ops::RangeInclusive<u32> = 0..=3_000;
 pub const MAX_EXCLUDED_APPS: usize = 100;
+pub const KEEP_VERSIONS: std::ops::RangeInclusive<u32> = 0..=1000;
+pub const KEEP_DAYS: std::ops::RangeInclusive<u32> = 0..=3650;
 
 const MODIFIERS: &[&str] = &[
     "CmdOrCtrl",
@@ -559,6 +592,18 @@ impl Settings {
         }
         for word in &r.words {
             redact::check_word(word).map_err(|e| invalid(e.0))?;
+        }
+        if !KEEP_VERSIONS.contains(&self.history.keep_versions) {
+            return Err(invalid(format!(
+                "keep at most {} versions (0: no limit)",
+                KEEP_VERSIONS.end()
+            )));
+        }
+        if !KEEP_DAYS.contains(&self.history.keep_days) {
+            return Err(invalid(format!(
+                "keep versions at most {} days (0: no limit)",
+                KEEP_DAYS.end()
+            )));
         }
         Ok(())
     }
@@ -1457,6 +1502,29 @@ mod tests {
         assert_eq!(json["general"]["theme"], "paperDark");
         let back: Settings = serde_json::from_value(json).unwrap();
         assert_eq!(back.general.theme, Theme::PaperDark);
+    }
+
+    #[test]
+    fn history_retention_defaults_and_limits() {
+        let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        assert_eq!(old.history, History::default());
+        let retention = old.history.retention();
+        assert_eq!(retention.max_versions, Some(50));
+        assert_eq!(retention.max_age, Some(chrono::Duration::days(90)));
+        let unlimited = History {
+            keep_versions: 0,
+            keep_days: 0,
+        };
+        assert_eq!(unlimited.retention(), Retention::default());
+
+        let mut settings = Settings::default();
+        settings.history.keep_versions = 1001;
+        assert!(settings.validate().is_err());
+        settings.history.keep_versions = 0;
+        settings.history.keep_days = 3651;
+        assert!(settings.validate().is_err());
+        settings.history.keep_days = 0;
+        assert!(settings.validate().is_ok());
     }
 
     #[test]

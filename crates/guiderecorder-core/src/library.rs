@@ -10,6 +10,7 @@
 //!     steps/      <ulid>.webp, <ulid>.crop.webp, <ulid>.after.webp
 //!     assets/     manually inserted images
 //!     .backup/    pre-migration copies of guide.json
+//!     .history/   saved versions (see [`crate::history`])
 //!   Work/                 a folder: any plain directory
 //!     Onboarding/
 //!       Another Guide.guiderecorder/
@@ -187,11 +188,18 @@ pub enum LibraryError {
     },
     #[error("image size {width}x{height} is outside WebP's 1..={MAX_WEBP_DIMENSION} per side")]
     ImageSize { width: u32, height: u32 },
+    /// No version `id` in the guide's history ([`crate::history`]).
+    #[error("version {0} not found in the guide's history")]
+    VersionNotFound(Ulid),
+    /// A file in `.history/` is not what its version says (an image whose
+    /// bytes no longer match their hash, a version that does not decode).
+    #[error("{0}: damaged version history file")]
+    DamagedHistory(PathBuf),
 }
 
 pub type Result<T, E = LibraryError> = std::result::Result<T, E>;
 
-fn io_err(path: &Path) -> impl FnOnce(io::Error) -> LibraryError + '_ {
+pub(crate) fn io_err(path: &Path) -> impl FnOnce(io::Error) -> LibraryError + '_ {
     move |source| LibraryError::Io {
         path: path.to_path_buf(),
         source,
@@ -445,6 +453,9 @@ impl Library {
             sweep_temp_files(&bundle.join(BACKUP_DIR), min_age, &mut report, |name| {
                 name.starts_with('.')
             });
+            for dir in crate::history::store_dirs(&bundle) {
+                sweep_temp_files(&dir, min_age, &mut report, |name| name.starts_with('.'));
+            }
         }
         report
     }
@@ -477,6 +488,11 @@ impl Library {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The schema guides are read at.
+    pub(crate) fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     /// All readable guides, sorted by most recently updated, including ones
@@ -1460,7 +1476,7 @@ fn parse_and_upgrade(path: &Path, bytes: &[u8], schema: &Schema) -> Result<(Valu
 /// plus the version found on disk. Only [`Library::load`] acts on an older
 /// original version, by backing up and rewriting the file. Values from a
 /// newer app are returned unchanged.
-fn upgrade(path: &Path, value: Value, schema: &Schema) -> Result<(Value, u32)> {
+pub(crate) fn upgrade(path: &Path, value: Value, schema: &Schema) -> Result<(Value, u32)> {
     let version = value
         .get("schemaVersion")
         .and_then(Value::as_u64)
@@ -1710,7 +1726,7 @@ fn newer_placeholder(
 /// The fields a write checks before replacing `guide.json`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Header {
+pub(crate) struct Header {
     id: Ulid,
     #[serde(default)]
     schema_version: Option<u32>,
@@ -1740,7 +1756,7 @@ fn read_header(bundle: &Path) -> Result<Header> {
 }
 
 /// Checks that the bundle on disk still holds `handle.id`.
-fn verify_header(handle: &GuideHandle) -> Result<Header> {
+pub(crate) fn verify_header(handle: &GuideHandle) -> Result<Header> {
     let header = read_header(&handle.path)?;
     if header.id != handle.id {
         return Err(LibraryError::IdMismatch {
