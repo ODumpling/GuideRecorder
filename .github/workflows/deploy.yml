@@ -1,0 +1,94 @@
+name: Deploy
+
+# After CI passes on main, build the web app, its migration image and the
+# export worker, push them to GHCR, and roll them out to gr.dufflebear.dev
+# (deploy/compose.yaml on the OVH VPS). See docs/web-deployment.md.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  REGISTRY: ghcr.io/odumpling
+
+jobs:
+  images:
+    name: Build images
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: guiderecorder-web, file: web/Dockerfile, target: runtime }
+          - { name: guiderecorder-web-build, file: web/Dockerfile, target: build }
+          - { name: guiderecorder-export-worker, file: web/worker/Dockerfile, target: "" }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SHA }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ env.SHA }}
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    name: Deploy to gr.dufflebear.dev
+    needs: images
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://gr.dufflebear.dev
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SHA }}
+          sparse-checkout: deploy
+      - name: SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+      - name: Copy compose file and Caddyfile
+        run: scp deploy/compose.yaml deploy/Caddyfile "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:/srv/guiderecorder/"
+      - name: Roll out
+        # The registry login only lasts for this job (GITHUB_TOKEN).
+        run: |
+          ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" bash -s <<EOF
+          set -euo pipefail
+          cd /srv/guiderecorder
+          sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$SHA/" .env
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          docker compose pull --quiet
+          docker compose up -d --wait --remove-orphans
+          docker image prune -f >/dev/null
+          docker compose ps
+          EOF
+      - name: Health check
+        run: curl -fsS --retry 10 --retry-delay 3 --retry-all-errors https://gr.dufflebear.dev/api/health

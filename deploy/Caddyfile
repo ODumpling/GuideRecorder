@@ -1,0 +1,55 @@
+# Behind Cloudflare (SSL mode Full (strict)) with its origin certificate.
+# APP_HOST, STORAGE_HOST and CLOUDFLARE_IPS come from compose.yaml.
+{
+	auto_https off
+	servers {
+		# The client address is CF-Connecting-IP, but only from Cloudflare.
+		trusted_proxies static {$CLOUDFLARE_IPS}
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+(origin) {
+	tls /certs/origin.pem /certs/origin.key
+	# Only Cloudflare connects; anything else is someone skipping it.
+	@direct not remote_ip {$CLOUDFLARE_IPS}
+	abort @direct
+}
+
+{$APP_HOST}:443 {
+	import origin
+	encode zstd gzip
+	reverse_proxy app:3000 {
+		# The app rate-limits on the first X-Forwarded-For address.
+		header_up X-Forwarded-For {client_ip}
+	}
+}
+
+# Presigned uploads from the web editor and image downloads.
+{$STORAGE_HOST}:443 {
+	import origin
+
+	@cors header Origin https://{$APP_HOST}
+	header @cors {
+		Access-Control-Allow-Origin https://{$APP_HOST}
+		Access-Control-Allow-Methods "GET, HEAD, PUT"
+		Access-Control-Allow-Headers {header.Access-Control-Request-Headers}
+		Access-Control-Expose-Headers ETag
+		Access-Control-Max-Age 3600
+		Vary Origin
+		defer
+	}
+	@preflight {
+		method OPTIONS
+		header Origin https://{$APP_HOST}
+	}
+	respond @preflight 204
+
+	reverse_proxy storage:9000 {
+		header_down -Access-Control-Allow-Origin
+		header_down -Access-Control-Allow-Methods
+		header_down -Access-Control-Allow-Headers
+		header_down -Access-Control-Expose-Headers
+		header_down -Access-Control-Allow-Credentials
+	}
+}

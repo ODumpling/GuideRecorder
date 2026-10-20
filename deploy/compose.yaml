@@ -1,0 +1,165 @@
+# gr.dufflebear.dev on the OVH VPS: the web app, Postgres, RustFS for images,
+# the export worker, the hourly retention job, nightly backups and Caddy in
+# front, behind Cloudflare. Images come from GHCR, built by
+# .github/workflows/deploy.yml, which copies this file and the Caddyfile to
+# /srv/guiderecorder and runs `docker compose up -d --wait`.
+#
+# /srv/guiderecorder/.env holds the secrets (made by bootstrap.sh) and
+# IMAGE_TAG (set by each deploy). See docs/web-deployment.md.
+name: guiderecorder
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://guiderecorder:${POSTGRES_PASSWORD:?}@postgres:5432/guiderecorder
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
+  BETTER_AUTH_URL: https://${APP_HOST:?}
+  # Presigned URLs point here, so it's the public storage host.
+  S3_ENDPOINT: https://${STORAGE_HOST:?}
+  S3_REGION: us-east-1
+  S3_BUCKET: guiderecorder
+  S3_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?}
+  S3_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?}
+  SCIM_TOKEN_SECRET: ${SCIM_TOKEN_SECRET:?}
+  JOBS_TOKEN: ${JOBS_TOKEN:?}
+  # Caddy, on the compose network. It sets X-Forwarded-For to the client.
+  TRUSTED_PROXIES: 172.16.0.0/12
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+  MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+  STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  EMAIL_FROM: ${EMAIL_FROM:-GuideRecorder <no-reply@guiderecorder.app>}
+
+services:
+  # TLS with the Cloudflare origin certificate in ./certs; only Cloudflare
+  # may connect (Caddyfile).
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    ports: ["443:443"]
+    environment:
+      APP_HOST: ${APP_HOST:?}
+      STORAGE_HOST: ${STORAGE_HOST:?}
+      # https://www.cloudflare.com/ips/
+      CLOUDFLARE_IPS: >-
+        173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22
+        141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20
+        197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13
+        104.24.0.0/14 172.64.0.0/13 131.0.72.0/22
+        2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32
+        2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+    depends_on: [app, storage]
+    logging: &logging { driver: json-file, options: { max-size: 50m, max-file: "5" } }
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: guiderecorder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: guiderecorder
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guiderecorder"]
+      interval: 10s
+      retries: 5
+    logging: *logging
+
+  # S3-compatible storage for images and exports, public at STORAGE_HOST.
+  storage:
+    image: rustfs/rustfs:1.0.3
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?}
+      RUSTFS_SECRET_KEY: ${STORAGE_SECRET_KEY:?}
+    volumes: [storage:/data]
+    logging: *logging
+
+  # Creates the bucket, then exits.
+  storage-setup:
+    image: amazon/aws-cli:2.38.2
+    environment:
+      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        until aws --endpoint-url http://storage:9000 s3api head-bucket --bucket guiderecorder 2>/dev/null ||
+        aws --endpoint-url http://storage:9000 s3 mb s3://guiderecorder; do sleep 1; done
+    depends_on: [storage]
+
+  # Applies migrations, then exits; the app waits for it.
+  migrate:
+    image: ghcr.io/odumpling/guiderecorder-web-build:${IMAGE_TAG:?}
+    environment: *app-env
+    command: ["pnpm", "-C", "web", "db:migrate"]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  app:
+    image: ghcr.io/odumpling/guiderecorder-web:${IMAGE_TAG:?}
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      storage-setup: { condition: service_completed_successfully }
+    logging: *logging
+
+  # PDF, DOCX, Markdown and HTML downloads. Reads and writes objects
+  # directly, so it uses the storage service rather than the public host.
+  export-worker:
+    image: ghcr.io/odumpling/guiderecorder-export-worker:${IMAGE_TAG:?}
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      S3_ENDPOINT: http://storage:9000
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      storage-setup: { condition: service_completed_successfully }
+    logging: *logging
+
+  # Hourly retention (web/src/lib/retention.ts).
+  jobs:
+    image: alpine:3
+    restart: unless-stopped
+    environment: { JOBS_TOKEN: "${JOBS_TOKEN:?}" }
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        apk add --no-cache curl >/dev/null &&
+        while true; do
+          sleep 3600;
+          curl -fsS -X POST -H "authorization: Bearer $$JOBS_TOKEN" http://app:3000/api/jobs/retention || echo "retention failed";
+        done
+    depends_on: [app]
+    logging: *logging
+
+  # Nightly pg_dump: 7 daily, 4 weekly, 6 monthly in ./backups.
+  backup:
+    image: prodrigestivill/postgres-backup-local:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: guiderecorder
+      POSTGRES_USER: guiderecorder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      HEALTHCHECK_PORT: 8080
+    volumes: [./backups:/backups]
+    depends_on: { postgres: { condition: service_healthy } }
+    logging: *logging
+
+volumes:
+  postgres:
+  storage:
+  caddy-data:
