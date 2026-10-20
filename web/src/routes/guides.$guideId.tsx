@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { ExportMenu } from "@/components/guides/ExportMenu";
 import { GuideView } from "@/components/guides/GuideView";
 import { ShareLinks } from "@/components/guides/ShareLinks";
 import { title } from "@/lib/title";
@@ -18,9 +19,9 @@ export const Route = createFileRoute("/guides/$guideId")({
 });
 
 function Page() {
-  const { workspaceId, revision, canEdit, shares } = Route.useLoaderData();
+  const { workspaceId, revision, folder, canEdit, exportFormats, shares } = Route.useLoaderData();
   return (
-    // Remount after a save so the form starts from the new revision.
+    // Remount for a new revision so the viewer starts afresh.
     <GuideView
       key={revision.id}
       revision={revision}
@@ -28,9 +29,10 @@ function Page() {
       assetUrl={(sha) => `/api/workspaces/${workspaceId}/assets/${sha}`}
       header={
         <>
-          <Link to="/dashboard" className="mr-auto text-sm text-muted-foreground hover:underline">
-            ← Guides
+          <Link to="/library" search={folder ? { folder } : {}} className="mr-auto text-sm text-muted-foreground hover:underline">
+            ← {folder ?? "Library"}
           </Link>
+          <ExportMenu guideId={revision.guideId} revisionId={revision.id} formats={exportFormats} />
           <ShareLinks guideId={revision.guideId} revisionId={revision.id} shares={shares} />
         </>
       }

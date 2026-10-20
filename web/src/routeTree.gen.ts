@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as LibraryRouteImport } from './routes/library'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
@@ -45,6 +46,11 @@ const DashboardRoute = DashboardRouteImport.update({
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LibraryRoute = LibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -158,6 +164,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
@@ -182,6 +189,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
@@ -207,6 +215,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
@@ -233,6 +242,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
@@ -257,6 +267,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
@@ -281,6 +292,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
@@ -306,6 +318,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
   DeviceRoute: typeof DeviceRoute
+  LibraryRoute: typeof LibraryRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   ApiHealthRoute: typeof ApiHealthRoute
@@ -348,6 +361,13 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/library': {
+      id: '/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -490,6 +510,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
   DeviceRoute: DeviceRoute,
+  LibraryRoute: LibraryRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   ApiHealthRoute: ApiHealthRoute,

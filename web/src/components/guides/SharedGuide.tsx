@@ -5,8 +5,7 @@ import { Button, Card, ErrorText, Input } from "../ui";
 import { GuideView } from "./GuideView";
 
 // The public page of a share link: the guide read-only, or a password
-// prompt, or why the link doesn't work. The guide renders with GuideView;
-// a richer viewer (#48) can replace it here, given the guide and assetUrl.
+// prompt, or why the link doesn't work. The guide renders with GuideView.
 
 type Result = Awaited<ReturnType<typeof getSharedGuide>>;
 
