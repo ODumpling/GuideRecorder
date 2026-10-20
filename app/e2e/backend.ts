@@ -938,6 +938,8 @@ export class Backend {
         this.manualSteps += 1;
         return null;
       }
+      case "resize_toolbar":
+        return null;
       case "recording_snapshot": {
         const id = String(args.id);
         if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");
