@@ -32,6 +32,8 @@ x-app-env: &app-env
   STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
   RESEND_API_KEY: ${RESEND_API_KEY:-}
   EMAIL_FROM: ${EMAIL_FROM:-GuideRecorder <no-reply@guiderecorder.app>}
+  # Staff console users, made on every deploy (web/scripts/staff.ts).
+  STAFF_EMAILS: ${STAFF_EMAILS:-hello@dufflebear.dev}
 
 services:
   # TLS with the Cloudflare origin certificate in ./certs; only Cloudflare
@@ -103,7 +105,8 @@ services:
   migrate:
     image: ghcr.io/odumpling/guiderecorder-web-build:${IMAGE_TAG:?}
     environment: *app-env
-    command: ["pnpm", "-C", "web", "db:migrate"]
+    # Then makes sure the STAFF_EMAILS users exist and are staff.
+    command: ["sh", "-c", "pnpm -C web db:migrate && pnpm -C web staff ensure"]
     depends_on: { postgres: { condition: service_healthy } }
 
   app:

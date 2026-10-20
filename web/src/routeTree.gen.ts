@@ -14,6 +14,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as DeviceRouteImport } from './routes/device'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
+import { Route as StaffRouteImport } from './routes/staff'
 import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppAuditRouteImport } from './routes/_app.audit'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
@@ -21,9 +22,11 @@ import { Route as AppLibraryRouteImport } from './routes/_app.library'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
+import { Route as StaffIndexRouteImport } from './routes/staff.index'
 import { Route as AppGuidesGuideIdRouteImport } from './routes/_app.guides.$guideId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiJobsRetentionRouteImport } from './routes/api/jobs/retention'
+import { Route as StaffUsersUserIdRouteImport } from './routes/staff.users.$userId'
 import { Route as AppGuidesGuideIdEditRouteImport } from './routes/_app.guides.$guideId_.edit'
 import { Route as AppGuidesGuideIdReviewRouteImport } from './routes/_app.guides.$guideId_.review'
 import { Route as ApiShareTokenAssetsSha256RouteImport } from './routes/api/share/$token/assets/$sha256'
@@ -64,6 +67,11 @@ const SignUpRoute = SignUpRouteImport.update({
   path: '/sign-up',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StaffRoute = StaffRouteImport.update({
+  id: '/staff',
+  path: '/staff',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppAdminRoute = AppAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -99,6 +107,11 @@ const STokenRoute = STokenRouteImport.update({
   path: '/s/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StaffIndexRoute = StaffIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => StaffRoute,
+} as any)
 const AppGuidesGuideIdRoute = AppGuidesGuideIdRouteImport.update({
   id: '/guides/$guideId',
   path: '/guides/$guideId',
@@ -113,6 +126,11 @@ const ApiJobsRetentionRoute = ApiJobsRetentionRouteImport.update({
   id: '/api/jobs/retention',
   path: '/api/jobs/retention',
   getParentRoute: () => rootRouteImport,
+} as any)
+const StaffUsersUserIdRoute = StaffUsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => StaffRoute,
 } as any)
 const AppGuidesGuideIdEditRoute = AppGuidesGuideIdEditRouteImport.update({
   id: '/guides/$guideId_/edit',
@@ -208,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
+  '/staff': typeof StaffRouteWithChildren
   '/admin': typeof AppAdminRoute
   '/audit': typeof AppAuditRoute
   '/dashboard': typeof AppDashboardRoute
@@ -215,9 +234,11 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff/': typeof StaffIndexRoute
   '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
+  '/staff/users/$userId': typeof StaffUsersUserIdRoute
   '/guides/$guideId/edit': typeof AppGuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -246,9 +267,11 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff': typeof StaffIndexRoute
   '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
+  '/staff/users/$userId': typeof StaffUsersUserIdRoute
   '/guides/$guideId/edit': typeof AppGuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -272,6 +295,7 @@ export interface FileRoutesById {
   '/device': typeof DeviceRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
+  '/staff': typeof StaffRouteWithChildren
   '/_app/admin': typeof AppAdminRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/dashboard': typeof AppDashboardRoute
@@ -279,9 +303,11 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/staff/': typeof StaffIndexRoute
   '/_app/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
+  '/staff/users/$userId': typeof StaffUsersUserIdRoute
   '/_app/guides/$guideId_/edit': typeof AppGuidesGuideIdEditRoute
   '/_app/guides/$guideId_/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -305,6 +331,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/sign-in'
     | '/sign-up'
+    | '/staff'
     | '/admin'
     | '/audit'
     | '/dashboard'
@@ -312,9 +339,11 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff/'
     | '/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
+    | '/staff/users/$userId'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
     | '/api/share/$token/assets/$sha256'
@@ -343,9 +372,11 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff'
     | '/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
+    | '/staff/users/$userId'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
     | '/api/share/$token/assets/$sha256'
@@ -368,6 +399,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/sign-in'
     | '/sign-up'
+    | '/staff'
     | '/_app/admin'
     | '/_app/audit'
     | '/_app/dashboard'
@@ -375,9 +407,11 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/invitations/$id'
     | '/s/$token'
+    | '/staff/'
     | '/_app/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
+    | '/staff/users/$userId'
     | '/_app/guides/$guideId_/edit'
     | '/_app/guides/$guideId_/review'
     | '/api/share/$token/assets/$sha256'
@@ -401,6 +435,7 @@ export interface RootRouteChildren {
   DeviceRoute: typeof DeviceRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
+  StaffRoute: typeof StaffRouteWithChildren
   ApiHealthRoute: typeof ApiHealthRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
   STokenRoute: typeof STokenRoute
@@ -458,6 +493,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/staff': {
+      id: '/staff'
+      path: '/staff'
+      fullPath: '/staff'
+      preLoaderRoute: typeof StaffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/admin': {
       id: '/_app/admin'
       path: '/admin'
@@ -507,6 +549,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof STokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/staff/': {
+      id: '/staff/'
+      path: '/'
+      fullPath: '/staff/'
+      preLoaderRoute: typeof StaffIndexRouteImport
+      parentRoute: typeof StaffRoute
+    }
     '/_app/guides/$guideId': {
       id: '/_app/guides/$guideId'
       path: '/guides/$guideId'
@@ -527,6 +576,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/jobs/retention'
       preLoaderRoute: typeof ApiJobsRetentionRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/staff/users/$userId': {
+      id: '/staff/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/staff/users/$userId'
+      preLoaderRoute: typeof StaffUsersUserIdRouteImport
+      parentRoute: typeof StaffRoute
     }
     '/_app/guides/$guideId_/edit': {
       id: '/_app/guides/$guideId_/edit'
@@ -658,12 +714,25 @@ const AppRouteChildren: AppRouteChildren = {
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
+interface StaffRouteChildren {
+  StaffIndexRoute: typeof StaffIndexRoute
+  StaffUsersUserIdRoute: typeof StaffUsersUserIdRoute
+}
+
+const StaffRouteChildren: StaffRouteChildren = {
+  StaffIndexRoute: StaffIndexRoute,
+  StaffUsersUserIdRoute: StaffUsersUserIdRoute,
+}
+
+const StaffRouteWithChildren = StaffRoute._addFileChildren(StaffRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   DeviceRoute: DeviceRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
+  StaffRoute: StaffRouteWithChildren,
   ApiHealthRoute: ApiHealthRoute,
   InvitationsIdRoute: InvitationsIdRoute,
   STokenRoute: STokenRoute,

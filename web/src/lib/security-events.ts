@@ -20,7 +20,10 @@ export type SecurityEventType =
   | "scim.connection_decommissioned"
   | "scim.request_blocked"
   | "rate_limit.exceeded"
-  | "retention.run";
+  | "retention.run"
+  | "staff.licence_issued"
+  | "staff.licence_revoked"
+  | "staff.guide_restored";
 
 export interface SecurityEvent {
   type: SecurityEventType;

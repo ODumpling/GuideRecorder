@@ -50,6 +50,13 @@
       "when": 1792488225793,
       "tag": "0006_guide_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792505312390,
+      "tag": "0007_staff",
+      "breakpoints": true
     }
   ]
 }

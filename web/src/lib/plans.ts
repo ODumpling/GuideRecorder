@@ -59,11 +59,27 @@ export const ENTITLEMENTS: Record<PlanName, Entitlements> = {
 };
 
 /** Subscription statuses that keep a plan's features on. */
-const ACTIVE = new Set(["active", "trialing", "past_due"]);
+export const ACTIVE = new Set(["active", "trialing", "past_due"]);
 
 export function planOf(subscriptions: { plan: string; status: string | null }[]): PlanName {
   const active = subscriptions.filter((s) => s.status && ACTIVE.has(s.status)).map((s) => s.plan);
   if (active.includes("enterprise")) return "enterprise";
   if (active.includes("pro")) return "pro";
   return "free";
+}
+
+/** A plan staff gave a workspace for a period (`licence_grant`). */
+export interface LicenceGrant {
+  plan: string;
+  seats: number | null;
+  startsAt: Date;
+  endsAt: Date;
+  revokedAt: Date | null;
+}
+
+export const grantIsCurrent = (g: LicenceGrant, now = new Date()) => !g.revokedAt && g.startsAt <= now && now < g.endsAt;
+
+/** Current grants as active subscriptions, for `planOf`. */
+export function grantSubscriptions(grants: LicenceGrant[], now = new Date()) {
+  return grants.filter((g) => grantIsCurrent(g, now)).map((g) => ({ plan: g.plan, status: "active", seats: g.seats }));
 }
