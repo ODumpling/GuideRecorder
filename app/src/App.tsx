@@ -21,6 +21,7 @@ import { SettingsDialog, type SettingsPage } from "@/components/settings/Setting
 import { SignInDialog } from "@/components/SignInDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { StepView } from "@/components/StepView";
+import { SyncStatus } from "@/components/SyncStatus";
 import { useImageDrop } from "@/components/useImageDrop";
 import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
@@ -87,7 +88,7 @@ function DocTitle() {
   );
 }
 
-function Toolbar({ onSettings }: { onSettings(): void }) {
+function Toolbar({ onSettings, onSyncSettings }: { onSettings(): void; onSyncSettings(): void }) {
   const doc = useEditor((s) => s.doc);
   const canUndo = useEditor((s) => s.undoStack.length > 0 && !s.doc?.readOnly);
   const canRedo = useEditor((s) => s.redoStack.length > 0 && !s.doc?.readOnly);
@@ -104,6 +105,7 @@ function Toolbar({ onSettings }: { onSettings(): void }) {
       )}
       {doc && <DocTitle />}
       <div className={doc ? "ml-auto flex items-center gap-1" : "flex shrink-0 items-center gap-1"}>
+        {!doc && <SyncStatus onSettings={onSyncSettings} />}
         <RecordingControls />
         {doc && <SaveIndicator />}
         {doc && (
@@ -251,7 +253,7 @@ export default function App() {
         {hasDoc ? <Outline /> : <LibraryNav onSyncSettings={() => openSettings("sync")} />}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar onSettings={() => openSettings()} />
+        <Toolbar onSettings={() => openSettings()} onSyncSettings={() => openSettings("sync")} />
         <RecordingBanner onPermissions={() => openSettings("permissions")} />
         <RecordingStrip />
         <UpdateBanner />

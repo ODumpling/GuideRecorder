@@ -41,6 +41,14 @@ test("signs in from the sidebar", async ({ page, backend }) => {
   await signedIn.getByRole("button", { name: "Done" }).click();
   await expect(signedIn).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^(Synced|Syncing)/ })).toBeVisible();
+
+  // The account menu shows who's signed in, and signs out.
+  const account = page.getByRole("button", { name: "Account menu" });
+  await expect(account).toContainText("Dana Ortiz");
+  await account.click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await expect(page.getByRole("button", { name: "Sign in to sync" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync now" })).toHaveCount(0);
 });
 
 test("closing the sign-in dialog cancels signing in; opening it again starts over", async ({ page, backend }) => {
