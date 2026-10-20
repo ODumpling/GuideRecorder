@@ -8,6 +8,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.env*.local
 
 # Tauri generated
 app/src-tauri/gen/

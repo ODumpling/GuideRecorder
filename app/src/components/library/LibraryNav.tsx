@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BookOpen, Camera, ChevronRight, Folder, FolderPlus, HardDrive, Target, TriangleAlert } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { BookOpen, Camera, ChevronRight, Folder, FolderPlus, Target, TriangleAlert } from "lucide-react";
 import { NavHeading, STATUS_COLORS } from "@/components/library/bits";
 import { askName, showFolderMenu } from "@/components/library/menus";
 import { droppedGuides, guidesAt, isGuideDrag } from "@/components/library/selection";
+import { SyncCard } from "@/components/library/SyncCard";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   buildTree,
@@ -13,7 +14,6 @@ import {
   localToday,
   type FolderNode,
 } from "@/editor/library";
-import { tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
 import { cn } from "@guiderecorder/ui/utils";
 
 /** Indent per folder level, in pixels. */
@@ -165,31 +165,8 @@ function FolderItems({
   });
 }
 
-/** Where the library is, at the bottom of the sidebar. */
-function LibraryPlace({ api }: { api: SettingsApi }) {
-  const [path, setPath] = useState<string | null>(null);
-  useEffect(() => {
-    api.libraryInfo().then(
-      (info) => setPath(info.path),
-      () => setPath(null),
-    );
-  }, [api]);
-  if (!path) return null;
-  return (
-    <div className="m-2 flex items-start gap-2 rounded-lg bg-sidebar-foreground/5 p-2.5 text-[11px] text-muted-foreground">
-      <HardDrive className="mt-px size-3.5 shrink-0" />
-      <span className="min-w-0">
-        <span className="block font-medium text-sidebar-foreground/80">Stored on this Mac</span>
-        <span className="block truncate" title={path}>
-          {path.replace(/^\/Users\/[^/]+/, "~")}
-        </span>
-      </span>
-    </div>
-  );
-}
-
 /** The library's sidebar: what to show in the grid (everything, a status, a folder or a tag). */
-export function LibraryNav({ api = tauriSettingsApi }: { api?: SettingsApi }) {
+export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
   const guides = useEditor((s) => s.guides);
   const folders = useEditor((s) => s.folders);
   const statusFilter = useEditor((s) => s.statusFilter);
@@ -316,7 +293,7 @@ export function LibraryNav({ api = tauriSettingsApi }: { api?: SettingsApi }) {
           </div>
         )}
       </div>
-      <LibraryPlace api={api} />
+      <SyncCard onSettings={onSyncSettings} />
     </nav>
   );
 }

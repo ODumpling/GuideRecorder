@@ -75,7 +75,8 @@ export function AuthForm({ mode, providers, next = "/library", error: initialErr
       <p className="mb-6 text-sm text-muted-foreground">
         {mode === "sign-in" ? "Welcome back to GuideRecorder." : "Share and sync your guides."}
       </p>
-      <form onSubmit={submit} className="grid gap-4">
+      {/* POST: a submit before hydration must not put the password in the URL. */}
+      <form method="post" onSubmit={submit} className="grid gap-4">
         {mode === "sign-up" && (
           <Field>
             Name

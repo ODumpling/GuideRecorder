@@ -4,6 +4,9 @@ import { tauriSyncApi, tauriSyncBackend } from "@/lib/ipc";
 import { createShareStore, type ShareStoreState } from "@/sync/share";
 import { createSyncStore, type SyncStoreState } from "@/sync/store";
 
+/** The web app to sign in to, from app/.env (app/.env.development in dev builds). */
+export const WEB_APP_URL = import.meta.env.VITE_WEB_APP_URL;
+
 /** The app's sync store. */
 export const syncStore = createSyncStore({
   api: tauriSyncApi,

@@ -76,6 +76,22 @@ file opens. PDF, Word and Markdown exports show numbered markers on the image
 with a numbered list of the hotspots underneath. Hotspots work on recorded
 steps too.
 
+## Sync with the web
+
+On Pro and Enterprise, guides sync with your workspace in the GuideRecorder
+web app, where your team can read, edit, review and share them. Click
+**Sign in to sync** at the bottom of the library's sidebar: your browser opens,
+you sign in there and approve the code the app shows, and the app is signed in
+(the session token is kept in the Keychain). Then pick the workspace and
+either sync the whole library or turn on single guides (right-click a guide →
+**Sync to Web**). The sidebar shows when it last synced; Settings › Sync has
+the rest, including signing out.
+
+Syncing runs every 30 seconds, when the window comes to the front and soon
+after you edit a guide. Blurred areas are burned into the screenshots that are
+uploaded. If a guide changed both here and on the web, the changes are merged;
+where they clash, you keep yours, the web's, or both.
+
 ## Privacy
 
 GuideRecorder is built to be safe to leave running:
@@ -83,7 +99,8 @@ GuideRecorder is built to be safe to leave running:
 - **Local-first.** Guides are ordinary folders on your disk (one
   `.guiderecorder` folder per guide, holding a `guide.json`, its images and
   a `.history/` folder of saved versions),
-  so they work with any backup or sync tool. Nothing is uploaded.
+  so they work with any backup or sync tool. Nothing is uploaded unless you
+  sign in to sync (below), and then only the guides you choose.
 - **Password fields are never recorded.** Keystrokes in secure fields are
   masked before they are stored.
 - **Excluded apps.** While an app on your exclusion list is in front, nothing
@@ -179,6 +196,22 @@ lose them on every rebuild. To avoid re-granting them each time, create a local
 signing identity once with `scripts/macos-signing.sh create` (see
 [docs/signing.md](docs/signing.md)).
 
+### The web app
+
+The web app is in `web/` (see [web/README.md](web/README.md)). In development
+it runs at `https://app.guiderecorder.dev:3000`, and development builds of the
+desktop app sign in to it. Set that up once:
+
+```sh
+scripts/dev-domain.sh setup    # trusts a local CA (mkcert), makes the certificate,
+                               # adds the hosts entry; asks for your password
+```
+
+Then start it with the "Web" process in [Solo](https://soloterm.com)
+(`solo.yml`), or by hand as in web/README.md. The address the app signs in to
+comes from `app/.env` (release builds: `https://app.guiderecorder.app`) and
+`app/.env.development`; override it in `app/.env.local`.
+
 ### Project layout
 
 ```
@@ -189,6 +222,8 @@ crates/
   guiderecorder-cli/       command line tool (binary: guiderecorder)
 app/                       desktop app: Tauri 2, React, TypeScript, Tailwind
   src-tauri/               the app's Rust side (guiderecorder-app)
+web/                       web app: TanStack Start, Better Auth, Drizzle, Postgres, S3
+packages/                  shared by app and web: guide schema, sync merge, UI
 fixtures/guides/           sample guides used by the tests
 docs/                      signing, releasing, capture smoke test, dependency licences
 ```
@@ -198,6 +233,7 @@ docs/                      signing, releasing, capture smoke test, dependency li
 ```sh
 cargo test --workspace                 # Rust, from the repo root
 cd app && pnpm test && pnpm e2e        # frontend unit and end-to-end tests
+pnpm --filter @guiderecorder/web test  # web app
 ```
 
 CI runs these on every pull request. To publish a release, see
