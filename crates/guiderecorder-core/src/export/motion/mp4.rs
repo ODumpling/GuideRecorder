@@ -379,6 +379,22 @@ mod imp {
                     )));
                 }
                 let com = hr.is_ok();
+                // The binaries delay-load these: without them (Windows N
+                // without the Media Feature Pack) the first call would end
+                // the process.
+                let missing = ["mfplat.dll", "mfreadwrite.dll"]
+                    .into_iter()
+                    .find(|dll| !system_library(dll));
+                if let Some(dll) = missing {
+                    if com {
+                        CoUninitialize();
+                    }
+                    return Err(MotionError::Unsupported(format!(
+                        "MP4 export needs Windows Media Foundation, which is not installed \
+                         ({dll} is missing); install the Media Feature Pack, or export a GIF \
+                         instead"
+                    )));
+                }
                 if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_FULL) {
                     if com {
                         CoUninitialize();
@@ -395,6 +411,15 @@ mod imp {
                 })
             }
         }
+    }
+
+    /// Whether `name` loads from the system folder. It stays loaded, which
+    /// the delay-loaded calls then use.
+    fn system_library(name: &str) -> bool {
+        use windows::core::HSTRING;
+        use windows::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+        // SAFETY: a NUL-terminated name; only System32 is searched.
+        unsafe { LoadLibraryExW(&HSTRING::from(name), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.is_ok()
     }
 
     impl Drop for Session {
