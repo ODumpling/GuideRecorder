@@ -97,11 +97,11 @@ export function ReviewPage(data: Data) {
         {!data.enabled ? (
           <p className="text-sm text-muted-foreground">Your plan doesn&rsquo;t include approvals.</p>
         ) : !data.gated ? (
-          <p className="text-sm text-muted-foreground">This guide&rsquo;s folder doesn&rsquo;t need approval: edits publish straight away.</p>
+          <p className="text-sm text-muted-foreground">This guide is unlocked: edits publish straight away.</p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Publishing needs {policy.requiredApprovals} {policy.requiredApprovals === 1 ? "approval" : "approvals"}
-            {data.approvers.length ? ` from ${data.approvers.map((a) => a.name).join(", ")}` : ""}
+            This guide is locked. Publishing needs {policy.requiredApprovals} {policy.requiredApprovals === 1 ? "approval" : "approvals"}
+            {data.approvers.length ? ` from its owners (${data.approvers.map((a) => a.name).join(", ")})` : ""}
             {policy.allowSelfApproval ? "" : "; authors can't approve their own changes"}
             {policy.resetOnNewRevision ? "; new edits reset approvals" : ""}.
           </p>

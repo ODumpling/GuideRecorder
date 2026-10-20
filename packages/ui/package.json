@@ -23,6 +23,7 @@
     "./shapes": "./src/annotations/Shapes.tsx",
     "./split": "./src/text/split.ts",
     "./step-view": "./src/StepView.tsx",
+    "./switch": "./src/switch.tsx",
     "./table": "./src/table.tsx",
     "./textarea": "./src/textarea.tsx",
     "./theme.css": "./src/theme.css",

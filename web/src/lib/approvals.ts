@@ -9,13 +9,15 @@ import { diffGuides } from "./diff";
 import { roles } from "./permissions";
 import {
   approvalProblem,
-  approverIds,
   authorsOf,
   bumpVersion,
+  canApproveGuide,
   evaluate,
   folderOf,
   gate,
   loadApprovals,
+  loadApprovers,
+  ownersOf,
   policyFor,
   reviewStates,
   toPolicy,
@@ -25,7 +27,7 @@ import {
 } from "./review";
 import { getGuide, lockWorkspace, nextSeq, notify, readsDrafts, revisions, type Actor } from "./sync";
 
-// The approval workflow (Enterprise). Editing a gated guide makes a draft
+// The approval workflow (Enterprise). Editing a locked guide makes a draft
 // head; submitting it opens a change request, which follows the head until
 // it's closed. Reviewers approve, reject, request changes or comment, on
 // the whole change or one item. When enough approvals count (`evaluate`),
@@ -42,7 +44,7 @@ const notFound = { status: 404, error: "Guide not found." } as const;
 const noPlan = { status: 402, error: "Your plan doesn't include approvals. Upgrade to use them." } as const;
 
 /** A guide the actor can see, locked for the rest of the transaction. */
-async function lockedGuide(tx: Database, organizationId: string, actor: Actor, guideId: string) {
+export async function lockedGuide(tx: Database, organizationId: string, actor: Actor, guideId: string) {
   await lockWorkspace(tx, organizationId);
   const [row] = await tx.select().from(guide).where(and(eq(guide.organizationId, organizationId), eq(guide.id, guideId)));
   if (!row?.headRevisionId || row.deletedAt) return null;
@@ -50,7 +52,16 @@ async function lockedGuide(tx: Database, organizationId: string, actor: Actor, g
   return row;
 }
 
-async function moved(tx: Database, organizationId: string, guideId: string) {
+/** The policy gating a guide (null: unlocked), with its owners. */
+async function gateOf(db: Database, organizationId: string, approvals: Awaited<ReturnType<typeof loadApprovals>>, row: typeof guide.$inferSelect) {
+  const owners = (await ownersOf(db, organizationId, [row.id])).get(row.id) ?? [];
+  return { policy: gate(approvals, row, owners), owners };
+}
+
+const notDecider = { status: 403, error: "Only the guide's owners can approve, reject or ask for changes." } as const;
+
+/** Moves a guide in the sync feed, so clients hear its review state changed. */
+export async function moved(tx: Database, organizationId: string, guideId: string) {
   const next = await nextSeq(tx);
   await tx.update(guide).set({ seq: next }).where(and(eq(guide.organizationId, organizationId), eq(guide.id, guideId)));
   await notify(tx, organizationId, next);
@@ -83,7 +94,9 @@ export async function submitForReview(
     if (!row) return notFound;
     const approvals = await loadApprovals(tx, organizationId);
     if (!approvals.enabled) return noPlan;
-    if (!gate(approvals, row)) return { status: 400, error: "This guide's folder doesn't need approval: edits publish straight away." } as const;
+    if (!(await gateOf(tx, organizationId, approvals, row)).policy) {
+      return { status: 400, error: "This guide is unlocked: edits publish straight away." } as const;
+    }
     if (revisionId !== row.headRevisionId) return { status: 409, error: "The guide changed since. Sync, then submit again." } as const;
     const [open] = await tx
       .select()
@@ -127,9 +140,10 @@ export const reviewRequest = z.object({
 export type ReviewRequest = z.infer<typeof reviewRequest>;
 
 /**
- * Records a review. Approving needs `guide:approve`, and publishes once
- * enough approvals count; rejecting closes the request. Commenting needs
- * only to see drafts (`guide:update`).
+ * Records a review. Approving, rejecting and asking for changes are for the
+ * guide's owners (`canApproveGuide`); approving publishes once enough
+ * approvals count, rejecting closes the request. Commenting needs only to
+ * see drafts (`guide:update`).
  */
 export async function reviewChange(
   db: Database,
@@ -139,7 +153,7 @@ export async function reviewChange(
   request: z.input<typeof reviewRequest>,
 ): Promise<{ status: 200; published: boolean; review: ReviewState } | ApprovalError> {
   const { verdict, revisionId, body, itemId } = reviewRequest.parse(request);
-  if (!can(actor, verdict === "comment" ? "update" : "approve")) return forbidden;
+  if (!can(actor, "update")) return forbidden;
   if (verdict === "requestChanges" && !body.trim()) return { status: 400, error: "Say what needs to change." };
   return db.transaction(async (tx) => {
     const [cr] = await tx
@@ -154,8 +168,8 @@ export async function reviewChange(
     if (current!.status !== "open") return { status: 409, error: "This change request is closed." } as const;
     const approvals = await loadApprovals(tx, organizationId);
     if (!approvals.enabled) return noPlan;
-    const policy = gate(approvals, row);
-    if (!policy && verdict !== "comment") return { status: 400, error: "This guide's folder no longer needs approval." } as const;
+    const { policy, owners } = await gateOf(tx, organizationId, approvals, row);
+    if (!policy && verdict !== "comment") return { status: 400, error: "This guide is unlocked now: edits publish straight away." } as const;
     if (verdict !== "comment" && revisionId !== current!.revisionId) {
       return { status: 409, error: "The change was updated since you opened it. Review the new version." } as const;
     }
@@ -163,10 +177,12 @@ export async function reviewChange(
     if (itemId && !head!.guide.items.some((i) => i.id === itemId)) return { status: 400, error: "No such step in this change." } as const;
 
     const authors = authorsOf(current!, head);
-    const approvers = await approverIds(tx, organizationId);
+    const canApprove = canApproveGuide(await loadApprovers(tx, organizationId), owners);
     if (verdict === "approve") {
-      const problem = approvalProblem(policy!, actor.userId, authors, (id) => approvers.has(id));
+      const problem = approvalProblem(policy!, actor.userId, authors, canApprove);
       if (problem) return { status: 403, error: problem } as const;
+    } else if (verdict !== "comment" && !canApprove(actor.userId)) {
+      return notDecider;
     }
 
     await tx.insert(review).values({
@@ -193,7 +209,7 @@ export async function reviewChange(
       await tx.update(changeRequest).set({ status: "rejected", closedBy: actor.userId, closedAt: new Date() }).where(eq(changeRequest.id, cr.id));
     } else if (verdict === "approve") {
       const reviews = await tx.select().from(review).where(eq(review.changeRequestId, cr.id));
-      if (evaluate(policy!, { revisionId: current!.revisionId, authors }, reviews, (id) => approvers.has(id)).satisfied) {
+      if (evaluate(policy!, { revisionId: current!.revisionId, authors }, reviews, canApprove).satisfied) {
         await publish(tx, organizationId, actor, row, current!, head!);
         published = true;
       }
@@ -250,7 +266,7 @@ async function publish(
   });
 }
 
-/** Withdraws an open change request: its author, or an approver. */
+/** Withdraws an open change request: its author, or one of the guide's owners. */
 export async function withdrawChange(
   db: Database,
   organizationId: string,
@@ -263,9 +279,10 @@ export async function withdrawChange(
       .from(changeRequest)
       .where(and(eq(changeRequest.organizationId, organizationId), eq(changeRequest.id, changeRequestId)));
     if (!cr) return { status: 404, error: "Change request not found." } as const;
-    if (cr.authorId !== actor.userId && !can(actor, "approve")) return forbidden;
     const row = await lockedGuide(tx, organizationId, actor, cr.guideId);
     if (!row) return notFound;
+    const owners = (await ownersOf(tx, organizationId, [row.id])).get(row.id) ?? [];
+    if (cr.authorId !== actor.userId && !canApproveGuide(await loadApprovers(tx, organizationId), owners)(actor.userId)) return forbidden;
     const [current] = await tx.select().from(changeRequest).where(eq(changeRequest.id, cr.id));
     if (current!.status !== "open") return { status: 409, error: "This change request is closed." } as const;
     await tx.update(changeRequest).set({ status: "withdrawn", closedBy: actor.userId, closedAt: new Date() }).where(eq(changeRequest.id, cr.id));
@@ -295,7 +312,7 @@ export async function getReview(db: Database, organizationId: string, actor: Act
   if (row.visibility !== "workspace" && row.ownerId !== actor.userId) return null;
 
   const approvals = await loadApprovals(db, organizationId);
-  const policy = gate(approvals, row);
+  const { policy, owners } = await gateOf(db, organizationId, approvals, row);
   const [cr] = await db
     .select()
     .from(changeRequest)
@@ -317,18 +334,19 @@ export async function getReview(db: Database, organizationId: string, actor: Act
         .where(eq(review.changeRequestId, cr.id))
         .orderBy(asc(review.createdAt))
     : [];
-  const approvers = await approverIds(db, organizationId);
+  const approvers = await loadApprovers(db, organizationId);
+  const canApprove = canApproveGuide(approvers, owners);
   const authors = cr ? authorsOf(cr, loaded.get(cr.revisionId)) : [];
-  const evaluation =
-    open && policy ? evaluate(policy, { revisionId: open.revisionId, authors }, reviewRows.map((r) => r.review), (id) => approvers.has(id)) : null;
+  const evaluation = open && policy ? evaluate(policy, { revisionId: open.revisionId, authors }, reviewRows.map((r) => r.review), canApprove) : null;
   const state = (await reviewStates(db, organizationId, [row], loaded)).get(guideId)!;
   const effective = policy ?? policyFor(approvals.policies, folderOf(row));
-  const eligible = approvers.size
+  const eligibleIds = [...(owners.length ? owners.filter((id) => approvers.editors.has(id)) : approvers.byRole)];
+  const eligible = eligibleIds.length
     ? await db
         .select({ id: user.id, name: user.name, email: user.email })
         .from(member)
         .innerJoin(user, eq(user.id, member.userId))
-        .where(and(eq(member.organizationId, organizationId), inArray(member.userId, [...approvers])))
+        .where(and(eq(member.organizationId, organizationId), inArray(member.userId, eligibleIds)))
     : [];
   const people = await namesOf(db, [cr?.authorId ?? null, cr?.closedBy ?? null]);
 
@@ -338,7 +356,7 @@ export async function getReview(db: Database, organizationId: string, actor: Act
     gated: policy !== null,
     state,
     policy: effective,
-    approvers: eligible.filter((u) => !effective.approverIds.length || effective.approverIds.includes(u.id)),
+    approvers: eligible,
     changeRequest: cr
       ? {
           id: cr.id,
@@ -366,12 +384,12 @@ export async function getReview(db: Database, organizationId: string, actor: Act
     diff: diffGuides(before, after),
     can: {
       submit: Boolean(policy && !open && can(actor, "update") && row.headRevisionId !== row.publishedRevisionId),
-      approve: Boolean(open && policy && !approvalProblem(policy, actor.userId, authors, (id) => approvers.has(id))),
-      reject: Boolean(open && policy && can(actor, "approve")),
+      approve: Boolean(open && policy && !approvalProblem(policy, actor.userId, authors, canApprove)),
+      reject: Boolean(open && policy && canApprove(actor.userId)),
       comment: Boolean(open),
-      withdraw: Boolean(open && (open.authorId === actor.userId || can(actor, "approve"))),
+      withdraw: Boolean(open && (open.authorId === actor.userId || canApprove(actor.userId))),
     },
-    approveProblem: open && policy ? approvalProblem(policy, actor.userId, authors, (id) => approvers.has(id)) : null,
+    approveProblem: open && policy ? approvalProblem(policy, actor.userId, authors, canApprove) : null,
   };
 }
 
@@ -415,7 +433,7 @@ export async function savePolicy(
   if (!parsed.success) return { status: 400, error: "Check the policy's fields." };
   const policy = parsed.data;
   if (!(await loadApprovals(db, organizationId)).enabled) return noPlan;
-  const approvers = await approverIds(db, organizationId);
+  const approvers = (await loadApprovers(db, organizationId)).byRole;
   if (policy.approverIds.some((id) => !approvers.has(id))) return { status: 400, error: "Approvers must be members whose role can approve." };
   if (policy.approverIds.length && policy.requiredApprovals > policy.approverIds.length) {
     return { status: 400, error: "More approvals are required than there are approvers." };

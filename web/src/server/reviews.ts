@@ -1,15 +1,12 @@
 import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { member, user } from "@/db/schema";
 import { checkAccess, type Permission } from "@/lib/access";
 import { deletePolicy, getReview, listPolicies, policyInput, reviewChange, reviewRequest, savePolicy, submitForReview, withdrawChange } from "@/lib/approvals";
 import { requestMeta } from "@/lib/audit";
 import { getSession } from "@/lib/auth";
-import { roles, type RoleName } from "@/lib/permissions";
 import { DEFAULT_POLICY } from "@/lib/review";
 
 /** The signed-in user in their active workspace, with `permission` on a plan with approvals. */
@@ -67,17 +64,7 @@ export const withdrawGuideChange = createServerFn({ method: "POST" })
 export const getApprovalSettings = createServerFn({ method: "GET" }).handler(async () => {
   const { workspaceId, actor } = await approvalsSession("/dashboard", { organization: ["update"] });
   if (!actor) return { available: false as const };
-  const members = await db()
-    .select({ id: user.id, name: user.name, email: user.email, role: member.role })
-    .from(member)
-    .innerJoin(user, eq(user.id, member.userId))
-    .where(eq(member.organizationId, workspaceId));
-  return {
-    available: true as const,
-    policies: await listPolicies(db(), workspaceId),
-    defaultPolicy: DEFAULT_POLICY,
-    approvers: members.filter((m) => m.role in roles && roles[m.role as RoleName].authorize({ guide: ["approve"] }).success),
-  };
+  return { available: true as const, policies: await listPolicies(db(), workspaceId), defaultPolicy: DEFAULT_POLICY };
 });
 
 export const saveApprovalPolicy = createServerFn({ method: "POST" })

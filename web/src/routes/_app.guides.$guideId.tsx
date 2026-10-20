@@ -1,26 +1,29 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { ExportMenu } from "@/components/guides/ExportMenu";
+import { GuideAccess } from "@/components/guides/GuideAccess";
 import { GuideView } from "@/components/guides/GuideView";
 import { ShareLinks } from "@/components/guides/ShareLinks";
 import { title } from "@/lib/title";
 import { getSyncedGuide } from "@/server/guides";
+import { getGuideAccess } from "@/server/ownership";
 import { getShareLinks } from "@/server/shares";
 
 export const Route = createFileRoute("/_app/guides/$guideId")({
   loader: async ({ params }) => {
-    const [guide, shares] = await Promise.all([
+    const [guide, shares, access] = await Promise.all([
       getSyncedGuide({ data: { guideId: params.guideId } }),
       getShareLinks({ data: { guideId: params.guideId } }),
+      getGuideAccess({ data: { guideId: params.guideId } }),
     ]);
-    return { ...guide, shares };
+    return { ...guide, shares, access };
   },
   head: ({ loaderData }) => title(loaderData?.revision.guide.title ?? "Guide"),
   component: Page,
 });
 
 function Page() {
-  const { workspaceId, revision, folder, canEdit, canReview, unpublished, exportFormats, shares } = Route.useLoaderData();
+  const { workspaceId, revision, folder, canEdit, canReview, unpublished, exportFormats, shares, access } = Route.useLoaderData();
   return (
     // Remount for a new revision so the viewer starts afresh.
     <GuideView
@@ -45,6 +48,7 @@ function Page() {
               </>
             ) : null}
           </nav>
+          {access ? <GuideAccess guideId={revision.guideId} access={access} /> : null}
           <ExportMenu guideId={revision.guideId} revisionId={revision.id} formats={exportFormats} />
           <ShareLinks guideId={revision.guideId} revisionId={revision.id} shares={shares} />
         </>

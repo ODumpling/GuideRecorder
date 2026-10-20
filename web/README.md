@@ -100,14 +100,16 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   has a head (the latest revision) and a published revision. Viewers (no
   `guide:update`) and unpinned share links (`publishedRevisionFor`) only
   see the published one. Ungated guides publish on every push. A guide is gated
-  when the workspace has `approvals` and its folder's nearest policy
-  (`approval_policy`, keyed by folder path, "" for the whole workspace;
-  default 1 approval, no self-approval, reset on new revisions) needs at
-  least one approval. Pushes to a gated guide only move the head, and the
+  when the workspace has `approvals` and the guide is locked (`guide.locked`;
+  new guides start unlocked). Its folder's nearest policy (`approval_policy`,
+  keyed by folder path, "" for the whole workspace; default 1 approval, no
+  self-approval, reset on new revisions) says how many approvals it needs
+  (at least 1, at most its number of owners), and its owners approve.
+  Pushes to a gated guide only move the head, and the
   server sets its `status`, `lastReviewed` and `version`, so neither the app
   nor the editor can publish it. Submitting opens a `change_request` that
-  follows the head while open; reviewers (`guide:approve`) approve, reject,
-  request changes or comment (`review`, optionally on one item by ULID) on
+  follows the head while open; the guide's owners approve, reject or
+  request changes, and anyone who can edit comments (`review`, optionally on one item by ULID) on
   `/guides/:id/review`, which diffs the head against the published revision
   item by item with old and new screenshots side by side. Once the policy's
   N of M approvals count and nobody's request for changes is outstanding,
@@ -117,6 +119,13 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   published (head is published). Review steps move the guide in the sync
   feed, which carries each guide's `review` state. A guide's folder is its
   library folder (`guide.folder`).
+- Guide ownership (`src/lib/ownership.ts`): a guide has one or more owners
+  (`guide_owner`); whoever first syncs it owns it. Owners must be members whose
+  role can edit guides (owners with the editor role approve their guides too);
+  a guide without owners falls back to roles with `guide:approve`. Owners and
+  workspace admins add and remove owners (a guide keeps one) and lock or
+  unlock the guide from its page. Locking needs `approvals`; unlocking
+  publishes the head and withdraws any open change request.
 - Audit log (Enterprise, `src/lib/audit.ts`): `audit_event` is append-only (a
   trigger refuses updates and deletes, except retention pruning) and
   hash-chained per workspace: each event hashes its fields (actor, action,

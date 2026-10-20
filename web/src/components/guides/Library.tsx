@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
-import { BookOpen, Camera, EllipsisVertical, FolderInput, LayoutGrid, List, Lock, Target, Trash2 } from "lucide-react";
+import { BookOpen, Camera, EllipsisVertical, EyeOff, FolderInput, LayoutGrid, List, Lock, Target, Trash2 } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@guiderecorder/ui/dialog";
 import {
@@ -206,12 +206,12 @@ function GuideCard({ guide: g, cover, actions }: { guide: LibraryGuide; cover: s
         </span>
         <span className="mt-2.5 flex items-center gap-1.5 px-0.5 pr-8 text-sm font-semibold tracking-tight">
           <span className="truncate">{g.title}</span>
-          {g.private ? <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="Private" /> : null}
+          <GuideFlags guide={g} />
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-2 px-0.5 text-xs text-muted-foreground">
           {g.status ? <StatusPill status={g.status} /> : null}
           <span className="truncate">{meta}</span>
-          {g.owner ? <Avatar name={g.owner} label={`Owner ${g.owner}`} className="ml-auto" /> : null}
+          <Owners guide={g} className="ml-auto" />
         </span>
       </Link>
       {actions ? <div className="absolute right-0 bottom-6">{actions}</div> : null}
@@ -233,7 +233,7 @@ function GuideRow({ guide: g, cover, actions }: { guide: LibraryGuide; cover: st
       <span className="flex min-w-0 flex-1 flex-col">
         <Link to="/guides/$guideId" params={{ guideId: g.id }} className="truncate text-sm font-semibold after:absolute after:inset-0">
           {g.title}
-          {g.private ? <Lock className="ml-1.5 inline size-3 text-muted-foreground" aria-label="Private" /> : null}
+          <GuideFlags guide={g} className="ml-1.5 inline-flex" />
         </Link>
         <span className="truncate text-xs text-muted-foreground">{g.summary || contents(g)}</span>
       </span>
@@ -245,9 +245,34 @@ function GuideRow({ guide: g, cover, actions }: { guide: LibraryGuide; cover: st
       >
         {g.review === "overdue" ? "Review overdue" : timeAgo(g.updatedAt)}
       </span>
-      <span className="w-5 shrink-0">{g.owner ? <Avatar name={g.owner} label={`Owner ${g.owner}`} /> : null}</span>
+      <span className="flex w-12 shrink-0 justify-end">
+        <Owners guide={g} />
+      </span>
       <span className="relative w-7 shrink-0">{actions}</span>
     </li>
+  );
+}
+
+/** Locked and private marks after a guide's title. */
+function GuideFlags({ guide: g, className }: { guide: LibraryGuide; className?: string }) {
+  return (
+    <span className={cn("flex shrink-0 items-center gap-1 text-muted-foreground [&_svg]:size-3", className)}>
+      {g.locked ? <Lock aria-label="Locked: changes need an owner's approval" /> : null}
+      {g.private ? <EyeOff aria-label="Private" /> : null}
+    </span>
+  );
+}
+
+/** A guide's owners as overlapping avatars; guide.json's free-text owner without any. */
+function Owners({ guide: g, className }: { guide: LibraryGuide; className?: string }) {
+  const names = g.owners.length ? g.owners : g.owner ? [g.owner] : [];
+  if (!names.length) return null;
+  return (
+    <span className={cn("flex -space-x-1.5", className)} title={`Owned by ${names.join(", ")}`}>
+      {names.slice(0, 3).map((n) => (
+        <Avatar key={n} name={n} label={`Owner ${n}`} className="ring-2 ring-background" />
+      ))}
+    </span>
   );
 }
 

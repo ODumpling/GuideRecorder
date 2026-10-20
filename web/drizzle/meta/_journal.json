@@ -43,6 +43,13 @@
       "when": 1792457825639,
       "tag": "0005_enterprise",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792488225793,
+      "tag": "0006_guide_owners",
+      "breakpoints": true
     }
   ]
 }

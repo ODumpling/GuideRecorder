@@ -87,8 +87,9 @@ describe("share links", () => {
     expect(other.status).toBe(404);
   });
 
-  it("shows only what's published when approvals gate the guide", async () => {
+  it("shows only what's published when the guide is locked", async () => {
     await db.update(subscription).set({ plan: "enterprise", seats: 10 });
+    await db.insert(guide).values({ organizationId: "org", id: fixture.id, locked: true });
     const draft = await pushed(fixture, null);
     const link = await created();
     expect((await open(link.token)).status).toBe(404);

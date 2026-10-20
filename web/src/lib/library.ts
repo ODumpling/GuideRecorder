@@ -1,7 +1,7 @@
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { GuideStatus } from "@guiderecorder/guide-schema";
 import type { Database } from "@/db";
-import { guide, revision, revisionAsset, user } from "@/db/schema";
+import { guide, guideOwner, member, revision, revisionAsset, user } from "@/db/schema";
 import { GUIDE_STATUSES } from "./library-search";
 import { roles } from "./permissions";
 import { prefixQuery } from "./search";
@@ -48,6 +48,10 @@ export interface LibraryGuide {
   source: string;
   /** Only its owner sees it. */
   private: boolean;
+  /** Edits wait for an owner's approval. */
+  locked: boolean;
+  /** The names of its owners who are still in the workspace. */
+  owners: string[];
 }
 
 export interface Facet {
@@ -122,6 +126,8 @@ export async function library(
       reviewIntervalMonths: sql<unknown>`${json}->'reviewIntervalMonths'`,
       createdAt: sql<string | null>`${json}->>'createdAt'`,
       steps: sql<number>`jsonb_array_length(jsonb_path_query_array(${json}, '$.items[*] ? (@.type == "step")'))`,
+      locked: guide.locked,
+      owners: sql<string[]>`array(select ${user.name} from ${guideOwner} join ${user} on ${user.id} = ${guideOwner.userId} join ${member} on ${member.userId} = ${guideOwner.userId} and ${member.organizationId} = ${guideOwner.organizationId} where ${guideOwner.organizationId} = ${guide.organizationId} and ${guideOwner.guideId} = ${guide.id} order by ${guideOwner.createdAt})`,
       cover: sql<string | null>`(select ${revisionAsset.sha256} from ${revisionAsset} where ${revisionAsset.revisionId} = ${revision.id} and ${revisionAsset.path} = jsonb_path_query_first(${json}, '$.items[*] ? (@.type == "step").image.full') #>> '{}')`,
     })
     .from(guide)
@@ -151,6 +157,8 @@ export async function library(
       updatedAt: r.updatedAt.toISOString(),
       source: r.source,
       private: r.visibility !== "workspace",
+      locked: r.locked,
+      owners: r.owners ?? [],
     };
   });
 

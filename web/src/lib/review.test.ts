@@ -4,6 +4,7 @@ import {
   DEFAULT_POLICY,
   approvalProblem,
   bumpVersion,
+  canApproveGuide,
   evaluate,
   folderOf,
   gate,
@@ -44,13 +45,31 @@ describe("policyFor", () => {
 
 describe("gate", () => {
   it("gates nothing without the approvals entitlement", () => {
-    expect(gate({ enabled: false, policies: [] }, {})).toBeNull();
+    expect(gate({ enabled: false, policies: [] }, { locked: true }, ["a"])).toBeNull();
   });
 
-  it("gates by the folder's policy; 0 approvals turns it off", () => {
-    const approvals = { enabled: true, policies: [policy({ folder: "Drafts", requiredApprovals: 0 })] };
-    expect(gate(approvals, {})).toBe(DEFAULT_POLICY);
-    expect(gate(approvals, { folder: "Drafts/Old" })).toBeNull();
+  it("gates only locked guides", () => {
+    const approvals = { enabled: true, policies: [] };
+    expect(gate(approvals, {}, ["a"])).toBeNull();
+    expect(gate(approvals, { locked: false }, ["a"])).toBeNull();
+    expect(gate(approvals, { locked: true }, ["a", "b"])).toEqual({ ...DEFAULT_POLICY, approverIds: ["a", "b"] });
+  });
+
+  it("takes the folder's rules, with the owners as approvers and 1 to as many approvals as owners", () => {
+    const approvals = {
+      enabled: true,
+      policies: [
+        policy({ folder: "Drafts", requiredApprovals: 0, allowSelfApproval: true }),
+        policy({ folder: "Legal", requiredApprovals: 3, approverIds: ["x"], resetOnNewRevision: false }),
+      ],
+    };
+    expect(gate(approvals, { locked: true, folder: "Drafts/Old" }, ["a"])).toMatchObject({ requiredApprovals: 1, allowSelfApproval: true });
+    expect(gate(approvals, { locked: true, folder: "Legal" }, ["a", "b"])).toMatchObject({
+      requiredApprovals: 2,
+      approverIds: ["a", "b"],
+      resetOnNewRevision: false,
+    });
+    expect(gate(approvals, { locked: true, folder: "Legal" }, [])).toMatchObject({ requiredApprovals: 1, approverIds: [] });
   });
 });
 
@@ -105,7 +124,7 @@ describe("approvalProblem", () => {
   it("says why someone may not approve", () => {
     const anyone = () => true;
     expect(approvalProblem(policy(), "a", [], () => false)).toMatch(/role/);
-    expect(approvalProblem(policy({ approverIds: ["b"] }), "a", [], anyone)).toMatch(/approver/);
+    expect(approvalProblem(policy({ approverIds: ["b"] }), "a", [], anyone)).toMatch(/owners/);
     expect(approvalProblem(policy(), "a", ["a"], anyone)).toMatch(/own/);
     expect(approvalProblem(policy(), "a", ["b"], anyone)).toBeNull();
   });
@@ -152,5 +171,18 @@ describe("withServerFields", () => {
   it("is what sameContent leaves aside", () => {
     expect(sameContent({ ...base, status: "draft" }, { ...base, status: "published", version: "2" })).toBe(true);
     expect(sameContent(base, { ...base, title: "Other" })).toBe(false);
+  });
+});
+
+describe("canApproveGuide", () => {
+  const approvers = { byRole: new Set(["alan"]), editors: new Set(["alan", "eve"]) };
+
+  it("lets a guide's owners who can edit approve", () => {
+    const can = canApproveGuide(approvers, ["eve", "gone"]);
+    expect(["alan", "eve", "gone"].filter(can)).toEqual(["eve"]);
+  });
+
+  it("falls back to roles with guide:approve without owners", () => {
+    expect(["alan", "eve"].filter(canApproveGuide(approvers, []))).toEqual(["alan"]);
   });
 });
