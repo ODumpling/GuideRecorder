@@ -19,7 +19,6 @@ if [ ! -f .env ]; then
   umask 077
   cat > .env <<EOF
 APP_HOST=gr.dufflebear.dev
-STORAGE_HOST=gr-storage.dufflebear.dev
 POSTGRES_PASSWORD=$(secret)
 BETTER_AUTH_SECRET=$(secret)
 SCIM_TOKEN_SECRET=$(secret)
@@ -45,4 +44,11 @@ chmod 600 certs/origin.key
 # reach Caddy (https://www.cloudflare.com/ips/).
 for net in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www.cloudflare.com/ips-v6); do
   sudo ufw route allow proto tcp from "$net" to any port 443 comment cloudflare >/dev/null
+done
+
+# Storage admin (S3 API 9000, console 9001) over Tailscale only. Log in with
+# `sudo tailscale up` once; the rules apply to whatever arrives on tailscale0.
+command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
+for port in 9000 9001; do
+  sudo ufw route allow in on tailscale0 proto tcp to any port "$port" comment tailscale-storage >/dev/null
 done

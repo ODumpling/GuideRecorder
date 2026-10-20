@@ -12,10 +12,10 @@ x-app-env: &app-env
   DATABASE_URL: postgres://guiderecorder:${POSTGRES_PASSWORD:?}@postgres:5432/guiderecorder
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
   BETTER_AUTH_URL: https://${APP_HOST:?}
-  # Presigned URLs point here, so it's the public storage host.
-  S3_ENDPOINT: https://${STORAGE_HOST:?}
+  # Presigned URLs point here: Caddy serves the bucket at /storage/*.
+  S3_ENDPOINT: https://${APP_HOST:?}
   S3_REGION: us-east-1
-  S3_BUCKET: guiderecorder
+  S3_BUCKET: storage
   S3_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY:?}
   S3_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY:?}
   SCIM_TOKEN_SECRET: ${SCIM_TOKEN_SECRET:?}
@@ -42,7 +42,6 @@ services:
     ports: ["443:443"]
     environment:
       APP_HOST: ${APP_HOST:?}
-      STORAGE_HOST: ${STORAGE_HOST:?}
       # https://www.cloudflare.com/ips/
       CLOUDFLARE_IPS: >-
         173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22
@@ -72,13 +71,17 @@ services:
       retries: 5
     logging: *logging
 
-  # S3-compatible storage for images and exports, public at STORAGE_HOST.
+  # S3-compatible storage for images and exports. The public only reaches
+  # signed /storage/* requests through Caddy; the S3 API (9000) and console
+  # (9001) are published for Tailscale only (ufw route rules, bootstrap.sh).
   storage:
     image: rustfs/rustfs:1.0.3
     restart: unless-stopped
+    ports: ["9000:9000", "9001:9001"]
     environment:
       RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?}
       RUSTFS_SECRET_KEY: ${STORAGE_SECRET_KEY:?}
+      RUSTFS_CONSOLE_ENABLE: "true"
     volumes: [storage:/data]
     logging: *logging
 
@@ -92,8 +95,8 @@ services:
     entrypoint: ["sh", "-c"]
     command:
       - >-
-        until aws --endpoint-url http://storage:9000 s3api head-bucket --bucket guiderecorder 2>/dev/null ||
-        aws --endpoint-url http://storage:9000 s3 mb s3://guiderecorder; do sleep 1; done
+        until aws --endpoint-url http://storage:9000 s3api head-bucket --bucket storage 2>/dev/null ||
+        aws --endpoint-url http://storage:9000 s3 mb s3://storage; do sleep 1; done
     depends_on: [storage]
 
   # Applies migrations, then exits; the app waits for it.

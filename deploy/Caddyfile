@@ -1,5 +1,5 @@
 # Behind Cloudflare (SSL mode Full (strict)) with its origin certificate.
-# APP_HOST, STORAGE_HOST and CLOUDFLARE_IPS come from compose.yaml.
+# APP_HOST and CLOUDFLARE_IPS come from compose.yaml.
 {
 	auto_https off
 	servers {
@@ -18,38 +18,19 @@
 
 {$APP_HOST}:443 {
 	import origin
-	encode zstd gzip
-	reverse_proxy app:3000 {
-		# The app rate-limits on the first X-Forwarded-For address.
-		header_up X-Forwarded-For {client_ip}
-	}
-}
 
-# Presigned uploads from the web editor and image downloads.
-{$STORAGE_HOST}:443 {
-	import origin
-
-	@cors header Origin https://{$APP_HOST}
-	header @cors {
-		Access-Control-Allow-Origin https://{$APP_HOST}
-		Access-Control-Allow-Methods "GET, HEAD, PUT"
-		Access-Control-Allow-Headers {header.Access-Control-Request-Headers}
-		Access-Control-Expose-Headers ETag
-		Access-Control-Max-Age 3600
-		Vary Origin
-		defer
+	# The bucket, path-style (S3_ENDPOINT is this host, S3_BUCKET "storage"):
+	# presigned uploads and image downloads. Passed through unchanged so the
+	# signatures match; unsigned requests get RustFS's 403.
+	handle /storage/* {
+		reverse_proxy storage:9000
 	}
-	@preflight {
-		method OPTIONS
-		header Origin https://{$APP_HOST}
-	}
-	respond @preflight 204
 
-	reverse_proxy storage:9000 {
-		header_down -Access-Control-Allow-Origin
-		header_down -Access-Control-Allow-Methods
-		header_down -Access-Control-Allow-Headers
-		header_down -Access-Control-Expose-Headers
-		header_down -Access-Control-Allow-Credentials
+	handle {
+		encode zstd gzip
+		reverse_proxy app:3000 {
+			# The app rate-limits on the first X-Forwarded-For address.
+			header_up X-Forwarded-For {client_ip}
+		}
 	}
 }
