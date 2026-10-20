@@ -14,6 +14,7 @@ import { ExportPreview } from "@/components/ExportPreview";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
+import { inspectorStore } from "@/editor/inspector";
 import {
   ASPECTS,
   baseName,
@@ -212,10 +213,13 @@ export function ExportDialog({
   const reviewText = unreviewedBlursText(unreviewed);
   const canExport = !!guideId && !!out && accentOk && secondsOk && !busy && (!reviewText || skipReview);
 
-  /** Closes the dialog on the first step with suggestions left. */
+  /** Closes the dialog on the privacy review of the first step with suggestions left. */
   const review = () => {
     const first = unreviewed.stepIds[0];
-    if (first) editorStore.getState().select(first);
+    if (first) {
+      editorStore.getState().select(first);
+      inspectorStore.getState().setTab("privacy");
+    }
     onOpenChange(false);
   };
 

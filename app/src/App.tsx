@@ -244,7 +244,7 @@ export default function App() {
           <main className="flex min-w-0 flex-1 overflow-y-auto">{hasDoc ? <StepView /> : <LibraryHome />}</main>
           {hasDoc && selected && (
             <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-background/40">
-              <Inspector />
+              <Inspector onPrivacySettings={() => openSettings("privacy")} />
             </aside>
           )}
         </div>

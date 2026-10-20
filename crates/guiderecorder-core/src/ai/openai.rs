@@ -633,6 +633,8 @@ mod tests {
                 rect: rect(1100.0, 550.0, 100.0, 25.0),
                 reason: "email address".into(),
                 source: SuggestionSource::Ai,
+                preview: None,
+                review: None,
             }]
         );
 

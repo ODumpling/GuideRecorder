@@ -833,11 +833,15 @@ async fn get_step_burns_in_on_device_suggestions() {
                         rect: on_device,
                         reason: "API key".into(),
                         source: SuggestionSource::OnDevice,
+                        preview: None,
+                        review: None,
                     },
                     RedactionSuggestion {
                         rect: ai,
                         reason: "name".into(),
                         source: SuggestionSource::Ai,
+                        preview: None,
+                        review: None,
                     },
                 ];
             }

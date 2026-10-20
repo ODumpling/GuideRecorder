@@ -253,6 +253,14 @@ describe("unreviewed blur suggestions", () => {
     expect(unreviewedBlurs(steps([0, 0]))).toEqual({ stepIds: [], steps: [], count: 0 });
   });
 
+  it("skips reviewed suggestions", () => {
+    const items = steps([2, 1]);
+    const [first, second] = items as Extract<Item, { type: "step" }>[];
+    first.aiState.redactionSuggestions![0].review = "kept";
+    second.aiState.redactionSuggestions![0].review = "blurred";
+    expect(unreviewedBlurs(items)).toEqual({ stepIds: ["S1"], steps: [1], count: 1 });
+  });
+
   it("words the warning", () => {
     expect(unreviewedBlursText({ steps: [], count: 0 })).toBeNull();
     expect(unreviewedBlursText({ steps: [3], count: 1 })).toBe(

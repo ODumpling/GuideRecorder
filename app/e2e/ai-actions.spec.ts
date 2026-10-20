@@ -93,7 +93,7 @@ test("a rewrite without a key says why", async ({ page, backend }) => {
   await expect(stepTitle(page)).toHaveText("Open Settings → API keys");
 });
 
-test("blur suggestions are accepted or rejected, undoably", async ({ page, backend }) => {
+test("blur suggestions are blurred or kept in the Privacy tab, undoably", async ({ page, backend }) => {
   backend.aiSuggestions[STEP_3] = [
     { rect: { x: 40, y: 30, width: 200, height: 40 }, reason: "an API key" },
     { rect: { x: 300, y: 200, width: 120, height: 30 }, reason: "an email address" },
@@ -101,25 +101,39 @@ test("blur suggestions are accepted or rejected, undoably", async ({ page, backe
   const blurs = () => stepIn(backend.lastSave(API_KEY), STEP_3).annotations.filter((a) => a.type === "blur");
   await outlineItem(page, STEP_3).click();
   await aiAction(page, "Regenerate");
+  const tab = page.getByRole("tab", { name: /Privacy/ });
+  await expect(tab).toHaveText("Privacy2");
+  await tab.click();
   const list = page.getByRole("list", { name: "Blur suggestions" });
   await expect(list.getByRole("listitem")).toHaveCount(2);
   await expect(page.locator("[data-suggestion]")).toHaveCount(2);
   await saved(page);
   const before = blurs().length;
 
-  await page.getByRole("button", { name: "Accept blur suggestion 1" }).click();
+  // Pointing at a finding highlights its area.
+  await list.getByRole("listitem").nth(1).hover();
+  await expect(page.locator('[data-suggestion="1"] rect').first()).toHaveAttribute("fill-opacity", "0.25");
+
+  await page.getByRole("button", { name: "Blur it, suggestion 1" }).click();
   await expect(list.getByRole("listitem")).toHaveCount(1);
-  await expect(list).toContainText("an email address");
+  await expect(list).toContainText("An email address");
+  await expect(tab).toHaveText("Privacy1");
   await saved(page);
   expect(blurs()).toHaveLength(before + 1);
   expect(blurs().at(-1)!.geometry).toEqual({ x: 40, y: 30, width: 200, height: 40 });
 
-  await page.getByRole("button", { name: "Reject blur suggestion 1" }).click();
+  await page.getByRole("button", { name: "Keep, suggestion 1" }).click();
   await expect(list).toHaveCount(0);
   await expect(page.locator("[data-suggestion]")).toHaveCount(0);
   await saved(page);
   expect(blurs()).toHaveLength(before + 1);
-  expect(stepIn(backend.lastSave(API_KEY), STEP_3).aiState.redactionSuggestions).toEqual([]);
+  expect(stepIn(backend.lastSave(API_KEY), STEP_3).aiState.redactionSuggestions!.map((s) => s.review)).toEqual([
+    "blurred",
+    "kept",
+  ]);
+  // The whole guide shows what was decided.
+  await expect(page.getByRole("list", { name: "All findings" })).toContainText("Step 3 · blurred");
+  await expect(page.getByRole("list", { name: "All findings" })).toContainText("Step 3 · kept");
 
   await undo(page);
   await expect(list.getByRole("listitem")).toHaveCount(1);

@@ -421,6 +421,11 @@ pub struct AiState {
     /// pass replaces the AI's own; on-device ones stay until reviewed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redaction_suggestions: Vec<RedactionSuggestion>,
+    /// Whether the step's screenshot was scanned for sensitive text on this
+    /// device ([`crate::redact`]), so the editor can say which steps were
+    /// not.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub scanned: bool,
 }
 
 /// A suggested blur region.
@@ -435,6 +440,33 @@ pub struct RedactionSuggestion {
     /// redaction.
     #[serde(default, skip_serializing_if = "is_default")]
     pub source: SuggestionSource,
+    /// A masked hint of the text found, e.g. `•••• 4417`, for the editor's
+    /// privacy review. Only as much as is safe to keep in `guide.json`
+    /// (which syncs): never the text itself. Absent for the AI's and for
+    /// kinds with nothing safe to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// What the user decided. Absent: not reviewed yet (pending), the only
+    /// state blurred into images that leave the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<SuggestionReview>,
+}
+
+impl RedactionSuggestion {
+    /// Not reviewed yet.
+    pub fn is_pending(&self) -> bool {
+        self.review.is_none()
+    }
+}
+
+/// The user's decision on a [`RedactionSuggestion`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SuggestionReview {
+    /// Accepted: a blur annotation now covers it.
+    Blurred,
+    /// Left as it is.
+    Kept,
 }
 
 /// Where a [`RedactionSuggestion`] came from.
@@ -717,6 +749,8 @@ mod tests {
                     },
                     reason: "email address".into(),
                     source: SuggestionSource::Ai,
+                    preview: None,
+                    review: None,
                 },
                 RedactionSuggestion {
                     rect: Rect {
@@ -727,8 +761,11 @@ mod tests {
                     },
                     reason: "card number".into(),
                     source: SuggestionSource::OnDevice,
+                    preview: Some("•••• 4417".into()),
+                    review: Some(SuggestionReview::Kept),
                 },
             ],
+            scanned: true,
         };
         let json = serde_json::to_value(&guide).unwrap();
         // The AI's suggestions are written as before, without a source.
@@ -744,8 +781,11 @@ mod tests {
                 }, {
                     "rect": { "x": 5.0, "y": 6.0, "width": 7.0, "height": 8.0 },
                     "reason": "card number",
-                    "source": "onDevice"
-                }]
+                    "source": "onDevice",
+                    "preview": "•••• 4417",
+                    "review": "kept"
+                }],
+                "scanned": true
             })
         );
         assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);

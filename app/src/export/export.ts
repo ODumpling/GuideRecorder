@@ -285,7 +285,7 @@ export function unreviewedBlurs(items: Item[]): { stepIds: string[]; steps: numb
   items
     .filter((item): item is Step => item.type === "step")
     .forEach((step, i) => {
-      const n = step.aiState.redactionSuggestions?.length ?? 0;
+      const n = step.aiState.redactionSuggestions?.filter((s) => !s.review).length ?? 0;
       if (!n) return;
       unreviewed.stepIds.push(step.id);
       unreviewed.steps.push(i + 1);
