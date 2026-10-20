@@ -91,6 +91,7 @@
     "allow-sync-sign-in-start",
     "allow-sync-sign-in-poll",
     "allow-sync-sign-out",
+    "allow-sync-open-web",
     "allow-sync-request",
     "allow-sync-load-state",
     "allow-sync-save-state",
