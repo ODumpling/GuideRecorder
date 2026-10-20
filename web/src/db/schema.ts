@@ -265,3 +265,45 @@ export const revisionAsset = pgTable(
     foreignKey({ columns: [t.organizationId, t.sha256], foreignColumns: [asset.organizationId, asset.sha256] }),
   ],
 );
+
+/**
+ * A public link to a guide for people outside the workspace: `/s/<token>`.
+ * Shows a pinned revision, or the guide's latest published one when
+ * `revisionId` is null. Revoked links stay, with their view counts.
+ */
+export const shareLink = pgTable(
+  "share_link",
+  {
+    id: text("id").primaryKey(),
+    /** Random and URL-safe; the link is the credential. */
+    token: text("token").notNull().unique(),
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    revisionId: text("revision_id").references(() => revision.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at"),
+    /** Better Auth's scrypt hash; null if anyone with the link may view. */
+    passwordHash: text("password_hash"),
+    allowDownload: boolean("allow_download").notNull().default(false),
+    views: integer("views").notNull().default(0),
+    lastViewedAt: timestamp("last_viewed_at"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.organizationId, t.guideId], foreignColumns: [guide.organizationId, guide.id] }).onDelete("cascade"),
+    index("share_link_guide_idx").on(t.organizationId, t.guideId),
+  ],
+);
+
+/** Settings a workspace's admins change. Workspaces without a row have the defaults. */
+export const workspaceSettings = pgTable("workspace_settings", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  /** `anyone`: share links work for anyone who has one; `password`: only with a password; `off`: not at all. */
+  shareLinks: text("share_links").notNull().default("anyone"),
+  /** The longest a share link may last, in days; null for no limit. */
+  shareLinkMaxDays: integer("share_link_max_days"),
+  updatedAt: updatedAt(),
+});

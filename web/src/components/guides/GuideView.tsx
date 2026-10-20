@@ -1,23 +1,26 @@
 import { Link, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Guide } from "@guiderecorder/guide-schema";
 import type { Revision } from "@guiderecorder/sync";
 import { saveSyncedGuide } from "@/server/guides";
 import { Button, Card, ErrorText, Input } from "../ui";
 
 // A synced guide on the web: read it, or edit its text. Edits become a new
-// revision the desktop app pulls and merges.
+// revision the desktop app pulls and merges. Share links show it read-only.
 
 type Item = { id: string; type: "step" | "section" | "note"; title?: string; description?: string; body?: string; image?: StepImage };
 type StepImage = { full: string; crop?: string; show?: "crop" | "full" };
 
 interface Props {
-  workspaceId: string;
-  revision: Revision;
+  revision: Pick<Revision, "id" | "guideId" | "guide" | "assets" | "source" | "createdAt">;
+  /** Where to load an image from, by its SHA-256. */
+  assetUrl: (sha256: string) => string;
   canEdit: boolean;
+  /** Shown above the guide, e.g. the back link or the share links. */
+  header?: ReactNode;
 }
 
-export function GuideView({ workspaceId, revision, canEdit }: Props) {
+export function GuideView({ revision, assetUrl, canEdit, header }: Props) {
   const router = useRouter();
   const [draft, setDraft] = useState<Guide | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +31,7 @@ export function GuideView({ workspaceId, revision, canEdit }: Props) {
   const imageUrl = (image: StepImage) => {
     const path = image.show === "full" || !image.crop ? image.full : image.crop;
     const sha = revision.assets[path];
-    return sha ? `/api/workspaces/${workspaceId}/assets/${sha}` : null;
+    return sha ? assetUrl(sha) : null;
   };
 
   const setField = (field: "title" | "intro", value: string) => setDraft({ ...guide, [field]: value });
@@ -53,10 +56,8 @@ export function GuideView({ workspaceId, revision, canEdit }: Props) {
 
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-6 p-6">
-      <header className="flex items-center justify-between gap-4">
-        <Link to="/dashboard" className="text-sm text-muted-foreground hover:underline">
-          ← Guides
-        </Link>
+      <header className="flex items-center justify-between gap-4 empty:hidden">
+        {header}
         {canEdit ? (
           editing ? (
             <span className="flex gap-2">

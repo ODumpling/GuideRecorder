@@ -15,6 +15,13 @@
       "when": 1792439071907,
       "tag": "0001_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792443592837,
+      "tag": "0003_share_links",
+      "breakpoints": true
     }
   ]
 }

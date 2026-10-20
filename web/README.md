@@ -1,8 +1,8 @@
 # GuideRecorder Web
 
 The web app for Pro and Enterprise workspaces: accounts, workspaces and
-roles, billing, image storage for synced guides, and the web editor. Later
-phases add the cloud library, sharing, approvals and audit.
+roles, billing, image storage for synced guides, the web editor, and share
+links. Later phases add the cloud library, approvals and audit.
 
 TanStack Start (Vite, file routes in `src/routes`, server functions in
 `src/server`), Better Auth (email/password, magic link, Google, Microsoft,
@@ -55,6 +55,15 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   choose which to keep. Text the user writes is marked edited, so the
   app's AI passes leave it. Needs the `guide:update` permission and a plan
   with `webEditor`.
+- Share links (`src/lib/sharing.ts`) show a guide to anyone with the link at
+  `/s/<token>`: a pinned revision or the latest published one (the head,
+  until approvals publish), optionally with an expiry, a password (scrypt
+  hash; a correct one sets a signed cookie for 12 hours) and download
+  allowed. The page is `noindex`, rate limited per address (in memory, per
+  process), and serves only the guide and its images, through the token.
+  Views are counted per link. On Enterprise, admins can require passwords,
+  cap how long links last, or turn links off (`workspace_settings`); this
+  applies to existing links too.
 - The desktop app signs in with device authorization: it shows a code, the
   user approves it at `/device`, and the app calls the API with the session
   token as a bearer token.
@@ -72,9 +81,14 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 | `GET` | `/api/workspaces/:id/sync/events` | Server-sent `change` events when a guide changes |
 | `GET` / `DELETE` | `/api/workspaces/:id/sync/guides/:guideId` | The head revision / move to the trash |
 | `POST` | `/api/workspaces/:id/sync/guides/:guideId/restore` | Take out of the trash |
-
-API calls take the session cookie or `Authorization: Bearer <token>`.
+| `GET` | `/api/workspaces/:id/shares?guideId=<id>` | `{ links: [{ id, url, revisionId, expiresAt, hasPassword, allowDownload, views, lastViewedAt, state }], settings }` |
+| `POST` | `/api/workspaces/:id/shares` | `{ guideId, revisionId?, expiresAt?, password?, allowDownload? }` → `{ link }`; `revisionId` null shares the latest published revision |
+| `DELETE` | `/api/workspaces/:id/shares/:shareId` | Revoke a link |
+| `GET` | `/api/share/:token/assets/:sha256` | Public: an image of the shared revision (password cookie if the link has one) |
 | `GET` | `/api/health` | Database check |
+
+API calls take the session cookie or `Authorization: Bearer <token>`; the
+share API needs the `sharing` entitlement and the `guide: share` permission.
 
 ## Tests
 
