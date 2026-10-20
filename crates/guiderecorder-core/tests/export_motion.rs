@@ -3,7 +3,7 @@
 //! Frames are checked by decoding the GIF: size, total duration (title
 //! card, section cards and steps) and that a step's close-up differs from
 //! its whole-screenshot frame. The MP4 is checked for its container boxes
-//! (macOS only; elsewhere it must report that it is unsupported).
+//! (macOS and Windows; elsewhere it must report that it is unsupported).
 
 mod support;
 
@@ -243,7 +243,7 @@ fn annotation_guides_export_without_a_click() {
     assert!(!decode_gif(&out).is_empty());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[test]
 fn mp4_is_an_mpeg4_movie() {
     let fixtures = Fixtures::new();
@@ -276,7 +276,7 @@ fn mp4_is_an_mpeg4_movie() {
     .unwrap();
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[test]
 fn mp4_is_unsupported_elsewhere() {
     let fixtures = Fixtures::new();

@@ -2395,6 +2395,7 @@ dependencies = [
  "typst-pdf",
  "typst-render",
  "ulid",
+ "windows",
  "zip 8.6.0",
 ]
 

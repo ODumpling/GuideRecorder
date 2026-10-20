@@ -125,7 +125,7 @@ enum Command {
     /// write into the `--out` folder (`guide.md` plus `images/`, or
     /// `guide.html`; a walkthrough is also one `guide.html`); the other
     /// formats write the `--out` file. Image problems
-    /// become placeholders and warnings, not errors. MP4 needs macOS.
+    /// become placeholders and warnings, not errors. MP4 needs macOS or Windows.
     Export(ExportArgs),
 }
 
