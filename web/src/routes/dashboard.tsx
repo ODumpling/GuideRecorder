@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ApprovalPolicies } from "@/components/dashboard/ApprovalPolicies";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
@@ -8,11 +9,12 @@ import { Card } from "@/components/ui";
 import { title } from "@/lib/title";
 import { getDashboard } from "@/server/dashboard";
 import { getSyncedGuides } from "@/server/guides";
+import { getApprovalSettings } from "@/server/reviews";
 
 export const Route = createFileRoute("/dashboard")({
   loader: async () => {
-    const [dashboard, guides] = await Promise.all([getDashboard(), getSyncedGuides()]);
-    return { ...dashboard, guides };
+    const [dashboard, guides, approvals] = await Promise.all([getDashboard(), getSyncedGuides(), getApprovalSettings()]);
+    return { ...dashboard, guides, approvals };
   },
   head: () => title("Dashboard"),
   component: Dashboard,
@@ -27,7 +29,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, workspaces, active, billingEnabled, can, guides } = Route.useLoaderData();
+  const { user, workspaces, active, billingEnabled, can, guides, approvals } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -37,6 +39,11 @@ function Dashboard() {
           <WorkspaceSwitcher workspaces={workspaces} activeId={active?.id ?? null} />
         </div>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          {can.readAudit ? (
+            <Link to="/audit" className="hover:underline">
+              Audit log
+            </Link>
+          ) : null}
           {user.email}
           <SignOutButton />
         </div>
@@ -70,6 +77,7 @@ function Dashboard() {
             </dl>
           </Card>
           {guides.available ? <SyncedGuides {...guides} /> : null}
+          {approvals.available ? <ApprovalPolicies {...approvals} /> : null}
           <Members
             workspaceId={active.id}
             currentUserId={user.id}

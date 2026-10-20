@@ -41,4 +41,21 @@ describe("checkAccess", () => {
     expect(await checkAccess(db, "owner", "org", { guide: ["create"] }, "sync")).toMatchObject({ ok: true });
     expect(await checkAccess(db, "owner", "org", { audit: ["read"] }, "audit")).toMatchObject({ ok: false, status: 402 });
   });
+
+  it("gates approving and the audit log on the role and on Enterprise", async () => {
+    const now = new Date();
+    for (const role of ["approver", "editor"]) {
+      await db.insert(user).values({ id: role, name: role, email: `${role}@example.com` });
+      await db.insert(member).values({ id: `m-${role}`, organizationId: "org", userId: role, role, createdAt: now });
+    }
+    const approve = { guide: ["approve" as const] };
+    const audit = { audit: ["read" as const] };
+    expect(await checkAccess(db, "approver", "org", approve, "approvals")).toMatchObject({ ok: false, status: 402 });
+    await db.insert(subscription).values({ id: "s", plan: "enterprise", referenceId: "org", status: "active" });
+    expect(await checkAccess(db, "approver", "org", approve, "approvals")).toMatchObject({ ok: true });
+    expect(await checkAccess(db, "editor", "org", approve, "approvals")).toMatchObject({ ok: false, status: 403 });
+    expect(await checkAccess(db, "owner", "org", audit, "audit")).toMatchObject({ ok: true });
+    expect(await checkAccess(db, "approver", "org", audit, "audit")).toMatchObject({ ok: false, status: 403 });
+    expect(await checkAccess(db, "viewer", "org", audit, "audit")).toMatchObject({ ok: false, status: 403 });
+  });
 });

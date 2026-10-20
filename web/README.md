@@ -55,6 +55,39 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   choose which to keep. Text the user writes is marked edited, so the
   app's AI passes leave it. Needs the `guide:update` permission and a plan
   with `webEditor`.
+- Approvals (Enterprise, `src/lib/review.ts`, `src/lib/approvals.ts`): a guide
+  has a head (the latest revision) and a published revision. Viewers (no
+  `guide:update`), and later share links (`publishedRevisionFor`), only see
+  the published one. Ungated guides publish on every push. A guide is gated
+  when the workspace has `approvals` and its folder's nearest policy
+  (`approval_policy`, keyed by folder path, "" for the whole workspace;
+  default 1 approval, no self-approval, reset on new revisions) needs at
+  least one approval. Pushes to a gated guide only move the head, and the
+  server sets its `status`, `lastReviewed` and `version`, so neither the app
+  nor the editor can publish it. Submitting opens a `change_request` that
+  follows the head while open; reviewers (`guide:approve`) approve, reject,
+  request changes or comment (`review`, optionally on one item by ULID) on
+  `/guides/:id/review`, which diffs the head against the published revision
+  item by item with old and new screenshots side by side. Once the policy's
+  N of M approvals count and nobody's request for changes is outstanding,
+  the server publishes: a new revision with `status: published`, today's
+  `lastReviewed` and the next `version`. Status maps onto `GuideStatus`:
+  draft, inReview (open request), needsUpdate (changes requested),
+  published (head is published). Review steps move the guide in the sync
+  feed, which carries each guide's `review` state. Folders come with the web
+  library (`guide.folder`); until then every guide is unfiled and follows
+  the workspace policy.
+- Audit log (Enterprise, `src/lib/audit.ts`): `audit_event` is append-only (a
+  trigger refuses updates and deletes, except retention pruning) and
+  hash-chained per workspace: each event hashes its fields (actor, action,
+  target, before/after state hashes, IP, user agent, time, metadata) and the
+  previous event's hash. Sign-ins, membership, role and invitation changes,
+  billing webhooks, guide create/edit/delete/restore/publish, reviews,
+  policies, audit exports and retention changes are logged; `share.*` and
+  `guide.export` are reserved for share links and exports. `/audit` filters
+  the log, checks the chain, exports CSV or JSON and sets retention (30 to
+  3650 days, or forever); pruning records where the chain now starts.
+  Reading needs `audit:read` and the `audit` entitlement.
 - The desktop app signs in with device authorization: it shows a code, the
   user approves it at `/device`, and the app calls the API with the session
   token as a bearer token.
@@ -72,6 +105,8 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 | `GET` | `/api/workspaces/:id/sync/events` | Server-sent `change` events when a guide changes |
 | `GET` / `DELETE` | `/api/workspaces/:id/sync/guides/:guideId` | The head revision / move to the trash |
 | `POST` | `/api/workspaces/:id/sync/guides/:guideId/restore` | Take out of the trash |
+| `GET` / `POST` | `/api/workspaces/:id/sync/guides/:guideId/review` | `{ review }`: where the guide stands in review / submit `{ revisionId, note }` for review (Enterprise) |
+| `GET` | `/api/workspaces/:id/audit/export?format=csv\|json&action=&actorId=&targetId=&from=&to=` | The audit log (`audit:read`, Enterprise) |
 
 API calls take the session cookie or `Authorization: Bearer <token>`.
 | `GET` | `/api/health` | Database check |

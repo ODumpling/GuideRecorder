@@ -12,5 +12,8 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
     environment: "node",
+    // Each test migrates a fresh PGlite, which is slow on a busy machine.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

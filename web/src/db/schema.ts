@@ -265,3 +265,127 @@ export const revisionAsset = pgTable(
     foreignKey({ columns: [t.organizationId, t.sha256], foreignColumns: [asset.organizationId, asset.sha256] }),
   ],
 );
+
+/**
+ * Who must approve edits to the guides in a folder before they're published
+ * (Enterprise). `folder` is a library folder path; "" is the whole workspace.
+ * A guide follows its folder's nearest policy; with none, `DEFAULT_POLICY`
+ * in `lib/approvals.ts` applies. `requiredApprovals` 0 turns approvals off.
+ */
+export const approvalPolicy = pgTable(
+  "approval_policy",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    folder: text("folder").notNull().default(""),
+    /** N of M: approvals needed to publish. */
+    requiredApprovals: integer("required_approvals").notNull().default(1),
+    /** The M who may approve; empty: anyone with `guide:approve`. */
+    approverIds: text("approver_ids").array().notNull().default(sql`'{}'::text[]`),
+    /** Whether whoever submitted or last edited the change may approve it. */
+    allowSelfApproval: boolean("allow_self_approval").notNull().default(false),
+    /** Approvals given before a new revision stop counting. */
+    resetOnNewRevision: boolean("reset_on_new_revision").notNull().default(true),
+    updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.folder] })],
+);
+
+/**
+ * A request to publish a guide's draft. While open it follows the guide's
+ * head: `revisionId` is the revision under review, `baseRevisionId` the
+ * published one it changes (null for a guide never published).
+ */
+export const changeRequest = pgTable(
+  "change_request",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => revision.id, { onDelete: "cascade" }),
+    baseRevisionId: text("base_revision_id"),
+    /** `open`, `approved`, `rejected` or `withdrawn`. */
+    status: text("status").notNull().default("open"),
+    authorId: text("author_id").references(() => user.id, { onDelete: "set null" }),
+    note: text("note").notNull().default(""),
+    /** The revision its approval published. */
+    publishedRevisionId: text("published_revision_id"),
+    closedBy: text("closed_by").references(() => user.id, { onDelete: "set null" }),
+    closedAt: timestamp("closed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.organizationId, t.guideId], foreignColumns: [guide.organizationId, guide.id] }).onDelete("cascade"),
+    index("change_request_guide_idx").on(t.organizationId, t.guideId),
+    // One open request per guide.
+    uniqueIndex("change_request_open_idx").on(t.organizationId, t.guideId).where(sql`status = 'open'`),
+  ],
+);
+
+/** A reviewer's verdict on a change request, or a comment; either may be on one item (by ULID). */
+export const review = pgTable(
+  "review",
+  {
+    id: text("id").primaryKey(),
+    changeRequestId: text("change_request_id")
+      .notNull()
+      .references(() => changeRequest.id, { onDelete: "cascade" }),
+    reviewerId: text("reviewer_id").references(() => user.id, { onDelete: "set null" }),
+    /** The revision under review when it was given. */
+    revisionId: text("revision_id").notNull(),
+    /** `approve`, `reject`, `requestChanges` or `comment`. */
+    verdict: text("verdict").notNull(),
+    body: text("body").notNull().default(""),
+    itemId: text("item_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("review_change_request_idx").on(t.changeRequestId)],
+);
+
+/**
+ * The audit log: append-only (a trigger refuses updates, and deletes other
+ * than retention pruning) and hash-chained per workspace, so a changed or
+ * missing event shows (`lib/audit.ts`). No foreign keys: events outlive
+ * what they name.
+ */
+export const auditEvent = pgTable(
+  "audit_event",
+  {
+    organizationId: text("organization_id").notNull(),
+    /** Position in the workspace's chain, from 1. */
+    seq: bigint("seq", { mode: "number" }).notNull(),
+    actorId: text("actor_id"),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    /** SHA-256 of the target's state before and after, where it has one. */
+    beforeHash: text("before_hash"),
+    afterHash: text("after_hash"),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    metadata: jsonb("metadata").notNull().default({}),
+    prevHash: text("prev_hash").notNull(),
+    hash: text("hash").notNull(),
+    createdAt: timestamp("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.organizationId, t.seq] }),
+    index("audit_event_created_idx").on(t.organizationId, t.createdAt),
+    index("audit_event_action_idx").on(t.organizationId, t.action),
+  ],
+);
+
+/** A workspace's audit settings. Workspaces without a row keep events forever. */
+export const auditSettings = pgTable("audit_settings", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  /** Events older than this many days are pruned; null: kept forever. */
+  retentionDays: integer("retention_days"),
+  updatedAt: updatedAt(),
+});

@@ -15,9 +15,13 @@ interface Props {
   workspaceId: string;
   revision: Revision;
   canEdit: boolean;
+  /** Approvals: the review page is open to the user. */
+  canReview: boolean;
+  /** The head (shown) isn't what viewers see yet. */
+  unpublished: boolean;
 }
 
-export function GuideView({ workspaceId, revision, canEdit }: Props) {
+export function GuideView({ workspaceId, revision, canEdit, canReview, unpublished }: Props) {
   const router = useRouter();
   const [draft, setDraft] = useState<Guide | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +57,20 @@ export function GuideView({ workspaceId, revision, canEdit }: Props) {
 
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-6 p-6">
-      <header className="flex items-center justify-between gap-4">
+      <header className="flex items-center gap-4">
         <Link to="/dashboard" className="text-sm text-muted-foreground hover:underline">
           ← Guides
         </Link>
+        <span className="ml-auto" />
+        {canReview && !editing ? (
+          <Link
+            to="/guides/$guideId/review"
+            params={{ guideId: revision.guideId }}
+            className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted"
+          >
+            Review
+          </Link>
+        ) : null}
         {canEdit ? (
           editing ? (
             <span className="flex gap-2">
@@ -79,6 +93,9 @@ export function GuideView({ workspaceId, revision, canEdit }: Props) {
         ) : null}
       </header>
       <ErrorText>{error}</ErrorText>
+      {unpublished && canReview ? (
+        <p className="text-sm text-muted-foreground">This version isn&rsquo;t published yet: viewers see the last approved one.</p>
+      ) : null}
 
       <Card className="grid gap-3">
         {editing ? (

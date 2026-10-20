@@ -10,7 +10,7 @@ export const Route = createFileRoute("/api/workspaces/$workspaceId/sync/guides/$
       GET: async ({ request, params: { workspaceId, guideId } }) => {
         const access = await authorize(request, workspaceId, { guide: ["read"] }, "sync");
         if ("error" in access) return access.error;
-        const found = await getGuide(db(), workspaceId, access.userId, guideId);
+        const found = await getGuide(db(), workspaceId, access, guideId);
         if (!found) return jsonError(404, "Guide not found.");
         return Response.json({ revision: found.head, deletedAt: found.guide.deletedAt });
       },

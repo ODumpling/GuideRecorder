@@ -15,6 +15,13 @@
       "when": 1792439071907,
       "tag": "0001_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792445645706,
+      "tag": "0004_approvals_audit",
+      "breakpoints": true
     }
   ]
 }
