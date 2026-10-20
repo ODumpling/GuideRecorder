@@ -25,6 +25,8 @@ function item(path: string, fields: Partial<GuideListItem> = {}): GuideListItem 
     summary: "",
     tags: [],
     stepCount: 1,
+    kind: "walkthrough",
+    hotspotCount: 0,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     folder: "",

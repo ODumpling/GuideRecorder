@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BookOpen, ChevronRight, Folder, FolderPlus, HardDrive, TriangleAlert } from "lucide-react";
+import { BookOpen, Camera, ChevronRight, Folder, FolderPlus, HardDrive, Target, TriangleAlert } from "lucide-react";
 import { NavHeading, STATUS_COLORS } from "@/components/library/bits";
 import { askName, showFolderMenu } from "@/components/library/menus";
 import { droppedGuides, guidesAt, isGuideDrag } from "@/components/library/selection";
 import { editorStore, useEditor } from "@/editor/editor";
-import { buildTree, GUIDE_STATUSES, isReviewOverdue, libraryTags, localToday, type FolderNode } from "@/editor/library";
+import {
+  buildTree,
+  GUIDE_KINDS,
+  GUIDE_STATUSES,
+  isReviewOverdue,
+  libraryTags,
+  localToday,
+  type FolderNode,
+} from "@/editor/library";
 import { tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** Indent per folder level, in pixels. */
 const INDENT_PX = 12;
@@ -187,14 +195,15 @@ export function LibraryNav({ api = tauriSettingsApi }: { api?: SettingsApi }) {
   const statusFilter = useEditor((s) => s.statusFilter);
   const folder = useEditor((s) => s.folder);
   const tag = useEditor((s) => s.tag);
+  const kind = useEditor((s) => s.kind);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const today = localToday();
 
   const tree = useMemo(() => buildTree(guides, folders, true), [guides, folders]);
   const tags = useMemo(() => libraryTags(guides), [guides]);
   const overdue = guides.filter((g) => isReviewOverdue(g, today)).length;
-  const { setFolder, setStatusFilter, setTag } = editorStore.getState();
-  const everything = !statusFilter && folder === null && !tag;
+  const { setFolder, setStatusFilter, setTag, setKind } = editorStore.getState();
+  const everything = !statusFilter && folder === null && !tag && !kind;
 
   const toggle = (path: string) =>
     setCollapsed((current) => {
@@ -216,6 +225,7 @@ export function LibraryNav({ api = tauriSettingsApi }: { api?: SettingsApi }) {
               setFolder(null);
               setStatusFilter(null);
               setTag(null);
+              setKind(null);
             }}
           />
           <NavItem
@@ -238,6 +248,20 @@ export function LibraryNav({ api = tauriSettingsApi }: { api?: SettingsApi }) {
               count={guides.filter((g) => g.status === s.value).length}
               current={statusFilter === s.value}
               onClick={() => setStatusFilter(statusFilter === s.value ? null : s.value)}
+            />
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-px">
+          <NavHeading>Kind</NavHeading>
+          {GUIDE_KINDS.map((k) => (
+            <NavItem
+              key={k.value}
+              icon={k.value === "annotated" ? <Target /> : <Camera />}
+              label={k.label}
+              count={guides.filter((g) => g.kind === k.value).length}
+              current={kind === k.value}
+              onClick={() => setKind(kind === k.value ? null : k.value)}
             />
           ))}
         </div>

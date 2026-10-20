@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
-import { hotspots } from "@/annotations/geometry";
+import { hotspots } from "@guiderecorder/ui/geometry";
 import { HotspotBadge } from "@/components/annotations/HotspotPopover";
 import { annotationSelection, useSelectedAnnotation } from "@/components/annotations/selection";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { IMAGE_SHOW_HINTS, setImageShow } from "@/editor/commands";
 import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
-import type { AiState, ImageShow, Step, StepKind } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { AiState, ImageShow, Step, StepKind } from "@guiderecorder/guide-schema";
+import { cn } from "@guiderecorder/ui/utils";
 
 export const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",

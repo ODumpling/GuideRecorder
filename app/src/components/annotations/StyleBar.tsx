@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { isValidColor } from "@/annotations/color";
+import { isValidColor } from "@guiderecorder/ui/color";
 import {
   removeAnnotation,
   setAnnotationStyle,
@@ -19,13 +19,13 @@ import {
   DEFAULT_STROKE,
   MIN_BLUR_AMOUNT,
   strokeWidth,
-} from "@/annotations/geometry";
+} from "@guiderecorder/ui/geometry";
 import { HotspotBadge } from "@/components/annotations/HotspotPopover";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import type { Command } from "@/editor/commands";
-import type { Annotation, AnnotationStyle, Guide } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { Annotation, AnnotationStyle, Guide } from "@guiderecorder/guide-schema";
+import { cn } from "@guiderecorder/ui/utils";
 
 const SWATCHES = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#007aff", "#af52de", "#1d1d1f", "#ffffff"];
 const STROKES = [1, 2, 3, 4, 6, 8, 12];

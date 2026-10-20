@@ -301,6 +301,8 @@ mod tests {
             .unwrap();
         assert_eq!(listed.first().map(|g| g.id.as_str()), Some(id.as_str()));
         assert_eq!(listed[0].step_count, 6);
+        assert_eq!(listed[0].kind, GuideKind::Annotated);
+        assert_eq!(listed[0].hotspot_count, 0);
         assert_eq!(bundles(&root).len(), before.len() + 1);
         fs::remove_dir_all(root).unwrap();
     }

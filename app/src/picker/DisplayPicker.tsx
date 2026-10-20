@@ -1,7 +1,7 @@
 import { Dialog } from "radix-ui";
 import { LoaderCircle, Monitor, TriangleAlert, X } from "lucide-react";
 import { useStore } from "zustand";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import type { CaptureDisplay } from "@/lib/types";
 import type { StartFlowStore } from "@/recording/startFlow";
 import type { RecordingStore } from "@/recording/store";

@@ -457,6 +457,49 @@ pub fn export(
     Ok(report)
 }
 
+/// A Markdown export in memory, for a preview.
+#[derive(Debug, Clone)]
+pub struct MdPreview {
+    /// `guide.md` as [`export`] writes it.
+    pub markdown: String,
+    /// The PNG images it links, by their link (`images/<name>`), the logo
+    /// first when there is one.
+    pub images: Vec<(String, Vec<u8>)>,
+    /// The step image warnings; no files.
+    pub report: ExportReport,
+}
+
+/// What [`export`] would write, without writing it: the same document and
+/// images (blur and pixelate burned in), at `opts.image`'s size.
+pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &MdOptions) -> MdPreview {
+    let labels = opts
+        .labels
+        .clone()
+        .unwrap_or_else(|| Labels::for_language(&guide.language));
+    let names = image_names(guide);
+    let mut report = ExportReport::default();
+    let mut images = Vec::new();
+    let logo = opts.branding.logo().map(Logo::png);
+    if let Some(png) = logo {
+        images.push((format!("{IMAGES_DIR}/{LOGO_FILE}"), png.to_vec()));
+    }
+    for (step, name) in guide.steps().zip(&names) {
+        let image = render_step_image(handle, &step.step, &opts.image);
+        report.add_warnings(step.step.id, image.warnings);
+        images.push((format!("{IMAGES_DIR}/{name}"), image.png));
+    }
+    let details = opts
+        .review_details
+        .then(|| labels.review_details(&guide.review))
+        .flatten();
+    let markdown = render_document(guide, &names, &labels, logo.is_some(), details.as_deref());
+    MdPreview {
+        markdown,
+        images,
+        report,
+    }
+}
+
 /// The Markdown document for `guide`, with image `i` at
 /// `images/<names[i]>`. Exposed for tests and previews; [`export`] writes
 /// it.

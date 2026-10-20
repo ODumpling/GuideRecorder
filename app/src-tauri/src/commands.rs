@@ -22,7 +22,8 @@ use crate::editor::{
     ReviewedGuide, Session, SessionCell, MAX_PNG_BYTES,
 };
 use crate::export::{
-    self, with_extension, BrandingRequest, ChosenPaths, ExportResult, Format, MotionRequest,
+    self, with_extension, BrandingRequest, ChosenPaths, ExportPreview, ExportResult, Format,
+    MotionRequest,
 };
 
 /// Runs `f` with the session on the blocking pool.
@@ -535,6 +536,45 @@ pub async fn export_guide(
         )
     })
     .await
+}
+
+/// A preview of exporting a guide from its saved bundle, writing nothing
+/// (see [`export::preview_guide`]).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn preview_export(
+    cell: State<'_, Arc<SessionCell>>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+    guide_id: String,
+    format: Format,
+    branding: BrandingRequest,
+    paper: Paper,
+    review_details: bool,
+    motion: Option<MotionRequest>,
+) -> Result<ExportPreview> {
+    let chosen = Arc::clone(&chosen);
+    let motion = motion.unwrap_or_default();
+    with_session(cell, move |s| {
+        export::preview_guide(
+            s,
+            &chosen,
+            &guide_id,
+            format,
+            &branding,
+            paper,
+            review_details,
+            &motion,
+        )
+    })
+    .await
+}
+
+/// The chosen logo as a PNG data URI, for the Export dialog (see
+/// [`export::logo_preview`]).
+#[tauri::command]
+pub async fn logo_preview(chosen: State<'_, Arc<ChosenPaths>>, path: PathBuf) -> Result<String> {
+    let chosen = Arc::clone(&chosen);
+    blocking(move || export::logo_preview(&chosen, &path)).await
 }
 
 /// Shows a file an export wrote in Finder.

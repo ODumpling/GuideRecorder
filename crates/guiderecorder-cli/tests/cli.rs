@@ -235,7 +235,9 @@ fn list_json_shape() {
             "createdAt",
             "duplicateOf",
             "folder",
+            "hotspotCount",
             "id",
+            "kind",
             "lastReviewed",
             "owner",
             "path",
@@ -262,6 +264,17 @@ fn list_json_shape() {
     assert_eq!(rotate["readOnly"], false);
     assert_eq!(rotate["duplicateOf"], Value::Null);
     assert!(rotate["stepCount"].as_u64().unwrap() > 0);
+    assert_eq!(rotate["kind"], "walkthrough");
+    assert_eq!(rotate["hotspotCount"], 0);
+    let floor_plan = value["guides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["title"] == "Office floor plan")
+        .unwrap();
+    assert_eq!(floor_plan["kind"], "annotated");
+    assert_eq!(floor_plan["stepCount"], 2);
+    assert_eq!(floor_plan["hotspotCount"], 6);
     assert!(rotate["path"].as_str().unwrap().ends_with(ROTATE));
     assert_eq!(rotate["folder"], "");
 }
@@ -370,6 +383,11 @@ fn list_human_output() {
     let text = stdout(&out);
     assert!(text.contains("Rotate an API key"), "{text}");
     assert!(text.contains("security, api, console"), "{text}");
+    assert!(text.contains("Rotate an API key  (5 steps;"), "{text}");
+    assert!(
+        text.contains("Office floor plan  (2 pages, 6 hotspots"),
+        "{text}"
+    );
     assert!(text.contains("01M4WZCE2000000000000002R0"), "{text}");
 }
 

@@ -14,7 +14,7 @@ import {
   type ListLayout,
 } from "@/editor/libraryList";
 import type { GuideListItem } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn } from "@guiderecorder/ui/utils";
 
 /** What the container puts on each row: selection, keys and dragging. */
 export type RowProps = HTMLAttributes<HTMLElement> & { draggable?: boolean; "data-guide-path"?: string };

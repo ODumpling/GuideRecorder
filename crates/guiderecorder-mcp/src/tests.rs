@@ -373,6 +373,12 @@ async fn list_guides_reads_the_index_and_filters() {
     let rotate = guides.iter().find(|g| g["id"] == ROTATE).unwrap();
     assert_eq!(rotate["title"], "Rotate an API key");
     assert_eq!(rotate["step_count"], 5);
+    assert_eq!(rotate["kind"], "walkthrough");
+    assert_eq!(rotate["hotspot_count"], 0);
+    let floor_plan = guides.iter().find(|g| g["id"] == FLOOR_PLAN).unwrap();
+    assert_eq!(floor_plan["kind"], "annotated");
+    assert_eq!(floor_plan["step_count"], 2);
+    assert_eq!(floor_plan["hotspot_count"], 6);
     assert_eq!(rotate["read_only"], false);
     assert_eq!(rotate["tags"], json!(["security", "api", "console"]));
     assert!(rotate["updated_at"]

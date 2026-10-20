@@ -34,7 +34,7 @@ use guiderecorder_core::index::{
     IndexedGuide, ListFilter, Source, StepHit, SyncReport,
 };
 use guiderecorder_core::library::{Library, LoadedGuide};
-use guiderecorder_core::model::{local_today, GuideStatus, NaiveDate};
+use guiderecorder_core::model::{local_today, GuideKind, GuideStatus, NaiveDate};
 use guiderecorder_core::{Ulid, SCHEMA_VERSION};
 use serde_json::{json, Value};
 
@@ -441,6 +441,8 @@ fn guide_json(guide: &IndexedGuide, today: NaiveDate) -> Value {
         "summary": guide.summary,
         "tags": guide.tags,
         "stepCount": guide.step_count,
+        "kind": guide.kind.as_str(),
+        "hotspotCount": guide.hotspot_count,
         "createdAt": guide.created_at.to_rfc3339(),
         "updatedAt": guide.updated_at.to_rfc3339(),
         "folder": guide.folder,
@@ -476,7 +478,13 @@ fn print_list(
         return Ok(());
     }
     for guide in guides {
-        let mut line = format!("{}  ({} steps", guide.title, guide.step_count);
+        let mut line = match guide.kind {
+            GuideKind::Annotated => format!(
+                "{}  ({} pages, {} hotspots",
+                guide.title, guide.step_count, guide.hotspot_count
+            ),
+            GuideKind::Walkthrough => format!("{}  ({} steps", guide.title, guide.step_count),
+        };
         if !guide.tags.is_empty() {
             line.push_str(&format!("; {}", guide.tags.join(", ")));
         }

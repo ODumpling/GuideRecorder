@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
-import { organization, user } from "@/db/schema";
-import { assetKey, commitUploads, downloadUrl, planUploads, QuotaExceededError, storageUsed, uploadRequest } from "./assets";
+import { guide, organization, revision, revisionAsset, user } from "@/db/schema";
+import { assetKey, canDownload, commitUploads, downloadUrl, planUploads, QuotaExceededError, storageUsed, uploadRequest } from "./assets";
 import type { ObjectStore } from "./storage";
 
 /** An in-memory store; `put` stands in for a client's presigned upload. */
@@ -81,5 +81,32 @@ describe("assets", () => {
 
   it("doesn't presign downloads for bad hashes", async () => {
     expect(await downloadUrl(db, s3.store, "org", "../../etc/passwd")).toBeNull();
+  });
+
+  it("lets members download what they uploaded or what a guide they can see shows", async () => {
+    await db.insert(user).values({ id: "v", name: "V", email: "v@example.com" });
+    s3.put(assetKey("org", a), 10);
+    s3.put(assetKey("org", b), 10);
+    await commitUploads(db, s3.store, "org", "u", [a, b]);
+    expect(await canDownload(db, "org", "u", a)).toBe(true);
+    expect(await canDownload(db, "org", "v", a)).toBe(false);
+
+    await db.insert(guide).values([
+      { organizationId: "org", id: "shared", ownerId: "u", headRevisionId: "r1" },
+      { organizationId: "org", id: "mine", ownerId: "u", visibility: "private", headRevisionId: "r2" },
+    ]);
+    await db.insert(revision).values([
+      { id: "r1", organizationId: "org", guideId: "shared", guideJson: {}, source: "app" },
+      { id: "r2", organizationId: "org", guideId: "mine", guideJson: {}, source: "app" },
+    ]);
+    await db.insert(revisionAsset).values([
+      { revisionId: "r1", path: "steps/a.webp", organizationId: "org", sha256: a },
+      { revisionId: "r2", path: "steps/b.webp", organizationId: "org", sha256: b },
+    ]);
+    expect(await canDownload(db, "org", "v", a)).toBe(true);
+    // Only in a private guide of someone else's.
+    expect(await canDownload(db, "org", "v", b)).toBe(false);
+    expect(await canDownload(db, "other", "u", a)).toBe(false);
+    expect(await canDownload(db, "org", "u", "../../etc/passwd")).toBe(false);
   });
 });
