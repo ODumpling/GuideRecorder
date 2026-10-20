@@ -79,8 +79,8 @@ pub struct ImageOptions {
     /// Off for a writer that overlays its own markers using
     /// [`RenderedImage::hotspots`].
     pub hotspot_markers: bool,
-    /// Also blur the step's on-device blur suggestions, reviewed or not
-    /// (off by default). On for images that leave the device with no
+    /// Also blur the step's pending on-device blur suggestions, not yet
+    /// accepted or kept (off by default). On for images that leave the device with no
     /// review in between (the MCP server, the CLI): text found here as
     /// sensitive is never sent.
     pub burn_on_device_suggestions: bool,
@@ -258,7 +258,7 @@ pub fn render_step_image(handle: &GuideHandle, step: &Step, opts: &ImageOptions)
 }
 
 /// Whether [`redacted_image`] changes anything for `step`: it has a blur
-/// annotation, or an on-device blur suggestion.
+/// annotation, or a pending on-device blur suggestion.
 pub fn has_redactions(step: &Step) -> bool {
     step.annotations
         .iter()
@@ -267,7 +267,7 @@ pub fn has_redactions(step: &Step) -> bool {
             .ai_state
             .redaction_suggestions
             .iter()
-            .any(|s| s.source == SuggestionSource::OnDevice)
+            .any(|s| s.source == SuggestionSource::OnDevice && s.is_pending())
 }
 
 /// One of the step's stored images (`full`, `crop` or `after`, by its
@@ -615,7 +615,7 @@ fn burn_in_redactions(pixmap: &mut Pixmap, origin: Point, step: &Step, on_device
         .ai_state
         .redaction_suggestions
         .iter()
-        .filter(|s| on_device && s.source == SuggestionSource::OnDevice)
+        .filter(|s| on_device && s.source == SuggestionSource::OnDevice && s.is_pending())
         .map(|s| (s.rect, BlurMode::Blur, None));
     for (rect, mode, amount) in blurs.chain(suggested) {
         if let Some(r) = region(&rect, origin, (w, h)) {

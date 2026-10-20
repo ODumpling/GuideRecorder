@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, ExportBranding, ExportFormat, ExportResult, GuideListItem, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
 import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -18,6 +18,11 @@ export interface EditorApi {
    * images. False if the user cancelled.
    */
   deleteGuide(id: string, path: string, title: string): Promise<boolean>;
+  /**
+   * Asks (natively) once to delete several guides, then deletes them in
+   * turn, stopping at the first that fails. False if the user cancelled.
+   */
+  deleteGuides(guides: GuideTarget[]): Promise<boolean>;
   /** The library's folders: relative paths with `/` separators. */
   listFolders(): Promise<string[]>;
   /** Makes folder `name` in `parent` (`""`: the top). Returns its path. */
@@ -29,6 +34,8 @@ export interface EditorApi {
   /** Sets the last review day of the guide at `path` to `today` (`YYYY-MM-DD`). */
   markGuideReviewed(id: string, path: string, today: string): Promise<ReviewedGuide>;
   /** Moves the guide at `path` into `folder` (`""`: the top). Returns its new path. */
+  /** Sets the status, owner and tags of the guide at `path`. Returns the guide as saved. */
+  editGuideDetails(id: string, path: string, edit: DetailsEdit): Promise<Guide>;
   moveGuide(id: string, path: string, folder: string): Promise<string>;
   /** Shows a guide's bundle, or a library folder, in Finder. */
   reveal(target: { path: string } | { folder: string }): Promise<void>;
@@ -60,11 +67,13 @@ export const tauriApi: EditorApi = {
   saveGuide: (guide) => invoke("save_guide", { guide }),
   closeGuide: (id) => invoke("close_guide", { id }),
   deleteGuide: (id, path, title) => invoke("delete_guide", { id, path, title }),
+  deleteGuides: (guides) => invoke("delete_guides", { guides }),
   listFolders: () => invoke("list_folders"),
   createFolder: (parent, name) => invoke("create_folder", { parent, name }),
   duplicateGuide: (id, path, title) => invoke("duplicate_guide", { id, path, title }),
   renameGuide: (id, path, title) => invoke("rename_guide", { id, path, title }),
   markGuideReviewed: (id, path, today) => invoke("mark_guide_reviewed", { id, path, today }),
+  editGuideDetails: (id, path, edit) => invoke("edit_guide_details", { id, path, edit }),
   moveGuide: (id, path, folder) => invoke("move_guide", { id, path, folder }),
   reveal: (target) =>
     invoke("reveal_in_library", {
@@ -149,6 +158,17 @@ export interface ExportApi {
     /** Used by MP4 and GIF. */
     motion: MotionOptions,
   ): Promise<ExportResult>;
+  /** A preview of exporting from the saved bundle with these options; writes nothing. */
+  previewExport(
+    guideId: string,
+    format: ExportFormat,
+    branding: ExportBranding,
+    paper: PaperSize,
+    reviewDetails: boolean,
+    motion: MotionOptions,
+  ): Promise<ExportPreviewData>;
+  /** A logo `chooseLogo` returned (PNG or JPEG, up to 2 MB) as a PNG data URI. */
+  logoPreview(path: string): Promise<string>;
   /** Shows a file an export wrote in Finder. */
   reveal(path: string): Promise<void>;
 }
@@ -160,6 +180,9 @@ export const tauriExportApi: ExportApi = {
   chooseLogo: () => invoke("choose_logo"),
   exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion) =>
     invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion }),
+  previewExport: (guideId, format, branding, paper, reviewDetails, motion) =>
+    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion }),
+  logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
 
@@ -252,6 +275,25 @@ export const tauriRecordingApi: RecordingApi = {
   snapshotImage: async (id) => toArrayBuffer(await invoke("recording_snapshot", { id })),
 };
 
+/** The toolbar's live capture feed (see app/src-tauri/src/feed.rs and toolbar.rs). */
+export interface FeedApi {
+  /** Leaves a capture's steps out of the guide. */
+  deleteCapture(id: string): Promise<void>;
+  /** Gives a capture's first step `title` (plain text); resolves to it as stored (guide Markdown). */
+  renameCapture(id: string, title: string): Promise<string>;
+  /** Sizes the toolbar window to `height` CSS px (from the bar alone to a cap). */
+  resizeToolbar(height: number): Promise<void>;
+  /** Lets the toolbar take the keyboard (to rename a capture), or gives it back. */
+  setToolbarTyping(typing: boolean): Promise<void>;
+}
+
+export const tauriFeedApi: FeedApi = {
+  deleteCapture: (id) => invoke("delete_capture", { id }),
+  renameCapture: (id, title) => invoke("rename_capture", { id, title }),
+  resizeToolbar: (height) => invoke("resize_toolbar", { height }),
+  setToolbarTyping: (typing) => invoke("set_toolbar_typing", { typing }),
+};
+
 /** Picking what to record (see app/src-tauri/src/picker.rs). */
 export interface PickerApi {
   /** Windows that can be recorded, frontmost first. */
@@ -293,6 +335,10 @@ export const RECORDING_STATUS_EVENT = "recording://status";
 export const RECORDING_SAVED_EVENT = "recording://saved";
 /** Emitted with a `RecordingSnapshot` for each screenshot the running recording takes. */
 export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";
+/** Emitted with a `SnapshotTitle` when a capture's title is refined or renamed. */
+export const RECORDING_SNAPSHOT_TITLE_EVENT = "recording://snapshot-title";
+/** Emitted with `{ id }` when a capture is deleted (in the feed or with ⌘⌥Z). */
+export const RECORDING_SNAPSHOT_REMOVED_EVENT = "recording://snapshot-removed";
 /**
  * Emitted (no payload) when the tray or the record hotkey starts a
  * recording while the capture area is One display, Window or Region: the main window

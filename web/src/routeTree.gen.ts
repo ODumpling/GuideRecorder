@@ -13,18 +13,23 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DeviceRouteImport } from './routes/device'
+import { Route as LibraryRouteImport } from './routes/library'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
+import { Route as STokenRouteImport } from './routes/s.$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as GuidesGuideIdEditRouteImport } from './routes/guides.$guideId_.edit'
 import { Route as GuidesGuideIdReviewRouteImport } from './routes/guides.$guideId_.review'
+import { Route as ApiShareTokenAssetsSha256RouteImport } from './routes/api/share/$token/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
 import { Route as ApiWorkspacesWorkspaceIdAssetsUploadsRouteImport } from './routes/api/workspaces/$workspaceId/assets/uploads'
 import { Route as ApiWorkspacesWorkspaceIdAuditExportRouteImport } from './routes/api/workspaces/$workspaceId/audit/export'
+import { Route as ApiWorkspacesWorkspaceIdSharesIndexRouteImport } from './routes/api/workspaces/$workspaceId/shares/index'
+import { Route as ApiWorkspacesWorkspaceIdSharesShareIdRouteImport } from './routes/api/workspaces/$workspaceId/shares/$shareId'
 import { Route as ApiWorkspacesWorkspaceIdSyncChangesRouteImport } from './routes/api/workspaces/$workspaceId/sync/changes'
 import { Route as ApiWorkspacesWorkspaceIdSyncEventsRouteImport } from './routes/api/workspaces/$workspaceId/sync/events'
 import { Route as ApiWorkspacesWorkspaceIdSyncPushRouteImport } from './routes/api/workspaces/$workspaceId/sync/push'
@@ -52,6 +57,11 @@ const DeviceRoute = DeviceRouteImport.update({
   path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LibraryRoute = LibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
@@ -77,6 +87,11 @@ const InvitationsIdRoute = InvitationsIdRouteImport.update({
   path: '/invitations/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const STokenRoute = STokenRouteImport.update({
+  id: '/s/$token',
+  path: '/s/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -92,6 +107,12 @@ const GuidesGuideIdReviewRoute = GuidesGuideIdReviewRouteImport.update({
   path: '/guides/$guideId/review',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiShareTokenAssetsSha256Route =
+  ApiShareTokenAssetsSha256RouteImport.update({
+    id: '/api/share/$token/assets/$sha256',
+    path: '/api/share/$token/assets/$sha256',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiWorkspacesWorkspaceIdAssetsSha256Route =
   ApiWorkspacesWorkspaceIdAssetsSha256RouteImport.update({
     id: '/api/workspaces/$workspaceId/assets/$sha256',
@@ -114,6 +135,18 @@ const ApiWorkspacesWorkspaceIdAuditExportRoute =
   ApiWorkspacesWorkspaceIdAuditExportRouteImport.update({
     id: '/api/workspaces/$workspaceId/audit/export',
     path: '/api/workspaces/$workspaceId/audit/export',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSharesIndexRoute =
+  ApiWorkspacesWorkspaceIdSharesIndexRouteImport.update({
+    id: '/api/workspaces/$workspaceId/shares/',
+    path: '/api/workspaces/$workspaceId/shares/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiWorkspacesWorkspaceIdSharesShareIdRoute =
+  ApiWorkspacesWorkspaceIdSharesShareIdRouteImport.update({
+    id: '/api/workspaces/$workspaceId/shares/$shareId',
+    path: '/api/workspaces/$workspaceId/shares/$shareId',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiWorkspacesWorkspaceIdSyncChangesRoute =
@@ -158,21 +191,26 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
+  '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
+  '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
   '/api/workspaces/$workspaceId/audit/export': typeof ApiWorkspacesWorkspaceIdAuditExportRoute
+  '/api/workspaces/$workspaceId/shares/$shareId': typeof ApiWorkspacesWorkspaceIdSharesShareIdRoute
   '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
   '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
   '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/shares/': typeof ApiWorkspacesWorkspaceIdSharesIndexRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/review': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
@@ -182,21 +220,26 @@ export interface FileRoutesByTo {
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
+  '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
+  '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
   '/api/workspaces/$workspaceId/audit/export': typeof ApiWorkspacesWorkspaceIdAuditExportRoute
+  '/api/workspaces/$workspaceId/shares/$shareId': typeof ApiWorkspacesWorkspaceIdSharesShareIdRoute
   '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
   '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
   '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/shares': typeof ApiWorkspacesWorkspaceIdSharesIndexRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/review': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
@@ -207,21 +250,26 @@ export interface FileRoutesById {
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
+  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/api/health': typeof ApiHealthRoute
   '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
+  '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/guides/$guideId_/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId_/review': typeof GuidesGuideIdReviewRoute
+  '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   '/api/workspaces/$workspaceId/assets/uploads': typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
   '/api/workspaces/$workspaceId/audit/export': typeof ApiWorkspacesWorkspaceIdAuditExportRoute
+  '/api/workspaces/$workspaceId/shares/$shareId': typeof ApiWorkspacesWorkspaceIdSharesShareIdRoute
   '/api/workspaces/$workspaceId/sync/changes': typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
   '/api/workspaces/$workspaceId/sync/events': typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
   '/api/workspaces/$workspaceId/sync/push': typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  '/api/workspaces/$workspaceId/shares/': typeof ApiWorkspacesWorkspaceIdSharesIndexRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/restore': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/review': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute
   '/api/workspaces/$workspaceId/sync/guides/$guideId/': typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
@@ -233,21 +281,26 @@ export interface FileRouteTypes {
     | '/audit'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
     | '/guides/$guideId'
     | '/invitations/$id'
+    | '/s/$token'
     | '/api/auth/$'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
+    | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
     | '/api/workspaces/$workspaceId/audit/export'
+    | '/api/workspaces/$workspaceId/shares/$shareId'
     | '/api/workspaces/$workspaceId/sync/changes'
     | '/api/workspaces/$workspaceId/sync/events'
     | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/shares/'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/review'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/'
@@ -257,21 +310,26 @@ export interface FileRouteTypes {
     | '/audit'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
     | '/guides/$guideId'
     | '/invitations/$id'
+    | '/s/$token'
     | '/api/auth/$'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
+    | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
     | '/api/workspaces/$workspaceId/audit/export'
+    | '/api/workspaces/$workspaceId/shares/$shareId'
     | '/api/workspaces/$workspaceId/sync/changes'
     | '/api/workspaces/$workspaceId/sync/events'
     | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/shares'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/review'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId'
@@ -281,21 +339,26 @@ export interface FileRouteTypes {
     | '/audit'
     | '/dashboard'
     | '/device'
+    | '/library'
     | '/sign-in'
     | '/sign-up'
     | '/api/health'
     | '/guides/$guideId'
     | '/invitations/$id'
+    | '/s/$token'
     | '/api/auth/$'
     | '/guides/$guideId_/edit'
     | '/guides/$guideId_/review'
+    | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
     | '/api/workspaces/$workspaceId/assets/uploads'
     | '/api/workspaces/$workspaceId/audit/export'
+    | '/api/workspaces/$workspaceId/shares/$shareId'
     | '/api/workspaces/$workspaceId/sync/changes'
     | '/api/workspaces/$workspaceId/sync/events'
     | '/api/workspaces/$workspaceId/sync/push'
+    | '/api/workspaces/$workspaceId/shares/'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/restore'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/review'
     | '/api/workspaces/$workspaceId/sync/guides/$guideId/'
@@ -306,21 +369,26 @@ export interface RootRouteChildren {
   AuditRoute: typeof AuditRoute
   DashboardRoute: typeof DashboardRoute
   DeviceRoute: typeof DeviceRoute
+  LibraryRoute: typeof LibraryRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   ApiHealthRoute: typeof ApiHealthRoute
   GuidesGuideIdRoute: typeof GuidesGuideIdRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
+  STokenRoute: typeof STokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   GuidesGuideIdEditRoute: typeof GuidesGuideIdEditRoute
   GuidesGuideIdReviewRoute: typeof GuidesGuideIdReviewRoute
+  ApiShareTokenAssetsSha256Route: typeof ApiShareTokenAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
   ApiWorkspacesWorkspaceIdAssetsUploadsRoute: typeof ApiWorkspacesWorkspaceIdAssetsUploadsRoute
   ApiWorkspacesWorkspaceIdAuditExportRoute: typeof ApiWorkspacesWorkspaceIdAuditExportRoute
+  ApiWorkspacesWorkspaceIdSharesShareIdRoute: typeof ApiWorkspacesWorkspaceIdSharesShareIdRoute
   ApiWorkspacesWorkspaceIdSyncChangesRoute: typeof ApiWorkspacesWorkspaceIdSyncChangesRoute
   ApiWorkspacesWorkspaceIdSyncEventsRoute: typeof ApiWorkspacesWorkspaceIdSyncEventsRoute
   ApiWorkspacesWorkspaceIdSyncPushRoute: typeof ApiWorkspacesWorkspaceIdSyncPushRoute
+  ApiWorkspacesWorkspaceIdSharesIndexRoute: typeof ApiWorkspacesWorkspaceIdSharesIndexRoute
   ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute
   ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute
   ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute: typeof ApiWorkspacesWorkspaceIdSyncGuidesGuideIdIndexRoute
@@ -354,6 +422,13 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/library': {
+      id: '/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -391,6 +466,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InvitationsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/s/$token': {
+      id: '/s/$token'
+      path: '/s/$token'
+      fullPath: '/s/$token'
+      preLoaderRoute: typeof STokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -410,6 +492,13 @@ declare module '@tanstack/react-router' {
       path: '/guides/$guideId/review'
       fullPath: '/guides/$guideId/review'
       preLoaderRoute: typeof GuidesGuideIdReviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/share/$token/assets/$sha256': {
+      id: '/api/share/$token/assets/$sha256'
+      path: '/api/share/$token/assets/$sha256'
+      fullPath: '/api/share/$token/assets/$sha256'
+      preLoaderRoute: typeof ApiShareTokenAssetsSha256RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/workspaces/$workspaceId/assets/$sha256': {
@@ -438,6 +527,20 @@ declare module '@tanstack/react-router' {
       path: '/api/workspaces/$workspaceId/audit/export'
       fullPath: '/api/workspaces/$workspaceId/audit/export'
       preLoaderRoute: typeof ApiWorkspacesWorkspaceIdAuditExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/shares/': {
+      id: '/api/workspaces/$workspaceId/shares/'
+      path: '/api/workspaces/$workspaceId/shares'
+      fullPath: '/api/workspaces/$workspaceId/shares/'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSharesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces/$workspaceId/shares/$shareId': {
+      id: '/api/workspaces/$workspaceId/shares/$shareId'
+      path: '/api/workspaces/$workspaceId/shares/$shareId'
+      fullPath: '/api/workspaces/$workspaceId/shares/$shareId'
+      preLoaderRoute: typeof ApiWorkspacesWorkspaceIdSharesShareIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/workspaces/$workspaceId/sync/changes': {
@@ -490,14 +593,17 @@ const rootRouteChildren: RootRouteChildren = {
   AuditRoute: AuditRoute,
   DashboardRoute: DashboardRoute,
   DeviceRoute: DeviceRoute,
+  LibraryRoute: LibraryRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   ApiHealthRoute: ApiHealthRoute,
   GuidesGuideIdRoute: GuidesGuideIdRoute,
   InvitationsIdRoute: InvitationsIdRoute,
+  STokenRoute: STokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   GuidesGuideIdEditRoute: GuidesGuideIdEditRoute,
   GuidesGuideIdReviewRoute: GuidesGuideIdReviewRoute,
+  ApiShareTokenAssetsSha256Route: ApiShareTokenAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
     ApiWorkspacesWorkspaceIdAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsCommitRoute:
@@ -506,11 +612,15 @@ const rootRouteChildren: RootRouteChildren = {
     ApiWorkspacesWorkspaceIdAssetsUploadsRoute,
   ApiWorkspacesWorkspaceIdAuditExportRoute:
     ApiWorkspacesWorkspaceIdAuditExportRoute,
+  ApiWorkspacesWorkspaceIdSharesShareIdRoute:
+    ApiWorkspacesWorkspaceIdSharesShareIdRoute,
   ApiWorkspacesWorkspaceIdSyncChangesRoute:
     ApiWorkspacesWorkspaceIdSyncChangesRoute,
   ApiWorkspacesWorkspaceIdSyncEventsRoute:
     ApiWorkspacesWorkspaceIdSyncEventsRoute,
   ApiWorkspacesWorkspaceIdSyncPushRoute: ApiWorkspacesWorkspaceIdSyncPushRoute,
+  ApiWorkspacesWorkspaceIdSharesIndexRoute:
+    ApiWorkspacesWorkspaceIdSharesIndexRoute,
   ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute:
     ApiWorkspacesWorkspaceIdSyncGuidesGuideIdRestoreRoute,
   ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute:

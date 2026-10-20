@@ -165,6 +165,8 @@ pub struct Recording {
     pub excluded_apps: Vec<String>,
     /// Typing pauses longer than this end a typing step.
     pub typing_idle_ms: u32,
+    /// Briefly show a ring on screen where each click was captured.
+    pub click_ring: bool,
 }
 
 impl Default for Recording {
@@ -176,6 +178,7 @@ impl Default for Recording {
             after_frame_delay_ms: 400,
             excluded_apps: default_excluded_apps(),
             typing_idle_ms: 1500,
+            click_ring: false,
         }
     }
 }
@@ -951,6 +954,7 @@ mod tests {
         let json = serde_json::to_value(&settings).unwrap();
         assert_eq!(json["version"], SETTINGS_VERSION);
         assert_eq!(json["recording"]["typingIdleMs"], 1500);
+        assert_eq!(json["recording"]["clickRing"], false);
         assert_eq!(json["ai"]["stepModel"], DEFAULT_STEP_MODEL);
         assert_eq!(json["export"]["format"], "pdf");
         assert_eq!(

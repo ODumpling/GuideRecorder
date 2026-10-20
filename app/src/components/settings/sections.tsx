@@ -344,6 +344,14 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
           onChange={(afterFrames) => setRecording({ afterFrames })}
         />
       </Row>
+      <Row label="Click ring" note="Briefly show a ring on screen where each click was captured.">
+        <Toggle
+          label="Click ring"
+          checked={r.clickRing}
+          disabled={readOnly}
+          onChange={(clickRing) => setRecording({ clickRing })}
+        />
+      </Row>
       <Row
         label="Typing pause"
         note={`A pause this long ends a typing step (${TYPING_IDLE_MS.min}–${TYPING_IDLE_MS.max} ms).`}

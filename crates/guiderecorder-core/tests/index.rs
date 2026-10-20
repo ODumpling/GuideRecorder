@@ -121,9 +121,31 @@ fn rebuild_indexes_every_fixture() {
         assert_eq!(guide.summary, summary.summary);
         assert_eq!(guide.tags, summary.tags);
         assert_eq!(guide.step_count, summary.step_count);
+        assert_eq!(guide.kind, summary.kind);
+        assert_eq!(guide.hotspot_count, summary.hotspot_count);
         assert_eq!(guide.updated_at, summary.updated_at);
         assert!(!guide.read_only);
     }
+    let floor_plan = guides
+        .iter()
+        .find(|g| g.title == "Office floor plan")
+        .unwrap();
+    assert_eq!(
+        (
+            floor_plan.kind,
+            floor_plan.step_count,
+            floor_plan.hotspot_count
+        ),
+        (GuideKind::Annotated, 2, 6)
+    );
+    let rotate = guides
+        .iter()
+        .find(|g| g.title == "Rotate an API key")
+        .unwrap();
+    assert_eq!(
+        (rotate.kind, rotate.hotspot_count),
+        (GuideKind::Walkthrough, 0)
+    );
     assert!(!index.is_stale(&fx.library).unwrap());
 
     // Rebuilding again is idempotent.
@@ -164,6 +186,13 @@ fn list_filters_by_tag_query_and_limit() {
         ["Kurzanleitung Drucker"]
     );
     assert!(list(Some("macos"), Some("papier"), None).is_empty());
+    // Hotspot titles and descriptions.
+    for query in ["fjord", "visitor badges"] {
+        assert_eq!(
+            titles(&list(None, Some(query), None)),
+            ["Office floor plan"]
+        );
+    }
     assert_eq!(list(None, None, Some(2)).len(), 2);
     assert!(list(None, Some("--"), None).is_empty());
 }

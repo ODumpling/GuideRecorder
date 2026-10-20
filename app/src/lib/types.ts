@@ -1,7 +1,7 @@
 // The app's IPC types. The guide.json model comes from
 // `@guiderecorder/guide-schema`, generated from guiderecorder_core::model.
 
-import type { AiState, Guide, GuideField, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
+import type { AiState, Guide, GuideField, GuideKind, GuideStatus, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
 
 export type Ulid = string;
 
@@ -17,7 +17,11 @@ export interface GuideListItem extends ReviewFields {
   title: string;
   summary: string;
   tags: string[];
+  /** Steps, or an annotation guide's pages. */
   stepCount: number;
+  kind: GuideKind;
+  /** Hotspots across all steps (an annotation guide's pages). */
+  hotspotCount: number;
   createdAt: string;
   updatedAt: string;
   /** The library folder holding it, `/` separated; `""` at the top. */
@@ -30,6 +34,21 @@ export interface GuideListItem extends ReviewFields {
 export interface ReviewedGuide {
   lastReviewed: string;
   updatedAt: string;
+}
+
+/** `edit_guide_details`'s changes (the library's bulk actions); unset fields are left as they are. */
+export interface DetailsEdit {
+  status?: GuideStatus;
+  /** Trimmed; empty clears the owner. */
+  owner?: string;
+  addTags?: string[];
+  removeTags?: string[];
+}
+
+/** A listed guide a library action works on. */
+export interface GuideTarget {
+  id: Ulid;
+  path: string;
 }
 
 /** `rename_guide`'s result. */
@@ -79,6 +98,23 @@ export interface ExportBranding {
   logo: string | null;
   accent: string | null;
 }
+
+/**
+ * The Export dialog's preview, made by the format's own exporter (Rust
+ * `export::ExportPreview`). Images are PNG data URIs with the blurs burned
+ * in, as in the file.
+ */
+export type ExportPreviewData =
+  /** The exported HTML or walkthrough page, self-contained. */
+  | { kind: "html"; html: string }
+  /** The exported `guide.md` and the images it links, by link. */
+  | { kind: "markdown"; markdown: string; images: { link: string; src: string }[] }
+  /** The PDF's first pages; Word is approximated with them (`approximate`). */
+  | { kind: "pages"; pages: string[]; pageCount: number; approximate: boolean }
+  /** Each step's slide image, in step order. */
+  | { kind: "slides"; images: string[] }
+  /** A still of each of the first scenes of a video or GIF. */
+  | { kind: "frames"; frames: string[]; sceneCount: number };
 
 /** What an export wrote and what degraded along the way. */
 export interface ExportResult {
@@ -160,6 +196,8 @@ export interface Settings {
     afterFrameDelayMs: number;
     excludedApps: string[];
     typingIdleMs: number;
+    /** Briefly show a ring on screen where each click was captured. */
+    clickRing: boolean;
   };
   ai: {
     enabled: boolean;
@@ -312,6 +350,16 @@ export interface RecordingSnapshot {
   height: number;
   /** Where the click landed, in image pixels; null for a key. */
   point: Point | null;
+  /** A provisional step title (guide Markdown), e.g. "Click **Submit** in Safari". */
+  title: string;
+  /** Recorded time (pauses left out) when it was taken. */
+  elapsedMs: number;
+}
+
+/** A capture's new title (`recording://snapshot-title`). */
+export interface SnapshotTitle {
+  id: string;
+  title: string;
 }
 
 /** What the guide pass writes (`ai://guide`). */

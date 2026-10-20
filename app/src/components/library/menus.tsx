@@ -13,7 +13,7 @@ import { folderName, localToday } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
 import { canSubmitForReview } from "@/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
-import { syncStore } from "@/sync/sync";
+import { shareStore, syncStore } from "@/sync/sync";
 
 /** What the name dialog is asking for. */
 export type Naming = { kind: "rename"; guide: GuideListItem } | { kind: "folder"; parent: string };
@@ -84,7 +84,7 @@ export async function showGuideMenu(event: MouseEvent, guide: GuideListItem, fol
   }
 }
 
-/** Sync to Web, and Resolve Sync Conflict while there is one; none until signed in. */
+/** Sync to Web, Resolve Sync Conflict while there is one, and Share… once synced; none until signed in. */
 function syncItems(guide: GuideListItem) {
   const sync = syncStore.getState();
   if (!sync.account?.signedIn || !sync.state.workspaceId) return [];
@@ -107,6 +107,11 @@ function syncItems(guide: GuideListItem) {
   }
   if (status === "conflict") {
     items.push({ id: "resolve-sync-conflict", text: "Resolve Sync Conflict…", action: () => syncStore.getState().openConflict(guide.id) });
+  }
+  // Share links need the guide on the server.
+  const revisionId = sync.state.guides[guide.id]?.revisionId ?? null;
+  if (revisionId && status !== "deleted") {
+    items.push({ id: "share-guide", text: "Share…", action: () => void shareStore.getState().open(guide.id, revisionId) });
   }
   return items.length > 1 ? items : [];
 }

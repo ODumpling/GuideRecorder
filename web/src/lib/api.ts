@@ -5,6 +5,7 @@ import { checkAccess, type BooleanEntitlement, type Permission } from "./access"
 import { requestMeta } from "./audit";
 import { auth } from "./auth";
 import { env } from "./env";
+import { shareUrl, type ShareLinkInfo } from "./sharing";
 import { s3Store, type ObjectStore } from "./storage";
 
 export function jsonError(status: number, error: string, extra?: object) {
@@ -44,4 +45,9 @@ export function objectStore(): ObjectStore {
     secretAccessKey: e.S3_SECRET_ACCESS_KEY,
   });
   return store;
+}
+
+/** A share link with its public URL. */
+export function withUrl(link: ShareLinkInfo) {
+  return { ...link, url: shareUrl(env().BETTER_AUTH_URL, link.token) };
 }

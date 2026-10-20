@@ -17,6 +17,7 @@ import { asset, changeRequest, guide, revision, revisionAsset } from "@/db/schem
 import { recordAudit, type RequestMeta } from "./audit";
 import { roles, type RoleName } from "./permissions";
 import { evaluate, gate, loadApprovals, openRequests, reviewStates, sameContent, withServerFields } from "./review";
+import { searchVector } from "./search";
 
 // Desktop ⇄ web sync. Each guide is a chain of immutable revisions; a push
 // adds one on top of the head it was made on, or gets the head back (409) to
@@ -65,7 +66,7 @@ export type PushResult =
 const can = (actor: Actor, action: "read" | "create" | "update" | "delete") => roles[actor.role].authorize({ guide: [action] }).success;
 
 /** Who may see a guide: every member, or only its owner if it's private. */
-const visibleTo = (userId: string) => or(eq(guide.visibility, "workspace"), eq(guide.ownerId, userId));
+export const visibleTo = (userId: string) => or(eq(guide.visibility, "workspace"), eq(guide.ownerId, userId));
 
 export async function lockWorkspace(tx: Database, organizationId: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`sync:${organizationId}`}))`);
@@ -169,7 +170,7 @@ export async function push(
     }
     const [updated] = await tx
       .update(guide)
-      .set({ headRevisionId: id, ...(policy ? {} : { publishedRevisionId: id }) })
+      .set({ headRevisionId: id, search: searchVector(content), ...(policy ? {} : { publishedRevisionId: id }) })
       .where(and(eq(guide.organizationId, organizationId), eq(guide.id, request.guideId)))
       .returning();
     if (open) await tx.update(changeRequest).set({ revisionId: id }).where(eq(changeRequest.id, open.request.id));
@@ -245,7 +246,7 @@ export async function purgeTrash(db: Database, now = new Date()): Promise<number
   return db.transaction(async (tx) => {
     const expired = await tx
       .update(guide)
-      .set({ headRevisionId: null, publishedRevisionId: null })
+      .set({ headRevisionId: null, publishedRevisionId: null, search: null })
       .where(and(isNotNull(guide.deletedAt), lt(guide.deletedAt, cutoff), isNotNull(guide.headRevisionId)))
       .returning({ organizationId: guide.organizationId, id: guide.id });
     for (const g of expired) {

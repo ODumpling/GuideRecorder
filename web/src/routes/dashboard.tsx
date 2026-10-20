@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ApprovalPolicies } from "@/components/dashboard/ApprovalPolicies";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
+import { SharingSettings } from "@/components/dashboard/SharingSettings";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { WorkspaceSwitcher } from "@/components/dashboard/WorkspaceSwitcher";
 import { SyncedGuides } from "@/components/guides/SyncedGuides";
@@ -10,11 +11,17 @@ import { title } from "@/lib/title";
 import { getDashboard } from "@/server/dashboard";
 import { getSyncedGuides } from "@/server/guides";
 import { getApprovalSettings } from "@/server/reviews";
+import { getWorkspaceSharing } from "@/server/shares";
 
 export const Route = createFileRoute("/dashboard")({
   loader: async () => {
-    const [dashboard, guides, approvals] = await Promise.all([getDashboard(), getSyncedGuides(), getApprovalSettings()]);
-    return { ...dashboard, guides, approvals };
+    const [dashboard, guides, approvals, sharing] = await Promise.all([
+      getDashboard(),
+      getSyncedGuides(),
+      getApprovalSettings(),
+      getWorkspaceSharing(),
+    ]);
+    return { ...dashboard, guides, approvals, sharing };
   },
   head: () => title("Dashboard"),
   component: Dashboard,
@@ -29,7 +36,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, workspaces, active, billingEnabled, can, guides, approvals } = Route.useLoaderData();
+  const { user, workspaces, active, billingEnabled, can, guides, approvals, sharing } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -87,6 +94,7 @@ function Dashboard() {
             canManage={can.manageMembers}
             seatsLeft={active.plan.entitlements.seats - active.members.length - active.invitations.length}
           />
+          {sharing ? <SharingSettings key={active.id} {...sharing} /> : null}
           <Billing workspaceId={active.id} plan={active.plan.plan} enabled={billingEnabled} canManage={can.manageBilling} />
         </>
       ) : (

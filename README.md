@@ -88,8 +88,10 @@ GuideRecorder is built to be safe to leave running:
   for email addresses, phone numbers, card numbers, IBANs, IP addresses, API
   keys and tokens, long numbers, and your own words and patterns. Each
   finding becomes a suggested blur, or a blur straight away; Settings ›
-  Privacy chooses, or turns it off. Export asks you to review suggestions
-  left; the MCP server and the command line, which ask no one, blur them.
+  Privacy chooses, or turns it off. The editor's Privacy tab lists every
+  finding to blur or keep, and which steps were scanned. Export asks you to
+  review suggestions left; the MCP server and the command line, which ask no
+  one, blur them.
 - **AI only when you say so.** Nothing is sent anywhere unless AI is turned
   on and you have added your own key, which is kept in the macOS Keychain.
   Screenshots are sent with their blurs, and the sensitive text found on your

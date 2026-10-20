@@ -30,6 +30,8 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
               summary: "",
               tags: [],
               stepCount: 3,
+              kind: "walkthrough" as const,
+              hotspotCount: 0,
               createdAt: "",
               updatedAt: "",
               folder: "",
@@ -52,6 +54,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
     }),
     closeGuide: vi.fn(async () => []),
     deleteGuide: vi.fn(async () => true),
+    deleteGuides: vi.fn(async () => true),
     listFolders: vi.fn(async () => ["Work"]),
     createFolder: vi.fn(async (parent: string, name: string) => (parent ? `${parent}/${name}` : name)),
     duplicateGuide: vi.fn(async () => "G3"),
@@ -64,6 +67,7 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
       lastReviewed: today,
       updatedAt: "2026-10-19T00:00:00Z",
     })),
+    editGuideDetails: vi.fn(async () => guide()),
     moveGuide: vi.fn(async () => "/lib/Work/Guide.guiderecorder"),
     reveal: vi.fn(async () => {}),
     newAnnotatedGuide: vi.fn(async (): Promise<string | null> => "G2"),
@@ -224,6 +228,112 @@ describe("library", () => {
     api.markGuideReviewed = vi.fn(async () => Promise.reject({ kind: "readOnly", message: "read-only" }));
     expect(await s().markReviewed(s().guides[0])).toBe(false);
     expect(s().notice).toBe("Could not mark the guide reviewed: read-only");
+  });
+});
+
+describe("bulk actions", () => {
+  const other = (n: number) => ({
+    id: `G${n + 10}`,
+    path: `/lib/Other ${n}.guiderecorder`,
+    title: `Other ${n}`,
+    summary: "",
+    tags: [],
+    stepCount: 1,
+    kind: "walkthrough" as const,
+    hotspotCount: 0,
+    createdAt: "",
+    updatedAt: "",
+    folder: "",
+    readOnly: false,
+    duplicateOf: null,
+  });
+
+  it("move every guide, the open one following, and list once", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    vi.mocked(api.listGuides).mockClear();
+    const items = [s().guides[0]!, other(1), other(2)];
+    expect(await s().moveGuides(items, "Work")).toBe(true);
+    expect(api.moveGuide).toHaveBeenCalledTimes(3);
+    expect(api.moveGuide).toHaveBeenCalledWith("G11", "/lib/Other 1.guiderecorder", "Work");
+    expect(s().doc?.path).toBe("/lib/Work/Guide.guiderecorder");
+    expect(api.listGuides).toHaveBeenCalledOnce();
+    expect(s().busy).toBe(false);
+  });
+
+  it("keep going past a guide that fails and count the failures", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    api.markGuideReviewed = vi.fn(async (id: string, _path: string, today: string) =>
+      id === "G11" ? Promise.reject({ kind: "readOnly", message: "read-only" }) : { lastReviewed: today, updatedAt: "" },
+    );
+    const items = [other(1), other(2), other(3)];
+    expect(await store.getState().markGuidesReviewed(items, "2026-10-19")).toBe(false);
+    expect(api.markGuideReviewed).toHaveBeenCalledTimes(3);
+    expect(store.getState().notice).toBe("Could not mark the 3 guides reviewed (1 of 3): read-only");
+    expect(api.listGuides).toHaveBeenCalled();
+  });
+
+  it("set status, owner and tags; the open guide takes them and stays saved", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    api.editGuideDetails = vi.fn(async (id: string) => ({
+      ...s().doc!.guide,
+      id,
+      status: "published" as const,
+      owner: "IT",
+      tags: ["security"],
+      editedFields: ["tags" as const],
+      updatedAt: "2026-10-19T00:00:00Z",
+    }));
+    const edit = { status: "published" as const, owner: "IT", addTags: ["security"] };
+    expect(await s().editGuides([s().guides[0]!, other(1)], edit)).toBe(true);
+    expect(api.editGuideDetails).toHaveBeenCalledWith("G1", "/lib/Guide.guiderecorder", edit);
+    expect(api.editGuideDetails).toHaveBeenCalledWith("G11", "/lib/Other 1.guiderecorder", edit);
+    const guide = s().doc!.guide;
+    expect([guide.status, guide.owner, guide.tags, guide.editedFields]).toEqual([
+      "published",
+      "IT",
+      ["security"],
+      ["tags"],
+    ]);
+    expect(guide.title).toBe("Guide");
+    expect(s().saveStatus).toBe("saved");
+  });
+
+  it("duplicate each with its own copy title", async () => {
+    const { api } = fakeApi();
+    const store = createEditorStore({ api });
+    await store.getState().loadGuides();
+    const guide = store.getState().guides[0]!;
+    expect(await store.getState().duplicateGuides([guide, { ...guide, path: "/lib/Guide 2.guiderecorder" }])).toBe(true);
+    expect(vi.mocked(api.duplicateGuide).mock.calls.map((c) => c[2])).toEqual(["Guide copy", "Guide copy 2"]);
+  });
+
+  it("delete after one confirmation, closing the open guide among them", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    const items = [s().guides[0]!, other(1)];
+    expect(await s().deleteGuides(items)).toBe(true);
+    expect(api.deleteGuides).toHaveBeenCalledWith([
+      { id: "G1", path: "/lib/Guide.guiderecorder" },
+      { id: "G11", path: "/lib/Other 1.guiderecorder" },
+    ]);
+    expect(api.deleteGuide).not.toHaveBeenCalled();
+    expect(s().doc).toBeNull();
+
+    // One guide asks by its title.
+    expect(await s().deleteGuides([other(2)])).toBe(true);
+    expect(api.deleteGuide).toHaveBeenCalledWith("G12", "/lib/Other 2.guiderecorder", "Other 2");
+  });
+
+  it("delete nothing when cancelled", async () => {
+    const { api, s } = await opened();
+    await s().loadGuides();
+    api.deleteGuides = vi.fn(async () => false);
+    expect(await s().deleteGuides([s().guides[0]!, other(1)])).toBe(false);
+    expect(s().doc).not.toBeNull();
+    expect(s().busy).toBe(false);
   });
 });
 

@@ -6,7 +6,12 @@ import { pushRequest } from "@guiderecorder/sync";
 import { db } from "@/db";
 import { checkAccess } from "@/lib/access";
 import { requestMeta } from "@/lib/audit";
+import { objectStore } from "@/lib/api";
+import { DOWNLOAD_TTL } from "@/lib/assets";
 import { getSession } from "@/lib/auth";
+import { EXPORT_FORMATS, exportFilename, exportFormat, requestExport, type ExportFormat } from "@/lib/exports";
+import { library, setFolder } from "@/lib/library";
+import { librarySearch } from "@/lib/library-search";
 import { roles } from "@/lib/permissions";
 import { getGuide, listGuides, push, readsDrafts, restoreGuide, trashGuide } from "@/lib/sync";
 
@@ -60,11 +65,60 @@ export const getSyncedGuide = createServerFn({ method: "GET" })
     return {
       workspaceId,
       revision: found.head,
+      folder: found.guide.folder,
       canEdit: can(access.role, "update") && access.plan.entitlements.webEditor,
       // Approvals: authors and approvers see drafts and the review page; viewers only what's published.
       canReview: readsDrafts(access.role) && access.plan.entitlements.approvals,
       unpublished: readsDrafts(access.role) && found.guide.headRevisionId !== found.guide.publishedRevisionId,
+      exportFormats: Object.entries(EXPORT_FORMATS).map(([id, f]) => ({ id: id as ExportFormat, label: f.label })),
     };
+  });
+
+/** The active workspace's library: the guides the user can see, searched and filtered. */
+export const getLibrary = createServerFn({ method: "GET" })
+  .validator(librarySearch)
+  .handler(async ({ data }) => {
+    const { userId, workspaceId, access } = await workspaceAccess("/library");
+    if (!access.ok) return { available: false as const, reason: access.error };
+    const found = await library(db(), workspaceId, { userId, role: access.role }, {
+      query: data.q,
+      folder: data.folder,
+      tag: data.tag,
+      status: data.status,
+      reviewDue: data.review === "due",
+    });
+    return { available: true as const, canOrganize: can(access.role, "update"), ...found };
+  });
+
+/** Files a guide in a library folder, or takes it out of one (null). */
+export const setGuideFolder = createServerFn({ method: "POST" })
+  .validator(z.object({ guideId: z.string(), folder: z.string().max(200).nullable() }))
+  .handler(async ({ data }) => {
+    const { userId, workspaceId, access } = await workspaceAccess("/library");
+    if (!access.ok) return { ok: false as const, error: access.error };
+    const result = await setFolder(db(), workspaceId, { userId, role: access.role }, data.guideId, data.folder);
+    return result.status === 200 ? { ok: true as const, folder: result.folder } : { ok: false as const, error: result.error };
+  });
+
+/**
+ * A download of one revision as PDF, DOCX, Markdown or HTML: its URL once
+ * the export worker has made it, else how far it got. Poll until done;
+ * `retry` queues a failed export again.
+ */
+export const requestGuideExport = createServerFn({ method: "POST" })
+  .validator(z.object({ guideId: z.string(), revisionId: z.string(), format: exportFormat, retry: z.boolean().optional() }))
+  .handler(async ({ data }) => {
+    const { userId, workspaceId, access } = await workspaceAccess(`/guides/${data.guideId}`);
+    if (!access.ok) return { status: "failed" as const, error: access.error };
+    const result = await requestExport(db(), workspaceId, userId, data);
+    if (typeof result.status === "number") return { status: "failed" as const, error: result.error };
+    if (result.status === "failed") return { status: "failed" as const, error: result.error };
+    if (result.status !== "done") return { status: result.status };
+    const found = await getGuide(db(), workspaceId, { userId, role: access.role }, data.guideId);
+    const url = await objectStore().presignGet(result.key, DOWNLOAD_TTL, {
+      filename: exportFilename(found?.head.guide.title ?? "Guide", data.format),
+    });
+    return { status: "done" as const, url };
   });
 
 /** Saves an edit made on the web as a new revision. */

@@ -60,6 +60,8 @@ fn every_fixture_loads() {
         assert_eq!(handle.id, summary.id);
         assert_eq!(guide.title, summary.title);
         assert_eq!(guide.steps().count(), summary.step_count);
+        assert_eq!(guide.kind, summary.kind);
+        assert_eq!(guide.hotspot_count(), summary.hotspot_count);
     }
 }
 

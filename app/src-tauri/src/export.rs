@@ -13,9 +13,10 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
+use guiderecorder_core::export::md::{Branding, CheckedBranding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, motion, pdf, pptx, verify_crop_rect, ExportReport, OutPathError, RenderGuide,
+    docx, html, md, motion, pdf, pptx, verify_crop_rect, ExportReport, ImageOptions, OutPathError,
+    RenderGuide,
 };
 use guiderecorder_core::model::StepImage;
 use serde::{Deserialize, Serialize};
@@ -311,22 +312,7 @@ pub fn export_guide(
     }
     chosen.check_destination(format, out)?;
     // Checked (and the logo decoded) once, before anything is written.
-    let logo = match &branding.logo {
-        Some(path) => {
-            chosen.check_logo(path)?;
-            Some(read_logo(path)?)
-        }
-        None => None,
-    };
-    let accent = branding
-        .accent
-        .as_deref()
-        .map(str::trim)
-        .filter(|a| !a.is_empty())
-        .map(str::to_owned);
-    let branding = Branding { logo, accent }
-        .check()
-        .map_err(|e| AppError::new(ErrorKind::Invalid, format!("branding: {e}")))?;
+    let branding = check_branding(chosen, branding)?;
 
     let lock = session.guide_lock(id);
     let _guard = lock.lock().unwrap();
@@ -436,6 +422,232 @@ pub fn export_guide(
         chosen.add_exported(main.clone());
     }
     Ok(result)
+}
+
+/// The UI's branding, checked: a logo the user chose (read and decoded
+/// here) and a valid accent; a blank accent means none.
+fn check_branding(chosen: &ChosenPaths, branding: &BrandingRequest) -> Result<CheckedBranding> {
+    let logo = match &branding.logo {
+        Some(path) => {
+            chosen.check_logo(path)?;
+            Some(read_logo(path)?)
+        }
+        None => None,
+    };
+    let accent = branding
+        .accent
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_owned);
+    Branding { logo, accent }
+        .check()
+        .map_err(|e| AppError::new(ErrorKind::Invalid, format!("branding: {e}")))
+}
+
+/// Widest step image in a preview, in pixels: the preview pane is about
+/// 350 px wide, so this stays sharp on Retina and keeps the IPC small.
+const PREVIEW_IMAGE_WIDTH: u32 = 800;
+
+/// Short side of a video or GIF preview frame, in pixels.
+const PREVIEW_FRAME_SIZE: u32 = 360;
+
+/// The Export dialog's preview of a guide in one format, made by that
+/// format's own exporter (see [`preview_guide`]). Images are PNG data
+/// URIs with blur and pixelate burned in, as in the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ExportPreview {
+    /// The exported page (HTML or interactive walkthrough), self-contained
+    /// with its own CSP.
+    Html { html: String },
+    /// The exported `guide.md` and the images it links, by link.
+    Markdown {
+        markdown: String,
+        images: Vec<PreviewImage>,
+    },
+    /// The first pages of the PDF, as images. Word is approximated with
+    /// the PDF's pages (`approximate`).
+    Pages {
+        pages: Vec<String>,
+        page_count: usize,
+        approximate: bool,
+    },
+    /// Slides: each step's image as the deck shows it, in step order.
+    Slides { images: Vec<String> },
+    /// Video and GIF: a still of the first scenes (title card, sections,
+    /// steps in their close-up).
+    Frames {
+        frames: Vec<String>,
+        scene_count: usize,
+    },
+}
+
+/// An image a Markdown preview links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewImage {
+    /// The link in `guide.md`, e.g. `images/01-open-settings.png`.
+    pub link: String,
+    pub src: String,
+}
+
+fn png_uri(png: &[u8]) -> String {
+    html::data_uri("image/png", png)
+}
+
+/// Renders a preview of exporting a guide from its saved bundle with these
+/// options, writing nothing. The branding and motion options are checked
+/// as [`export_guide`] checks them; no destination is needed.
+#[allow(clippy::too_many_arguments)]
+pub fn preview_guide(
+    session: &Session,
+    chosen: &ChosenPaths,
+    guide_id: &str,
+    format: Format,
+    branding: &BrandingRequest,
+    paper: docx::Paper,
+    review_details: bool,
+    motion_request: &MotionRequest,
+) -> Result<ExportPreview> {
+    let id = parse_id(guide_id)?;
+    let branding = check_branding(chosen, branding)?;
+    let lock = session.guide_lock(id);
+    let _guard = lock.lock().unwrap();
+    let handle = session.bundle(id)?;
+    let loaded = session.library().read(&handle.path)?;
+    if loaded.guide.id != id {
+        return Err(AppError::new(
+            ErrorKind::Conflict,
+            format!("{} no longer holds guide {id}", handle.path.display()),
+        ));
+    }
+    let guide = loaded.guide;
+    let handle = loaded.handle;
+    let render = RenderGuide::new(&guide, &handle);
+    let image = ImageOptions {
+        max_width: Some(PREVIEW_IMAGE_WIDTH),
+        ..ImageOptions::default()
+    };
+
+    Ok(match format {
+        Format::Md => {
+            let opts = md::MdOptions {
+                image,
+                branding,
+                review_details,
+                ..md::MdOptions::default()
+            };
+            let preview = md::preview(&render, &handle, &opts);
+            ExportPreview::Markdown {
+                markdown: preview.markdown,
+                images: preview
+                    .images
+                    .into_iter()
+                    .map(|(link, png)| PreviewImage {
+                        link,
+                        src: png_uri(&png),
+                    })
+                    .collect(),
+            }
+        }
+        Format::Html | Format::Walkthrough => {
+            let mode = if format == Format::Walkthrough {
+                html::HtmlMode::Walkthrough
+            } else {
+                html::HtmlMode::Document
+            };
+            let opts = html::HtmlOptions {
+                mode,
+                image,
+                branding,
+                review_details,
+                ..html::HtmlOptions::default()
+            };
+            let (html, _) = html::render_string(&render, &handle, &opts).map_err(md_error)?;
+            ExportPreview::Html { html }
+        }
+        Format::Docx | Format::Pdf => {
+            let opts = pdf::PdfOptions {
+                image,
+                timestamp: Some(guide.updated_at),
+                paper,
+                branding,
+                review_details,
+                ..pdf::PdfOptions::default()
+            };
+            let preview = pdf::preview(&render, &handle, &opts)
+                .map_err(|e| AppError::new(ErrorKind::Io, e.to_string()))?;
+            ExportPreview::Pages {
+                pages: preview.pages.iter().map(|p| png_uri(p)).collect(),
+                page_count: preview.page_count,
+                approximate: format == Format::Docx,
+            }
+        }
+        Format::Pptx => {
+            let opts = ImageOptions {
+                max_width: Some(PREVIEW_IMAGE_WIDTH),
+                ..pptx::PptxOptions::default().image
+            };
+            ExportPreview::Slides {
+                images: render
+                    .steps()
+                    .map(|step| png_uri(&render.step_image(step, &opts).png))
+                    .collect(),
+            }
+        }
+        Format::Mp4 | Format::Gif => {
+            let opts = motion::MotionOptions {
+                seconds_per_step: motion_request
+                    .seconds_per_step
+                    .clamp(motion::MIN_SECONDS_PER_STEP, motion::MAX_SECONDS_PER_STEP),
+                aspect: motion_request.aspect,
+                zoom: motion_request.zoom,
+                captions: motion_request.captions,
+                ..motion::MotionOptions::default()
+            };
+            let preview =
+                motion::preview(&render, &opts, PREVIEW_FRAME_SIZE).map_err(|e| match e {
+                    motion::MotionError::NoSteps => {
+                        AppError::new(ErrorKind::Invalid, e.to_string())
+                    }
+                    e => AppError::new(ErrorKind::Io, e.to_string()),
+                })?;
+            ExportPreview::Frames {
+                frames: preview.frames.iter().map(|f| png_uri(f)).collect(),
+                scene_count: preview.scene_count,
+            }
+        }
+    })
+}
+
+/// The logo the user chose, for the Export dialog to show: a PNG or JPEG
+/// of at most [`MAX_LOGO_BYTES`], checked like an export's logo (and
+/// turned upright), as a PNG data URI. Only paths from the logo dialog
+/// (or the Settings default) are read.
+pub fn logo_preview(chosen: &ChosenPaths, path: &Path) -> Result<String> {
+    chosen.check_logo(path)?;
+    let bytes = read_logo(path)?;
+    if !(bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(&[0xff, 0xd8, 0xff])) {
+        return Err(AppError::new(
+            ErrorKind::Invalid,
+            format!("logo {}: not a PNG or JPEG image", path.display()),
+        ));
+    }
+    let branding = Branding {
+        logo: Some(bytes),
+        accent: None,
+    }
+    .check()
+    .map_err(|e| AppError::new(ErrorKind::Invalid, format!("logo {}: {e}", path.display())))?;
+    let logo = branding
+        .logo()
+        .ok_or_else(|| AppError::new(ErrorKind::Invalid, "no logo"))?;
+    Ok(png_uri(logo.png()))
 }
 
 fn exists(path: &Path) -> AppError {
@@ -968,6 +1180,182 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);
+    }
+
+    #[test]
+    fn previews_every_format_without_writing() {
+        let (session, id, chosen, dir) = session();
+        let none = BrandingRequest::default();
+        let steps = {
+            let handle = session.bundle(parse_id(&id).unwrap()).unwrap();
+            let loaded = session.library().read(&handle.path).unwrap();
+            loaded
+                .guide
+                .items
+                .iter()
+                .filter(|i| matches!(i, guiderecorder_core::model::Item::Step(_)))
+                .count()
+        };
+        let preview = |format, branding: &BrandingRequest| {
+            preview_guide(
+                &session,
+                &chosen,
+                &id,
+                format,
+                branding,
+                docx::Paper::A4,
+                true,
+                &MotionRequest::default(),
+            )
+        };
+        let is_png = |src: &str| src.starts_with("data:image/png;base64,");
+
+        match preview(Format::Html, &none).unwrap() {
+            ExportPreview::Html { html } => {
+                assert!(html.contains("<html") && !html.contains("<script>"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match preview(Format::Walkthrough, &none).unwrap() {
+            ExportPreview::Html { html } => assert!(html.contains("<script>")),
+            other => panic!("{other:?}"),
+        }
+        match preview(Format::Md, &none).unwrap() {
+            ExportPreview::Markdown { markdown, images } => {
+                assert_eq!(images.len(), steps);
+                for image in &images {
+                    assert!(markdown.contains(&format!("]({})", image.link)));
+                    assert!(is_png(&image.src));
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+        for (format, word) in [(Format::Pdf, false), (Format::Docx, true)] {
+            match preview(format, &none).unwrap() {
+                ExportPreview::Pages {
+                    pages,
+                    page_count,
+                    approximate,
+                } => {
+                    assert!(page_count >= 2 && pages.len() == page_count.min(12));
+                    assert!(pages.iter().all(|p| is_png(p)));
+                    assert_eq!(approximate, word);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        match preview(Format::Pptx, &none).unwrap() {
+            ExportPreview::Slides { images } => assert_eq!(images.len(), steps),
+            other => panic!("{other:?}"),
+        }
+        for format in [Format::Mp4, Format::Gif] {
+            match preview(format, &none).unwrap() {
+                ExportPreview::Frames {
+                    frames,
+                    scene_count,
+                } => {
+                    assert!(scene_count >= steps && !frames.is_empty());
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // Nothing was written.
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+
+        // Branding is checked as for an export.
+        let logo = dir.join("logo.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
+            .save(&logo)
+            .unwrap();
+        let branding = BrandingRequest {
+            logo: Some(logo.clone()),
+            accent: Some("#336699".into()),
+        };
+        let err = preview(Format::Html, &branding).unwrap_err();
+        assert!(
+            err.message.contains("not chosen as the logo"),
+            "{}",
+            err.message
+        );
+        chosen.add_logo(logo);
+        match preview(Format::Html, &branding).unwrap() {
+            ExportPreview::Html { html } => {
+                assert!(html.contains("#336699") && html.contains("data:image/png"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn logo_previews_are_chosen_png_or_jpeg_files() {
+        let dir = scratch();
+        let chosen = ChosenPaths::default();
+        let png = dir.join("logo.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([9, 8, 7, 255]))
+            .save(&png)
+            .unwrap();
+        let jpeg = dir.join("logo.jpg");
+        image::RgbImage::from_pixel(3, 2, image::Rgb([9, 8, 7]))
+            .save(&jpeg)
+            .unwrap();
+        let gif = dir.join("logo.gif");
+        fs::write(&gif, b"GIF89a....").unwrap();
+        let svg = dir.join("logo.png.svg");
+        fs::write(&svg, b"<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        let big = dir.join("big.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(MAX_LOGO_BYTES + 1, 0);
+        fs::write(&big, bytes).unwrap();
+
+        // Not chosen: refused before it is read.
+        let err = logo_preview(&chosen, &png).unwrap_err();
+        assert!(
+            err.message.contains("not chosen as the logo"),
+            "{}",
+            err.message
+        );
+        for path in [&png, &jpeg, &gif, &svg, &big] {
+            chosen.add_logo(path.clone());
+        }
+        for path in [&png, &jpeg] {
+            let uri = logo_preview(&chosen, path).unwrap();
+            assert!(
+                uri.starts_with("data:image/png;base64,"),
+                "{}",
+                path.display()
+            );
+        }
+        for path in [&gif, &svg] {
+            let err = logo_preview(&chosen, path).unwrap_err();
+            assert_eq!(err.kind, ErrorKind::Invalid);
+            assert!(err.message.contains("PNG or JPEG"), "{}", err.message);
+        }
+        assert!(logo_preview(&chosen, &big)
+            .unwrap_err()
+            .message
+            .contains("2 MB"));
+    }
+
+    /// The preview shows the walkthrough's own page in a frame, which
+    /// keeps the app's CSP, so that CSP allows the page's script by hash.
+    #[test]
+    fn app_csp_allows_the_walkthrough_script() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+        let page = guiderecorder_core::export::walkthrough::csp();
+        let hash = page
+            .split(';')
+            .find_map(|d| d.trim().strip_prefix("script-src "))
+            .unwrap();
+        let script_src = csp
+            .split(';')
+            .find_map(|d| d.trim().strip_prefix("script-src "))
+            .unwrap();
+        assert!(
+            script_src.split(' ').any(|s| s == hash),
+            "tauri.conf.json script-src needs {hash}"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  customType,
   foreignKey,
   index,
   integer,
@@ -198,6 +199,9 @@ export const asset = pgTable(
   (t) => [primaryKey({ columns: [t.organizationId, t.sha256] })],
 );
 
+/** Postgres full-text search document; written with `to_tsvector` (see `lib/search.ts`). */
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
+
 /** Orders guide changes for the sync feed; a guide takes a new value on every change. */
 export const syncSeq = pgSequence("sync_seq");
 
@@ -218,6 +222,10 @@ export const guide = pgTable(
     visibility: text("visibility").notNull().default("workspace"),
     headRevisionId: text("head_revision_id"),
     publishedRevisionId: text("published_revision_id"),
+    /** The library folder it's filed in, set on the web; null: unfiled. Not part of guide.json. */
+    folder: text("folder"),
+    /** The head revision's title, tags, steps and notes, for library search. */
+    search: tsvector("search"),
     /** Position in the workspace's change feed. */
     seq: bigint("seq", { mode: "bigint" })
       .notNull()
@@ -226,7 +234,11 @@ export const guide = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [primaryKey({ columns: [t.organizationId, t.id] }), index("guide_organization_seq_idx").on(t.organizationId, t.seq)],
+  (t) => [
+    primaryKey({ columns: [t.organizationId, t.id] }),
+    index("guide_organization_seq_idx").on(t.organizationId, t.seq),
+    index("guide_search_idx").using("gin", t.search),
+  ],
 );
 
 /** An immutable version of a guide: the whole guide.json. */
@@ -265,6 +277,80 @@ export const revisionAsset = pgTable(
     foreignKey({ columns: [t.organizationId, t.sha256], foreignColumns: [asset.organizationId, asset.sha256] }),
   ],
 );
+
+/**
+ * A PDF, DOCX, Markdown or HTML export of one revision, made by the export
+ * worker with `guiderecorder export`. Revisions never change, so a finished
+ * export is kept and served again; the file is at `key` in the store.
+ */
+export const exportJob = pgTable(
+  "export_job",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => revision.id, { onDelete: "cascade" }),
+    /** `pdf`, `docx`, `md` or `html` (see `lib/exports.ts`). */
+    format: text("format").notNull(),
+    /** `pending`, `running`, `done` or `failed`. */
+    status: text("status").notNull().default("pending"),
+    key: text("key"),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+  },
+  (t) => [
+    uniqueIndex("export_job_revision_format_idx").on(t.revisionId, t.format),
+    index("export_job_status_idx").on(t.status, t.createdAt),
+  ],
+);
+
+/**
+ * A public link to a guide for people outside the workspace: `/s/<token>`.
+ * Shows a pinned revision, or the guide's latest published one when
+ * `revisionId` is null. Revoked links stay, with their view counts.
+ */
+export const shareLink = pgTable(
+  "share_link",
+  {
+    id: text("id").primaryKey(),
+    /** Random and URL-safe; the link is the credential. */
+    token: text("token").notNull().unique(),
+    organizationId: text("organization_id").notNull(),
+    guideId: text("guide_id").notNull(),
+    revisionId: text("revision_id").references(() => revision.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at"),
+    /** Better Auth's scrypt hash; null if anyone with the link may view. */
+    passwordHash: text("password_hash"),
+    allowDownload: boolean("allow_download").notNull().default(false),
+    views: integer("views").notNull().default(0),
+    lastViewedAt: timestamp("last_viewed_at"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.organizationId, t.guideId], foreignColumns: [guide.organizationId, guide.id] }).onDelete("cascade"),
+    index("share_link_guide_idx").on(t.organizationId, t.guideId),
+  ],
+);
+
+/** Settings a workspace's admins change. Workspaces without a row have the defaults. */
+export const workspaceSettings = pgTable("workspace_settings", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  /** `anyone`: share links work for anyone who has one; `password`: only with a password; `off`: not at all. */
+  shareLinks: text("share_links").notNull().default("anyone"),
+  /** The longest a share link may last, in days; null for no limit. */
+  shareLinkMaxDays: integer("share_link_max_days"),
+  updatedAt: updatedAt(),
+});
 
 /**
  * Who must approve edits to the guides in a folder before they're published

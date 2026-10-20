@@ -37,6 +37,24 @@ services:
         until aws --endpoint-url http://storage:9000 s3api head-bucket --bucket guiderecorder 2>/dev/null ||
         aws --endpoint-url http://storage:9000 s3 mb s3://guiderecorder; do sleep 1; done
 
+  # Makes PDF, DOCX, Markdown and HTML downloads with the Rust CLI. Builds
+  # the CLI, so it's opt-in: `docker compose --profile worker up -d --build`.
+  # Or run `pnpm worker` with GUIDERECORDER_CLI pointing at a local build.
+  export-worker:
+    profiles: [worker]
+    build:
+      context: ..
+      dockerfile: web/worker/Dockerfile
+    depends_on: [postgres, storage]
+    environment:
+      DATABASE_URL: postgres://guiderecorder:guiderecorder@postgres:5432/guiderecorder
+      S3_ENDPOINT: http://storage:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: guiderecorder
+      S3_ACCESS_KEY_ID: guiderecorder
+      S3_SECRET_ACCESS_KEY: guiderecorder
+    restart: unless-stopped
+
 volumes:
   postgres:
   storage:
