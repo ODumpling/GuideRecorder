@@ -43,7 +43,7 @@ function plainLabel(markdown: string): string {
 // The menu (Radix and its positioning) loads with the first opened guide.
 const InsertMenu = lazy(() => import("@/components/InsertMenu"));
 
-function itemLabel(item: Item, annotated: boolean): string {
+export function itemLabel(item: Item, annotated: boolean): string {
   switch (item.type) {
     case "step":
       return plainLabel(item.title) || (annotated ? "Untitled page" : "Untitled step");

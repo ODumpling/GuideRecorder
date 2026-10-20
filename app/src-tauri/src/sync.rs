@@ -56,7 +56,7 @@ fn http_error(e: reqwest::Error) -> AppError {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncAccount {
-    /// The web app's origin, e.g. `https://app.guiderecorder.app`.
+    /// The web app's origin, e.g. `https://gr.dufflebear.dev`.
     pub server: Option<String>,
     pub signed_in: bool,
 }
@@ -79,7 +79,7 @@ pub fn normalize_server(server: &str) -> Result<String> {
     let invalid = || {
         AppError::new(
             ErrorKind::Invalid,
-            "enter the web app's address, e.g. https://app.guiderecorder.app",
+            "enter the web app's address, e.g. https://gr.dufflebear.dev",
         )
     };
     let url = reqwest::Url::parse(server.trim()).map_err(|_| invalid())?;
@@ -289,6 +289,18 @@ pub async fn sync_sign_in_poll(
             return Err(AppError::new(ErrorKind::Io, message.to_owned()));
         }
     })
+}
+
+/// Opens a page of the signed-in web app (`path`, e.g. `/profile`) in the
+/// browser.
+#[tauri::command]
+pub async fn sync_open_web(path: String) -> Result<()> {
+    if !path.starts_with('/') || path.starts_with("//") || path.contains("..") {
+        return Err(AppError::new(ErrorKind::Invalid, "not a web app page"));
+    }
+    let (server, _) = blocking(credentials).await?;
+    tauri_plugin_opener::open_url(format!("{server}{path}"), None::<&str>)
+        .map_err(|e| AppError::new(ErrorKind::Io, format!("can't open the browser: {e}")))
 }
 
 /// Signs out: ends the session on the server (best effort) and removes the

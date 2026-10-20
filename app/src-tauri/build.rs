@@ -100,6 +100,7 @@ const COMMANDS: &[&str] = &[
     "sync_sign_in_start",
     "sync_sign_in_poll",
     "sync_sign_out",
+    "sync_open_web",
     "sync_request",
     "sync_load_state",
     "sync_save_state",

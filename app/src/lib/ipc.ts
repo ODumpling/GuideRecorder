@@ -473,6 +473,8 @@ export interface SyncApi {
   signInStart(server: string): Promise<DeviceCode>;
   signInPoll(deviceCode: string): Promise<SignInStatus>;
   signOut(): Promise<void>;
+  /** Opens a page of the signed-in web app (e.g. `/profile`) in the browser. */
+  openWeb(path: string): Promise<void>;
   loadState(): Promise<unknown>;
   saveState(state: unknown): Promise<void>;
 }
@@ -482,6 +484,7 @@ export const tauriSyncApi: SyncApi = {
   signInStart: (server) => invoke("sync_sign_in_start", { server }),
   signInPoll: (deviceCode) => invoke("sync_sign_in_poll", { deviceCode }),
   signOut: () => invoke("sync_sign_out"),
+  openWeb: (path) => invoke("sync_open_web", { path }),
   loadState: () => invoke("sync_load_state"),
   saveState: (state) => invoke("sync_save_state", { state }),
 };

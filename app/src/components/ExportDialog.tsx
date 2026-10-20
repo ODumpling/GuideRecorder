@@ -10,6 +10,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
+import { create } from "zustand";
 import { ExportPreview } from "@/components/ExportPreview";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
@@ -124,14 +125,27 @@ const FORMAT_COLORS: Record<ExportFormat, string> = {
   gif: "#c2398f",
 };
 
-/** The export dialog for the open guide. */
+/** Whether the export dialog is open, and the format it opens on (null: the remembered one). */
+export const exportDialogStore = create<{ open: boolean; format: ExportFormat | null }>(() => ({
+  open: false,
+  format: null,
+}));
+
+/** Opens the export dialog, from the toolbar or the command palette. */
+export function openExport(format: ExportFormat | null = null) {
+  exportDialogStore.setState({ open: true, format });
+}
+
+/** The export dialog for the open guide; `format` overrides the starting format. */
 export function ExportDialog({
   open,
   onOpenChange,
+  format: startFormat = null,
   api = tauriExportApi,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
+  format?: ExportFormat | null;
   api?: ExportApi;
 }) {
   const doc = useEditor((s) => s.doc);
@@ -183,7 +197,7 @@ export function ExportDialog({
   useEffect(() => {
     if (open) {
       const start = initialChoices();
-      setFormat(start.format);
+      setFormat(startFormat ?? start.format);
       setDestination((d) => ({ ...d, folder: start.folder }));
       setLogo(start.logo);
       setAccent(start.accent);
@@ -196,7 +210,7 @@ export function ExportDialog({
       setRevealError(null);
       setSkipReview(false);
     }
-  }, [open]);
+  }, [open, startFormat]);
 
   const out = outPath(format, destination);
   // "Replace" covers one destination only: a new guide, format or target,

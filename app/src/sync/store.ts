@@ -21,8 +21,17 @@ export interface Workspace {
   name: string;
 }
 
+/** The signed-in user on the web app. */
+export interface SyncUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
 export interface SyncStoreState {
   account: SyncAccount | null;
+  /** Who's signed in, once the server said. */
+  user: SyncUser | null;
   state: SyncState;
   workspaces: Workspace[];
   /** Whether the sign-in dialog is open. */
@@ -91,6 +100,29 @@ export function createSyncStore({
       await api.saveState(state).catch((e) => set({ error: errorMessage(e) }));
     }
 
+    /**
+     * Who's signed in, then the sync state made theirs: another account's
+     * choices (what syncs, where it synced to) don't carry over, so nothing
+     * syncs to the new one until it's turned on.
+     */
+    async function identify(server: string | null) {
+      let user: SyncUser | null = null;
+      try {
+        const response = await backend.request<{ user: SyncUser } | null>("GET", "/api/auth/get-session");
+        if (response.status === 200 && response.body?.user) {
+          const { id, name, email } = response.body.user;
+          user = { id, name, email };
+        }
+      } catch {
+        // Only the account menu shows it; it says "Signed in" without.
+      }
+      set({ user });
+      if (!user) return;
+      const owner = `${user.id}@${server ?? ""}`;
+      // State from before owners were recorded stays with whoever signs in next.
+      if (get().state.owner !== owner) await update((s) => (s.owner === undefined ? { ...s, owner } : { ...emptyState(), owner }));
+    }
+
     function stopPolling() {
       if (poll !== undefined) timers.clearTimeout(poll);
       poll = undefined;
@@ -98,6 +130,7 @@ export function createSyncStore({
 
     return {
       account: null,
+      user: null,
       state: emptyState(),
       workspaces: [],
       signInOpen: false,
@@ -110,7 +143,10 @@ export function createSyncStore({
       async load() {
         try {
           const [account, stored] = await Promise.all([api.account(), api.loadState()]);
-          set({ account, state: loadedState(stored) });
+          set({ state: loadedState(stored) });
+          // Made theirs before it's signed in, so no sync runs on someone else's choices.
+          if (account.signedIn) await identify(account.server);
+          set({ account });
           if (account.signedIn) await get().loadWorkspaces();
         } catch (error) {
           set({ error: errorMessage(error) });
@@ -142,7 +178,9 @@ export function createSyncStore({
             const status = await api.signInPoll(code.deviceCode);
             if (get().signIn?.deviceCode !== code.deviceCode) return;
             if (status === "approved") {
-              set({ signIn: null, account: await api.account() });
+              const account = await api.account();
+              await identify(account.server);
+              set({ signIn: null, account });
               await get().loadWorkspaces();
               return;
             }
@@ -166,7 +204,7 @@ export function createSyncStore({
         stopPolling();
         try {
           await api.signOut();
-          set({ account: await api.account(), workspaces: [], signIn: null, error: null });
+          set({ account: await api.account(), user: null, workspaces: [], signIn: null, error: null });
         } catch (error) {
           set({ error: errorMessage(error) });
         }

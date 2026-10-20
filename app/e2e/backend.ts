@@ -1075,6 +1075,8 @@ export class Backend {
       case "sync_sign_out":
         this.sync.signedIn = false;
         return null;
+      case "sync_open_web":
+        return null;
       case "sync_load_state":
         return this.sync.state;
       case "sync_save_state":
@@ -1097,6 +1099,7 @@ export class Backend {
         const body = args.body as { guideId: string; guide: Guide; assets: Record<string, string> };
         let response: unknown;
         if (path === "/api/auth/organization/list") response = [{ id: "ws1", name: "Acme" }];
+        else if (path === "/api/auth/get-session") response = { user: { id: "u1", name: "Dana Ortiz", email: "dana@example.com" } };
         else if (path.includes("/sync/changes")) response = { changes: [], cursor: "0", hasMore: false };
         else if (path.endsWith("/assets/uploads")) response = { present: ["0".repeat(64)], uploads: [] };
         else if (path.endsWith("/sync/push")) {

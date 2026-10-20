@@ -262,6 +262,7 @@ pub fn run() {
             sync::sync_sign_in_start,
             sync::sync_sign_in_poll,
             sync::sync_sign_out,
+            sync::sync_open_web,
             sync::sync_request,
             sync::sync_load_state,
             sync::sync_save_state,
