@@ -35,6 +35,19 @@ the `build` target before rolling out (`pnpm -C web db:migrate`), and run the
 `runtime` target. Migrations are additive within a release, so the old
 version keeps working while they run.
 
+### Staff
+
+Staff use the staff console (`/staff`). Someone signs up, then you make them
+staff from the migrations image, which has the scripts:
+
+```sh
+docker compose -f web/compose.prod.yaml --env-file web/.env.production run --rm migrate pnpm -C web staff add you@example.com
+```
+
+`staff list` and `staff remove <email>` work the same way. On
+gr.dufflebear.dev, run it from `/srv/guiderecorder` with
+`docker compose run --rm migrate pnpm -C web staff add <email>`.
+
 ## gr.dufflebear.dev (continuous deployment)
 
 Every push to `main` that passes CI is deployed to https://gr.dufflebear.dev

@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { createAuth, type Auth } from "./create-auth";
 import { emailSender } from "./email";
 import { env } from "./env";
+import { getPlatformSettings, offeredPlans } from "./platform";
 
 let cached: Auth | undefined;
 
@@ -50,4 +51,11 @@ export function authFeatures() {
     microsoft: Boolean(e.MICROSOFT_CLIENT_ID),
     billing: Boolean(e.STRIPE_SECRET_KEY && e.STRIPE_WEBHOOK_SECRET),
   };
+}
+
+/** The paid plans workspaces can subscribe to now. */
+export async function plansOnOffer() {
+  const e = env();
+  if (!authFeatures().billing) return [];
+  return offeredPlans(await getPlatformSettings(db()), { pro: e.STRIPE_PRICE_PRO, enterprise: e.STRIPE_PRICE_ENTERPRISE });
 }

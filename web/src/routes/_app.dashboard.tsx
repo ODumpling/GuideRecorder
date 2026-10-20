@@ -33,7 +33,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, active, billingEnabled, can, guides, approvals, sharing } = Route.useLoaderData();
+  const { user, active, billingEnabled, plansOnOffer, can, guides, approvals, sharing } = Route.useLoaderData();
 
   if (!active) {
     return (
@@ -73,7 +73,7 @@ function Dashboard() {
       {approvals.available ? <ApprovalPolicies {...approvals} /> : null}
       {sharing ? <SharingSettings key={active.id} {...sharing} /> : null}
       {guides.available ? <Trash {...guides} /> : null}
-      <Billing workspaceId={active.id} plan={active.plan.plan} enabled={billingEnabled} canManage={can.manageBilling} />
+      <Billing workspaceId={active.id} plan={active.plan.plan} enabled={billingEnabled} canManage={can.manageBilling} offered={plansOnOffer} />
     </div>
   );
 }

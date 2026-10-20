@@ -7,7 +7,7 @@ import { imagePaths, pushRequest } from "@guiderecorder/sync";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
 import { asset, auditEvent, guide, member, organization, staff, subscription, user } from "@/db/schema";
-import { ensureStaff, findUsers, isStaff, issueLicence, restoreDeletedGuide, revokeLicence, userDetail } from "./staff";
+import { findUsers, isStaff, issueLicence, restoreDeletedGuide, revokeLicence, userDetail } from "./staff";
 import { getGuide, push, restoreGuide, trashGuide, type Actor } from "./sync";
 import { workspacePlan } from "./workspace";
 
@@ -49,18 +49,6 @@ describe("staff", () => {
   it("lets in only users in the staff table", async () => {
     expect(await isStaff(db, "help")).toBe(true);
     expect(await isStaff(db, "ada")).toBe(false);
-  });
-
-  it("makes STAFF_EMAILS users and staff, idempotently", async () => {
-    expect(await ensureStaff(db, [" Hello@DuffleBear.dev", "ada@acme.com", ""])).toEqual([
-      { email: "hello@dufflebear.dev", created: true },
-      { email: "ada@acme.com", created: false },
-    ]);
-    expect(await ensureStaff(db, ["hello@dufflebear.dev"])).toEqual([{ email: "hello@dufflebear.dev", created: false }]);
-    const [hello] = await findUsers(db, "hello@dufflebear.dev");
-    expect(await isStaff(db, hello!.id)).toBe(true);
-    expect(await isStaff(db, "ada")).toBe(true);
-    await expect(ensureStaff(db, ["nope"])).rejects.toThrow("Not an email");
   });
 
   it("finds users by name, email or id", async () => {

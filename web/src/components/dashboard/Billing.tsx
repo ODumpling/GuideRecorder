@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import type { PaidPlan } from "@/lib/platform";
 import { ENTITLEMENTS, type PlanName } from "@/lib/plans";
 import { Button } from "@guiderecorder/ui/button";
 import { Card } from "@guiderecorder/ui/card";
@@ -13,6 +14,8 @@ interface Props {
   /** Stripe is configured. */
   enabled: boolean;
   canManage: boolean;
+  /** The paid plans that can be bought now; staff can turn plans off. */
+  offered: PaidPlan[];
 }
 
 const PLANS: PlanName[] = ["free", "pro", "enterprise"];
@@ -38,7 +41,7 @@ function features(plan: PlanName): string[] {
 }
 
 /** The workspace's plan, with upgrades and downgrades through Stripe. */
-export function Billing({ workspaceId, plan, enabled, canManage }: Props) {
+export function Billing({ workspaceId, plan, enabled, canManage, offered }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<PlanName | "portal" | null>(null);
 
@@ -107,6 +110,7 @@ export function Billing({ workspaceId, plan, enabled, canManage }: Props) {
         {PLANS.map((p) => {
           const current = p === plan;
           const up = RANK[p] > RANK[plan];
+          const available = p === "free" || offered.includes(p);
           return (
             <li
               key={p}
@@ -124,7 +128,10 @@ export function Billing({ workspaceId, plan, enabled, canManage }: Props) {
                   </li>
                 ))}
               </ul>
-              {enabled && canManage && !current ? (
+              {enabled && canManage && !current && !available ? (
+                <p className="text-sm text-muted-foreground">Not available right now.</p>
+              ) : null}
+              {enabled && canManage && !current && available ? (
                 <Button
                   variant={up ? "brand" : "outline"}
                   disabled={busy !== null}

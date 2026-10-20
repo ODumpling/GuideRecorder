@@ -8,7 +8,8 @@ import { ErrorText, Field } from "@/components/ui";
 
 export interface AuthFormProps {
   mode: "sign-in" | "sign-up";
-  providers: { google: boolean; microsoft: boolean };
+  /** Configured sign-in providers, and whether new accounts can be created. */
+  providers: { google: boolean; microsoft: boolean; registration: boolean };
   /** Where to go after signing in. */
   next?: string;
   /** An error code from a redirect back here, e.g. `SSO_REQUIRED`. */
@@ -18,6 +19,7 @@ export interface AuthFormProps {
 const ERRORS: Record<string, string> = {
   SSO_REQUIRED: "Your organization requires single sign-on. Enter your work email and choose Sign in with SSO.",
   SSO_NOT_AVAILABLE: "Single sign-on isn't available for this workspace's plan.",
+  REGISTRATION_CLOSED: "New sign-ups are closed. Ask a workspace admin for an invitation.",
 };
 
 export function AuthForm({ mode, providers, next = "/library", error: initialError }: AuthFormProps) {
@@ -51,7 +53,7 @@ export function AuthForm({ mode, providers, next = "/library", error: initialErr
     const email = (event.currentTarget.form?.elements.namedItem("email") as HTMLInputElement | null)?.value;
     if (!email) return setError("Enter your email first.");
     void run(
-      () => authClient.signIn.magicLink({ email, callbackURL: next }),
+      () => authClient.signIn.magicLink({ email, callbackURL: next, errorCallbackURL: "/sign-in" }),
       () => setNotice(`We sent a sign-in link to ${email}.`),
     );
   }
@@ -73,7 +75,11 @@ export function AuthForm({ mode, providers, next = "/library", error: initialErr
     <Card className="p-6 block w-full max-w-sm">
       <h1 className="mb-1 font-serif text-3xl">{mode === "sign-in" ? "Sign in" : "Create your account"}</h1>
       <p className="mb-6 text-sm text-muted-foreground">
-        {mode === "sign-in" ? "Welcome back to GuideRecorder." : "Share and sync your guides."}
+        {mode === "sign-in"
+          ? "Welcome back to GuideRecorder."
+          : providers.registration
+            ? "Share and sync your guides."
+            : "New sign-ups are by invitation only. Use the email address you were invited at."}
       </p>
       {/* POST: a submit before hydration must not put the password in the URL. */}
       <form method="post" onSubmit={submit} className="grid gap-4">
@@ -130,7 +136,7 @@ export function AuthForm({ mode, providers, next = "/library", error: initialErr
       <p className="mt-6 text-center text-sm text-muted-foreground">
         {mode === "sign-in" ? (
           <>
-            New here? <Link className="text-brand underline-offset-4 hover:underline" to="/sign-up" search={{ next }}>Create an account</Link>
+            {providers.registration ? "New here?" : "Invited?"} <Link className="text-brand underline-offset-4 hover:underline" to="/sign-up" search={{ next }}>Create an account</Link>
           </>
         ) : (
           <>

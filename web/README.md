@@ -165,16 +165,17 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 - An hourly job deletes what's past its retention (`src/lib/retention.ts`).
 - Staff console (`/staff`, `src/lib/staff.ts`): for GuideRecorder's own
   developers and helpdesk, not customers. Users in the `staff` table
-  (`pnpm staff add <email>`; in production list them in `STAFF_EMAILS`:
-  each deploy's migrate step runs `pnpm staff ensure`, which makes missing
-  users, without a password, and adds them; gr.dufflebear.dev defaults to
-  `hello@dufflebear.dev`)
+  (`pnpm staff add <email>` once they've signed up; `pnpm staff list`,
+  `pnpm staff remove <email>`)
   find any user and see their workspaces, plans and sign-in methods; give a
   workspace Pro or Enterprise through a date (`licence_grant`, outside
   Stripe, counted like an active subscription by `workspacePlan` until it
   ends or is revoked); and restore guides deleted under 30 days ago, private
   ones too. Grants, revokes and restores go in the workspace's audit log
   (`metadata.staff`) and the security log. Everyone else gets a 404.
+  Its Settings page (`/staff/settings`, `src/lib/platform.ts`) closes
+  sign-ups to everyone but invited people and SSO/SCIM users, and turns paid
+  plans off for new purchases; existing subscriptions and grants keep working.
 - Security events (admin changes, SSO, SCIM, rate limits) are logged as JSON
   (`src/lib/security-events.ts`); the audit log plugs in there.
 

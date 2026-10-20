@@ -4,8 +4,6 @@
 //   pnpm staff list
 //   pnpm staff add <email>
 //   pnpm staff remove <email>
-//   pnpm staff ensure      creates the users in STAFF_EMAILS (comma-separated)
-//                          if missing and makes them staff; run on deploy
 
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -13,7 +11,6 @@ import postgres from "postgres";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
 import { staff, user } from "@/db/schema";
-import { ensureStaff } from "@/lib/staff";
 
 const url = process.env.DATABASE_URL ?? "postgres://guiderecorder:guiderecorder@localhost:5432/guiderecorder";
 const client = postgres(url, { max: 1 });
@@ -32,10 +29,6 @@ try {
   if (command === "add") {
     await db.insert(staff).values({ userId: await userId(email), addedBy: "cli" }).onConflictDoNothing();
     console.log(`staff: added ${email}`);
-  } else if (command === "ensure") {
-    const emails = (process.env.STAFF_EMAILS ?? "").split(",").filter((e) => e.trim());
-    for (const { email, created } of await ensureStaff(db, emails)) console.log(`staff: ${email}${created ? " (new user)" : ""}`);
-    if (!emails.length) console.log("staff: STAFF_EMAILS is empty; nothing to do");
   } else if (command === "remove") {
     await db.delete(staff).where(eq(staff.userId, await userId(email)));
     console.log(`staff: removed ${email}`);
@@ -44,7 +37,7 @@ try {
     for (const r of rows) console.log(`${r.email.padEnd(32)} since ${r.since.toISOString().slice(0, 10)}`);
     if (!rows.length) console.log("staff: nobody yet; `pnpm staff add <email>`");
   } else {
-    throw new Error("Usage: pnpm staff list | add <email> | remove <email> | ensure");
+    throw new Error("Usage: pnpm staff list | add <email> | remove <email>");
   }
 } catch (error) {
   console.error(`staff: ${error instanceof Error ? error.message : error}`);
