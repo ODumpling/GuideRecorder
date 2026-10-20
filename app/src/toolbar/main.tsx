@@ -4,9 +4,10 @@ import { listen } from "@tauri-apps/api/event";
 import "../index.css";
 import "./toolbar.css";
 import { installIpcDiagnostics } from "@/lib/ipc-diagnostics";
-import { addManualStep, tauriRecordingApi } from "@/lib/ipc";
+import { addManualStep, tauriFeedApi, tauriRecordingApi } from "@/lib/ipc";
 import { createRecordingStore, subscribe } from "@/recording/store";
 import { applyTheme, parseTheme, storedTheme, THEME_STORAGE_KEY } from "@/settings/theme";
+import { createFeedStore } from "@/toolbar/feed";
 import { FloatingToolbar } from "@/toolbar/FloatingToolbar";
 import { createManualStepStore } from "@/toolbar/toolbar";
 
@@ -24,12 +25,21 @@ window.addEventListener("storage", (e) => {
 // `recording://saved` and opens the guide; Rust closes this window.
 const recording = createRecordingStore({ api: tauriRecordingApi });
 const manual = createManualStepStore({ addManualStep, recording });
+const feed = createFeedStore({ api: tauriFeedApi, recording });
 // Subscribed before loading, so no event between the read and the listen is lost.
 subscribe(recording, (event, handler) => listen(event, (e) => handler(e.payload)));
 void recording.getState().load();
 
+// The window follows the content's height (the bar, and the feed panel when it shows).
+let height = 0;
+const resize = (next: number) => {
+  if (next === height) return;
+  height = next;
+  tauriFeedApi.resizeToolbar(next).catch((error) => console.error("resizing the toolbar failed:", error));
+};
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <FloatingToolbar recording={recording} manual={manual} />
+    <FloatingToolbar recording={recording} manual={manual} feed={feed} resize={resize} />
   </React.StrictMode>,
 );

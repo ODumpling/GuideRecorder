@@ -3,14 +3,13 @@ import { AlertDialog } from "radix-ui";
 import { Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
 import { NewGuideButton } from "@/components/NewGuideDialog";
 import { Button } from "@/components/ui/button";
-import { tauriRecordingApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";
 import { DisplayPicker } from "@/picker/DisplayPicker";
 import { WindowPicker } from "@/picker/WindowPicker";
 import { recordingStore, startFlow, useRecording } from "@/recording/recording";
 import { captureLostLabel, captureLostMessage, elapsedMs, formatElapsed } from "@/recording/store";
-import { makeThumbnail, THUMBNAIL_SIDE } from "@/recording/thumbnails";
+import { useThumbnail } from "@/recording/useThumbnail";
 
 /** Recorded time, ticking while recording and frozen while paused. */
 function Elapsed() {
@@ -186,30 +185,7 @@ export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
 
 /** One screenshot of the strip, fetched and scaled down once; a dot marks the click. */
 function Thumbnail({ snapshot, index }: { snapshot: RecordingSnapshot; index: number }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let revoke: string | null = null;
-    let gone = false;
-    tauriRecordingApi
-      .snapshotImage(snapshot.id)
-      .then((bytes) => makeThumbnail(bytes, THUMBNAIL_SIDE * Math.min(2, window.devicePixelRatio || 1)))
-      .then((made) => {
-        if (gone || !made) {
-          if (made) URL.revokeObjectURL(made);
-          else setFailed(true);
-          return;
-        }
-        revoke = made;
-        setUrl(made);
-      })
-      .catch(() => setFailed(true));
-    return () => {
-      gone = true;
-      if (revoke) URL.revokeObjectURL(revoke);
-    };
-  }, [snapshot.id]);
-
+  const { url, failed } = useThumbnail(snapshot.id);
   const label = `Screenshot ${index + 1}`;
   const { point, width, height } = snapshot;
   return (

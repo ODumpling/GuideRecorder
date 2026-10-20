@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "toolbar",
-  "description": "The floating recording toolbar: recording events, dragging the window, and pause, resume, stop and manual steps",
+  "description": "The floating recording toolbar: recording events, dragging and sizing the window, pause, resume, stop and manual steps, and the live capture feed (thumbnails, rename, delete)",
   "windows": [
     "toolbar"
   ],
@@ -14,6 +14,11 @@
     "allow-pause-recording",
     "allow-resume-recording",
     "allow-stop-recording",
-    "allow-add-manual-step"
+    "allow-add-manual-step",
+    "allow-recording-snapshot",
+    "allow-delete-capture",
+    "allow-rename-capture",
+    "allow-resize-toolbar",
+    "allow-set-toolbar-typing"
   ]
 }

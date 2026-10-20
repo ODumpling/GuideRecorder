@@ -359,6 +359,8 @@ export interface Settings {
     afterFrameDelayMs: number;
     excludedApps: string[];
     typingIdleMs: number;
+    /** Briefly show a ring on screen where each click was captured. */
+    clickRing: boolean;
   };
   ai: {
     enabled: boolean;
@@ -511,6 +513,16 @@ export interface RecordingSnapshot {
   height: number;
   /** Where the click landed, in image pixels; null for a key. */
   point: Point | null;
+  /** A provisional step title (guide Markdown), e.g. "Click **Submit** in Safari". */
+  title: string;
+  /** Recorded time (pauses left out) when it was taken. */
+  elapsedMs: number;
+}
+
+/** A capture's new title (`recording://snapshot-title`). */
+export interface SnapshotTitle {
+  id: string;
+  title: string;
 }
 
 /** What the guide pass writes (`ai://guide`). */

@@ -34,7 +34,11 @@
 //! show what has been captured so far; `recording_snapshot` serves the
 //! image. These are provisional: the steps, and which screenshots they
 //! keep, are only decided at stop (see the capture crate's
-//! `LiveSnapshot`).
+//! `LiveSnapshot`). Each is titled and can be renamed or deleted before
+//! stop (the live feed, see [`crate::feed`]); ⌘⌥Z deletes the newest.
+//! Each click also shows a click ring when the settings ask for one, and
+//! moves the toolbar out of the way when it lands near it (see
+//! [`crate::toolbar`]).
 //!
 //! The library is checked at start (no open library, no recording) and
 //! read again at stop: switching the library mid-recording saves into the
@@ -70,8 +74,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use guiderecorder_capture::macos::frames::CaptureTarget;
 use guiderecorder_capture::macos::session::{
-    AfterFrames, CaptureLostSink, ExclusionSink, Hotkey, LiveSnapshot, RecordingSession,
-    SessionConfig, SessionError, SnapshotSink,
+    AfterFrames, CaptureEdits, CaptureLostSink, ExclusionSink, Hotkey, LivePress, PressSink,
+    RecordingSession, SessionConfig, SessionError, SnapshotSink, UndoSink,
 };
 use guiderecorder_core::events::Modifiers;
 use guiderecorder_core::model::Point;
@@ -205,18 +209,11 @@ pub struct RecordingSnapshot {
     pub height: u32,
     /// Where the click landed, in image pixels; none for a key.
     pub point: Option<Point>,
-}
-
-impl RecordingSnapshot {
-    fn of(snapshot: &LiveSnapshot) -> Self {
-        Self {
-            id: snapshot.frame.file_stem(),
-            ts: snapshot.ts.0,
-            width: snapshot.width,
-            height: snapshot.height,
-            point: snapshot.point,
-        }
-    }
+    /// A provisional step title (guide Markdown), e.g. "Click
+    /// **Submit** in Safari"; see [`crate::feed`].
+    pub title: String,
+    /// Recorded time (pauses left out) when it was taken.
+    pub elapsed_ms: u64,
 }
 
 /// True for an id `recording_snapshot` accepts: a file stem as
@@ -234,6 +231,8 @@ fn is_snapshot_id(id: &str) -> bool {
 pub struct Recorder {
     session: Mutex<Option<RecordingSession>>,
     status: Mutex<StampedStatus>,
+    /// The running recording's captures and their edits.
+    pub feed: crate::feed::LiveFeed,
     /// A [`control`] is running; another one meanwhile is ignored (a
     /// double press must not start a second recording or show an error).
     controlling: AtomicBool,
@@ -434,6 +433,36 @@ fn with_excluded(mut status: RecordingStatus, app: Option<&str>) -> RecordingSta
         *excluded_app = app.map(str::to_owned);
     }
     status
+}
+
+/// Milliseconds recorded by `now`, pauses left out (as the webview's
+/// `elapsedMs`); `None` unless recording or paused.
+pub fn elapsed_ms(status: &RecordingStatus, now: DateTime<Utc>) -> Option<u64> {
+    let (started_at, paused_ms, paused_at) = match status {
+        RecordingStatus::Recording {
+            started_at,
+            paused_ms,
+            ..
+        } => (started_at, *paused_ms, None),
+        RecordingStatus::Paused {
+            started_at,
+            paused_ms,
+            paused_at,
+            ..
+        } => (started_at, *paused_ms, Some(paused_at)),
+        _ => return None,
+    };
+    let total = ms_since(started_at, now);
+    let pausing = paused_at.map_or(0, |at| ms_since(at, now));
+    Some(total.saturating_sub(paused_ms).saturating_sub(pausing))
+}
+
+/// `invalid` unless a recording is running or paused.
+pub fn ensure_active(recorder: &Recorder) -> Result<()> {
+    match recorder.status().status {
+        RecordingStatus::Recording { .. } | RecordingStatus::Paused { .. } => Ok(()),
+        _ => Err(not_recording()),
+    }
 }
 
 /// Whole milliseconds from the RFC 3339 time `at` to `now`; 0 when `at`
@@ -658,12 +687,10 @@ fn start<R: Runtime>(
         .map(|t| picker::resolve_target(t, &settings.recording.excluded_apps))
         .transpose()?;
     let (mut cfg, capture_area_fallback) = session_config(&settings, target);
-    let emitter = app.clone();
-    cfg.on_snapshot = Some(SnapshotSink::new(move |snapshot| {
-        if let Err(e) = emitter.emit(SNAPSHOT_EVENT, RecordingSnapshot::of(snapshot)) {
-            eprintln!("guiderecorder: cannot emit {SNAPSHOT_EVENT}: {e}");
-        }
-    }));
+    recorder.feed.reset();
+    cfg.on_snapshot = Some(snapshot_sink(app, recorder));
+    cfg.on_press = Some(press_sink(app, recorder, settings.recording.click_ring));
+    cfg.on_undo = Some(undo_sink(app, recorder));
     cfg.on_excluded = Some(exclusion_sink(app, recorder));
     cfg.on_capture_lost = Some(capture_lost_sink(app, recorder));
     let session = RecordingSession::start(cfg).map_err(session_error)?;
@@ -712,6 +739,60 @@ fn sync_session<R: Runtime>(
     changed.then(|| {
         emit(app, &status);
         status
+    })
+}
+
+/// Titles each screenshot the session announces (see [`crate::feed`]) and
+/// sends it as [`SNAPSHOT_EVENT`]. Runs on the encoder thread; holds the
+/// recorder weakly, as [`exclusion_sink`] does.
+fn snapshot_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> SnapshotSink {
+    let app = app.clone();
+    let recorder = Arc::downgrade(recorder);
+    SnapshotSink::new(move |snapshot| {
+        let Some(recorder) = recorder.upgrade() else {
+            return;
+        };
+        let elapsed = elapsed_ms(&recorder.status().status, Utc::now()).unwrap_or(0);
+        let sent = recorder.feed.snapshot(snapshot, elapsed);
+        if let Err(e) = app.emit(SNAPSHOT_EVENT, sent) {
+            eprintln!("guiderecorder: cannot emit {SNAPSHOT_EVENT}: {e}");
+        }
+    })
+}
+
+/// For each click: refines its capture's title with the clicked element's
+/// label, shows the click ring when `click_ring` is on, and moves the
+/// toolbar away if the click landed near it. Runs on the element thread.
+fn press_sink<R: Runtime>(
+    app: &AppHandle<R>,
+    recorder: &Arc<Recorder>,
+    click_ring: bool,
+) -> PressSink {
+    let app = app.clone();
+    let recorder = Arc::downgrade(recorder);
+    PressSink::new(move |press: &LivePress| {
+        let Some(recorder) = recorder.upgrade() else {
+            return;
+        };
+        if let Some(change) = recorder.feed.press(press) {
+            crate::feed::emit_title(&app, &change);
+        }
+        crate::toolbar::on_click(&app, press.point, click_ring);
+    })
+}
+
+/// Deletes the newest capture on the undo hotkey. Runs on the router
+/// thread.
+fn undo_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> UndoSink {
+    let app = app.clone();
+    let recorder = Arc::downgrade(recorder);
+    UndoSink::new(move || {
+        let Some(recorder) = recorder.upgrade() else {
+            return;
+        };
+        if let Some(id) = recorder.feed.undo() {
+            crate::feed::emit_removed(&app, id);
+        }
     })
 }
 
@@ -874,11 +955,14 @@ fn stop<R: Runtime>(
         .try_state::<Arc<SettingsStore>>()
         .map(|store| store.get().redaction)
         .unwrap_or_default();
+    let edits = recorder.feed.edits();
+    recorder.feed.reset();
     let saved = save(
         session,
         cell,
         title.unwrap_or_else(default_title),
         &redaction,
+        edits,
     );
     emit_status(app, recorder, RecordingStatus::Idle);
     let saved = saved?;
@@ -895,9 +979,11 @@ fn save(
     cell: Arc<SessionCell>,
     title: String,
     redaction: &Redaction,
+    edits: CaptureEdits,
 ) -> Result<RecordingSaved> {
     // Dropping the `Recording` on any error removes the session folder.
-    let recording = session.stop().map_err(session_error)?;
+    let mut recording = session.stop().map_err(session_error)?;
+    recording.edits = edits;
     let library = cell.get()?;
     let mut saved = recording
         .save_guide(library.library(), &title)
@@ -932,6 +1018,7 @@ pub async fn cancel_recording<R: Runtime>(
         let session = slot.take().ok_or_else(not_recording)?;
         // Dropping the session stops everything and removes its folder.
         drop(session);
+        recorder.feed.reset();
         emit_status(&app, &recorder, RecordingStatus::Idle);
         Ok(())
     })
@@ -1460,6 +1547,8 @@ mod tests {
                 width: 16,
                 height: 10,
                 point: Some(Point { x: 8.0, y: 5.0 }),
+                title: "Click **Save**".into(),
+                elapsed_ms: 1_500,
             })
             .unwrap(),
             json!({
@@ -1468,6 +1557,8 @@ mod tests {
                 "width": 16,
                 "height": 10,
                 "point": {"x": 8.0, "y": 5.0},
+                "title": "Click **Save**",
+                "elapsedMs": 1_500,
             })
         );
     }
@@ -1605,6 +1696,50 @@ mod tests {
             ),
             "{status:?}"
         );
+    }
+
+    #[test]
+    fn elapsed_time_leaves_out_pauses() {
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 10_000,
+            excluded_app: None,
+            capture_lost: None,
+        };
+        let now = at("2026-10-15T01:02:14.000Z");
+        assert_eq!(elapsed_ms(&recording, now), Some(124_000));
+        let paused = with_paused(recording, true, at("2026-10-15T01:02:00.000Z"));
+        assert_eq!(elapsed_ms(&paused, now), Some(110_000));
+        assert_eq!(elapsed_ms(&RecordingStatus::Idle, now), None);
+        // A clock behind the start reads 0.
+        let before = at("2026-10-15T00:59:00.000Z");
+        assert_eq!(elapsed_ms(&paused, before), Some(0));
+    }
+
+    #[test]
+    fn feed_edits_need_a_running_recording() {
+        let recorder = Recorder::default();
+        assert_eq!(
+            ensure_active(&recorder).unwrap_err().kind,
+            ErrorKind::Invalid
+        );
+        recorder.set_status(RecordingStatus::Saving {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+        });
+        assert!(ensure_active(&recorder).is_err());
+        recorder.set_status(RecordingStatus::Paused {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            paused_at: "2026-10-15T01:01:00.000Z".into(),
+            excluded_app: None,
+            capture_lost: None,
+        });
+        assert!(ensure_active(&recorder).is_ok());
     }
 
     #[test]

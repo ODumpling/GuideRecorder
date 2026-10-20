@@ -2,8 +2,16 @@
 //! menu to start, pause, resume and stop a recording, open the main window
 //! and quit. Updated from every recording status sent (see
 //! `recording::emit`); its actions go through [`recording::control`].
+//!
+//! While recording or paused the icon also shows the recorded time beside
+//! it ([`elapsed_title`]), ticking once a second from a thread of its own
+//! that ends at idle.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -117,6 +125,23 @@ impl<R: Runtime> Items<R> {
 struct Tray<R: Runtime> {
     icon: TrayIcon<R>,
     items: Items<R>,
+    /// The elapsed-time ticker is running.
+    ticking: AtomicBool,
+}
+
+/// How often the elapsed time beside the icon is updated.
+const TICK: Duration = Duration::from_millis(500);
+
+/// The recorded time shown beside the icon (`2:14`, `1:02:03` from an
+/// hour), pauses left out; `None` unless recording or paused.
+pub fn elapsed_title(status: &RecordingStatus, now: DateTime<Utc>) -> Option<String> {
+    let total = recording::elapsed_ms(status, now)? / 1000;
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    Some(if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    })
 }
 
 /// Creates the tray icon in its state for the current status.
@@ -153,7 +178,12 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(on_menu_event)
         .build(app)?;
-    app.manage(Tray { icon, items });
+    app.manage(Tray {
+        icon,
+        items,
+        ticking: AtomicBool::new(false),
+    });
+    tick(app);
     Ok(())
 }
 
@@ -186,6 +216,41 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if let Err(e) = result {
         eprintln!("guiderecorder: cannot update the tray: {e}");
     }
+    tick(app);
+}
+
+/// Starts the elapsed-time ticker if a recording is running or paused and
+/// it is not running yet. It clears the time and ends once idle.
+fn tick<R: Runtime>(app: &AppHandle<R>) {
+    let (Some(tray), Some(recorder)) =
+        (app.try_state::<Tray<R>>(), app.try_state::<Arc<Recorder>>())
+    else {
+        return;
+    };
+    if elapsed_title(&recorder.status().status, Utc::now()).is_none()
+        || tray.ticking.swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        let (Some(tray), Some(recorder)) =
+            (app.try_state::<Tray<R>>(), app.try_state::<Arc<Recorder>>())
+        else {
+            return;
+        };
+        let title = elapsed_title(&recorder.status().status, Utc::now());
+        if let Err(e) = tray.icon.set_title(title.as_deref()) {
+            eprintln!("guiderecorder: cannot update the tray time: {e}");
+        }
+        if title.is_none() {
+            tray.ticking.store(false, Ordering::SeqCst);
+            // A recording started meanwhile restarts it.
+            tick(&app);
+            return;
+        }
+        std::thread::sleep(TICK);
+    });
 }
 
 /// Shows, unminimizes and focuses the main window.
@@ -257,6 +322,42 @@ mod tests {
         }
         assert_ne!(TrayState::Idle.icon(), TrayState::Paused.icon());
         assert_ne!(TrayState::Recording.icon(), TrayState::Paused.icon());
+    }
+
+    #[test]
+    fn elapsed_time_shows_while_recording_or_paused() {
+        let at = |t: &str| DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc);
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+            capture_lost: None,
+        };
+        let now = at("2026-10-15T01:02:14.900Z");
+        assert_eq!(elapsed_title(&recording, now).as_deref(), Some("2:14"));
+        assert_eq!(
+            elapsed_title(&recording, at("2026-10-15T02:01:02.000Z")).as_deref(),
+            Some("1:01:02")
+        );
+        let paused = RecordingStatus::Paused {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 4_000,
+            paused_at: "2026-10-15T01:01:00.000Z".into(),
+            excluded_app: None,
+            capture_lost: None,
+        };
+        // Frozen at the pause, earlier pauses left out.
+        assert_eq!(elapsed_title(&paused, now).as_deref(), Some("0:56"));
+        assert_eq!(elapsed_title(&RecordingStatus::Idle, now), None);
+        let saving = RecordingStatus::Saving {
+            started_at: "2026-10-15T01:00:00.000Z".into(),
+            title: None,
+        };
+        assert_eq!(elapsed_title(&saving, now), None);
     }
 
     #[test]
