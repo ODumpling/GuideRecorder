@@ -1,26 +1,33 @@
 import { and, asc, count, eq, gt } from "drizzle-orm";
 import type { Database } from "@/db";
-import { invitation, member, organization, subscription } from "@/db/schema";
-import { ENTITLEMENTS, planOf, type Entitlements, type PlanName } from "./plans";
+import { invitation, licenceGrant, member, organization, subscription } from "@/db/schema";
+import { ACTIVE, ENTITLEMENTS, grantSubscriptions, planOf, type Entitlements, type PlanName } from "./plans";
 
 export interface WorkspacePlan {
   plan: PlanName;
   entitlements: Entitlements;
 }
 
-/** The workspace's plan from its subscriptions; seats follow an Enterprise subscription's seat count. */
-export async function workspacePlan(db: Database, organizationId: string): Promise<WorkspacePlan> {
-  const subs = await db
-    .select({ plan: subscription.plan, status: subscription.status, seats: subscription.seats })
-    .from(subscription)
-    .where(eq(subscription.referenceId, organizationId));
-  return planFromSubscriptions(subs);
+/**
+ * The workspace's plan from its subscriptions and current licence grants;
+ * seats follow an Enterprise subscription's (or grant's) seat count.
+ */
+export async function workspacePlan(db: Database, organizationId: string, now = new Date()): Promise<WorkspacePlan> {
+  const [subs, grants] = await Promise.all([
+    db
+      .select({ plan: subscription.plan, status: subscription.status, seats: subscription.seats })
+      .from(subscription)
+      .where(eq(subscription.referenceId, organizationId)),
+    db.select().from(licenceGrant).where(eq(licenceGrant.organizationId, organizationId)),
+  ]);
+  return planFromSubscriptions([...subs, ...grantSubscriptions(grants, now)]);
 }
 
 export function planFromSubscriptions(subs: { plan: string; status: string | null; seats?: number | null }[]): WorkspacePlan {
   const plan = planOf(subs);
   const entitlements = { ...ENTITLEMENTS[plan] };
-  const seats = subs.find((s) => s.plan === plan)?.seats;
+  // The most seats any active subscription or grant on the plan gives.
+  const seats = Math.max(0, ...subs.filter((s) => s.plan === plan && s.status && ACTIVE.has(s.status)).map((s) => s.seats ?? 0));
   if (plan === "enterprise" && seats) entitlements.seats = seats;
   return { plan, entitlements };
 }

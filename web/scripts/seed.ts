@@ -1,26 +1,32 @@
-// Development accounts: one per plan, and one per role in the Enterprise
-// workspace. `pnpm db:seed`, after `pnpm db:migrate`. Idempotent: fixed ids,
-// existing rows are left alone. Refuses to run with NODE_ENV=production.
+// Development accounts: one per plan, one per role in the Enterprise
+// workspace, and a staff admin. `pnpm db:seed`, after `pnpm db:migrate`.
+// Idempotent: fixed ids; existing rows are left alone, except that emails
+// follow SEED_EMAIL_DOMAIN. Refuses to run with NODE_ENV=production.
 //
-// Every account signs in with email and password `password123`:
-//   free@example.com       Free, personal workspace
-//   pro@example.com        Pro, personal workspace
-//   owner@example.com      Enterprise ("Acme"), owner
-//   admin@example.com      Enterprise, admin
-//   approver@example.com   Enterprise, approver
-//   editor@example.com     Enterprise, editor
-//   viewer@example.com     Enterprise, viewer
+// Every account is on SEED_EMAIL_DOMAIN (default dufflebear.dev) and signs
+// in with password `password123`:
+//   hello@      Staff console (/staff), Free personal workspace
+//   staff@      Staff console (/staff), Free personal workspace
+//   free@       Free, personal workspace
+//   pro@        Pro, personal workspace
+//   owner@      Enterprise ("Acme"), owner
+//   admin@      Enterprise, admin
+//   approver@   Enterprise, approver
+//   editor@     Enterprise, editor
+//   viewer@     Enterprise, viewer
 
 import { hashPassword } from "better-auth/crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
-import { account, member, organization, subscription, user } from "@/db/schema";
+import { account, member, organization, staff, subscription, user } from "@/db/schema";
 import type { PlanName } from "@/lib/plans";
 import type { RoleName } from "@/lib/permissions";
 
 const PASSWORD = "password123";
+const DOMAIN = (process.env.SEED_EMAIL_DOMAIN || "dufflebear.dev").toLowerCase().replace(/^@/, "");
+const email = (local: string) => `${local}@${DOMAIN}`;
 
 if (process.env.NODE_ENV === "production") {
   console.error("seed: refusing to run with NODE_ENV=production");
@@ -39,22 +45,40 @@ interface Workspace {
   members: { id: string; name: string; email: string; role: RoleName }[];
 }
 
+/** Seeded accounts that may use the staff console. */
+const STAFF = ["seed-user-hello", "seed-user-staff"];
+
 const WORKSPACES: Workspace[] = [
+  {
+    id: "seed-org-hello",
+    name: "Hello's workspace",
+    slug: "personal-seed-user-hello",
+    plan: "free",
+    members: [{ id: "seed-user-hello", name: "Hello", email: email("hello"), role: "owner" }],
+  },
+  {
+    id: "seed-org-staff",
+    name: "Staff's workspace",
+    slug: "personal-seed-user-staff",
+    plan: "free",
+    members: [{ id: "seed-user-staff", name: "Staff", email: email("staff"), role: "owner" }],
+  },
   {
     id: "seed-org-free",
     name: "Free's workspace",
     // The personal workspace slug `ensureWorkspace` would make.
     slug: "personal-seed-user-free",
     plan: "free",
-    members: [{ id: "seed-user-free", name: "Free", email: "free@example.com", role: "owner" }],
+    members: [{ id: "seed-user-free", name: "Free", email: email("free"), role: "owner" }],
   },
   {
     id: "seed-org-pro",
     name: "Pro's workspace",
     slug: "personal-seed-user-pro",
     plan: "pro",
-    members: [{ id: "seed-user-pro", name: "Pro", email: "pro@example.com", role: "owner" }],
+    members: [{ id: "seed-user-pro", name: "Pro", email: email("pro"), role: "owner" }],
   },
+
   {
     id: "seed-org-acme",
     name: "Acme",
@@ -63,7 +87,7 @@ const WORKSPACES: Workspace[] = [
     members: (["owner", "admin", "approver", "editor", "viewer"] as const).map((role) => ({
       id: `seed-user-${role}`,
       name: role[0]!.toUpperCase() + role.slice(1),
-      email: `${role}@example.com`,
+      email: email(role),
       role,
     })),
   },
@@ -89,7 +113,10 @@ await db.transaction(async (tx) => {
         .onConflictDoNothing();
     }
     for (const m of ws.members) {
-      await tx.insert(user).values({ id: m.id, name: m.name, email: m.email, emailVerified: true }).onConflictDoNothing();
+      await tx
+        .insert(user)
+        .values({ id: m.id, name: m.name, email: m.email, emailVerified: true })
+        .onConflictDoUpdate({ target: user.id, set: { email: m.email } });
       await tx
         .insert(account)
         .values({ id: `${m.id}-credential`, accountId: m.id, providerId: "credential", userId: m.id, password })
@@ -100,11 +127,12 @@ await db.transaction(async (tx) => {
         .onConflictDoNothing();
     }
   }
+  for (const userId of STAFF) await tx.insert(staff).values({ userId, addedBy: "seed" }).onConflictDoNothing();
 });
 
 await client.end();
 
 console.log(`seed: done. Sign in with password "${PASSWORD}":`);
 for (const ws of WORKSPACES) {
-  for (const m of ws.members) console.log(`  ${m.email.padEnd(22)} ${ws.plan.padEnd(10)} ${ws.name}, ${m.role}`);
+  for (const m of ws.members) console.log(`  ${m.email.padEnd(30)} ${ws.plan.padEnd(10)} ${ws.name}, ${m.role}`);
 }

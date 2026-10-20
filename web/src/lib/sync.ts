@@ -208,10 +208,18 @@ export async function restoreGuide(db: Database, organizationId: string, actor: 
   return setDeleted(db, organizationId, actor, guideId, null);
 }
 
+/**
+ * Takes a guide out of the trash for GuideRecorder staff (`lib/staff.ts`):
+ * any guide in any workspace, private ones too, until it's purged.
+ */
+export async function staffRestoreGuide(db: Database, organizationId: string, staff: RequestMeta & { userId: string }, guideId: string) {
+  return setDeleted(db, organizationId, { ...staff, role: "owner", staff: true }, guideId, null);
+}
+
 async function setDeleted(
   db: Database,
   organizationId: string,
-  actor: Actor,
+  actor: Actor & { staff?: boolean },
   guideId: string,
   deletedAt: Date | null,
 ): Promise<{ status: 200; seq: bigint } | SyncError> {
@@ -221,7 +229,7 @@ async function setDeleted(
     const [row] = await tx
       .select()
       .from(guide)
-      .where(and(eq(guide.organizationId, organizationId), eq(guide.id, guideId), visibleTo(actor.userId)));
+      .where(and(eq(guide.organizationId, organizationId), eq(guide.id, guideId), actor.staff ? undefined : visibleTo(actor.userId)));
     if (!row?.headRevisionId) return { status: 404, error: "Guide not found." } as const;
     if (Boolean(row.deletedAt) === Boolean(deletedAt)) return { status: 200, seq: row.seq } as const;
     const next = await nextSeq(tx);
@@ -231,7 +239,7 @@ async function setDeleted(
       action: deletedAt ? "guide.delete" : "guide.restore",
       targetType: "guide",
       targetId: guideId,
-      metadata: { revisionId: row.headRevisionId },
+      metadata: { revisionId: row.headRevisionId, ...(actor.staff ? { staff: true } : {}) },
       ip: actor.ip,
       userAgent: actor.userAgent,
     });

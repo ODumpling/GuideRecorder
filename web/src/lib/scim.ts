@@ -4,6 +4,7 @@ import { PROVISIONING_ROLES, ROLE_RANK, type RoleName } from "./permissions";
 import { DEFAULT_POLICY, type WorkspacePolicy } from "./policy";
 import { securityEvent } from "./security-events";
 import { domainCovered, emailDomain } from "./sso";
+import { grantSubscriptions, type LicenceGrant } from "./plans";
 import { planFromSubscriptions } from "./workspace";
 
 // SCIM 2.0 provisioning (RFC 7643/7644) at /api/auth/scim/v2, from Better
@@ -116,7 +117,8 @@ export async function reconcileMember(state: SCIMProjectedUserState, { database 
     model: "subscription",
     where: [{ field: "referenceId", value: organizationId }],
   });
-  const { seats } = planFromSubscriptions(subscriptions).entitlements;
+  const grants = await database.findMany<LicenceGrant>({ model: "licenceGrant", where: [{ field: "organizationId", value: organizationId }] });
+  const { seats } = planFromSubscriptions([...subscriptions, ...grantSubscriptions(grants)]).entitlements;
   const members = await database.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] });
   const pending = await database.count({
     model: "invitation",

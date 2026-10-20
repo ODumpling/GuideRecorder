@@ -47,6 +47,17 @@ export function enterprisePlugin(db: Database) {
           seats: { type: "number", required: false },
         },
       },
+      // Staff-issued plans; they count towards seats like subscriptions.
+      licenceGrant: {
+        fields: {
+          organizationId: { type: "string", required: true },
+          plan: { type: "string", required: true },
+          seats: { type: "number", required: false },
+          startsAt: { type: "date", required: true },
+          endsAt: { type: "date", required: true },
+          revokedAt: { type: "date", required: false },
+        },
+      },
     },
 
     async onRequest(request, ctx) {

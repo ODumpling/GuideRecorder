@@ -20,7 +20,7 @@ docker compose up -d          # Postgres and S3-compatible storage (RustFS)
 cp .env.example .env.local    # then set BETTER_AUTH_SECRET
 pnpm install
 pnpm db:migrate
-pnpm db:seed                  # dev accounts, password "password123" (scripts/seed.ts)
+pnpm db:seed                  # dev accounts on SEED_EMAIL_DOMAIN (default dufflebear.dev), password "password123"; hello@ and staff@ are staff (scripts/seed.ts)
 pnpm dev                      # https://app.guiderecorder.dev:3000
 ```
 
@@ -163,6 +163,18 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   admins (`workspace: manage`). `src/lib/enterprise.ts` ties them to plans
   and sessions.
 - An hourly job deletes what's past its retention (`src/lib/retention.ts`).
+- Staff console (`/staff`, `src/lib/staff.ts`): for GuideRecorder's own
+  developers and helpdesk, not customers. Users in the `staff` table
+  (`pnpm staff add <email>`; in production list them in `STAFF_EMAILS`:
+  each deploy's migrate step runs `pnpm staff ensure`, which makes missing
+  users, without a password, and adds them; gr.dufflebear.dev defaults to
+  `hello@dufflebear.dev`)
+  find any user and see their workspaces, plans and sign-in methods; give a
+  workspace Pro or Enterprise through a date (`licence_grant`, outside
+  Stripe, counted like an active subscription by `workspacePlan` until it
+  ends or is revoked); and restore guides deleted under 30 days ago, private
+  ones too. Grants, revokes and restores go in the workspace's audit log
+  (`metadata.staff`) and the security log. Everyone else gets a 404.
 - Security events (admin changes, SSO, SCIM, rate limits) are logged as JSON
   (`src/lib/security-events.ts`); the audit log plugs in there.
 

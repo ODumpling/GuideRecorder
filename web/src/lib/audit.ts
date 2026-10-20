@@ -21,6 +21,8 @@ export const AUDIT_ACTIONS = [
   "invitation.accept",
   "invitation.cancel",
   "billing.subscription",
+  "licence.grant",
+  "licence.revoke",
   "guide.create",
   "guide.edit",
   "guide.delete",

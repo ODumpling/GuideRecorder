@@ -777,3 +777,43 @@ export const workspacePolicy = pgTable("workspace_policy", {
   revisionRetentionDays: integer("revision_retention_days"),
   updatedAt: updatedAt(),
 });
+
+// Staff console (`/staff`, `lib/staff.ts`): GuideRecorder's own developers
+// and helpdesk, across every workspace.
+
+/** Who may use the staff console. Added with `pnpm staff add <email>`. */
+export const staff = pgTable("staff", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  addedBy: text("added_by"),
+  createdAt: createdAt(),
+});
+
+/**
+ * A plan given to a workspace by staff for a period, outside Stripe. While
+ * current (started, not ended, not revoked) it counts like an active
+ * subscription (`lib/workspace.ts`).
+ */
+export const licenceGrant = pgTable(
+  "licence_grant",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    /** `pro` or `enterprise`. */
+    plan: text("plan").notNull(),
+    /** Enterprise seats; null for the plan's default. */
+    seats: integer("seats"),
+    startsAt: timestamp("starts_at").notNull(),
+    endsAt: timestamp("ends_at").notNull(),
+    /** Why it was given, e.g. a ticket number. */
+    note: text("note").notNull().default(""),
+    issuedBy: text("issued_by").references(() => user.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at"),
+    revokedBy: text("revoked_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("licence_grant_organization_idx").on(t.organizationId)],
+);
