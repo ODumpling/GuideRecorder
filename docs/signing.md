@@ -128,6 +128,17 @@ and Accessibility to the **responsible process**, which is the terminal app
   don't get an "allow access" prompt after every rebuild. A binary started on
   its own (`open`, Finder, launchd) also gets a stable identity.
 
+### Keychain: dev and release builds keep separate entries
+
+Secrets (AI keys, the sync token) are stored under the Keychain service
+`dev.dufflebear.guiderecorder.dev` in every build except a release. Only the
+release workflow compiles with `GUIDERECORDER_RELEASE=1`, which switches to
+`dev.dufflebear.guiderecorder`. Without that split, an entry created by a
+locally signed build would make the Developer ID release ask for the login
+password (and the other way round), because each entry only trusts the
+signature that created it. So a dev build and an installed release on the
+same Mac each need their own sign-in and keys.
+
 To test the real first-run and permission flow as the app itself, build a
 debug bundle and start it with `open`:
 

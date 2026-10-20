@@ -17,6 +17,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Compiled in: release builds use the production Keychain service
+  # (crates/guiderecorder-core/src/ai/keychain.rs). Only this workflow sets it.
+  GUIDERECORDER_RELEASE: "1"
 
 jobs:
   ci:

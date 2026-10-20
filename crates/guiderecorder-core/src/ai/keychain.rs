@@ -8,7 +8,16 @@
 
 use super::AiError;
 
-pub const SERVICE: &str = "dev.dufflebear.guiderecorder";
+/// The Keychain service the entries live under. Only release builds
+/// (`GUIDERECORDER_RELEASE=1` at compile time, set by the release workflow)
+/// use the app's identifier; every other build uses a `.dev` service. macOS
+/// ties each entry to the code signature of the app that created it, so a
+/// shared service would make Developer ID and locally signed builds keep
+/// asking for each other's entries.
+pub const SERVICE: &str = match option_env!("GUIDERECORDER_RELEASE") {
+    Some(_) => "dev.dufflebear.guiderecorder",
+    None => "dev.dufflebear.guiderecorder.dev",
+};
 /// The Anthropic key's entry.
 pub const ACCOUNT: &str = "anthropic-api-key";
 /// The key for a custom OpenAI-compatible API.

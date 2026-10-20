@@ -110,3 +110,9 @@ This needs `app/src-tauri/binaries/guiderecorder-mcp-<target triple>` first
 `guiderecorder-mcp-aarch64-apple-darwin`). Plain `pnpm tauri build` and
 `pnpm tauri dev` don't use the release config, so they need neither the
 key nor the sidecar.
+
+This build doesn't set `GUIDERECORDER_RELEASE`, so it keeps its secrets in
+the dev Keychain service, apart from the installed release's (see
+[signing.md](signing.md#keychain-dev-and-release-builds-keep-separate-entries)).
+Don't set it here: an ad-hoc signature changes with every build, so the
+release's entries would ask for your password each time.
