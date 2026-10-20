@@ -20,3 +20,45 @@ body {
   background: var(--backdrop), var(--background);
   color: var(--foreground);
 }
+
+/* The front page's motion (components/landing). */
+@theme {
+  --animate-landing-rise: landing-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-landing-ping: landing-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-landing-zoom: landing-zoom 6s ease-in-out infinite;
+
+  @keyframes landing-rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+  }
+  @keyframes landing-ping {
+    from {
+      opacity: 1;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 0;
+      transform: scale(1.8);
+    }
+  }
+  @keyframes landing-zoom {
+    0%,
+    15% {
+      transform: scale(1);
+    }
+    55%,
+    85% {
+      transform: scale(1.9);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-landing-rise,
+  .animate-landing-ping,
+  .animate-landing-zoom {
+    animation: none;
+  }
+}
