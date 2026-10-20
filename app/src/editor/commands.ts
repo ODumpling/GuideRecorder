@@ -224,6 +224,39 @@ export function moveItem(guide: Guide, id: string, to: number): Command {
   };
 }
 
+/** `moveItem` patches that turn the order `from` into `to` (the same ids). */
+function reorderPatches(from: string[], to: string[]): Patch[] {
+  const current = from.slice();
+  const patches: Patch[] = [];
+  to.forEach((id, index) => {
+    const at = current.indexOf(id);
+    if (at === index) return;
+    current.splice(at, 1);
+    current.splice(index, 0, id);
+    patches.push({ op: "moveItem", id, to: index });
+  });
+  return patches;
+}
+
+/**
+ * Moves the items `ids` together, in guide order, so the first of them ends
+ * up at `to` (its index after the move). One undo step.
+ */
+export function moveItems(guide: Guide, ids: string[], to: number): Command {
+  const moving = new Set(ids);
+  const block = guide.items.filter((item) => moving.has(item.id));
+  if (block.length === 0 || block.length !== moving.size) throw new PatchError("moving an item that is not in the guide");
+  const rest = guide.items.filter((item) => !moving.has(item.id));
+  if (to < 0 || to > rest.length) throw new PatchError(`move target ${to} out of range`);
+  const before = guide.items.map((item) => item.id);
+  const after = [...rest.slice(0, to), ...block, ...rest.slice(to)].map((item) => item.id);
+  return {
+    label: block.length === 1 ? "Move item" : `Move ${block.length} items`,
+    forward: reorderPatches(before, after),
+    inverse: reorderPatches(after, before),
+  };
+}
+
 /**
  * The `to` for {@link moveItem} when the item at `from` is dropped before
  * position `before` (0..items.length, where items.length means the end).
@@ -375,6 +408,39 @@ export function deleteItem(guide: Guide, id: string): Command {
   };
 }
 
+/**
+ * Deletes several items as one undo step; the item after the last of them
+ * (or else the one before the first) is selected.
+ */
+export function deleteItems(guide: Guide, ids: string[]): Command {
+  if (ids.length === 1) return deleteItem(guide, ids[0]);
+  const doomed = new Set(ids);
+  const indices = guide.items.flatMap((item, index) => (doomed.has(item.id) ? [index] : []));
+  if (indices.length === 0 || indices.length !== doomed.size) {
+    throw new PatchError("deleting an item that is not in the guide");
+  }
+  const kept = (item: Item) => !doomed.has(item.id);
+  const neighbour =
+    guide.items.slice(indices[indices.length - 1] + 1).find(kept) ??
+    guide.items.slice(0, indices[0]).filter(kept).at(-1) ??
+    null;
+  // A deleted cover step stops being the cover; undo makes it the cover again.
+  const cover = guide.coverStepId && doomed.has(guide.coverStepId) ? dropCover(guide, guide.coverStepId) : null;
+  return {
+    label: `Delete ${indices.length} items`,
+    forward: [
+      ...indices.map((index): Patch => ({ op: "removeItem", id: guide.items[index].id })),
+      ...(cover?.forward ?? []),
+    ],
+    // In guide order, so each goes back where it was.
+    inverse: [
+      ...(cover?.inverse ?? []),
+      ...indices.map((index): Patch => ({ op: "insertItem", index, item: guide.items[index] })),
+    ],
+    select: { forward: neighbour?.id ?? null, inverse: guide.items[indices[0]].id },
+  };
+}
+
 /** The step directly after `id`, if that item is a step. */
 export function nextStep(guide: Guide, id: string): Step | null {
   const next = guide.items[indexOf(guide, id) + 1];
@@ -422,6 +488,26 @@ export function mergeWithNext(guide: Guide, id: string): Command {
   forward.push(...cover.forward);
   inverse.unshift(...cover.inverse);
   return { label: "Merge steps", forward, inverse, select: { forward: id, inverse: id } };
+}
+
+/**
+ * Merges consecutive steps `ids` (in guide order) into the first, as
+ * {@link mergeWithNext} would one after another, in one undo step.
+ */
+export function mergeSteps(guide: Guide, ids: string[]): Command {
+  if (ids.length < 2) throw new PatchError("merging needs two steps or more");
+  const [first, ...rest] = ids;
+  let current = guide;
+  const forward: Patch[] = [];
+  const inverse: Patch[] = [];
+  for (const id of rest) {
+    if (nextStep(current, first)?.id !== id) throw new PatchError(`step ${id} does not follow the merged steps`);
+    const command = mergeWithNext(current, first);
+    forward.push(...command.forward);
+    inverse.unshift(...command.inverse);
+    current = applyPatches(current, command.forward);
+  }
+  return { label: `Merge ${ids.length} steps`, forward, inverse, select: { forward: first, inverse: first } };
 }
 
 /**

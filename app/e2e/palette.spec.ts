@@ -48,7 +48,7 @@ test("runs editor commands: jump to a step, export as a format, switch theme", a
   await search(page).fill("step 2");
   await expect(options(page).first()).toContainText("Step 2:");
   await page.keyboard.press("Enter");
-  await expect(page.getByText(/step 2 of/i)).toBeVisible();
+  await expect(page.getByText("step 2 of 5", { exact: true })).toBeVisible();
 
   await openPalette(page);
   await search(page).fill("export as html");

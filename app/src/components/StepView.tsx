@@ -244,14 +244,14 @@ function ItemHeader({ item }: { item: Item }) {
         </span>
       )}
       <span className="ml-auto flex items-center">
-        <Button variant="ghost" size="icon" aria-label="Previous item" title="Previous (↑ in the outline)" disabled={index <= 0} onClick={() => select(index - 1)}>
+        <Button variant="ghost" size="icon" aria-label="Previous item" title="Previous (K)" disabled={index <= 0} onClick={() => select(index - 1)}>
           <ChevronLeft />
         </Button>
         <Button
           variant="ghost"
           size="icon"
           aria-label="Next item"
-          title="Next (↓ in the outline)"
+          title="Next (J)"
           disabled={index < 0 || index >= items.length - 1}
           onClick={() => select(index + 1)}
         >
@@ -285,7 +285,7 @@ export function StepView() {
     void splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
   };
   return (
-    <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
+    <div data-item={item.id} className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
       <ItemHeader item={item} />
       {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
       <ItemView
