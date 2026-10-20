@@ -1,27 +1,10 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { testDb } from "../../test/db";
+import { memoryStore } from "../../test/store";
 import type { Database } from "@/db";
 import { guide, organization, revision, revisionAsset, user } from "@/db/schema";
 import { assetKey, canDownload, commitUploads, downloadUrl, planUploads, QuotaExceededError, storageUsed, uploadRequest } from "./assets";
-import type { ObjectStore } from "./storage";
-
-/** An in-memory store; `put` stands in for a client's presigned upload. */
-function memoryStore() {
-  const objects = new Map<string, { size: number; contentType: string }>();
-  const store: ObjectStore = {
-    async presignPut(key, object) {
-      return { url: `https://s3.test/${key}?signed`, method: "PUT", headers: { "content-type": object.contentType } };
-    },
-    async presignGet(key) {
-      return `https://s3.test/${key}?get`;
-    },
-    async head(key) {
-      return objects.get(key) ?? null;
-    },
-  };
-  return { store, put: (key: string, size: number, contentType = "image/webp") => objects.set(key, { size, contentType }) };
-}
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const a = hash("a");

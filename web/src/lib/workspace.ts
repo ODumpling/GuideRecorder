@@ -14,6 +14,10 @@ export async function workspacePlan(db: Database, organizationId: string): Promi
     .select({ plan: subscription.plan, status: subscription.status, seats: subscription.seats })
     .from(subscription)
     .where(eq(subscription.referenceId, organizationId));
+  return planFromSubscriptions(subs);
+}
+
+export function planFromSubscriptions(subs: { plan: string; status: string | null; seats?: number | null }[]): WorkspacePlan {
   const plan = planOf(subs);
   const entitlements = { ...ENTITLEMENTS[plan] };
   const seats = subs.find((s) => s.plan === plan)?.seats;

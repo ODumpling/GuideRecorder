@@ -7,6 +7,7 @@ import type { AssetMap, RevisionSource } from "@guiderecorder/sync";
 import type { Database } from "@/db";
 import { guide, revision, revisionAsset, shareLink, user, workspaceSettings } from "@/db/schema";
 import { roles } from "./permissions";
+import { canShare as policyAllows } from "./policy";
 import { getGuide, publishedRevisionFor, type Actor } from "./sync";
 import { workspacePlan } from "./workspace";
 
@@ -154,7 +155,9 @@ export async function createShareLink(
   const refused = await shareableGuide(db, organizationId, actor, request.guideId);
   if (refused) return refused;
   const settings = await getSharingSettings(db, organizationId);
-  if (settings.shareLinks === "off") return { status: 403, error: "Share links are turned off for this workspace." };
+  if (settings.shareLinks === "off" || !(await policyAllows(db, organizationId, "public"))) {
+    return { status: 403, error: "Share links are turned off for this workspace." };
+  }
   if (settings.shareLinks === "password" && !request.password) {
     return { status: 400, error: "This workspace requires a password on share links." };
   }
@@ -244,6 +247,8 @@ async function resolve(db: Database, token: string, now: Date): Promise<{ link: 
   if (!plan.entitlements.sharing) return notFound;
   const state = stateOf(link, settings, now);
   if (state === "blocked") return notFound;
+  // The admin console's sharing policy (policy.ts) can close every public link.
+  if (!(await policyAllows(db, link.organizationId, "public"))) return notFound;
   if (state === "expired") return { status: 410, error: "This link has expired." };
   if (!g?.headRevisionId || g.deletedAt) return notFound;
   // Unpinned links show what's published; a gated guide may have nothing published yet.

@@ -23,6 +23,7 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(async () =
       manageMembers: can({ member: ["update"] }),
       manageBilling: can({ billing: ["manage"] }),
       readAudit: can({ audit: ["read"] }) && Boolean(active?.plan.entitlements.audit),
+      manageWorkspace: can({ workspace: ["manage"] }),
     },
   };
 });

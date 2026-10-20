@@ -20,6 +20,7 @@ import {
   unlockShareLink,
   type Cookies,
 } from "./sharing";
+import { setPolicy } from "./policy";
 import { push, trashGuide, type Actor } from "./sync";
 
 const fixture: Guide = JSON.parse(
@@ -175,6 +176,16 @@ describe("workspace sharing settings", () => {
     expect((await open(token)).status).toBe(404);
     expect((await createShareLink(db, "org", ada, createShareRequest.parse({ guideId: fixture.id }))).status).toBe(403);
     expect(await listShareLinks(db, "org", ada, fixture.id)).toMatchObject({ links: [{ state: "blocked" }], settings: { shareLinks: "off" } });
+  });
+
+  it("follows the workspace's sharing policy", async () => {
+    await pushed(fixture, null);
+    const { token } = await created();
+    await setPolicy(db, "org", { sharing: "workspace" });
+    expect((await open(token)).status).toBe(404);
+    expect((await createShareLink(db, "org", ada, createShareRequest.parse({ guideId: fixture.id }))).status).toBe(403);
+    await setPolicy(db, "org", { sharing: "public" });
+    expect((await open(token)).status).toBe(200);
   });
 
   it("requires passwords", async () => {

@@ -51,6 +51,11 @@ function Dashboard() {
               Audit log
             </Link>
           ) : null}
+          {can.manageWorkspace && (
+            <Link to="/admin" className="text-brand underline-offset-4 hover:underline">
+              Admin
+            </Link>
+          )}
           {user.email}
           <SignOutButton />
         </div>

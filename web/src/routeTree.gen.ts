@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DeviceRouteImport } from './routes/device'
@@ -21,6 +22,7 @@ import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiJobsRetentionRouteImport } from './routes/api/jobs/retention'
 import { Route as GuidesGuideIdEditRouteImport } from './routes/guides.$guideId_.edit'
 import { Route as GuidesGuideIdReviewRouteImport } from './routes/guides.$guideId_.review'
 import { Route as ApiShareTokenAssetsSha256RouteImport } from './routes/api/share/$token/assets/$sha256'
@@ -40,6 +42,11 @@ import { Route as ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRouteImport } f
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuditRoute = AuditRouteImport.update({
@@ -95,6 +102,11 @@ const STokenRoute = STokenRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiJobsRetentionRoute = ApiJobsRetentionRouteImport.update({
+  id: '/api/jobs/retention',
+  path: '/api/jobs/retention',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GuidesGuideIdEditRoute = GuidesGuideIdEditRouteImport.update({
@@ -188,6 +200,7 @@ const ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
@@ -199,6 +212,7 @@ export interface FileRoutesByFullPath {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -217,6 +231,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
@@ -228,6 +243,7 @@ export interface FileRoutesByTo {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -247,6 +263,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/audit': typeof AuditRoute
   '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
@@ -258,6 +275,7 @@ export interface FileRoutesById {
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/jobs/retention': typeof ApiJobsRetentionRoute
   '/guides/$guideId_/edit': typeof GuidesGuideIdEditRoute
   '/guides/$guideId_/review': typeof GuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
@@ -278,6 +296,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/audit'
     | '/dashboard'
     | '/device'
@@ -289,6 +308,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
     | '/api/share/$token/assets/$sha256'
@@ -307,6 +327,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/admin'
     | '/audit'
     | '/dashboard'
     | '/device'
@@ -318,6 +339,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/guides/$guideId/edit'
     | '/guides/$guideId/review'
     | '/api/share/$token/assets/$sha256'
@@ -336,6 +358,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/audit'
     | '/dashboard'
     | '/device'
@@ -347,6 +370,7 @@ export interface FileRouteTypes {
     | '/invitations/$id'
     | '/s/$token'
     | '/api/auth/$'
+    | '/api/jobs/retention'
     | '/guides/$guideId_/edit'
     | '/guides/$guideId_/review'
     | '/api/share/$token/assets/$sha256'
@@ -366,6 +390,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRoute
   AuditRoute: typeof AuditRoute
   DashboardRoute: typeof DashboardRoute
   DeviceRoute: typeof DeviceRoute
@@ -377,6 +402,7 @@ export interface RootRouteChildren {
   InvitationsIdRoute: typeof InvitationsIdRoute
   STokenRoute: typeof STokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiJobsRetentionRoute: typeof ApiJobsRetentionRoute
   GuidesGuideIdEditRoute: typeof GuidesGuideIdEditRoute
   GuidesGuideIdReviewRoute: typeof GuidesGuideIdReviewRoute
   ApiShareTokenAssetsSha256Route: typeof ApiShareTokenAssetsSha256Route
@@ -401,6 +427,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/audit': {
@@ -478,6 +511,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/jobs/retention': {
+      id: '/api/jobs/retention'
+      path: '/api/jobs/retention'
+      fullPath: '/api/jobs/retention'
+      preLoaderRoute: typeof ApiJobsRetentionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/guides/$guideId_/edit': {
@@ -590,6 +630,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRoute,
   AuditRoute: AuditRoute,
   DashboardRoute: DashboardRoute,
   DeviceRoute: DeviceRoute,
@@ -601,6 +642,7 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsIdRoute: InvitationsIdRoute,
   STokenRoute: STokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiJobsRetentionRoute: ApiJobsRetentionRoute,
   GuidesGuideIdEditRoute: GuidesGuideIdEditRoute,
   GuidesGuideIdReviewRoute: GuidesGuideIdReviewRoute,
   ApiShareTokenAssetsSha256Route: ApiShareTokenAssetsSha256Route,

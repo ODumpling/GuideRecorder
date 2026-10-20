@@ -36,6 +36,13 @@
       "when": 1792457355770,
       "tag": "0004_approvals_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792457825639,
+      "tag": "0005_enterprise",
+      "breakpoints": true
     }
   ]
 }

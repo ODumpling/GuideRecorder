@@ -8,6 +8,8 @@ export interface ObjectStore {
   presignGet(key: string, ttlSeconds: number, options?: { filename?: string }): Promise<string>;
   /** The stored object's size and type, or null if there is none. */
   head(key: string): Promise<{ size: number; contentType: string } | null>;
+  /** Deletes the object; deleting one that isn't there succeeds. */
+  delete(key: string): Promise<void>;
 }
 
 /** Reading and writing whole objects, for the export worker. */
@@ -28,6 +30,12 @@ export interface S3Config {
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
+  /**
+   * Server-side encryption to ask for on every upload: `AES256` (S3-managed
+   * keys) or `aws:kms` with an optional key id. Unset for stores that
+   * always encrypt at rest and reject the header (R2) or for local storage.
+   */
+  sse?: { algorithm: "AES256" } | { algorithm: "aws:kms"; kmsKeyId?: string };
 }
 
 /** Any S3-compatible store (S3, R2, MinIO), path-style addressing. */
@@ -48,11 +56,13 @@ export function s3Store(config: S3Config): ObjectStore & BlobStore {
     async presignPut(key, { size, contentType, sha256 }, ttlSeconds) {
       // Signed headers: S3 rejects the upload unless the body's SHA-256 and
       // length match, so a key always holds the bytes its hash names.
-      const headers = {
+      // SSE headers are signed too, so an upload can't skip encryption.
+      const headers: Record<string, string> = {
         "content-type": contentType,
         "content-length": String(size),
         "x-amz-checksum-sha256": hexToBase64(sha256),
         "x-amz-sdk-checksum-algorithm": "SHA256",
+        ...sseHeaders(config.sse),
       };
       const signed = await client.sign(objectUrl(key, ttlSeconds), {
         method: "PUT",
@@ -79,6 +89,11 @@ export function s3Store(config: S3Config): ObjectStore & BlobStore {
       };
     },
 
+    async delete(key) {
+      const response = await client.fetch(objectUrl(key), { method: "DELETE" });
+      if (!response.ok && response.status !== 404) throw new Error(`DELETE ${key} failed with ${response.status}`);
+    },
+
     async get(key) {
       const response = await client.fetch(objectUrl(key));
       if (response.status === 404) return null;
@@ -90,10 +105,19 @@ export function s3Store(config: S3Config): ObjectStore & BlobStore {
       const response = await client.fetch(objectUrl(key), {
         method: "PUT",
         body,
-        headers: { "content-type": contentType, "content-length": String(body.byteLength) },
+        headers: { "content-type": contentType, "content-length": String(body.byteLength), ...sseHeaders(config.sse) },
       });
       if (!response.ok) throw new Error(`PUT ${key} failed with ${response.status}`);
     },
+  };
+}
+
+export function sseHeaders(sse: S3Config["sse"]): Record<string, string> {
+  if (!sse) return {};
+  if (sse.algorithm === "AES256") return { "x-amz-server-side-encryption": "AES256" };
+  return {
+    "x-amz-server-side-encryption": "aws:kms",
+    ...(sse.kmsKeyId ? { "x-amz-server-side-encryption-aws-kms-key-id": sse.kmsKeyId } : {}),
   };
 }
 

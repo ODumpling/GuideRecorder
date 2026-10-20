@@ -7,7 +7,7 @@ import { testDb } from "../../test/db";
 import type { Database } from "@/db";
 import * as schema from "@/db/schema";
 import { subscription } from "@/db/schema";
-import { DESKTOP_CLIENT_ID } from "./create-auth";
+import { createAuth, DESKTOP_CLIENT_ID } from "./create-auth";
 import { memberRole } from "./workspace";
 
 let db: Database;
@@ -116,5 +116,25 @@ describe("desktop sign-in", () => {
 
   it("only issues codes to the desktop app", async () => {
     expect((await post("/device/code", { client_id: "someone-else" })).status).toBe(400);
+  });
+});
+
+describe("rate limits", () => {
+  it("limit sign-in attempts per address, in the database", async () => {
+    const auth = createAuth({ db, baseURL: "http://localhost:3000", secret: "test-secret-test-secret-test-secret-0123", sendEmail: async () => {}, rateLimit: true });
+    const attempt = (ip: string) =>
+      auth.handler(
+        new Request("http://localhost:3000/api/auth/sign-in/email", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": ip },
+          body: JSON.stringify({ email: "nobody@example.com", password: "wrong password" }),
+        }),
+      );
+    const statuses = [];
+    for (let i = 0; i < 11; i++) statuses.push((await attempt("203.0.113.9")).status);
+    expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
+    expect(statuses[10]).toBe(429);
+    expect((await attempt("203.0.113.10")).status).toBe(401);
+    expect((await db.select().from(schema.rateLimit)).length).toBeGreaterThan(0);
   });
 });

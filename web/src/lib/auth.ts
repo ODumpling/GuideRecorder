@@ -31,6 +31,8 @@ export function auth(): Auth {
             prices: { pro: e.STRIPE_PRICE_PRO, enterprise: e.STRIPE_PRICE_ENTERPRISE },
           }
         : undefined,
+    scimTokenSecret: e.SCIM_TOKEN_SECRET,
+    trustedProxies: e.TRUSTED_PROXIES?.split(",").map((p) => p.trim()).filter(Boolean),
   });
   return cached;
 }

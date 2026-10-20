@@ -8,11 +8,18 @@ export interface AuthFormProps {
   providers: { google: boolean; microsoft: boolean };
   /** Where to go after signing in. */
   next?: string;
+  /** An error code from a redirect back here, e.g. `SSO_REQUIRED`. */
+  error?: string;
 }
 
-export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps) {
+const ERRORS: Record<string, string> = {
+  SSO_REQUIRED: "Your organization requires single sign-on. Enter your work email and choose Sign in with SSO.",
+  SSO_NOT_AVAILABLE: "Single sign-on isn't available for this workspace's plan.",
+};
+
+export function AuthForm({ mode, providers, next = "/dashboard", error: initialError }: AuthFormProps) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ? (ERRORS[initialError] ?? "Sign-in failed. Try again.") : null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -43,6 +50,16 @@ export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps
     void run(
       () => authClient.signIn.magicLink({ email, callbackURL: next }),
       () => setNotice(`We sent a sign-in link to ${email}.`),
+    );
+  }
+
+  // Finds the identity provider for the email's domain and goes there.
+  function singleSignOn(event: FormEvent<HTMLButtonElement>) {
+    const email = (event.currentTarget.form?.elements.namedItem("email") as HTMLInputElement | null)?.value;
+    if (!email) return setError("Enter your work email first.");
+    void run(
+      () => authClient.signIn.sso({ email, callbackURL: next, errorCallbackURL: "/sign-in" }),
+      () => {},
     );
   }
 
@@ -84,6 +101,11 @@ export function AuthForm({ mode, providers, next = "/dashboard" }: AuthFormProps
         {mode === "sign-in" && (
           <Button type="button" variant="secondary" disabled={busy} onClick={magicLink}>
             Email me a sign-in link
+          </Button>
+        )}
+        {mode === "sign-in" && (
+          <Button type="button" variant="secondary" disabled={busy} onClick={singleSignOn}>
+            Sign in with SSO
           </Button>
         )}
       </form>
