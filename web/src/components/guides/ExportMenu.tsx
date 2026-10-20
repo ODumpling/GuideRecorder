@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ExportFormat } from "@/lib/exports";
 import { requestGuideExport } from "@/server/guides";
-import { ErrorText } from "../ui";
+import { Download } from "lucide-react";
+import { Button } from "@guiderecorder/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@guiderecorder/ui/dropdown-menu";
+import { ErrorText } from "@/components/ui";
 
 // Downloads of the revision on screen. The export worker makes each file
 // once per revision; until it's ready, this polls and then starts the
@@ -51,26 +54,23 @@ export function ExportMenu({ guideId, revisionId, formats }: Props) {
 
   if (!formats.length) return null;
   return (
-    <details className="relative">
-      <summary className="inline-flex h-9 cursor-pointer list-none items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted">
-        {working ? "Preparing…" : "Download"}
-      </summary>
-      <div className="absolute right-0 z-20 mt-1 grid w-56 gap-1 rounded-lg border border-border bg-card p-1 shadow-lg">
-        {formats.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            disabled={working !== null}
-            onClick={() => download(f.id)}
-            className="rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
-          >
-            {working === f.id ? `Preparing ${f.label}…` : f.label}
-          </button>
-        ))}
-        <div className="px-3">
-          <ErrorText>{error}</ErrorText>
-        </div>
-      </div>
-    </details>
+    <div className="grid justify-items-end gap-1">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" disabled={working !== null}>
+            <Download />
+            {working ? `Preparing ${formats.find((f) => f.id === working)?.label ?? ""}…` : "Download"}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          {formats.map((f) => (
+            <DropdownMenuItem key={f.id} onSelect={() => void download(f.id)}>
+              {f.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ErrorText>{error}</ErrorText>
+    </div>
   );
 }

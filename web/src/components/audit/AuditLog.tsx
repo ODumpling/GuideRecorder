@@ -2,7 +2,12 @@ import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import type { AuditSearch } from "@/lib/audit-filters";
 import { saveAuditRetention, type getAuditLog } from "@/server/audit";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { NativeSelect } from "@guiderecorder/ui/native-select";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@guiderecorder/ui/table";
+import { ErrorText, Field } from "@/components/ui";
 
 // The workspace's audit log: filters in the URL, the chain's check, CSV and
 // JSON export of what's filtered, and how long events are kept.
@@ -35,23 +40,20 @@ export function AuditLog({ data, search }: { data: Data; search: AuditSearch }) 
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-6 p-6">
-      <header className="flex items-center justify-between gap-4">
-        <Link to="/dashboard" className="text-sm text-muted-foreground hover:underline">
-          ← Dashboard
-        </Link>
+    <div className="mx-auto grid w-full max-w-6xl gap-7 px-5 py-8 md:px-9">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <h1 className="font-serif text-[40px] leading-none tracking-tight">Audit log</h1>
         <span className="flex gap-2">
-          <a href={exportUrl("csv")} className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted">
-            Export CSV
-          </a>
-          <a href={exportUrl("json")} className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted">
-            Export JSON
-          </a>
+          <Button asChild variant="outline">
+            <a href={exportUrl("csv")}>Export CSV</a>
+          </Button>
+          <Button asChild variant="outline">
+            <a href={exportUrl("json")}>Export JSON</a>
+          </Button>
         </span>
       </header>
 
-      <Card className="grid gap-3">
-        <h1 className="font-serif text-3xl">Audit log</h1>
+      <Card className="p-6 grid gap-3">
         {chain.ok ? (
           <p className="text-sm text-success">
             {chain.count} {chain.count === 1 ? "event" : "events"}, chain intact
@@ -63,9 +65,9 @@ export function AuditLog({ data, search }: { data: Data; search: AuditSearch }) 
           </p>
         )}
         <form onSubmit={filter} className="flex flex-wrap items-end gap-2 text-sm" key={JSON.stringify(filters)}>
-          <Label>
+          <Field>
             Action
-            <select name="action" defaultValue={search.action ?? ""} className="h-9 rounded-lg border border-input bg-card px-2">
+            <NativeSelect name="action" defaultValue={search.action ?? ""}>
               <option value="">All</option>
               {CATEGORIES.map((c) => (
                 <optgroup key={c} label={c}>
@@ -79,32 +81,32 @@ export function AuditLog({ data, search }: { data: Data; search: AuditSearch }) 
                     ))}
                 </optgroup>
               ))}
-            </select>
-          </Label>
-          <Label>
+            </NativeSelect>
+          </Field>
+          <Field>
             Who
-            <select name="actorId" defaultValue={search.actorId ?? ""} className="h-9 rounded-lg border border-input bg-card px-2">
+            <NativeSelect name="actorId" defaultValue={search.actorId ?? ""}>
               <option value="">Anyone</option>
               {members.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name} ({m.email})
                 </option>
               ))}
-            </select>
-          </Label>
-          <Label>
+            </NativeSelect>
+          </Field>
+          <Field>
             Target id
             <Input name="targetId" defaultValue={search.targetId ?? ""} className="w-56" />
-          </Label>
-          <Label>
+          </Field>
+          <Field>
             From
             <Input name="from" type="date" defaultValue={search.from ?? ""} />
-          </Label>
-          <Label>
+          </Field>
+          <Field>
             To
             <Input name="to" type="date" defaultValue={search.to ?? ""} />
-          </Label>
-          <Button type="submit">Filter</Button>
+          </Field>
+          <Button variant="brand" size="lg" type="submit">Filter</Button>
           {Object.values(filters).some(Boolean) ? (
             <Link to="/audit" className="h-9 content-center text-muted-foreground hover:underline">
               Clear
@@ -113,39 +115,39 @@ export function AuditLog({ data, search }: { data: Data; search: AuditSearch }) 
         </form>
       </Card>
 
-      <Card className="overflow-x-auto p-0">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border text-left text-muted-foreground">
-            <tr>
-              <th className="px-4 py-2 font-medium">#</th>
-              <th className="px-4 py-2 font-medium">When</th>
-              <th className="px-4 py-2 font-medium">Who</th>
-              <th className="px-4 py-2 font-medium">Action</th>
-              <th className="px-4 py-2 font-medium">Target</th>
-              <th className="px-4 py-2 font-medium">From</th>
-              <th className="px-4 py-2 font-medium">Details</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
+      <Card className="block p-0">
+        <Table>
+          <TableHeader className="[&_th]:text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-4 py-2">#</TableHead>
+              <TableHead className="px-4 py-2">When</TableHead>
+              <TableHead className="px-4 py-2">Who</TableHead>
+              <TableHead className="px-4 py-2">Action</TableHead>
+              <TableHead className="px-4 py-2">Target</TableHead>
+              <TableHead className="px-4 py-2">From</TableHead>
+              <TableHead className="px-4 py-2">Details</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {events.map((e) => (
-              <tr key={e.seq} className="align-top">
-                <td className="px-4 py-2 text-muted-foreground tabular-nums">{e.seq}</td>
-                <td className="px-4 py-2 whitespace-nowrap">{date(e.createdAt)}</td>
-                <td className="px-4 py-2">{e.actorId ? (e.actorName ?? names.get(e.actorId) ?? e.actorId) : <span className="text-muted-foreground">System</span>}</td>
-                <td className="px-4 py-2 font-mono text-xs">{e.action}</td>
-                <td className="px-4 py-2">
+              <TableRow key={e.seq} className="align-top">
+                <TableCell className="px-4 py-2 text-muted-foreground tabular-nums">{e.seq}</TableCell>
+                <TableCell className="px-4 py-2 whitespace-nowrap">{date(e.createdAt)}</TableCell>
+                <TableCell className="px-4 py-2">{e.actorId ? (e.actorName ?? names.get(e.actorId) ?? e.actorId) : <span className="text-muted-foreground">System</span>}</TableCell>
+                <TableCell className="px-4 py-2 font-mono text-xs">{e.action}</TableCell>
+                <TableCell className="px-4 py-2">
                   <span className="text-muted-foreground">{e.targetType}</span> <span className="font-mono text-xs break-all">{e.targetId}</span>
-                </td>
-                <td className="px-4 py-2 text-xs text-muted-foreground" title={e.userAgent ?? undefined}>
+                </TableCell>
+                <TableCell className="px-4 py-2 text-xs text-muted-foreground" title={e.userAgent ?? undefined}>
                   {e.ip ?? "—"}
-                </td>
-                <td className="px-4 py-2 font-mono text-xs break-all text-muted-foreground" title={`hash ${e.hash}`}>
+                </TableCell>
+                <TableCell className="px-4 py-2 font-mono text-xs break-all text-muted-foreground" title={`hash ${e.hash}`}>
                   {Object.keys(e.metadata as object).length ? JSON.stringify(e.metadata) : ""}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         {!events.length ? <p className="p-4 text-sm text-muted-foreground">No events match.</p> : null}
       </Card>
       {data.hasMore ? (
@@ -176,18 +178,18 @@ function Retention({ days, canSet }: { days: number | null; canSet: boolean }) {
   }
 
   return (
-    <Card className="grid gap-3">
+    <Card className="p-6 grid gap-3">
       <h2 className="text-lg font-semibold">Retention</h2>
       <p className="text-sm text-muted-foreground">
         {days ? `Events older than ${days} days are deleted; the chain records where it now starts.` : "Events are kept forever."}
       </p>
       {canSet ? (
         <form onSubmit={save} className="flex flex-wrap items-end gap-2">
-          <Label>
+          <Field>
             Keep events for (days, empty for forever)
             <Input name="days" type="number" min={30} max={3650} defaultValue={days ?? ""} className="w-40" />
-          </Label>
-          <Button type="submit">Save</Button>
+          </Field>
+          <Button variant="brand" size="lg" type="submit">Save</Button>
           {saved ? <span className="text-sm text-muted-foreground">Saved.</span> : null}
         </form>
       ) : null}

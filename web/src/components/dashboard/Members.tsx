@@ -2,7 +2,11 @@ import { useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { authClient } from "@/lib/auth-client";
 import { ROLE_NAMES, type RoleName } from "@/lib/permissions";
-import { Button, Card, ErrorText, Input } from "../ui";
+import { NativeSelect } from "@guiderecorder/ui/native-select";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText } from "@/components/ui";
 
 interface Props {
   workspaceId: string;
@@ -44,7 +48,7 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
   }
 
   return (
-    <Card>
+    <Card className="block p-6">
       <h2 className="mb-4 text-lg font-semibold">Members</h2>
       <ul className="divide-y divide-border">
         {members.map((m) => (
@@ -54,9 +58,8 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
             </span>
             {canManage && m.role !== "owner" && m.userId !== currentUserId ? (
               <span className="flex items-center gap-2">
-                <select
+                <NativeSelect
                   aria-label={`Role of ${m.email}`}
-                  className="h-8 rounded-md border border-input bg-card px-2"
                   value={m.role}
                   onChange={(e) =>
                     act(() =>
@@ -73,10 +76,9 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
                       {r}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
                 <Button
-                  variant="danger"
-                  className="h-8 px-3"
+                  variant="destructive"
                   onClick={() => act(() => authClient.organization.removeMember({ organizationId: workspaceId, memberIdOrEmail: m.id }))}
                 >
                   Remove
@@ -93,7 +95,7 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
               {i.email} <em>invited as {i.role}</em>
             </span>
             {canInvite && (
-              <Button variant="secondary" className="h-8 px-3" onClick={() => act(() => authClient.organization.cancelInvitation({ invitationId: i.id }))}>
+              <Button variant="outline" onClick={() => act(() => authClient.organization.cancelInvitation({ invitationId: i.id }))}>
                 Cancel
               </Button>
             )}
@@ -104,14 +106,14 @@ export function Members({ workspaceId, currentUserId, members, invitations, canI
         (seatsLeft > 0 ? (
           <form onSubmit={invite} className="mt-4 flex flex-wrap gap-2">
             <Input name="email" type="email" placeholder="colleague@example.com" required className="max-w-xs" />
-            <select name="role" aria-label="Role" defaultValue="editor" className="h-9 rounded-lg border border-input bg-card px-2 text-sm">
+            <NativeSelect name="role" aria-label="Role" defaultValue="editor">
               {ASSIGNABLE.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
               ))}
-            </select>
-            <Button type="submit">Invite</Button>
+            </NativeSelect>
+            <Button variant="brand" size="lg" type="submit">Invite</Button>
           </form>
         ) : (
           <p className="mt-4 text-sm text-muted-foreground">No seats left. Upgrade to invite more people.</p>

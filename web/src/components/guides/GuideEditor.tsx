@@ -8,7 +8,9 @@ import { Input } from "@guiderecorder/ui/input";
 import { ItemView } from "@guiderecorder/ui/step-view";
 import { deleteItem, moveItem, setGuideText, setItemText, type GuideTextField } from "@/lib/draft";
 import { saveGuideEdit } from "@/server/editor";
-import { Button, Card, ErrorText, Label } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { ErrorText, Field } from "@/components/ui";
 
 // The web editor: a synced guide's text, in the desktop app's editors. A
 // save is a new revision on the revision the edit began on; the server
@@ -120,7 +122,7 @@ export function GuideEditor({ workspaceId, revision }: Props) {
   let stepNumber = 0;
 
   return (
-    <div className="mx-auto grid w-full max-w-3xl gap-6 p-6">
+    <div className="mx-auto grid w-full max-w-3xl gap-7 px-5 py-8 md:px-9">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <Link to="/guides/$guideId" params={{ guideId: revision.guideId }} className="text-sm text-muted-foreground hover:underline">
           ← Back to the guide
@@ -129,17 +131,17 @@ export function GuideEditor({ workspaceId, revision }: Props) {
           <span className="text-xs text-muted-foreground" aria-live="polite">
             {dirty ? "Unsaved changes" : `Saved ${new Date(revision.createdAt).toLocaleString()}`}
           </span>
-          <Button variant="secondary" onClick={discard} disabled={!dirty || saving}>
+          <Button variant="outline" size="lg" onClick={discard} disabled={!dirty || saving}>
             Discard
           </Button>
-          <Button onClick={() => save()} disabled={!dirty || saving}>
+          <Button variant="brand" size="lg" onClick={() => save()} disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
           </Button>
         </span>
       </header>
       <ErrorText>{error}</ErrorText>
       {conflicts.length > 0 && (
-        <Card role="alert" className="grid gap-3 border-destructive/40 p-4 text-sm">
+        <Card role="alert" className="p-6 grid gap-3 border-destructive/40 p-4 text-sm">
           <p>Someone changed the same text since you started editing:</p>
           <ul className="list-disc pl-5">
             {conflicts.map((c) => (
@@ -147,25 +149,25 @@ export function GuideEditor({ workspaceId, revision }: Props) {
             ))}
           </ul>
           <span className="flex flex-wrap gap-2">
-            <Button onClick={() => save("ours")} disabled={saving}>
+            <Button variant="brand" size="lg" onClick={() => save("ours")} disabled={saving}>
               Keep my changes
             </Button>
-            <Button variant="secondary" onClick={() => save("theirs")} disabled={saving}>
+            <Button variant="outline" size="lg" onClick={() => save("theirs")} disabled={saving}>
               Keep theirs
             </Button>
           </span>
         </Card>
       )}
 
-      <Card className="grid gap-4">
-        <Label>
+      <Card className="p-6 grid gap-4">
+        <Field>
           Title
           <Input
             className="h-11 bg-card px-3 font-serif text-2xl"
             value={draft.title}
             onChange={(e) => change((g) => setGuideText(g, "title", e.target.value), "guide.title")}
           />
-        </Label>
+        </Field>
         <div className="grid gap-1.5 text-sm font-medium">
           Introduction
           <MarkdownEditor value={draft.intro} onChange={text("intro")} onUndo={undo} onRedo={redo} readOnly={false} label="Introduction" placeholder="Introduce the guide" />
@@ -188,7 +190,7 @@ export function GuideEditor({ workspaceId, revision }: Props) {
         if (item.type === "step") stepNumber += 1;
         const name = item.type === "step" ? `${noun} ${stepNumber}` : item.type === "section" ? "Section" : item.kind;
         return (
-          <Card key={item.id} className="grid gap-3" aria-label={name}>
+          <Card key={item.id} className="p-6 grid gap-3" aria-label={name}>
             <ItemToolbar
               name={name}
               first={index === 0}
@@ -246,13 +248,13 @@ function ItemToolbar({
     <div className="flex items-center gap-2" role="toolbar" aria-label={`${name} actions`}>
       <span className="text-[11px] font-semibold tracking-[0.08em] text-brand uppercase">{name}</span>
       <span className="ml-auto flex gap-1">
-        <Button variant="secondary" className="h-8 px-2.5" aria-label={`Move ${name} up`} disabled={first} onMouseDown={keepFocus} onClick={() => onMove(-1)}>
+        <Button variant="outline" size="lg" className="h-8 px-2.5" aria-label={`Move ${name} up`} disabled={first} onMouseDown={keepFocus} onClick={() => onMove(-1)}>
           ↑
         </Button>
-        <Button variant="secondary" className="h-8 px-2.5" aria-label={`Move ${name} down`} disabled={last} onMouseDown={keepFocus} onClick={() => onMove(1)}>
+        <Button variant="outline" size="lg" className="h-8 px-2.5" aria-label={`Move ${name} down`} disabled={last} onMouseDown={keepFocus} onClick={() => onMove(1)}>
           ↓
         </Button>
-        <Button variant="danger" className="h-8 px-2.5" aria-label={`Delete ${name}`} onMouseDown={keepFocus} onClick={onDelete}>
+        <Button variant="destructive" size="lg" className="h-8 px-2.5" aria-label={`Delete ${name}`} onMouseDown={keepFocus} onClick={onDelete}>
           Delete
         </Button>
       </span>

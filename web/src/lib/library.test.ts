@@ -45,8 +45,11 @@ beforeEach(async () => {
 
 describe("library", () => {
   it("lists the workspace's guides, newest change first, with what the list shows", async () => {
-    const { guides, tags } = await library(db, "org", vic, {}, today);
+    const { guides, tags, counts } = await library(db, "org", vic, {}, today);
     expect(guides.map((g) => g.title)).toEqual(["Kurzanleitung Drucker", "Office floor plan", "Rotate an API key"]);
+    const firstStep = apiKey.items?.find((i) => i.type === "step");
+    expect(guides[2]!.cover).toBe(hash(firstStep!.type === "step" ? firstStep!.image.full : ""));
+    expect(counts).toEqual({ all: 3, reviewDue: 1, unfiled: 3, statuses: { draft: 0, inReview: 0, published: 0, needsUpdate: 1 } });
     expect(guides[2]).toMatchObject({ steps: 5, tags: ["security", "api", "console"], owner: "Ada Lovelace", status: null, review: null, private: false });
     expect(guides[0]).toMatchObject({ owner: "IT", status: "needsUpdate", reviewDue: "2026-09-01", review: "overdue" });
     expect(tags.map((t) => t.name)).toEqual(["api", "console", "Drucker", "office", "security"]);

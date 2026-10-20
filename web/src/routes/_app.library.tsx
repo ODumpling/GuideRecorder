@@ -1,11 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Library } from "@/components/guides/Library";
-import { Card } from "@/components/ui";
 import { librarySearch } from "@/lib/library-search";
 import { title } from "@/lib/title";
 import { getLibrary } from "@/server/guides";
 
-export const Route = createFileRoute("/library")({
+export const Route = createFileRoute("/_app/library")({
   validateSearch: librarySearch,
   loaderDeps: ({ search }) => search,
   loader: ({ deps }) => getLibrary({ data: deps }),
@@ -18,14 +17,15 @@ function Page() {
   const search = Route.useSearch();
   if (!data.available) {
     return (
-      <main className="mx-auto grid w-full max-w-md gap-3 p-6">
-        <Card className="grid gap-3 text-sm">
-          <p>{data.reason}</p>
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-7 px-5 py-8 md:px-9">
+        <h1 className="font-serif text-[40px] leading-none tracking-tight">All guides</h1>
+        <p className="rounded-xl border border-dashed border-border px-6 py-14 text-center text-sm text-muted-foreground">
+          {data.reason}{" "}
           <Link to="/dashboard" className="text-brand hover:underline">
-            Go to the dashboard
+            Workspace settings
           </Link>
-        </Card>
-      </main>
+        </p>
+      </div>
     );
   }
   return <Library data={data} search={search} />;

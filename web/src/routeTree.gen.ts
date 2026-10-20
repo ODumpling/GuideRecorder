@@ -10,21 +10,22 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AdminRouteImport } from './routes/admin'
-import { Route as AuditRouteImport } from './routes/audit'
-import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as AppRouteImport } from './routes/_app'
 import { Route as DeviceRouteImport } from './routes/device'
-import { Route as LibraryRouteImport } from './routes/library'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
+import { Route as AppAdminRouteImport } from './routes/_app.admin'
+import { Route as AppAuditRouteImport } from './routes/_app.audit'
+import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as AppLibraryRouteImport } from './routes/_app.library'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
-import { Route as GuidesGuideIdRouteImport } from './routes/guides.$guideId'
 import { Route as InvitationsIdRouteImport } from './routes/invitations.$id'
 import { Route as STokenRouteImport } from './routes/s.$token'
+import { Route as AppGuidesGuideIdRouteImport } from './routes/_app.guides.$guideId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiJobsRetentionRouteImport } from './routes/api/jobs/retention'
-import { Route as GuidesGuideIdEditRouteImport } from './routes/guides.$guideId_.edit'
-import { Route as GuidesGuideIdReviewRouteImport } from './routes/guides.$guideId_.review'
+import { Route as AppGuidesGuideIdEditRouteImport } from './routes/_app.guides.$guideId_.edit'
+import { Route as AppGuidesGuideIdReviewRouteImport } from './routes/_app.guides.$guideId_.review'
 import { Route as ApiShareTokenAssetsSha256RouteImport } from './routes/api/share/$token/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsSha256RouteImport } from './routes/api/workspaces/$workspaceId/assets/$sha256'
 import { Route as ApiWorkspacesWorkspaceIdAssetsCommitRouteImport } from './routes/api/workspaces/$workspaceId/assets/commit'
@@ -44,29 +45,13 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminRoute = AdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuditRoute = AuditRouteImport.update({
-  id: '/audit',
-  path: '/audit',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeviceRoute = DeviceRouteImport.update({
   id: '/device',
   path: '/device',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LibraryRoute = LibraryRouteImport.update({
-  id: '/library',
-  path: '/library',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInRoute = SignInRouteImport.update({
@@ -79,14 +64,29 @@ const SignUpRoute = SignUpRouteImport.update({
   path: '/sign-up',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAuditRoute = AppAuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryRoute = AppLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
+  getParentRoute: () => AppRoute,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GuidesGuideIdRoute = GuidesGuideIdRouteImport.update({
-  id: '/guides/$guideId',
-  path: '/guides/$guideId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InvitationsIdRoute = InvitationsIdRouteImport.update({
@@ -99,6 +99,11 @@ const STokenRoute = STokenRouteImport.update({
   path: '/s/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppGuidesGuideIdRoute = AppGuidesGuideIdRouteImport.update({
+  id: '/guides/$guideId',
+  path: '/guides/$guideId',
+  getParentRoute: () => AppRoute,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -109,15 +114,15 @@ const ApiJobsRetentionRoute = ApiJobsRetentionRouteImport.update({
   path: '/api/jobs/retention',
   getParentRoute: () => rootRouteImport,
 } as any)
-const GuidesGuideIdEditRoute = GuidesGuideIdEditRouteImport.update({
+const AppGuidesGuideIdEditRoute = AppGuidesGuideIdEditRouteImport.update({
   id: '/guides/$guideId_/edit',
   path: '/guides/$guideId/edit',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const GuidesGuideIdReviewRoute = GuidesGuideIdReviewRouteImport.update({
+const AppGuidesGuideIdReviewRoute = AppGuidesGuideIdReviewRouteImport.update({
   id: '/guides/$guideId_/review',
   path: '/guides/$guideId/review',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
 const ApiShareTokenAssetsSha256Route =
   ApiShareTokenAssetsSha256RouteImport.update({
@@ -200,21 +205,21 @@ const ApiWorkspacesWorkspaceIdSyncGuidesGuideIdReviewRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/audit': typeof AuditRoute
-  '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
-  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
+  '/admin': typeof AppAdminRoute
+  '/audit': typeof AppAuditRoute
+  '/dashboard': typeof AppDashboardRoute
+  '/library': typeof AppLibraryRoute
   '/api/health': typeof ApiHealthRoute
-  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
-  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
-  '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
+  '/guides/$guideId/edit': typeof AppGuidesGuideIdEditRoute
+  '/guides/$guideId/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -231,21 +236,21 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/audit': typeof AuditRoute
-  '/dashboard': typeof DashboardRoute
   '/device': typeof DeviceRoute
-  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
+  '/admin': typeof AppAdminRoute
+  '/audit': typeof AppAuditRoute
+  '/dashboard': typeof AppDashboardRoute
+  '/library': typeof AppLibraryRoute
   '/api/health': typeof ApiHealthRoute
-  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
-  '/guides/$guideId/edit': typeof GuidesGuideIdEditRoute
-  '/guides/$guideId/review': typeof GuidesGuideIdReviewRoute
+  '/guides/$guideId/edit': typeof AppGuidesGuideIdEditRoute
+  '/guides/$guideId/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -263,21 +268,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/audit': typeof AuditRoute
-  '/dashboard': typeof DashboardRoute
+  '/_app': typeof AppRouteWithChildren
   '/device': typeof DeviceRoute
-  '/library': typeof LibraryRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
+  '/_app/admin': typeof AppAdminRoute
+  '/_app/audit': typeof AppAuditRoute
+  '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/library': typeof AppLibraryRoute
   '/api/health': typeof ApiHealthRoute
-  '/guides/$guideId': typeof GuidesGuideIdRoute
   '/invitations/$id': typeof InvitationsIdRoute
   '/s/$token': typeof STokenRoute
+  '/_app/guides/$guideId': typeof AppGuidesGuideIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/jobs/retention': typeof ApiJobsRetentionRoute
-  '/guides/$guideId_/edit': typeof GuidesGuideIdEditRoute
-  '/guides/$guideId_/review': typeof GuidesGuideIdReviewRoute
+  '/_app/guides/$guideId_/edit': typeof AppGuidesGuideIdEditRoute
+  '/_app/guides/$guideId_/review': typeof AppGuidesGuideIdReviewRoute
   '/api/share/$token/assets/$sha256': typeof ApiShareTokenAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/$sha256': typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   '/api/workspaces/$workspaceId/assets/commit': typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -296,17 +302,17 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/device'
+    | '/sign-in'
+    | '/sign-up'
     | '/admin'
     | '/audit'
     | '/dashboard'
-    | '/device'
     | '/library'
-    | '/sign-in'
-    | '/sign-up'
     | '/api/health'
-    | '/guides/$guideId'
     | '/invitations/$id'
     | '/s/$token'
+    | '/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
     | '/guides/$guideId/edit'
@@ -327,17 +333,17 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/device'
+    | '/sign-in'
+    | '/sign-up'
     | '/admin'
     | '/audit'
     | '/dashboard'
-    | '/device'
     | '/library'
-    | '/sign-in'
-    | '/sign-up'
     | '/api/health'
-    | '/guides/$guideId'
     | '/invitations/$id'
     | '/s/$token'
+    | '/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
     | '/guides/$guideId/edit'
@@ -358,21 +364,22 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/admin'
-    | '/audit'
-    | '/dashboard'
+    | '/_app'
     | '/device'
-    | '/library'
     | '/sign-in'
     | '/sign-up'
+    | '/_app/admin'
+    | '/_app/audit'
+    | '/_app/dashboard'
+    | '/_app/library'
     | '/api/health'
-    | '/guides/$guideId'
     | '/invitations/$id'
     | '/s/$token'
+    | '/_app/guides/$guideId'
     | '/api/auth/$'
     | '/api/jobs/retention'
-    | '/guides/$guideId_/edit'
-    | '/guides/$guideId_/review'
+    | '/_app/guides/$guideId_/edit'
+    | '/_app/guides/$guideId_/review'
     | '/api/share/$token/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/$sha256'
     | '/api/workspaces/$workspaceId/assets/commit'
@@ -390,21 +397,15 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AdminRoute: typeof AdminRoute
-  AuditRoute: typeof AuditRoute
-  DashboardRoute: typeof DashboardRoute
+  AppRoute: typeof AppRouteWithChildren
   DeviceRoute: typeof DeviceRoute
-  LibraryRoute: typeof LibraryRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   ApiHealthRoute: typeof ApiHealthRoute
-  GuidesGuideIdRoute: typeof GuidesGuideIdRoute
   InvitationsIdRoute: typeof InvitationsIdRoute
   STokenRoute: typeof STokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiJobsRetentionRoute: typeof ApiJobsRetentionRoute
-  GuidesGuideIdEditRoute: typeof GuidesGuideIdEditRoute
-  GuidesGuideIdReviewRoute: typeof GuidesGuideIdReviewRoute
   ApiShareTokenAssetsSha256Route: typeof ApiShareTokenAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsSha256Route: typeof ApiWorkspacesWorkspaceIdAssetsSha256Route
   ApiWorkspacesWorkspaceIdAssetsCommitRoute: typeof ApiWorkspacesWorkspaceIdAssetsCommitRoute
@@ -429,25 +430,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AdminRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/audit': {
-      id: '/audit'
-      path: '/audit'
-      fullPath: '/audit'
-      preLoaderRoute: typeof AuditRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/device': {
@@ -455,13 +442,6 @@ declare module '@tanstack/react-router' {
       path: '/device'
       fullPath: '/device'
       preLoaderRoute: typeof DeviceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/library': {
-      id: '/library'
-      path: '/library'
-      fullPath: '/library'
-      preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in': {
@@ -478,18 +458,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/audit': {
+      id: '/_app/audit'
+      path: '/audit'
+      fullPath: '/audit'
+      preLoaderRoute: typeof AppAuditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library': {
+      id: '/_app/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof AppLibraryRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/guides/$guideId': {
-      id: '/guides/$guideId'
-      path: '/guides/$guideId'
-      fullPath: '/guides/$guideId'
-      preLoaderRoute: typeof GuidesGuideIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/invitations/$id': {
@@ -506,6 +507,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof STokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/guides/$guideId': {
+      id: '/_app/guides/$guideId'
+      path: '/guides/$guideId'
+      fullPath: '/guides/$guideId'
+      preLoaderRoute: typeof AppGuidesGuideIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -520,19 +528,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiJobsRetentionRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/guides/$guideId_/edit': {
-      id: '/guides/$guideId_/edit'
+    '/_app/guides/$guideId_/edit': {
+      id: '/_app/guides/$guideId_/edit'
       path: '/guides/$guideId/edit'
       fullPath: '/guides/$guideId/edit'
-      preLoaderRoute: typeof GuidesGuideIdEditRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppGuidesGuideIdEditRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/guides/$guideId_/review': {
-      id: '/guides/$guideId_/review'
+    '/_app/guides/$guideId_/review': {
+      id: '/_app/guides/$guideId_/review'
       path: '/guides/$guideId/review'
       fullPath: '/guides/$guideId/review'
-      preLoaderRoute: typeof GuidesGuideIdReviewRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppGuidesGuideIdReviewRouteImport
+      parentRoute: typeof AppRoute
     }
     '/api/share/$token/assets/$sha256': {
       id: '/api/share/$token/assets/$sha256'
@@ -628,23 +636,39 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppRouteChildren {
+  AppAdminRoute: typeof AppAdminRoute
+  AppAuditRoute: typeof AppAuditRoute
+  AppDashboardRoute: typeof AppDashboardRoute
+  AppLibraryRoute: typeof AppLibraryRoute
+  AppGuidesGuideIdRoute: typeof AppGuidesGuideIdRoute
+  AppGuidesGuideIdEditRoute: typeof AppGuidesGuideIdEditRoute
+  AppGuidesGuideIdReviewRoute: typeof AppGuidesGuideIdReviewRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppAdminRoute: AppAdminRoute,
+  AppAuditRoute: AppAuditRoute,
+  AppDashboardRoute: AppDashboardRoute,
+  AppLibraryRoute: AppLibraryRoute,
+  AppGuidesGuideIdRoute: AppGuidesGuideIdRoute,
+  AppGuidesGuideIdEditRoute: AppGuidesGuideIdEditRoute,
+  AppGuidesGuideIdReviewRoute: AppGuidesGuideIdReviewRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AdminRoute: AdminRoute,
-  AuditRoute: AuditRoute,
-  DashboardRoute: DashboardRoute,
+  AppRoute: AppRouteWithChildren,
   DeviceRoute: DeviceRoute,
-  LibraryRoute: LibraryRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   ApiHealthRoute: ApiHealthRoute,
-  GuidesGuideIdRoute: GuidesGuideIdRoute,
   InvitationsIdRoute: InvitationsIdRoute,
   STokenRoute: STokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiJobsRetentionRoute: ApiJobsRetentionRoute,
-  GuidesGuideIdEditRoute: GuidesGuideIdEditRoute,
-  GuidesGuideIdReviewRoute: GuidesGuideIdReviewRoute,
   ApiShareTokenAssetsSha256Route: ApiShareTokenAssetsSha256Route,
   ApiWorkspacesWorkspaceIdAssetsSha256Route:
     ApiWorkspacesWorkspaceIdAssetsSha256Route,

@@ -12,7 +12,8 @@
     "skipLibCheck": true,
     "strict": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "paths": { "@guiderecorder/ui/*": ["./src/*"] }
   },
   "include": ["src"]
 }

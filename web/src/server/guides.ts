@@ -87,7 +87,7 @@ export const getLibrary = createServerFn({ method: "GET" })
       status: data.status,
       reviewDue: data.review === "due",
     });
-    return { available: true as const, canOrganize: can(access.role, "update"), ...found };
+    return { available: true as const, workspaceId, canOrganize: can(access.role, "update"), canDelete: can(access.role, "delete"), ...found };
   });
 
 /** Files a guide in a library folder, or takes it out of one (null). */

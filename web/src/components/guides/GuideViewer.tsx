@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import type { Guide } from "@guiderecorder/guide-schema";
-import { Button, Card } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
 import { Markdown } from "./Markdown";
 import { StepFigure, type ImageUrl } from "./StepFigure";
 import { plainText, slides, viewerItems, type ViewerItem, type ViewerNote, type ViewerStep } from "./viewer";
@@ -81,20 +82,20 @@ export function GuideViewer({ guide, imageUrl, mode: initialMode = "document", h
   const steps = items.filter((i): i is ViewerStep => i.type === "step");
 
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-6 p-6" lang={guide.language || undefined}>
+    <div className="mx-auto grid w-full max-w-5xl gap-7 px-5 py-8 md:px-9" lang={guide.language || undefined}>
       {header}
-      <Card className="grid gap-3">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <h1 className="font-serif text-3xl">{guide.title}</h1>
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <h1 className="min-w-0 font-serif text-[40px] leading-none tracking-tight">{guide.title}</h1>
           {steps.length ? (
-            <div role="group" aria-label="View" className="inline-flex rounded-lg border border-border p-0.5 text-sm">
+            <div role="group" aria-label="View" className="inline-flex rounded-lg bg-foreground/[0.06] p-0.5 text-sm print:hidden">
               {(["document", "walkthrough"] as const).map((m) => (
                 <button
                   key={m}
                   type="button"
                   aria-pressed={mode === m}
                   onClick={() => setMode(m)}
-                  className={`rounded-md px-3 py-1 ${mode === m ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`h-7 rounded-md px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring ${mode === m ? "bg-card font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {w[m]}
                 </button>
@@ -102,9 +103,9 @@ export function GuideViewer({ guide, imageUrl, mode: initialMode = "document", h
             </div>
           ) : null}
         </div>
-        {guide.summary ? <p className="text-muted-foreground">{guide.summary}</p> : null}
+        {guide.summary ? <p className="max-w-3xl text-muted-foreground">{guide.summary}</p> : null}
         {meta}
-      </Card>
+      </div>
       {mode === "walkthrough" && steps.length ? (
         <Walkthrough guide={guide} items={items} total={steps.length} imageUrl={imageUrl} w={w} />
       ) : (
@@ -160,7 +161,7 @@ function DocumentView({ guide, items, steps, imageUrl, w }: { guide: Guide; item
     <div className={steps.length > 1 ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_14rem]" : "grid gap-6"}>
       <div className="grid min-w-0 gap-6">
         {hasIntro ? (
-          <Card className="grid gap-3">
+          <Card className="p-6 grid gap-3">
             <Intro guide={guide} w={w} />
           </Card>
         ) : null}
@@ -174,7 +175,7 @@ function DocumentView({ guide, items, steps, imageUrl, w }: { guide: Guide; item
           }
           if (item.type === "note") return <NoteCard key={item.id} note={item} w={w} />;
           return (
-            <Card key={item.id} id={`step-${item.number}`} className="grid scroll-mt-6 gap-4">
+            <Card key={item.id} id={`step-${item.number}`} className="p-6 grid scroll-mt-6 gap-4">
               <StepTitle step={item} w={w} />
               <StepFigure step={item} imageUrl={imageUrl} alt={plainText(item.title)} />
               {item.description.trim() ? <Markdown text={item.description} className="text-sm" /> : null}
@@ -184,7 +185,7 @@ function DocumentView({ guide, items, steps, imageUrl, w }: { guide: Guide; item
       </div>
       {steps.length > 1 ? (
         <nav aria-label={w.steps} className="hidden lg:block">
-          <ol className="sticky top-6 grid gap-1 text-sm">
+          <ol className="sticky top-6 grid grid-cols-[minmax(0,1fr)] gap-1 text-sm">
             {steps.map((s) => (
               <li key={s.id}>
                 <a href={`#step-${s.number}`} className="flex gap-2 rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -251,21 +252,21 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
           <div className="h-full bg-brand transition-[width]" style={{ width: `${(index / Math.max(last, 1)) * 100}%` }} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" aria-disabled={index === 0} onClick={() => go(index - 1, false)}>
+          <Button variant="outline" size="lg" aria-disabled={index === 0} onClick={() => go(index - 1, false)}>
             ← {w.back}
           </Button>
           <p className="min-w-0 flex-1 truncate text-center text-sm text-muted-foreground" role="status" aria-live="polite" aria-atomic="true">
             {status}
           </p>
-          <Button aria-disabled={index === last} onClick={() => go(index + 1, false)}>
+          <Button variant="brand" size="lg" aria-disabled={index === last} onClick={() => go(index + 1, false)}>
             {w.next} →
           </Button>
-          <Button variant="secondary" onClick={() => go(0)}>
+          <Button variant="outline" size="lg" onClick={() => go(0)}>
             {w.restart}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">{w.hint}</p>
-        <Card className="grid gap-4">
+        <Card className="p-6 grid gap-4">
           {slide.kind === "intro" ? (
             <>
               <h2 ref={heading} tabIndex={-1} className="text-xl font-semibold outline-none">
@@ -273,7 +274,7 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
               </h2>
               <Intro guide={guide} w={w} />
               <p>
-                <Button onClick={() => go(index + 1)}>{w.begin} →</Button>
+                <Button variant="brand" size="lg" onClick={() => go(index + 1)}>{w.begin} →</Button>
               </p>
             </>
           ) : slide.kind === "done" ? (
@@ -286,7 +287,7 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
                 <NoteCard key={n.id} note={n} w={w} />
               ))}
               <p>
-                <Button onClick={() => go(0)}>{w.restart}</Button>
+                <Button variant="brand" size="lg" onClick={() => go(0)}>{w.restart}</Button>
               </p>
             </>
           ) : (

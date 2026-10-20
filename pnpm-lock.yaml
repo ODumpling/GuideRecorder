@@ -184,6 +184,9 @@ importers:
       markdown-it:
         specifier: 15.0.2
         version: 15.0.2
+      radix-ui:
+        specifier: ^1.6.5
+        version: 1.8.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.7.0
@@ -257,6 +260,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@electric-sql/pglite@0.5.10)(kysely@0.29.7)(postgres@3.4.9)
+      lucide-react:
+        specifier: ^1.57.0
+        version: 1.57.0(@types/react@19.3.0)(react@19.3.0)
       markdown-it:
         specifier: 15.0.2
         version: 15.0.2
@@ -272,6 +278,9 @@ importers:
       stripe:
         specifier: ^22
         version: 22.6.2(@types/node@26.6.5)
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7

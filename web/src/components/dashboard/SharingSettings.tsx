@@ -2,7 +2,11 @@ import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import type { SharingSettings as Settings } from "@/lib/sharing";
 import { saveWorkspaceSharing } from "@/server/shares";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { NativeSelect } from "@guiderecorder/ui/native-select";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
 const MODES: { value: Settings["shareLinks"]; label: string }[] = [
   { value: "anyone", label: "Anyone with the link" },
@@ -28,7 +32,7 @@ export function SharingSettings({ settings, canManage }: { settings: Settings; c
   }
 
   return (
-    <Card className="grid gap-4">
+    <Card className="p-6 grid gap-4">
       <div>
         <h2 className="text-lg font-semibold">Share links</h2>
         <p className="text-sm text-muted-foreground">
@@ -38,10 +42,9 @@ export function SharingSettings({ settings, canManage }: { settings: Settings; c
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Label>
+        <Field>
           Links work for
-          <select
-            className="h-9 rounded-lg border border-input bg-card px-3 text-sm"
+          <NativeSelect
             disabled={!canManage}
             value={draft.shareLinks}
             onChange={(e) => setDraft({ ...draft, shareLinks: e.target.value as Settings["shareLinks"] })}
@@ -51,9 +54,9 @@ export function SharingSettings({ settings, canManage }: { settings: Settings; c
                 {m.label}
               </option>
             ))}
-          </select>
-        </Label>
-        <Label>
+          </NativeSelect>
+        </Field>
+        <Field>
           Longest a link lasts (days)
           <Input
             type="number"
@@ -64,10 +67,10 @@ export function SharingSettings({ settings, canManage }: { settings: Settings; c
             value={draft.shareLinkMaxDays ?? ""}
             onChange={(e) => setDraft({ ...draft, shareLinkMaxDays: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : null })}
           />
-        </Label>
+        </Field>
       </div>
       {canManage ? (
-        <Button className="justify-self-start" disabled={!changed || saving} onClick={save}>
+        <Button variant="brand" size="lg" className="justify-self-start" disabled={!changed || saving} onClick={save}>
           {saving ? "Saving…" : "Save"}
         </Button>
       ) : null}

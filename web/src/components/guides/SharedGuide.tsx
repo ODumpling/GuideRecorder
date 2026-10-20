@@ -1,7 +1,10 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { unlockSharedGuide, type getSharedGuide } from "@/server/shares";
-import { Button, Card, ErrorText, Input } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText } from "@/components/ui";
 import { GuideView } from "./GuideView";
 
 // The public page of a share link: the guide read-only, or a password
@@ -26,7 +29,7 @@ export function SharedGuide({ token, result }: { token: string; result: Result }
         header={
           allowDownload ? (
             // TODO(#48): download a real export (PDF, HTML) from the export worker once it lands.
-            <Button variant="secondary" className="ml-auto print:hidden" onClick={() => window.print()}>
+            <Button variant="outline" size="lg" className="ml-auto print:hidden" onClick={() => window.print()}>
               Download PDF
             </Button>
           ) : null
@@ -60,12 +63,12 @@ function PasswordPrompt({ token }: { token: string }) {
 
   return (
     <main className="mx-auto grid w-full max-w-sm flex-1 place-content-center p-6">
-      <Card className="grid gap-4">
+      <Card className="p-6 grid gap-4">
         <h1 className="font-serif text-2xl">Password protected</h1>
         <p className="text-sm text-muted-foreground">Enter the password you were given to see this guide.</p>
         <form className="grid gap-3" onSubmit={submit}>
           <Input type="password" aria-label="Password" autoFocus required value={password} onChange={(e) => setPassword(e.target.value)} />
-          <Button type="submit" disabled={busy}>
+          <Button variant="brand" size="lg" type="submit" disabled={busy}>
             {busy ? "Checking…" : "View guide"}
           </Button>
         </form>

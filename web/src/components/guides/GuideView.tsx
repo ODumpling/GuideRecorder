@@ -1,6 +1,9 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { Revision } from "@guiderecorder/sync";
+import { ClipboardCheck, Pencil } from "lucide-react";
+import { Button } from "@guiderecorder/ui/button";
+import { StatusPill } from "./bits";
 import { GuideViewer } from "./GuideViewer";
 
 // A synced guide on the web, read with <GuideViewer>. Editing is at
@@ -31,31 +34,30 @@ export function GuideView({ revision, assetUrl, canEdit, canReview = false, unpu
       guide={revision.guide}
       imageUrl={imageUrl}
       header={
-        <header className="flex flex-wrap items-center justify-between gap-4 empty:hidden print:hidden">
+        <header className="flex flex-wrap items-center gap-1.5 empty:hidden print:hidden">
           {header}
           {canReview ? (
-            <Link
-              to="/guides/$guideId/review"
-              params={{ guideId: revision.guideId }}
-              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted"
-            >
-              Review
-            </Link>
+            <Button asChild variant="ghost">
+              <Link to="/guides/$guideId/review" params={{ guideId: revision.guideId }}>
+                <ClipboardCheck /> Review
+              </Link>
+            </Button>
           ) : null}
           {canEdit ? (
-            <Link
-              to="/guides/$guideId/edit"
-              params={{ guideId: revision.guideId }}
-              className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-muted"
-            >
-              Edit
-            </Link>
+            <Button asChild>
+              <Link to="/guides/$guideId/edit" params={{ guideId: revision.guideId }}>
+                <Pencil /> Edit
+              </Link>
+            </Button>
           ) : null}
         </header>
       }
       meta={
         <>
-          <p className="text-xs text-muted-foreground">{changed}</p>
+          <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {revision.guide.status ? <StatusPill status={revision.guide.status} /> : null}
+            {changed}
+          </p>
           {unpublished && canReview ? (
             <p className="text-sm text-muted-foreground">This version isn&rsquo;t published yet: viewers see the last approved one.</p>
           ) : null}

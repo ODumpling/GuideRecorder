@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import type { PlanName } from "@/lib/plans";
-import { Button, Card, ErrorText } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { ErrorText } from "@/components/ui";
 
 interface Props {
   workspaceId: string;
@@ -36,20 +38,20 @@ export function Billing({ workspaceId, plan, enabled, canManage }: Props) {
   }
 
   return (
-    <Card>
+    <Card className="block p-6">
       <h2 className="mb-2 text-lg font-semibold">Billing</h2>
       {!canManage ? (
         <p className="text-sm text-muted-foreground">Only the workspace owner manages billing.</p>
       ) : (
         <div className="flex flex-wrap gap-2">
-          {plan === "free" && <Button onClick={() => upgrade("pro")}>Upgrade to Pro</Button>}
+          {plan === "free" && <Button variant="brand" size="lg" onClick={() => upgrade("pro")}>Upgrade to Pro</Button>}
           {plan !== "enterprise" && (
-            <Button variant={plan === "free" ? "secondary" : "primary"} onClick={() => upgrade("enterprise")}>
+            <Button variant={plan === "free" ? "outline" : "brand"} size="lg" onClick={() => upgrade("enterprise")}>
               Upgrade to Enterprise
             </Button>
           )}
           {plan !== "free" && (
-            <Button variant="secondary" onClick={portal}>
+            <Button variant="outline" size="lg" onClick={portal}>
               Manage billing
             </Button>
           )}

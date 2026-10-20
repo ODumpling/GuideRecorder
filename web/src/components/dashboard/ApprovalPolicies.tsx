@@ -1,7 +1,10 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { deleteApprovalPolicy, saveApprovalPolicy, type getApprovalSettings } from "@/server/reviews";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 
 // Approval policies per library folder (Enterprise; admins). A guide follows
 // its folder's nearest policy; folders without one follow the workspace's.
@@ -30,7 +33,7 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
         `${p.allowSelfApproval ? ", self-approval allowed" : ""}${p.resetOnNewRevision ? ", reset on new edits" : ""}`;
 
   return (
-    <Card>
+    <Card className="block p-6">
       <h2 className="mb-1 text-lg font-semibold">Approvals</h2>
       <p className="mb-4 text-sm text-muted-foreground">
         Edits to guides wait for approval before viewers and share links see them. A folder follows its nearest policy.
@@ -40,7 +43,7 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
           <span>
             <span className="font-medium">Whole workspace</span> <span className="text-muted-foreground">{describe(workspace ?? defaultPolicy)}</span>
           </span>
-          <Button variant="secondary" className="h-8 px-3" onClick={() => setEditing(workspace ?? defaultPolicy)}>
+          <Button variant="outline" onClick={() => setEditing(workspace ?? defaultPolicy)}>
             Edit
           </Button>
         </li>
@@ -52,10 +55,10 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
                 <span className="font-medium">{p.folder}</span> <span className="text-muted-foreground">{describe(p)}</span>
               </span>
               <span className="flex gap-2">
-                <Button variant="secondary" className="h-8 px-3" onClick={() => setEditing(p)}>
+                <Button variant="outline" onClick={() => setEditing(p)}>
                   Edit
                 </Button>
-                <Button variant="danger" className="h-8 px-3" onClick={() => remove(p.folder)}>
+                <Button variant="destructive" onClick={() => remove(p.folder)}>
                   Remove
                 </Button>
               </span>
@@ -66,7 +69,7 @@ export function ApprovalPolicies({ policies, defaultPolicy, approvers }: Data) {
         {editing ? (
           <PolicyForm key={editing.folder} policy={editing} approvers={approvers} onDone={() => setEditing(null)} />
         ) : (
-          <Button variant="secondary" onClick={() => setEditing({ ...defaultPolicy, folder: "new" })}>
+          <Button variant="outline" size="lg" onClick={() => setEditing({ ...defaultPolicy, folder: "new" })}>
             Add a folder policy
           </Button>
         )}
@@ -102,17 +105,17 @@ function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: 
   return (
     <form onSubmit={save} className="grid gap-3 rounded-lg border border-border p-4 text-sm">
       {isNew ? (
-        <Label>
+        <Field>
           Folder
           <Input name="folder" placeholder="e.g. HR/Payroll" required />
-        </Label>
+        </Field>
       ) : (
         <p className="font-medium">{policy.folder || "Whole workspace"}</p>
       )}
-      <Label>
+      <Field>
         Approvals needed (0: publish without review)
         <Input name="requiredApprovals" type="number" min={0} max={20} defaultValue={policy.requiredApprovals} className="w-24" />
-      </Label>
+      </Field>
       <fieldset className="grid gap-1">
         <legend className="mb-1 font-medium">Approvers (none ticked: anyone whose role can approve)</legend>
         {approvers.map((a) => (
@@ -131,8 +134,8 @@ function PolicyForm({ policy, approvers, onDone }: { policy: Policy; approvers: 
         New edits reset approvals
       </label>
       <span className="flex gap-2">
-        <Button type="submit">Save</Button>
-        <Button type="button" variant="secondary" onClick={onDone}>
+        <Button variant="brand" size="lg" type="submit">Save</Button>
+        <Button type="button" variant="outline" size="lg" onClick={onDone}>
           Cancel
         </Button>
       </span>

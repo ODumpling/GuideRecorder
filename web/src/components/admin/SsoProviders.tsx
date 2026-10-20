@@ -1,6 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { addSsoProvider, checkDomain, getDomainToken, removeSsoProvider } from "@/server/admin";
-import { Button, Card, ErrorText, Input, Label } from "../ui";
+import { NativeSelect } from "@guiderecorder/ui/native-select";
+import { Textarea } from "@guiderecorder/ui/textarea";
+import { Button } from "@guiderecorder/ui/button";
+import { Card } from "@guiderecorder/ui/card";
+import { Input } from "@guiderecorder/ui/input";
+import { ErrorText, Field } from "@/components/ui";
 import { useAction } from "./useAction";
 
 interface Provider {
@@ -39,7 +44,7 @@ export function SsoProviders({ providers, baseURL }: { providers: Provider[]; ba
   }
 
   return (
-    <Card className="grid gap-4">
+    <Card className="p-6 grid gap-4">
       <div>
         <h2 className="text-lg font-semibold">Single sign-on</h2>
         <p className="text-sm text-muted-foreground">
@@ -60,15 +65,15 @@ export function SsoProviders({ providers, baseURL }: { providers: Provider[]; ba
                 <span className="text-success">Verified</span>
               ) : (
                 <>
-                  <Button variant="secondary" className="h-8 px-3" disabled={busy} onClick={() => showToken(p.providerId)}>
+                  <Button variant="outline" disabled={busy} onClick={() => showToken(p.providerId)}>
                     Show DNS record
                   </Button>
-                  <Button className="h-8 px-3" disabled={busy} onClick={() => run(() => checkDomain({ data: { providerId: p.providerId } }))}>
+                  <Button variant="brand" disabled={busy} onClick={() => run(() => checkDomain({ data: { providerId: p.providerId } }))}>
                     Verify
                   </Button>
                 </>
               )}
-              <Button variant="danger" className="h-8 px-3" disabled={busy} onClick={() => run(() => removeSsoProvider({ data: { providerId: p.providerId } }))}>
+              <Button variant="destructive" disabled={busy} onClick={() => run(() => removeSsoProvider({ data: { providerId: p.providerId } }))}>
                 Remove
               </Button>
             </span>
@@ -96,53 +101,53 @@ export function SsoProviders({ providers, baseURL }: { providers: Provider[]; ba
       ))}
 
       <form onSubmit={add} className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
-        <Label>
+        <Field>
           Protocol
-          <select className="h-9 rounded-lg border border-input bg-card px-3 text-sm" value={type} onChange={(e) => setType(e.target.value as "oidc" | "saml")}>
+          <NativeSelect value={type} onChange={(e) => setType(e.target.value as "oidc" | "saml")}>
             <option value="oidc">OpenID Connect</option>
             <option value="saml">SAML 2.0</option>
-          </select>
-        </Label>
-        <Label>
+          </NativeSelect>
+        </Field>
+        <Field>
           Provider id
           <Input name="providerId" placeholder="acme-okta" pattern="[a-z0-9-]{3,40}" required />
-        </Label>
-        <Label>
+        </Field>
+        <Field>
           Email domains
           <Input name="domain" placeholder="acme.com, acme.co.uk" required />
-        </Label>
-        <Label>
+        </Field>
+        <Field>
           {type === "oidc" ? "Issuer URL" : "IdP entity id"}
           <Input name="issuer" required />
-        </Label>
+        </Field>
         {type === "oidc" ? (
           <>
-            <Label>
+            <Field>
               Client id
               <Input name="clientId" required />
-            </Label>
-            <Label>
+            </Field>
+            <Field>
               Client secret
               <Input name="clientSecret" type="password" required />
-            </Label>
-            <Label className="sm:col-span-2">
+            </Field>
+            <Field className="sm:col-span-2">
               Discovery URL (optional)
               <Input name="discoveryEndpoint" placeholder="https://idp.example.com/.well-known/openid-configuration" />
-            </Label>
+            </Field>
           </>
         ) : (
           <>
-            <Label className="sm:col-span-2">
+            <Field className="sm:col-span-2">
               IdP sign-in URL
               <Input name="entryPoint" type="url" required />
-            </Label>
-            <Label className="sm:col-span-2">
+            </Field>
+            <Field className="sm:col-span-2">
               IdP signing certificate (PEM)
-              <textarea name="cert" required rows={4} className="rounded-lg border border-input bg-card p-2 font-mono text-xs" />
-            </Label>
+              <Textarea name="cert" required rows={4} className="font-mono text-xs" />
+            </Field>
           </>
         )}
-        <Button type="submit" disabled={busy} className="justify-self-start">
+        <Button variant="brand" size="lg" type="submit" disabled={busy} className="justify-self-start">
           Add provider
         </Button>
       </form>
