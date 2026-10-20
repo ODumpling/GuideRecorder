@@ -3,6 +3,8 @@ import {
   errorMessage,
   RECORDING_SAVED_EVENT,
   RECORDING_SNAPSHOT_EVENT,
+  RECORDING_SNAPSHOT_REMOVED_EVENT,
+  RECORDING_SNAPSHOT_TITLE_EVENT,
   RECORDING_STATUS_EVENT,
   type RecordingApi,
 } from "@/lib/ipc";
@@ -12,6 +14,7 @@ import type {
   RecordingSaved,
   RecordingSnapshot,
   RecordingStatus,
+  SnapshotTitle,
   StampedStatus,
 } from "@/lib/types";
 
@@ -44,6 +47,10 @@ export interface RecordingState {
   setStatus(status: RecordingStatus | StampedStatus): void;
   /** Handles a `recording://snapshot` event (ignored when idle, and once per id). */
   addSnapshot(snapshot: RecordingSnapshot): void;
+  /** Handles a `recording://snapshot-title` event: a capture's title was refined or renamed. */
+  retitleSnapshot(change: SnapshotTitle): void;
+  /** Handles a `recording://snapshot-removed` event: the capture was deleted. */
+  removeSnapshot(id: string): void;
   /** Handles a `recording://saved` event or `stop`'s result, once per guide. */
   saved(saved: RecordingSaved): void;
   /** Starts recording `target`; without one, the capture area comes from the settings. */
@@ -128,6 +135,8 @@ export function subscribe(store: RecordingStore, listen: Listen): () => void {
     listen(RECORDING_STATUS_EVENT, (status) => store.getState().setStatus(status as StampedStatus)),
     listen(RECORDING_SAVED_EVENT, (saved) => store.getState().saved(saved as RecordingSaved)),
     listen(RECORDING_SNAPSHOT_EVENT, (snapshot) => store.getState().addSnapshot(snapshot as RecordingSnapshot)),
+    listen(RECORDING_SNAPSHOT_TITLE_EVENT, (change) => store.getState().retitleSnapshot(change as SnapshotTitle)),
+    listen(RECORDING_SNAPSHOT_REMOVED_EVENT, (removed) => store.getState().removeSnapshot((removed as { id: string }).id)),
   ];
   return () => {
     for (const stop of stops) void stop.then((unlisten) => unlisten());
@@ -198,6 +207,18 @@ export function createRecordingStore({ api, onSaved }: RecordingOptions): Record
         if (status.state === "idle") return;
         if (snapshots.some((s) => s.id === snapshot.id)) return;
         set({ snapshots: [...snapshots, snapshot] });
+      },
+
+      retitleSnapshot({ id, title }) {
+        const { snapshots } = get();
+        if (!snapshots.some((s) => s.id === id && s.title !== title)) return;
+        set({ snapshots: snapshots.map((s) => (s.id === id ? { ...s, title } : s)) });
+      },
+
+      removeSnapshot(id) {
+        const { snapshots } = get();
+        if (!snapshots.some((s) => s.id === id)) return;
+        set({ snapshots: snapshots.filter((s) => s.id !== id) });
       },
 
       saved(saved) {

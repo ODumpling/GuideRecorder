@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { Guide, Step } from "../src/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 import { API_KEY, emitEvents, expect, openGuide, saved, test } from "./fixtures";
 
 // "Rotate an API key": step 3 is edited and shows its full screenshot.

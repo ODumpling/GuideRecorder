@@ -538,28 +538,8 @@ impl Detector<'_> {
             return;
         }
 
-        let right = press.button == MouseButton::Right
-            || (press.button == MouseButton::Left && press.modifiers.control);
-        // A triple click keeps kind DoubleClick (the model has no TripleClick)
-        // and is told apart only by its title.
-        let (kind, verb) = if right {
-            (StepKind::RightClick, "Right-click")
-        } else if press.click_count >= 3 {
-            (StepKind::DoubleClick, "Triple-click")
-        } else if press.click_count == 2 {
-            (StepKind::DoubleClick, "Double-click")
-        } else {
-            (StepKind::Click, "Click")
-        };
-        // Control turns a left click into a right click; don't show it twice.
-        let modifiers = if right {
-            Modifiers {
-                control: press.button == MouseButton::Right && press.modifiers.control,
-                ..press.modifiers
-            }
-        } else {
-            press.modifiers
-        };
+        let (kind, verb, modifiers) = click_verb(press.button, press.click_count, press.modifiers);
+        let right = kind == StepKind::RightClick;
 
         // Later presses of a multi-click merge into the step of the first.
         if press.click_count >= 2 {
@@ -642,6 +622,133 @@ impl Detector<'_> {
             .or(press.element.as_ref())
             .cloned()
     }
+}
+
+/// A press's step kind, its verb ("Click", "Right-click", "Double-click",
+/// "Triple-click") and the modifiers to show with it. A triple click keeps
+/// kind DoubleClick (the model has no TripleClick) and is told apart only
+/// by its title. Control turns a left click into a right click, and is then
+/// not shown twice.
+fn click_verb(
+    button: MouseButton,
+    click_count: u32,
+    modifiers: Modifiers,
+) -> (StepKind, &'static str, Modifiers) {
+    let right = button == MouseButton::Right || (button == MouseButton::Left && modifiers.control);
+    let (kind, verb) = if right {
+        (StepKind::RightClick, "Right-click")
+    } else if click_count >= 3 {
+        (StepKind::DoubleClick, "Triple-click")
+    } else if click_count == 2 {
+        (StepKind::DoubleClick, "Double-click")
+    } else {
+        (StepKind::Click, "Click")
+    };
+    let modifiers = if right {
+        Modifiers {
+            control: button == MouseButton::Right && modifiers.control,
+            ..modifiers
+        }
+    } else {
+        modifiers
+    };
+    (kind, verb, modifiers)
+}
+
+/// What took a screenshot while recording, reduced to what a provisional
+/// title needs (see [`LiveAction::title`]). Holds no typed text: a key is
+/// read before the session knows whether its field is secure, so only a
+/// ⌘ or ⌃ shortcut, Return and Esc keep their key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveAction {
+    /// A press: its verb ("Click", "Double-click", …) with the held
+    /// modifiers, e.g. "⌘-click".
+    Click {
+        verb: String,
+    },
+    /// A shortcut, Return or Esc, by its label ("⌘S", "Return").
+    Press {
+        label: String,
+    },
+    /// Typing (the first key of a run).
+    Type,
+    Manual,
+}
+
+impl LiveAction {
+    /// The action of an event that can take a snapshot (a press, a key, a
+    /// manual step); `None` for any other.
+    pub fn of(event: &CaptureEvent) -> Option<Self> {
+        Some(match event {
+            CaptureEvent::MouseDown {
+                button,
+                click_count,
+                modifiers,
+                ..
+            } => {
+                let (_, verb, modifiers) = click_verb(*button, *click_count, *modifiers);
+                let held = modifier_symbols(modifiers);
+                let verb = if held.is_empty() {
+                    verb.to_owned()
+                } else {
+                    format!("{held}-{}", verb.to_lowercase())
+                };
+                Self::Click { verb }
+            }
+            CaptureEvent::KeyDown { key, modifiers, .. } => {
+                if modifiers.command || modifiers.control {
+                    Self::Press {
+                        label: shortcut_label(key, *modifiers),
+                    }
+                } else if modifiers.option {
+                    // Option types characters on many layouts.
+                    Self::Type
+                } else {
+                    match key.code {
+                        KEY_RETURN | KEY_KEYPAD_ENTER => Self::Press {
+                            label: "Return".to_owned(),
+                        },
+                        KEY_ESCAPE => Self::Press {
+                            label: "Esc".to_owned(),
+                        },
+                        _ => Self::Type,
+                    }
+                }
+            }
+            CaptureEvent::ManualStep => Self::Manual,
+            _ => return None,
+        })
+    }
+
+    /// A provisional title in the guide Markdown subset, worded as
+    /// [`detect_steps`] words the step: "Click **Submit** in Safari",
+    /// "Press **⌘S**", "Type in Notes", "Manual step". `label` is the
+    /// element's ([`RawElement::best_label`]), `app` the app's name.
+    pub fn title(&self, label: Option<&str>, app: Option<&str>) -> String {
+        let label = label.map(str::trim).filter(|l| !l.is_empty());
+        let app = app.map(str::trim).filter(|a| !a.is_empty());
+        match self {
+            Self::Click { verb } => match (label, app) {
+                (Some(label), Some(app)) => format!("{verb} {} in {}", bold(label), escape(app)),
+                (Some(label), None) => format!("{verb} {}", bold(label)),
+                (None, Some(app)) => format!("{verb} in {}", escape(app)),
+                (None, None) => verb.clone(),
+            },
+            Self::Press { label } => format!("Press {}", bold(label)),
+            Self::Type => match (label, app) {
+                (Some(label), _) => format!("Type into {}", bold(label)),
+                (None, Some(app)) => format!("Type in {}", escape(app)),
+                (None, None) => "Type".to_owned(),
+            },
+            Self::Manual => "Manual step".to_owned(),
+        }
+    }
+}
+
+/// `text` as a title in the guide Markdown subset that reads as typed:
+/// Markdown characters are escaped and whitespace is collapsed.
+pub fn plain_title(text: &str) -> String {
+    escape(text)
 }
 
 fn type_title(step: &DraftStep, shown: &str, submitted: bool) -> String {
@@ -1222,6 +1329,96 @@ mod tests {
     #[test]
     fn empty_trace() {
         assert!(detect_steps(&[], &StepConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn live_titles_read_like_step_titles() {
+        let down = |button, click_count, modifiers| CaptureEvent::MouseDown {
+            point: Point { x: 1.0, y: 2.0 },
+            button,
+            click_count,
+            modifiers,
+            element: None,
+        };
+        let cmd = Modifiers {
+            command: true,
+            ..Modifiers::default()
+        };
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let click = LiveAction::of(&down(MouseButton::Left, 1, Modifiers::default())).unwrap();
+        assert_eq!(
+            click.title(Some("Submit report"), Some("Safari")),
+            "Click **Submit report** in Safari"
+        );
+        assert_eq!(click.title(Some("  "), Some("Safari")), "Click in Safari");
+        assert_eq!(click.title(None, None), "Click");
+        let right = LiveAction::of(&down(MouseButton::Left, 1, ctrl)).unwrap();
+        assert_eq!(right.title(Some("File"), None), "Right-click **File**");
+        let double = LiveAction::of(&down(MouseButton::Left, 2, cmd)).unwrap();
+        assert_eq!(
+            double.title(None, Some("Finder")),
+            "⌘-double-click in Finder"
+        );
+
+        let key = |code, characters: &str, modifiers| CaptureEvent::KeyDown {
+            key: Key {
+                code,
+                characters: Some(characters.into()),
+                characters_ignoring_modifiers: Some(characters.into()),
+            },
+            modifiers,
+            is_repeat: false,
+            secure: false,
+        };
+        let save = LiveAction::of(&key(1, "s", cmd)).unwrap();
+        assert_eq!(save.title(None, Some("TextEdit")), "Press **⌘S**");
+        assert_eq!(
+            LiveAction::of(&key(KEY_RETURN, "\r", Modifiers::default()))
+                .unwrap()
+                .title(None, None),
+            "Press **Return**"
+        );
+        // Typed text never shows: the field may turn out to be secure.
+        let typed = LiveAction::of(&key(0, "p", Modifiers::default())).unwrap();
+        assert_eq!(typed, LiveAction::Type);
+        assert_eq!(typed.title(None, Some("Notes")), "Type in Notes");
+        assert_eq!(
+            typed.title(Some("Name"), Some("Notes")),
+            "Type into **Name**"
+        );
+        let option = Modifiers {
+            option: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            LiveAction::of(&key(37, "@", option)),
+            Some(LiveAction::Type)
+        );
+        assert_eq!(
+            LiveAction::of(&CaptureEvent::ManualStep)
+                .unwrap()
+                .title(Some("x"), Some("y")),
+            "Manual step"
+        );
+        assert_eq!(
+            LiveAction::of(&CaptureEvent::FlagsChanged {
+                modifiers: Modifiers::default()
+            }),
+            None
+        );
+        for title in [
+            click.title(Some("*a* [b]"), Some("C_d")),
+            plain_title("Click  **Submit**\n now"),
+        ] {
+            assert_eq!(markdown::normalize(&title), title);
+        }
+        assert_eq!(
+            markdown::to_plain_text(&plain_title("Click **Submit**")),
+            "Click **Submit**"
+        );
     }
 
     #[test]

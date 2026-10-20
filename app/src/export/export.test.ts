@@ -24,7 +24,8 @@ import {
   warningLines,
 } from "@/export/export";
 import type { ExportApi } from "@/lib/ipc";
-import type { ExportResult, Item } from "@/lib/types";
+import type { Item } from "@guiderecorder/guide-schema";
+import type { ExportResult } from "@/lib/types";
 
 function api(overrides: Partial<ExportApi> = {}): ExportApi {
   return {

@@ -12,7 +12,7 @@ import {
 import { createEditorStore } from "@/editor/store";
 import { guide, step } from "@/editor/test-fixtures";
 import type { EditorApi } from "@/lib/ipc";
-import type { Step, StepImage } from "@/lib/types";
+import type { Step, StepImage } from "@guiderecorder/guide-schema";
 
 const images = vi.hoisted(() => ({ insertImageSteps: vi.fn() }));
 vi.mock("@/editor/images", async (importOriginal) => ({ ...(await importOriginal<object>()), ...images }));

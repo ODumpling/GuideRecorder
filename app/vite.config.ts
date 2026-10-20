@@ -30,12 +30,13 @@ export default defineConfig({
     // Safari is the WebView engine on macOS.
     target: "safari15",
     rollupOptions: {
-      // The main window, the floating toolbar shown while recording, and
-      // the overlay a region is drawn on.
+      // The main window, the floating toolbar shown while recording, the
+      // overlay a region is drawn on, and the click ring.
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
         toolbar: fileURLToPath(new URL("./toolbar.html", import.meta.url)),
         region: fileURLToPath(new URL("./region.html", import.meta.url)),
+        ring: fileURLToPath(new URL("./ring.html", import.meta.url)),
       },
     },
   },

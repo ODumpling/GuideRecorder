@@ -11,6 +11,7 @@ mod blocking;
 mod commands;
 mod editor;
 mod export;
+mod feed;
 mod hotkeys;
 mod navigation;
 mod pdf;
@@ -232,6 +233,10 @@ pub fn run() {
             recording::recording_status,
             recording::recording_snapshot,
             recording::add_manual_step,
+            feed::delete_capture,
+            feed::rename_capture,
+            toolbar::resize_toolbar,
+            toolbar::set_toolbar_typing,
             picker::list_capture_windows,
             picker::list_capture_displays,
             picker::pick_region,

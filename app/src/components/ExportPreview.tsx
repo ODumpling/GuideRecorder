@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
+import { Button } from "@guiderecorder/ui/button";
+import { markdownToPlainText } from "@guiderecorder/ui/markdown";
+import { cn } from "@guiderecorder/ui/utils";
 import {
   markdownPreviewDocument,
   markdownPreviewHtml,
@@ -10,9 +13,7 @@ import {
   type PreviewState,
 } from "@/export/preview";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { ExportFormat, ExportPreviewData, Guide, MotionOptions, PaperSize, Step } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { markdownToPlainText } from "@/text/markdown";
+import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize } from "@/lib/types";
 
 const SHADOW = "shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]";
 

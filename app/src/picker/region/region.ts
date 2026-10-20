@@ -1,4 +1,4 @@
-import type { Rect } from "@/lib/types";
+import type { Rect } from "@guiderecorder/guide-schema";
 
 /** The smallest region side, in points; `start_recording` refuses smaller. */
 export const MIN_REGION_SIDE = 40;

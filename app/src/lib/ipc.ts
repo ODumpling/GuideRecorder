@@ -1,40 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  AiProviderKind,
-  AiRewriteResult,
-  AppError,
-  CaptureDisplay,
-  CaptureTargetArg,
-  CaptureWindow,
-  ExportBranding,
-  ExportFormat,
-  ExportPreviewData,
-  ExportResult,
-  Guide,
-  GuideListItem,
-  LibraryInfo,
-  McpSetup,
-  MotionOptions,
-  OpenedGuide,
-  PaperSize,
-  Permission,
-  RenamedGuide,
-  ReviewedGuide,
-  PermissionRow,
-  PermissionStatus,
-  RecordingReadiness,
-  RecordingSaved,
-  Rect,
-  RegionPick,
-  RewriteStyleArg,
-  HotkeyErrors,
-  Settings,
-  SettingsView,
-  StampedStatus,
-  Step,
-  StepImage,
-  UpdateStatus,
-} from "@/lib/types";
+import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus } from "@/lib/types";
 import type { SyncBackend } from "@/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -300,6 +266,25 @@ export const tauriRecordingApi: RecordingApi = {
   snapshotImage: async (id) => toArrayBuffer(await invoke("recording_snapshot", { id })),
 };
 
+/** The toolbar's live capture feed (see app/src-tauri/src/feed.rs and toolbar.rs). */
+export interface FeedApi {
+  /** Leaves a capture's steps out of the guide. */
+  deleteCapture(id: string): Promise<void>;
+  /** Gives a capture's first step `title` (plain text); resolves to it as stored (guide Markdown). */
+  renameCapture(id: string, title: string): Promise<string>;
+  /** Sizes the toolbar window to `height` CSS px (from the bar alone to a cap). */
+  resizeToolbar(height: number): Promise<void>;
+  /** Lets the toolbar take the keyboard (to rename a capture), or gives it back. */
+  setToolbarTyping(typing: boolean): Promise<void>;
+}
+
+export const tauriFeedApi: FeedApi = {
+  deleteCapture: (id) => invoke("delete_capture", { id }),
+  renameCapture: (id, title) => invoke("rename_capture", { id, title }),
+  resizeToolbar: (height) => invoke("resize_toolbar", { height }),
+  setToolbarTyping: (typing) => invoke("set_toolbar_typing", { typing }),
+};
+
 /** Picking what to record (see app/src-tauri/src/picker.rs). */
 export interface PickerApi {
   /** Windows that can be recorded, frontmost first. */
@@ -341,6 +326,10 @@ export const RECORDING_STATUS_EVENT = "recording://status";
 export const RECORDING_SAVED_EVENT = "recording://saved";
 /** Emitted with a `RecordingSnapshot` for each screenshot the running recording takes. */
 export const RECORDING_SNAPSHOT_EVENT = "recording://snapshot";
+/** Emitted with a `SnapshotTitle` when a capture's title is refined or renamed. */
+export const RECORDING_SNAPSHOT_TITLE_EVENT = "recording://snapshot-title";
+/** Emitted with `{ id }` when a capture is deleted (in the feed or with ⌘⌥Z). */
+export const RECORDING_SNAPSHOT_REMOVED_EVENT = "recording://snapshot-removed";
 /**
  * Emitted (no payload) when the tray or the record hotkey starts a
  * recording while the capture area is One display, Window or Region: the main window

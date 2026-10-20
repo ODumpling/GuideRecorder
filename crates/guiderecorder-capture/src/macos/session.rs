@@ -202,6 +202,19 @@
 //! one within 2 × [`StepConfig::typing_idle_ms`] ([`match_snapshot`]), or
 //! gets no image and counts as skipped.
 //!
+//! # Live feed
+//!
+//! Each [`LiveSnapshot`] says what took it ([`LiveAction`], never typed
+//! text) and the app's name, so a host can title it before the steps are
+//! known; [`SessionConfig::on_press`] reports each press's AX label as the
+//! element thread finds it ([`LivePress`], usually before the encoder has
+//! written the frame). [`SessionConfig::undo_hotkey`] (⌘⌥Z by default) is
+//! dropped like a control hotkey and reported through
+//! [`SessionConfig::on_undo`]. Edits made to the feed are handed to
+//! [`Recording::edits`] before [`Recording::save_guide`]: a deleted
+//! capture's steps are left out, a renamed one's first step takes its
+//! title (see [`CaptureEdits`]).
+//!
 //! # After frames
 //!
 //! Each event that took a snapshot also gets an "after" frame, showing
@@ -305,7 +318,7 @@ use guiderecorder_core::library::{
 use guiderecorder_core::model::{
     self, AppInfo, Guide, ImageShow, Item, Point, RecordingInfo, Rect, StepImage,
 };
-use guiderecorder_core::steps::{detect_steps, DraftStep, StepConfig};
+use guiderecorder_core::steps::{detect_steps, DraftStep, LiveAction, StepConfig};
 use guiderecorder_core::Ulid;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -398,6 +411,8 @@ const KEY_ESCAPE: u16 = 53;
 const KEY_KEYPAD_ENTER: u16 = 76;
 /// `kVK_ANSI_S`.
 const KEY_S: u16 = 1;
+/// `kVK_ANSI_Z`.
+const KEY_Z: u16 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -443,6 +458,19 @@ impl Hotkey {
             control: true,
             option: true,
             command: false,
+            function: false,
+            caps_lock: false,
+        },
+    };
+
+    /// ⌘⌥Z, the default undo-last-capture hotkey.
+    pub const UNDO_CAPTURE: Hotkey = Hotkey {
+        code: KEY_Z,
+        modifiers: Modifiers {
+            shift: false,
+            control: false,
+            option: true,
+            command: true,
             function: false,
             caps_lock: false,
         },
@@ -509,6 +537,18 @@ pub struct SessionConfig {
     /// nothing; the state can also be polled with
     /// [`RecordingSession::capture_lost`].
     pub on_capture_lost: Option<CaptureLostSink>,
+    /// Called on the element thread for each press kept, with its AX
+    /// label once looked up (see `# Live feed`). Keep it quick. `None`
+    /// reports nothing.
+    pub on_press: Option<PressSink>,
+    /// Key press that undoes the newest capture while recording: dropped
+    /// (repeats included), never recorded or snapshotted, and reported
+    /// through [`SessionConfig::on_undo`]. Default [`Hotkey::UNDO_CAPTURE`].
+    pub undo_hotkey: Option<Hotkey>,
+    /// Called on the router thread for each press of
+    /// [`SessionConfig::undo_hotkey`] while recording (not while paused).
+    /// Keep it quick.
+    pub on_undo: Option<UndoSink>,
 }
 
 /// How after frames are taken ([`SessionConfig::after_frames`]).
@@ -592,6 +632,11 @@ pub struct LiveSnapshot {
     /// The event's point in frame pixels, when it has one and it is on
     /// the frame (a click; `None` for a key or the manual-step hotkey).
     pub point: Option<Point>,
+    /// What the event was; `None` only for an event that never takes a
+    /// snapshot.
+    pub action: Option<LiveAction>,
+    /// The name of the app the event was aimed at, when known.
+    pub app: Option<String>,
 }
 
 /// The callback behind [`SessionConfig::on_snapshot`].
@@ -614,6 +659,98 @@ impl fmt::Debug for SnapshotSink {
     }
 }
 
+/// A press the element thread looked up (see [`SessionConfig::on_press`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LivePress {
+    /// The `MouseDown`'s ts: the [`LiveSnapshot::ts`] of its snapshot.
+    pub ts: Timestamp,
+    /// Where it landed, in global display points.
+    pub point: Point,
+    /// The pressed element's label ([`RawElement::best_label`]), if any.
+    pub label: Option<String>,
+}
+
+/// The callback behind [`SessionConfig::on_press`].
+#[derive(Clone)]
+pub struct PressSink(Arc<dyn Fn(&LivePress) + Send + Sync>);
+
+impl PressSink {
+    pub fn new(f: impl Fn(&LivePress) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn report(&self, press: &LivePress) {
+        (self.0)(press);
+    }
+}
+
+impl fmt::Debug for PressSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PressSink")
+    }
+}
+
+/// The callback behind [`SessionConfig::on_undo`].
+#[derive(Clone)]
+pub struct UndoSink(Arc<dyn Fn() + Send + Sync>);
+
+impl UndoSink {
+    pub fn new(f: impl Fn() + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    fn report(&self) {
+        (self.0)();
+    }
+}
+
+impl fmt::Debug for UndoSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("UndoSink")
+    }
+}
+
+/// Changes made to the live feed before stop, keyed by the
+/// [`LiveSnapshot::ts`] of each capture (the key of
+/// [`Recording::snapshots`]). Applied by [`Recording::save_guide`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CaptureEdits {
+    /// Captures deleted: every step whose screenshot is one of them is left
+    /// out (not counted as skipped).
+    pub deleted: HashSet<Timestamp>,
+    /// Titles given (guide Markdown): the first step whose screenshot is
+    /// the capture takes it.
+    pub titles: HashMap<Timestamp, String>,
+}
+
+/// What [`CaptureEdits`] do to a step whose screenshot is the capture
+/// `ts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureEdit<'a> {
+    Keep,
+    Drop,
+    Retitle(&'a str),
+}
+
+impl CaptureEdits {
+    pub fn is_empty(&self) -> bool {
+        self.deleted.is_empty() && self.titles.is_empty()
+    }
+
+    /// The edit for a step whose screenshot is the capture `ts`; `titled`
+    /// holds the captures whose title a step already took, so only the
+    /// first step of each is retitled.
+    pub fn edit(&self, ts: Timestamp, titled: &mut HashSet<Timestamp>) -> CaptureEdit<'_> {
+        if self.deleted.contains(&ts) {
+            return CaptureEdit::Drop;
+        }
+        match self.titles.get(&ts) {
+            Some(title) if titled.insert(ts) => CaptureEdit::Retitle(title),
+            _ => CaptureEdit::Keep,
+        }
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -631,6 +768,9 @@ impl Default for SessionConfig {
             on_snapshot: None,
             on_excluded: None,
             on_capture_lost: None,
+            on_press: None,
+            undo_hotkey: Some(Hotkey::UNDO_CAPTURE),
+            on_undo: None,
         }
     }
 }
@@ -1307,6 +1447,7 @@ impl RecordingSession {
             fallback_ms: self.steps.typing_idle_ms.saturating_mul(2),
             pauses: std::mem::take(&mut self.pauses),
             loss_cutoffs,
+            edits: CaptureEdits::default(),
             session_dir,
         })
     }
@@ -1636,6 +1777,9 @@ pub struct Recording {
     pub pauses: Vec<PauseSpan>,
     /// The streams the system stopped, and when (see `# Lost capture`).
     pub loss_cutoffs: Vec<LossCutoff>,
+    /// Changes made to the live feed, applied by [`Recording::save_guide`];
+    /// none after [`RecordingSession::stop`].
+    pub edits: CaptureEdits,
     session_dir: PathBuf,
 }
 
@@ -1692,17 +1836,23 @@ impl Recording {
         let mut skipped = 0;
         // The last decoded frame (RGBA), for crops.
         let mut decoded: Option<(FrameKey, u32, Vec<u8>)> = None;
+        let mut titled = HashSet::new();
         for (i, draft) in self.drafts.iter().enumerate() {
             // Never a frame of a stream from before it was lost, for a step
             // after: it may show a window that has closed since.
             let usable = |ts: Timestamp, snap: &SnapshotRef| {
                 usable_after_loss(&self.loss_cutoffs, draft.at, ts, snap.source)
             };
-            let Some((_, snap)) =
+            let Some((snap_ts, snap)) =
                 match_snapshot_where(&self.snapshots, draft.at, max_gap_ns, usable)
             else {
                 skipped += 1;
                 continue;
+            };
+            let title = match self.edits.edit(snap_ts, &mut titled) {
+                CaptureEdit::Drop => continue,
+                CaptureEdit::Retitle(title) => Some(title.to_owned()),
+                CaptureEdit::Keep => None,
             };
             let id = Ulid::new();
             // Each step gets its own `steps/<id>.webp`, even when steps share a
@@ -1753,6 +1903,9 @@ impl Recording {
             let mut step = draft.clone().into_step(id, image);
             step.point = point;
             step.end_point = end_point;
+            if let Some(title) = title {
+                step.title = title;
+            }
             guide.items.push(Item::Step(step));
         }
         Ok(skipped)
@@ -1973,9 +2126,16 @@ struct EncodeJob {
     ts: Timestamp,
     /// The event's point in frame pixels, if on the frame.
     point: Option<Point>,
-    /// Reported through [`SessionConfig::on_snapshot`]: snapshots only, not
-    /// after frames.
-    live: bool,
+    /// Reported through [`SessionConfig::on_snapshot`], with this: snapshots
+    /// only, not after frames (`None`).
+    live: Option<LiveMeta>,
+}
+
+/// What a [`LiveSnapshot`] says about its event.
+#[derive(Debug, Clone, Default)]
+struct LiveMeta {
+    action: Option<LiveAction>,
+    app: Option<String>,
 }
 
 /// A snapshot before its frame is encoded.
@@ -1991,6 +2151,8 @@ struct Router {
     excluded: Vec<String>,
     hotkey: Option<Hotkey>,
     control_hotkeys: SharedHotkeys,
+    undo_hotkey: Option<Hotkey>,
+    on_undo: Option<UndoSink>,
     filter: ExclusionFilter,
     runs: KeyRunTracker,
     apps: HashMap<i32, AppRef>,
@@ -2045,6 +2207,8 @@ impl Router {
             excluded: cfg.excluded_bundle_ids.clone(),
             hotkey: cfg.manual_hotkey,
             control_hotkeys: Arc::new(Mutex::new(cfg.control_hotkeys.clone())),
+            undo_hotkey: cfg.undo_hotkey,
+            on_undo: cfg.on_undo.clone(),
             filter: ExclusionFilter::default(),
             runs: KeyRunTracker::new(cfg.steps.typing_idle_ms),
             apps: HashMap::new(),
@@ -2100,12 +2264,26 @@ impl Router {
             return;
         }
         // The host's own hotkeys (start/stop, pause) never become steps.
-        if let CaptureEvent::KeyDown { key, modifiers, .. } = &event.event {
+        if let CaptureEvent::KeyDown {
+            key,
+            modifiers,
+            is_repeat,
+            ..
+        } = &event.event
+        {
             if lock(&self.control_hotkeys)
                 .iter()
                 .any(|h| h.matches(key, *modifiers))
             {
                 self.dropped_hotkeys += 1;
+                return;
+            }
+            // Undoing the newest capture: never a step either.
+            if self.undo_hotkey.is_some_and(|h| h.matches(key, *modifiers)) {
+                self.dropped_hotkeys += 1;
+                if let (false, Some(sink)) = (*is_repeat, &self.on_undo) {
+                    sink.report();
+                }
                 return;
             }
         }
@@ -2140,6 +2318,7 @@ impl Router {
                 event.event = CaptureEvent::ManualStep;
             }
         }
+        let app_name = app.as_ref().and_then(|app| app.name.clone());
         if matches!(
             event.event,
             CaptureEvent::MouseDown { .. }
@@ -2149,7 +2328,11 @@ impl Router {
             self.note_app(event.ts, target_pid, app);
         }
         if self.runs.should_snapshot(&event, target_pid) {
-            let msg = match self.snapshot(event.ts, event_point(&event.event)) {
+            let live = LiveMeta {
+                action: LiveAction::of(&event.event),
+                app: app_name,
+            };
+            let msg = match self.snapshot_as(event.ts, event_point(&event.event), live) {
                 Some((source, reader, before)) => AfterMsg::Step {
                     ts: event.ts,
                     source,
@@ -2237,10 +2420,21 @@ impl Router {
     /// the pointer as last seen for an event without one (a key), or
     /// under the mouse now if no mouse event has been seen yet. Returns the
     /// source, its reader and the frame, if the snapshot was taken.
+    #[cfg(test)]
     fn snapshot(
         &mut self,
         ts: Timestamp,
         point: Option<Point>,
+    ) -> Option<(usize, FrameReader, FrameKey)> {
+        self.snapshot_as(ts, point, LiveMeta::default())
+    }
+
+    /// [`Router::snapshot`], reporting `live` with the snapshot.
+    fn snapshot_as(
+        &mut self,
+        ts: Timestamp,
+        point: Option<Point>,
+        live: LiveMeta,
     ) -> Option<(usize, FrameReader, FrameKey)> {
         let picked = {
             let sources = lock(&self.sources);
@@ -2280,7 +2474,7 @@ impl Router {
                 frame,
                 ts,
                 point,
-                live: true,
+                live: Some(live),
             };
             // The encoder now owns the only extra reference to the frame.
             // Never wait for it: a full queue drops this snapshot, and the
@@ -2388,6 +2582,7 @@ impl AxStats {
 /// apps that the router could not see (target pid 0 or another pid).
 struct ElementWorker {
     excluded: Vec<String>,
+    sink: Option<PressSink>,
     filter: ExclusionFilter,
     events: Vec<TimedEvent>,
     dropped_ts: Vec<Timestamp>,
@@ -2404,6 +2599,7 @@ impl ElementWorker {
     fn new(cfg: &SessionConfig) -> Self {
         Self {
             excluded: cfg.excluded_bundle_ids.clone(),
+            sink: cfg.on_press.clone(),
             filter: ExclusionFilter::default(),
             events: Vec::new(),
             dropped_ts: Vec::new(),
@@ -2431,7 +2627,17 @@ impl ElementWorker {
             self.dropped_ts.push(event.ts);
             return;
         }
-        if let CaptureEvent::MouseDown { element, .. } = &mut event.event {
+        if let CaptureEvent::MouseDown { element, point, .. } = &mut event.event {
+            if let Some(sink) = &self.sink {
+                sink.report(&LivePress {
+                    ts: event.ts,
+                    point: *point,
+                    label: found
+                        .as_ref()
+                        .and_then(RawElement::best_label)
+                        .map(str::to_owned),
+                });
+            }
             *element = found;
         }
         self.events.push(event);
@@ -3030,7 +3236,10 @@ impl Encoder {
         };
         drop(frame);
         // An after frame written first is reported when a snapshot takes it.
-        if !live || !self.reported.insert(key) {
+        let Some(live) = live else {
+            return;
+        };
+        if !self.reported.insert(key) {
             return;
         }
         if let Some(sink) = &self.sink {
@@ -3041,6 +3250,8 @@ impl Encoder {
                 width,
                 height,
                 point,
+                action: live.action,
+                app: live.app,
             });
         }
     }
@@ -3361,7 +3572,7 @@ impl AfterWorker {
             frame,
             ts,
             point: None,
-            live: false,
+            live: None,
         };
         // Never wait for the encoder: snapshots come first.
         match self.encode.try_send(job) {
@@ -4983,7 +5194,7 @@ mod tests {
                 frame: f.clone(),
                 ts: Timestamp((10 + i) * MS),
                 point: Some(Point { x: 8.0, y: 5.0 }),
-                live: true,
+                live: Some(LiveMeta::default()),
             })
             .unwrap();
         }
@@ -5052,6 +5263,7 @@ mod tests {
             fallback_ms: 3000,
             pauses: Vec::new(),
             loss_cutoffs: Vec::new(),
+            edits: CaptureEdits::default(),
             session_dir,
         }
     }
@@ -5185,6 +5397,105 @@ mod tests {
         let lib = Library::open(scratch.0.join("lib")).unwrap();
         assert!(rec.save_guide(&lib, "Broken").is_err());
         assert!(lib.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn capture_edits_drop_and_retitle_once() {
+        let mut edits = CaptureEdits::default();
+        let (a, b) = (Timestamp(1), Timestamp(2));
+        edits.deleted.insert(a);
+        edits.titles.insert(a, "Gone".into());
+        edits.titles.insert(b, "Open **Settings**".into());
+        let mut titled = HashSet::new();
+        assert_eq!(edits.edit(a, &mut titled), CaptureEdit::Drop);
+        assert_eq!(
+            edits.edit(b, &mut titled),
+            CaptureEdit::Retitle("Open **Settings**")
+        );
+        // A second step on the same capture keeps its own title.
+        assert_eq!(edits.edit(b, &mut titled), CaptureEdit::Keep);
+        assert_eq!(edits.edit(Timestamp(3), &mut titled), CaptureEdit::Keep);
+        assert!(!edits.is_empty());
+        assert!(CaptureEdits::default().is_empty());
+    }
+
+    #[test]
+    fn save_guide_applies_the_feed_edits() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let f2 = frame(1_005 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let f3 = frame(2_005 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let mut events = click(10, 4.0, 2.5).to_vec();
+        events.extend(click(1_010, 4.0, 2.5));
+        events.extend(click(2_010, 4.0, 2.5));
+        let mut rec = recording(&scratch, events, &[(10, &f1), (1_010, &f2), (2_010, &f3)]);
+        rec.edits.deleted.insert(Timestamp(1_010 * MS));
+        rec.edits
+            .titles
+            .insert(Timestamp(2_010 * MS), "Save the \\*draft\\*".into());
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Edited").unwrap();
+        // A deleted capture's step is left out, not skipped.
+        assert_eq!(saved.skipped, 0);
+        let titles: Vec<_> = saved.guide.steps().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Click **Save**", "Save the \\*draft\\*"]);
+    }
+
+    #[test]
+    fn undo_hotkey_is_dropped_and_reported_once_per_press() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let undos = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&undos);
+        let cfg = SessionConfig {
+            on_undo: Some(UndoSink::new(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+            })),
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        tx.send(key_at(Timestamp(t0.0 + 1), "a")).unwrap();
+        let undo = Hotkey::UNDO_CAPTURE;
+        tx.send(control_key_at(Timestamp(t0.0 + 2), undo, false))
+            .unwrap();
+        tx.send(control_key_at(Timestamp(t0.0 + 3), undo, true))
+            .unwrap();
+        drop(tx);
+        let rec = session.stop().unwrap();
+        assert_eq!(undos.load(Ordering::SeqCst), 1);
+        assert_eq!(rec.metrics.dropped_hotkeys, 2);
+        assert_eq!(typed_text(&rec), "a");
+        assert_eq!(rec.snapshots.len(), 1);
+    }
+
+    #[test]
+    fn live_snapshots_say_what_took_them() {
+        let scratch = ScratchDir::new();
+        let reader = FrameReader::detached(4);
+        let seen: Seen<LiveSnapshot> = Arc::default();
+        let sink = Arc::clone(&seen);
+        let cfg = SessionConfig {
+            on_snapshot: Some(SnapshotSink::new(move |snap| {
+                lock(&sink).push(snap.clone());
+            })),
+            ..SessionConfig::default()
+        };
+        let (session, tx) = headless_session_with(&scratch, reader.clone(), cfg);
+        let t0 = event_tap::now();
+        reader.push(frame(t0.0, 4, 4, geometry(4.0, 4.0, 4, 4)));
+        tx.send(shortcut_at(Timestamp(t0.0 + 1))).unwrap();
+        drop(tx);
+        let _rec = session.stop().unwrap();
+        let seen = lock(&seen);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0].action,
+            Some(LiveAction::Press {
+                label: "⌘S".into()
+            })
+        );
     }
 
     /// A scripted focus: `current` is what AX would report right now.
@@ -7091,7 +7402,7 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].frame.ts, Timestamp(520 * MS));
         assert_eq!(jobs[0].ts, ts);
-        assert!(!jobs[0].live, "after frames are not reported live");
+        assert!(jobs[0].live.is_none(), "after frames are not reported live");
         assert_eq!(out.skips, AfterSkips::default());
     }
 
@@ -7261,7 +7572,7 @@ mod tests {
             frame: f.clone(),
             ts: Timestamp(ms * MS),
             point: None,
-            live,
+            live: live.then(LiveMeta::default),
         };
         let (tx, rx) = mpsc::channel();
         // Written as an after frame first: not reported.
