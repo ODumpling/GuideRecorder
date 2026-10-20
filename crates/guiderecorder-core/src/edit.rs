@@ -1,6 +1,6 @@
 //! Edits from outside the app's editor: the MCP server, when started with
-//! `--writable`. Guide-level fields, step text, notes, item order and tags,
-//! applied to a guide in memory by the functions here and written by
+//! `--writable`. Guide-level fields, step text, notes, item order, tags and
+//! the cover, applied to a guide in memory by the functions here and written by
 //! [`Library::edit`] through [`Library::save_to`] (one atomic `guide.json`
 //! rewrite). New annotated guides are [`crate::pages::create_from_images`].
 //!
@@ -41,7 +41,7 @@ use ulid::Ulid;
 
 use crate::history::{self, VersionReason};
 use crate::library::{GuideHandle, Library, LibraryError};
-use crate::model::{AiStatus, Guide, GuideField, GuideStatus, Item, Note, NoteKind};
+use crate::model::{AiStatus, CoverOptions, Guide, GuideField, GuideStatus, Item, Note, NoteKind};
 
 /// Marker file in a bundle while the guide is open in the app's editor: the
 /// app's process id in decimal, then a newline.
@@ -523,10 +523,46 @@ pub fn reorder_items(guide: &mut Guide, order: &[Ulid]) -> Result<()> {
     Ok(())
 }
 
+/// Makes step `step_id` the guide's cover, or clears the choice (`None`:
+/// the first screenshot is the cover again), and sets the cover options
+/// given. Returns whether anything changed. The step must have a
+/// screenshot.
+pub fn set_cover(
+    guide: &mut Guide,
+    step_id: Option<Ulid>,
+    options: Option<CoverOptions>,
+) -> Result<bool> {
+    if let Some(step_id) = step_id {
+        let guide_id = guide.id;
+        let item = guide
+            .items
+            .iter()
+            .find(|item| item.id() == step_id)
+            .ok_or_else(|| EditError::Invalid(format!("guide {guide_id} has no step {step_id}")))?;
+        let problem = match item {
+            Item::Step(step) if step.image.full.is_empty() => {
+                format!("step {step_id} of guide {guide_id} has no screenshot")
+            }
+            Item::Step(_) => String::new(),
+            Item::Section(_) => format!("{step_id} is a section of guide {guide_id}, not a step"),
+            Item::Note(_) => format!("{step_id} is a note of guide {guide_id}, not a step"),
+        };
+        if !problem.is_empty() {
+            return Err(EditError::Invalid(problem));
+        }
+    }
+    let before = (guide.cover_step_id, guide.cover_options);
+    guide.cover_step_id = step_id;
+    if let Some(options) = options {
+        guide.cover_options = options;
+    }
+    Ok((guide.cover_step_id, guide.cover_options) != before)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AiState, Section};
+    use crate::model::{AiState, ImageShow, Section};
     use crate::SCHEMA_VERSION;
 
     /// The (version 1) test guide, as a current-version guide.
@@ -740,6 +776,39 @@ mod tests {
         )
         .is_err());
         assert_eq!(guide.items.len(), expected.len());
+    }
+
+    #[test]
+    fn cover_is_set_on_steps_with_a_screenshot_and_cleared() {
+        let mut guide = sample_guide();
+        let step = guide.steps().nth(1).unwrap().id;
+        assert!(set_cover(&mut guide, Some(step), None).unwrap());
+        assert_eq!(guide.cover_step_id, Some(step));
+        assert_eq!(guide.cover_options, CoverOptions::default());
+        // The same again changes nothing.
+        assert!(!set_cover(&mut guide, Some(step), None).unwrap());
+        let options = CoverOptions {
+            image: ImageShow::Crop,
+            annotations: true,
+        };
+        assert!(set_cover(&mut guide, Some(step), Some(options)).unwrap());
+        assert_eq!(guide.cover_options, options);
+        // Clearing keeps the options for the next choice.
+        assert!(set_cover(&mut guide, None, None).unwrap());
+        assert_eq!((guide.cover_step_id, guide.cover_options), (None, options));
+
+        let section = guide.items[0].id();
+        let err = set_cover(&mut guide, Some(section), None).unwrap_err();
+        assert!(err.to_string().contains("is a section"), "{err}");
+        let err = set_cover(&mut guide, Some(Ulid::nil()), None).unwrap_err();
+        assert!(err.to_string().contains("has no step"), "{err}");
+        if let Item::Step(s) = &mut guide.items[1] {
+            s.image.full.clear();
+        }
+        let blank = guide.items[1].id();
+        let err = set_cover(&mut guide, Some(blank), None).unwrap_err();
+        assert!(err.to_string().contains("no screenshot"), "{err}");
+        assert_eq!(guide.cover_step_id, None);
     }
 
     #[test]

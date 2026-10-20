@@ -418,6 +418,27 @@ fn branding_hooks_are_off_by_default_and_work() {
 }
 
 #[test]
+fn chosen_cover_is_drawn_on_the_cover_page() {
+    let lib = Synthetic::new();
+    let mut guide = Guide::new("Covered", "en");
+    guide.items = vec![step("Click A"), step("Click B")];
+    let plain = lib.render(&guide);
+    assert_eq!(cover_images(&plain.pdf), "");
+
+    // The 800×450 placeholder is 600×337.5 pt at 96 dpi, so it is scaled
+    // down to the text width (481.89 pt), under the height cap.
+    guide.cover_step_id = Some(guide.items[1].id());
+    let covered = lib.render(&guide);
+    assert_eq!(cover_images(&covered.pdf), "481.89x271.06");
+    assert_eq!(covered.page_count(), plain.page_count());
+    assert!(
+        covered.report.notes.is_empty(),
+        "{:?}",
+        covered.report.notes
+    );
+}
+
+#[test]
 fn branded_fixtures_match_text_goldens() {
     let fixtures = Fixtures::new();
     for (name, loaded) in fixtures.guides() {

@@ -60,6 +60,17 @@ pub struct Guide {
     /// every field is the user's (see [`Guide::is_field_edited`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edited_fields: Vec<GuideField>,
+    /// The step the author chose as the cover: the guide's library card,
+    /// the cover page of a PDF or Word export and an HTML export's
+    /// `og:image`. Unset, or naming a step that is gone or has no
+    /// screenshot, the card shows the first screenshot and exports show no
+    /// cover image (see [`Guide::cover_step`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub cover_step_id: Option<Ulid>,
+    /// How the cover is drawn; left out while default.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub cover_options: CoverOptions,
     /// Owner, status, version and review schedule. Flattened: the fields
     /// sit at the top level of `guide.json` and are left out while unset,
     /// so guides without them read and write unchanged.
@@ -88,6 +99,8 @@ impl Guide {
             items: Vec::new(),
             ai_state: AiState::default(),
             edited_fields: Vec::new(),
+            cover_step_id: None,
+            cover_options: CoverOptions::default(),
             review: ReviewInfo::default(),
         }
     }
@@ -123,12 +136,55 @@ impl Guide {
         })
     }
 
+    /// The step chosen as the cover ([`Guide::cover_step_id`]), if it is
+    /// still in the guide and has a screenshot.
+    pub fn chosen_cover_step(&self) -> Option<&Step> {
+        let id = self.cover_step_id?;
+        self.steps()
+            .find(|step| step.id == id)
+            .filter(|step| has_screenshot(step))
+    }
+
+    /// The guide's cover: the chosen step ([`Guide::chosen_cover_step`]),
+    /// else the first step with a screenshot.
+    pub fn cover_step(&self) -> Option<&Step> {
+        self.chosen_cover_step()
+            .or_else(|| self.steps().find(|step| has_screenshot(step)))
+    }
+
     /// Hotspot annotations across all steps.
     pub fn hotspot_count(&self) -> usize {
         self.steps()
             .flat_map(|step| &step.annotations)
             .filter(|annotation| matches!(annotation.shape, Shape::Hotspot(_)))
             .count()
+    }
+}
+
+fn has_screenshot(step: &Step) -> bool {
+    !step.image.full.is_empty()
+}
+
+/// How a guide's cover is drawn from its step ([`Guide::cover_step_id`]).
+/// Blur and pixelation are burned in either way, and a crop annotation
+/// still cuts the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CoverOptions {
+    /// The close-up (`crop`) or the full screenshot (`full`, the default).
+    /// A step without a close-up shows its full screenshot.
+    pub image: ImageShow,
+    /// Draw the step's annotations (arrows, boxes, callouts, hotspots) on
+    /// it; off by default.
+    pub annotations: bool,
+}
+
+impl Default for CoverOptions {
+    fn default() -> Self {
+        Self {
+            image: ImageShow::Full,
+            annotations: false,
+        }
     }
 }
 
@@ -854,6 +910,69 @@ mod tests {
         assert!(
             matches!(&bare.shape, Shape::Hotspot(h) if h.title.is_empty() && h.description.is_empty())
         );
+    }
+
+    #[test]
+    fn cover_round_trips_and_defaults_unset() {
+        let old: Guide = serde_json::from_value(sample()).unwrap();
+        assert_eq!(old.cover_step_id, None);
+        assert_eq!(old.cover_options, CoverOptions::default());
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("coverStepId").is_none());
+        assert!(json.get("coverOptions").is_none());
+
+        let mut guide = old.clone();
+        let third = guide.steps().nth(2).unwrap().id;
+        guide.cover_step_id = Some(third);
+        guide.cover_options = CoverOptions {
+            image: ImageShow::Crop,
+            annotations: true,
+        };
+        let json = serde_json::to_value(&guide).unwrap();
+        assert_eq!(json["coverStepId"], third.to_string());
+        assert_eq!(
+            json["coverOptions"],
+            json!({ "image": "crop", "annotations": true })
+        );
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
+
+        // Options missing a field take its default.
+        let mut json = sample();
+        json["coverOptions"] = json!({ "annotations": true });
+        let partial: Guide = serde_json::from_value(json).unwrap();
+        assert_eq!(partial.cover_options.image, ImageShow::Full);
+        assert!(partial.cover_options.annotations);
+    }
+
+    #[test]
+    fn cover_step_falls_back_to_the_first_screenshot() {
+        let mut guide: Guide = serde_json::from_value(sample()).unwrap();
+        let ids: Vec<Ulid> = guide.steps().map(|s| s.id).collect();
+        assert_eq!(guide.chosen_cover_step(), None);
+        assert_eq!(guide.cover_step().map(|s| s.id), Some(ids[0]));
+
+        guide.cover_step_id = Some(ids[1]);
+        assert_eq!(guide.chosen_cover_step().map(|s| s.id), Some(ids[1]));
+        assert_eq!(guide.cover_step().map(|s| s.id), Some(ids[1]));
+
+        // A deleted step, or a section's id, is ignored.
+        guide.cover_step_id = Some(Ulid::new());
+        assert_eq!(guide.chosen_cover_step(), None);
+        assert_eq!(guide.cover_step().map(|s| s.id), Some(ids[0]));
+        guide.cover_step_id = Some(guide.items[0].id());
+        assert_eq!(guide.chosen_cover_step(), None);
+
+        // Steps without a screenshot are skipped.
+        guide.cover_step_id = Some(ids[0]);
+        for item in &mut guide.items {
+            if let Item::Step(step) = item {
+                if step.id == ids[0] {
+                    step.image.full.clear();
+                }
+            }
+        }
+        assert_eq!(guide.chosen_cover_step(), None);
+        assert_eq!(guide.cover_step().map(|s| s.id), Some(ids[1]));
     }
 
     #[test]

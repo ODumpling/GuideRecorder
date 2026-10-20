@@ -13,7 +13,7 @@
 
 use guiderecorder_core::export::ast::{Block, Inline};
 use guiderecorder_core::export::{RenderGuide, RenderItem, RenderStep};
-use guiderecorder_core::model::{ElementInfo, GuideKind, NoteKind, StepKind};
+use guiderecorder_core::model::{ElementInfo, GuideKind, ImageShow, NoteKind, StepKind};
 
 /// Extra facts about the guide that are not in [`RenderGuide`].
 pub struct GuideMeta<'a> {
@@ -66,6 +66,30 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     }
     if let Some(due) = &meta.review_due {
         facts.push(format!("Review due: {}", escape_line(due)));
+    }
+    if let Some(cover) = &render.cover {
+        let number = render
+            .steps()
+            .find(|s| s.step.id == cover.step.id)
+            .map_or(0, |s| s.number);
+        let image = match cover.options.image {
+            ImageShow::Crop => "close-up",
+            ImageShow::Full => "full screenshot",
+        };
+        let annotations = if cover.options.annotations {
+            "with"
+        } else {
+            "without"
+        };
+        facts.push(format!(
+            "Cover: {} {number} {{#step-{}}} ({image}, {annotations} annotations)",
+            if render.kind == GuideKind::Annotated {
+                "page"
+            } else {
+                "step"
+            },
+            cover.step.id
+        ));
     }
     if render.kind == GuideKind::Annotated {
         facts.insert(

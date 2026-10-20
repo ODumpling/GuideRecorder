@@ -314,8 +314,9 @@ pub async fn step_image(
     Ok(Response::new(bytes))
 }
 
-/// The first screenshot of a guide in the library, for its card (empty:
-/// none). The guide needn't be open.
+/// The cover of a guide in the library, as WebP, for its card: the chosen
+/// step drawn as asked, else the first screenshot (empty: none). The guide
+/// needn't be open.
 #[tauri::command]
 pub async fn guide_cover(cell: State<'_, Arc<SessionCell>>, guide_id: String) -> Result<Response> {
     let bytes = with_session(cell, move |s| s.guide_cover(&guide_id)).await?;

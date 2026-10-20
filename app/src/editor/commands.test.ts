@@ -4,10 +4,13 @@ import {
   applyPatches,
   coalesce,
   deleteItem,
+  deleteItems,
   insertItemAfter,
   insertItemBefore,
   insertItemsAfter,
+  mergeSteps,
   mergeWithNext,
+  moveItems,
   newNote,
   newSection,
   splitStep,
@@ -19,6 +22,10 @@ import {
   setReviewField,
   editedGuideFields,
   setImageShow,
+  setCover,
+  setCoverOptions,
+  coverOptions,
+  coverStepId,
   setItemText,
   setItemTitle,
   type Command,
@@ -308,6 +315,51 @@ describe("item operations", () => {
     expect(() => splitStep(g, "N1", "X", "", "")).toThrow(PatchError);
     expect(() => splitStep(g, "A", "B", "", "")).toThrow(PatchError);
   });
+
+  it("move several items together, both ways", () => {
+    // S1 A B N1 C
+    expect(ids(roundTrip(moveItems(guide(), ["A", "B"], 0)))).toEqual(["A", "B", "S1", "N1", "C"]);
+    expect(ids(roundTrip(moveItems(guide(), ["A", "B"], 3)))).toEqual(["S1", "N1", "C", "A", "B"]);
+    // Kept in guide order, whatever order the ids come in.
+    expect(ids(roundTrip(moveItems(guide(), ["N1", "A"], 1)))).toEqual(["S1", "A", "N1", "B", "C"]);
+    expect(moveItems(guide(), ["A"], 2).label).toBe("Move item");
+    expect(moveItems(guide(), ["A", "B"], 2).label).toBe("Move 2 items");
+    // Where they already are: nothing to do.
+    expect(moveItems(guide(), ["A", "B"], 1).forward).toEqual([]);
+    expect(() => moveItems(guide(), ["A", "X"], 0)).toThrow(PatchError);
+    expect(() => moveItems(guide(), ["A", "B"], 4)).toThrow(PatchError);
+  });
+
+  it("delete several items as one step and restore them in place", () => {
+    const command = deleteItems(guide(), ["B", "A", "N1"]);
+    expect(ids(roundTrip(command))).toEqual(["S1", "C"]);
+    expect(command.label).toBe("Delete 3 items");
+    expect(command.select).toEqual({ forward: "C", inverse: "A" });
+    // At the end, the item before them is selected.
+    expect(deleteItems(guide(), ["N1", "C"]).select).toEqual({ forward: "B", inverse: "N1" });
+    expect(deleteItems(guide(), ids(guide())).select?.forward).toBeNull();
+    // One item: the same as deleteItem.
+    expect(deleteItems(guide(), ["A"])).toEqual(deleteItem(guide(), "A"));
+    expect(() => deleteItems(guide(), ["A", "X"])).toThrow(PatchError);
+  });
+
+  it("merge a range of steps into the first, as one undo step", () => {
+    const g = guide();
+    (g.items[4] as Step).keystrokes = "⌘S";
+    // S1 A B N1 C: move C up so A B C are consecutive.
+    const moved = applyPatches(g, moveItem(g, "C", 3).forward);
+    const command = mergeSteps(moved, ["A", "B", "C"]);
+    const after = applyPatches(moved, command.forward);
+    expect(ids(after)).toEqual(["S1", "A", "N1"]);
+    expect(after.items[1]).toMatchObject({ description: "Step B\n\nStep C", keystrokes: "⌘S", aiState: { status: "edited" } });
+    expect(applyPatches(after, command.inverse)).toEqual(moved);
+    expect(command.label).toBe("Merge 3 steps");
+    expect(command.select).toEqual({ forward: "A", inverse: "A" });
+    // Only consecutive steps.
+    expect(() => mergeSteps(guide(), ["A", "C"])).toThrow(PatchError);
+    expect(() => mergeSteps(guide(), ["B", "N1"])).toThrow(PatchError);
+    expect(() => mergeSteps(guide(), ["A"])).toThrow(PatchError);
+  });
 });
 
 describe("guide-level fields", () => {
@@ -385,5 +437,55 @@ describe("guide-level fields", () => {
   it("change nothing, not even the AI state, when the value is the same", () => {
     const command = setGuideField(guide(), "title", "Guide");
     expect(command.forward).toEqual(command.inverse);
+  });
+});
+
+describe("cover", () => {
+  it("is set, changed and cleared undoably", () => {
+    const g0 = guide();
+    expect(coverStepId(g0)).toBeNull();
+    expect(coverOptions(g0)).toEqual({ image: "full", annotations: false });
+    const g1 = roundTrip(setCover(g0, "B"));
+    expect(coverStepId(g1)).toBe("B");
+    expect(setCover(g1, "B").forward).toEqual(setCover(g1, "B").inverse);
+    const options = setCoverOptions(g1, { image: "crop" });
+    const g2 = applyPatches(g1, options.forward);
+    expect(coverOptions(g2)).toEqual({ image: "crop", annotations: false });
+    expect(applyPatches(g2, options.inverse)).toEqual(g1);
+    const cleared = setCover(g2, null);
+    const g3 = applyPatches(g2, cleared.forward);
+    expect("coverStepId" in JSON.parse(JSON.stringify(g3))).toBe(false);
+    expect(applyPatches(g3, cleared.inverse)).toEqual(g2);
+  });
+
+  it("is only a step with a screenshot", () => {
+    const g = guide();
+    expect(() => setCover(g, "S1")).toThrow(PatchError);
+    expect(coverStepId({ ...g, coverStepId: "S1" })).toBeNull();
+    expect(coverStepId({ ...g, coverStepId: "gone" })).toBeNull();
+    const items = g.items.map((item) => (item.id === "A" && item.type === "step" ? { ...item, image: { ...item.image, full: "" } } : item));
+    expect(coverStepId({ ...g, coverStepId: "A", items })).toBeNull();
+  });
+
+  it("goes with its step, and comes back on undo", () => {
+    const g = { ...guide(), coverStepId: "B" };
+    const deleted = deleteItem(g, "B");
+    const after = applyPatches(g, deleted.forward);
+    expect(after.coverStepId).toBeUndefined();
+    expect(applyPatches(after, deleted.inverse)).toEqual(g);
+    // Other deletes leave it alone.
+    expect(applyPatches(g, deleteItem(g, "C").forward).coverStepId).toBe("B");
+
+    // Merging removes the next step, the cover here.
+    const base = { ...g, coverStepId: "C", items: g.items.filter((item) => item.id !== "N1") };
+    const merged = mergeWithNext(base, "B");
+    expect(applyPatches(base, merged.forward).coverStepId).toBeUndefined();
+    expect(applyPatches(applyPatches(base, merged.forward), merged.inverse)).toEqual(base);
+
+    // So does deleting a range that holds it.
+    const range = deleteItems(g, ["A", "B"]);
+    expect(applyPatches(g, range.forward).coverStepId).toBeUndefined();
+    expect(applyPatches(applyPatches(g, range.forward), range.inverse)).toEqual(g);
+    expect(applyPatches(g, deleteItems(g, ["A", "C"]).forward).coverStepId).toBe("B");
   });
 });

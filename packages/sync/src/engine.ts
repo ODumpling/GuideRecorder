@@ -92,6 +92,8 @@ export interface SyncState {
   /** The change feed cursor for `workspaceId`. */
   cursor: string;
   guides: Record<string, GuideSync>;
+  /** Whose choices these are (the app's key for the server and user); another account starts over. */
+  owner?: string;
 }
 
 export const emptyState = (): SyncState => ({ version: 1, workspaceId: null, library: false, cursor: "0", guides: {} });

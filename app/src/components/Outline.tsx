@@ -1,27 +1,47 @@
-import { lazy, Suspense, useMemo, useState, type DragEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
+import { Menu } from "@tauri-apps/api/menu";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  ChevronRight,
   FileText,
+  GripVertical,
   Heading,
   ImageIcon,
   Info,
   Lightbulb,
+  Merge,
   MousePointerClick,
   Plus,
   Sparkles,
+  Trash2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { aiStore, useAi } from "@/ai/ai";
 import { BUSY_HINT } from "@/ai/controller";
 import { StepStatusBadge, useAiBlocked } from "@/ai/WriteWithAi";
 import { Button } from "@guiderecorder/ui/button";
-import { deleteSelected } from "@/editor/actions";
+import { changeCover, toggleCover } from "@/editor/actions";
 import { Input } from "@guiderecorder/ui/input";
 import { useStepThumbnail } from "@/components/useStepThumbnail";
-import { dropTarget, moveItem, renameGuide } from "@/editor/commands";
-import { editorStore, stepNumbers, useEditor } from "@/editor/editor";
+import { coverOptions, coverStepId, deleteItems, mergeSteps, moveItems, renameGuide } from "@/editor/commands";
+import { editorStore, stepNoun, stepNumbers, useEditor } from "@/editor/editor";
+import {
+  blockDropTarget,
+  canMergeRange,
+  moveAnnouncement,
+  outlineKeyFor,
+  rangeIds,
+  sectionOf,
+  sectionStepCount,
+  selectionAnnouncement,
+  shiftTarget,
+  visibleItems,
+  withCollapsed,
+} from "@/editor/outline";
+import { navigationFor } from "@/editor/shortcuts";
 import type { Item, Step } from "@guiderecorder/guide-schema";
 import { cn } from "@guiderecorder/ui/utils";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
@@ -43,7 +63,7 @@ function plainLabel(markdown: string): string {
 // The menu (Radix and its positioning) loads with the first opened guide.
 const InsertMenu = lazy(() => import("@/components/InsertMenu"));
 
-function itemLabel(item: Item, annotated: boolean): string {
+export function itemLabel(item: Item, annotated: boolean): string {
   switch (item.type) {
     case "step":
       return plainLabel(item.title) || (annotated ? "Untitled page" : "Untitled step");
@@ -69,10 +89,63 @@ function ItemIcon({ item }: { item: Item }) {
 function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
   const url = useStepThumbnail(guideId, step.image.crop || step.image.full || null);
   return (
-    <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background">
+    <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background compact:h-6 compact:w-9">
       {url ? <img src={url} alt="" className="size-full object-cover" /> : <ItemIcon item={step} />}
     </span>
   );
+}
+
+/**
+ * The native context menu of a step in the outline: Set as Cover (or
+ * Remove as Cover) and, on the cover, how it is drawn. Each is one undoable
+ * change.
+ */
+async function showStepMenu(event: MouseEvent, step: Step, page: boolean) {
+  event.preventDefault();
+  const { doc } = editorStore.getState();
+  if (!doc || doc.readOnly) return;
+  const isCover = coverStepId(doc.guide) === step.id;
+  const options = coverOptions(doc.guide);
+  const noun = page ? "Page" : "Step";
+  try {
+    const menu = await Menu.new({
+      items: [
+        {
+          id: "toggle-cover",
+          text: isCover ? "Remove as Cover" : "Set as Cover",
+          enabled: !!step.image.full,
+          action: () => toggleCover(editorStore, step.id),
+        },
+        ...(isCover
+          ? [
+              { item: "Separator" as const },
+              {
+                id: "cover-close-up",
+                text: "Cover Shows the Close-up",
+                checked: options.image === "crop",
+                enabled: !!step.image.crop,
+                action: () => changeCover(editorStore, { image: "crop" }),
+              },
+              {
+                id: "cover-full",
+                text: "Cover Shows the Full Screenshot",
+                checked: options.image === "full",
+                action: () => changeCover(editorStore, { image: "full" }),
+              },
+              {
+                id: "cover-annotations",
+                text: `Draw the ${noun}'s Annotations on the Cover`,
+                checked: options.annotations,
+                action: () => changeCover(editorStore, { annotations: !options.annotations }),
+              },
+            ]
+          : []),
+      ],
+    });
+    await menu.popup();
+  } catch (error) {
+    console.error("step menu failed:", error);
+  }
 }
 
 /**
@@ -97,30 +170,132 @@ function RegenerateGuide({ readOnly }: { readOnly: boolean }) {
   );
 }
 
-/** The open guide's title and its items, with selection and reordering. */
+/** Whether keys typed at `target` are text, so J and K type rather than navigate. */
+function isTextTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || !!target.closest("input, textarea, select, [contenteditable]"))
+  );
+}
+
+/** Focuses the outline entry of item `id` (null: Guide details) once it has rendered. */
+function focusOutlineItem(id: string | null) {
+  requestAnimationFrame(() =>
+    document
+      .querySelector<HTMLElement>(id === null ? "[data-outline-details]" : `[data-outline-item="${id}"]`)
+      ?.focus(),
+  );
+}
+
+/** Focuses item `id`'s first text field (a step's title) once its editor has loaded. */
+function focusItemText(id: string, frames = 30) {
+  requestAnimationFrame(() => {
+    const field = document.querySelector<HTMLElement>(`main [data-item="${id}"] [role="textbox"][contenteditable="true"]`);
+    if (field) field.focus();
+    else if (frames > 0) focusItemText(id, frames - 1);
+  });
+}
+
+function Kbd({ children }: { children: string }) {
+  return <kbd className="rounded border border-sidebar-border px-1 font-sans text-[10px]">{children}</kbd>;
+}
+
+/** Where dragged items will land: a line with a dot, above the item. */
+function DropLine() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute -top-[2px] right-1 left-2 z-10 h-0.5 rounded-full bg-[var(--status-info)]"
+    >
+      <span className="absolute top-1/2 -left-1.5 size-2 -translate-y-1/2 rounded-full border-2 border-[var(--status-info)] bg-sidebar" />
+    </span>
+  );
+}
+
+/**
+ * The open guide's title and its items, with selection (⇧-click or ⇧↑/⇧↓
+ * for a range), keyboard navigation, folding sections and reordering.
+ */
 export function Outline() {
   const doc = useEditor((s) => s.doc)!;
   const selectedId = useEditor((s) => s.selectedId);
   const { guide, readOnly } = doc;
   // Annotation guides have pages, which AI doesn't write.
   const annotated = guide.kind === "annotated";
+  const noun = stepNoun(annotated);
   const numbers = useMemo(() => stepNumbers(guide.items), [guide.items]);
-  const [dragId, setDragId] = useState<string | null>(null);
+  const cover = coverStepId(guide);
+  // The dragged items: one, a range, or a collapsed section with its items.
+  const [dragIds, setDragIds] = useState<string[]>([]);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // A range runs from its anchor to the selected item; selecting anything
+  // else (a click, J/K, undo) ends it.
+  const [range, setRange] = useState<{ anchor: string; focus: string } | null>(null);
+  // Read out by screen readers when it changes.
+  const [announcement, setAnnouncement] = useState("");
+
+  const ranged = range && range.focus === selectedId ? rangeIds(guide.items, range.anchor, range.focus) : [];
+  const selection = ranged.length > 1 ? ranged : [];
+  const visible = useMemo(() => visibleItems(guide.items, collapsed), [guide.items, collapsed]);
+  const shown = new Set(visible.map((item) => item.id));
 
   const { dispatch, select } = editorStore.getState();
-  const move = (id: string, to: number) => dispatch(moveItem(editorStore.getState().doc!.guide, id, to));
-  /** Drops the dragged item before position `before` (items.length: the end). */
+  const items = () => editorStore.getState().doc!.guide.items;
+  /** What an action on item `id` applies to: the range it is in, or itself. */
+  const targets = (id: string) => (selection.includes(id) ? selection : [id]);
+
+  const setFolded = (id: string, folded: boolean) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (folded) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const toggle = (id: string) => {
+    const folding = !collapsed.has(id);
+    // The selection can't hide: it moves up to the section.
+    if (folding && selectedId && sectionOf(items(), selectedId) === id) select(id);
+    setFolded(id, folding);
+  };
+  /** Opens the collapsed section the item `id` landed in. */
+  const reveal = (id: string) => {
+    const section = sectionOf(items(), id);
+    if (section && collapsed.has(section)) setFolded(section, false);
+  };
+
+  /** Moves the items `ids` and announces where they went. */
+  const moveTo = (ids: string[], to: number | null) => {
+    if (to === null || !dispatch(moveItems(editorStore.getState().doc!.guide, ids, to))) return;
+    reveal(ids[0]);
+    setAnnouncement(moveAnnouncement(items(), ids));
+  };
+  /** Moves the items `ids` past the item shown above (-1) or below (1). */
+  const shift = (ids: string[], by: -1 | 1) => {
+    const block = withCollapsed(items(), ids, collapsed);
+    moveTo(block, shiftTarget(items(), block, by, collapsed));
+  };
+  const remove = (ids: string[]) => {
+    if (!dispatch(deleteItems(editorStore.getState().doc!.guide, ids))) return;
+    setRange(null);
+    // Keep the keyboard in the outline, on the newly selected item.
+    focusOutlineItem(editorStore.getState().selectedId);
+  };
+  const merge = (ids: string[]) => {
+    if (!dispatch(mergeSteps(editorStore.getState().doc!.guide, ids))) return;
+    setRange(null);
+    focusOutlineItem(editorStore.getState().selectedId);
+  };
+
+  /** Drops the dragged items before position `before` (items.length: the end). */
   const drop = (before: number) => {
-    const items = editorStore.getState().doc!.guide.items;
-    const from = items.findIndex((item) => item.id === dragId);
-    if (from >= 0) move(items[from].id, dropTarget(from, before));
-    setDragId(null);
+    if (dragIds.length > 0) moveTo(dragIds, blockDropTarget(items(), dragIds, before));
+    setDragIds([]);
     setDropIndex(null);
   };
   const dropZone = (before: number) => ({
     onDragOver: (e: DragEvent) => {
-      if (!dragId) return;
+      if (dragIds.length === 0) return;
       e.preventDefault();
       setDropIndex(before);
     },
@@ -129,6 +304,118 @@ export function Outline() {
       drop(before);
     },
   });
+  /** Whether dropping before `index` would leave the dragged items where they are. */
+  const dropsInPlace = (index: number) =>
+    dragIds.includes(guide.items[index]?.id) || dragIds.includes(guide.items[index - 1]?.id);
+
+  const onItemKeyDown = (e: KeyboardEvent<HTMLButtonElement>, item: Item) => {
+    if (e.key === "Escape" && selection.length > 0) {
+      e.preventDefault();
+      setRange(null);
+      return;
+    }
+    const key = outlineKeyFor(e);
+    if (!key) return;
+    e.preventDefault();
+    const at = visible.findIndex((other) => other.id === item.id);
+    /** Selects `target` (with `extend`, the range up to it) and keeps the keyboard on it. */
+    const go = (target: Item | undefined, extend = false) => {
+      if (!target) return;
+      setRange(extend ? { anchor: selection.length > 0 ? range!.anchor : item.id, focus: target.id } : null);
+      select(target.id);
+      focusOutlineItem(target.id);
+    };
+    switch (key) {
+      case "previous":
+      case "extendUp":
+        return go(visible[at - 1], key === "extendUp");
+      case "next":
+      case "extendDown":
+        return go(visible[at + 1], key === "extendDown");
+      case "first":
+        return go(visible[0]);
+      case "last":
+        return go(visible[visible.length - 1]);
+      case "moveUp":
+      case "moveDown":
+        if (readOnly) return;
+        shift(targets(item.id), key === "moveUp" ? -1 : 1);
+        // Moving the button can drop its focus.
+        return focusOutlineItem(item.id);
+      case "collapse": {
+        if (item.type === "section" && !collapsed.has(item.id)) return toggle(item.id);
+        const section = sectionOf(guide.items, item.id);
+        return go(guide.items.find((other) => other.id === section));
+      }
+      case "expand":
+        if (collapsed.has(item.id)) toggle(item.id);
+        return;
+      case "edit":
+        setRange(null);
+        select(item.id);
+        return focusItemText(item.id);
+      case "delete":
+        if (!readOnly) remove(targets(item.id));
+        return;
+    }
+  };
+
+  // A newly opened guide starts unfolded, with no range.
+  useEffect(() => {
+    setCollapsed(new Set());
+    setRange(null);
+  }, [guide.id]);
+
+  // An item selected inside a collapsed section (J/K, ‹ ›, undo) unfolds it.
+  useEffect(() => {
+    const section = selectedId && sectionOf(guide.items, selectedId);
+    if (section && collapsed.has(section)) setFolded(section, false);
+  }, [selectedId, guide.items, collapsed]);
+
+  useEffect(() => {
+    const { doc, selectedId } = editorStore.getState();
+    if (doc) setAnnouncement(selectionAnnouncement(doc.guide.items, selectedId, selection.length, annotated));
+  }, [selectedId, selection.length, annotated]);
+
+  // Editor-wide keys outside text fields: J/K and ⌘[ ⌘] for the previous
+  // and next item, ⌘D for the guide details. Esc in the item's text goes
+  // back to the outline.
+  useEffect(() => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      // Dialogs and menus keep their keys.
+      if (!target || target.closest('[role="dialog"], [role="menu"]')) return;
+      const { doc, selectedId, select } = editorStore.getState();
+      if (!doc) return;
+      if (isTextTarget(target)) {
+        // ProseMirror marks every Esc handled; other fields (the link
+        // popover) only when they used it.
+        if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !target.closest("main")) return;
+        if (e.defaultPrevented && !target.isContentEditable) return;
+        e.preventDefault();
+        focusOutlineItem(selectedId);
+        return;
+      }
+      if (e.defaultPrevented) return;
+      const action = navigationFor(e);
+      if (!action) return;
+      e.preventDefault();
+      const items = doc.guide.items;
+      const index = items.findIndex((item) => item.id === selectedId);
+      let next: string | null = null;
+      if (action !== "details") {
+        // From the guide details (index -1), next is the first item.
+        const item = action === "next" ? items[index + 1] : index > 0 ? items[index - 1] : undefined;
+        if (!item) return;
+        next = item.id;
+      }
+      select(next);
+      // Keep the keyboard in the outline if it was there.
+      if (target.closest("[data-outline-item], [data-outline-details]")) focusOutlineItem(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const back = async () => {
     if (await editorStore.getState().closeGuide()) await editorStore.getState().loadGuides();
@@ -164,120 +451,223 @@ export function Outline() {
         <button
           type="button"
           aria-current={selectedId === null || undefined}
-          title="Edit the guide's introduction, prerequisites, summary and tags"
+          title="Edit the guide's introduction, prerequisites, summary and tags (⌘D)"
+          data-outline-details
           onClick={() => select(null)}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowDown" || e.altKey || e.shiftKey || e.metaKey || e.ctrlKey || !visible[0]) return;
+            e.preventDefault();
+            select(visible[0].id);
+            focusOutlineItem(visible[0].id);
+          }}
           className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-sidebar-foreground/5",
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
             selectedId === null && "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
           )}
         >
           <FileText className="size-3.5 text-muted-foreground" /> Guide details
         </button>
       </div>
-      <ol className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2" onDragLeave={() => setDropIndex(null)}>
-        {guide.items.map((item, index) => (
-          <li
-            key={item.id}
-            draggable={!readOnly}
-            onDragStart={(e) => {
-              setDragId(item.id);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragEnd={() => {
-              setDragId(null);
-              setDropIndex(null);
-            }}
-            {...dropZone(index)}
-            className={cn(
-              "group flex items-center gap-0.5 rounded-lg border-t-2 border-transparent",
-              item.type === "section" && "mt-2 first:mt-0",
-              dropIndex === index && dragId !== item.id && "border-[var(--status-info)]",
-              dragId === item.id && "opacity-50",
-            )}
-          >
-            <button
-              type="button"
-              onClick={() => select(item.id)}
-              onKeyDown={(e) => {
-                if (readOnly || (e.key !== "Delete" && e.key !== "Backspace")) return;
-                e.preventDefault();
-                select(item.id);
-                deleteSelected(editorStore);
-                // Keep the keyboard in the outline, on the newly selected item.
-                const next = editorStore.getState().selectedId;
-                requestAnimationFrame(() =>
-                  document.querySelector<HTMLElement>(`[data-outline-item="${next}"]`)?.focus(),
-                );
+      <ol
+        aria-label="Outline"
+        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2"
+        onDragLeave={() => setDropIndex(null)}
+      >
+        {guide.items.map((item, index) => {
+          if (!shown.has(item.id)) return null;
+          const folded = item.type === "section" && collapsed.has(item.id);
+          const count = folded ? sectionStepCount(guide.items, item.id) : 0;
+          return (
+            <li
+              key={item.id}
+              draggable={!readOnly}
+              onDragStart={(e) => {
+                setDragIds(withCollapsed(guide.items, targets(item.id), collapsed));
+                e.dataTransfer.effectAllowed = "move";
               }}
-              data-outline-item={item.id}
+              onDragEnd={() => {
+                setDragIds([]);
+                setDropIndex(null);
+              }}
+              {...dropZone(index)}
               className={cn(
-                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-[13px] text-sidebar-foreground/85 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                item.type === "section" && "py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase",
-                item.type === "note" && "bg-sidebar-foreground/[0.04] text-xs",
-                item.id === selectedId &&
-                  "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
+                "group relative flex items-center gap-0.5 rounded-lg",
+                item.type === "section" && "mt-2 first:mt-0",
+                dragIds.includes(item.id) && "opacity-50",
               )}
             >
-              {item.type === "step" ? (
-                <>
+              {dropIndex === index && !dropsInPlace(index) && <DropLine />}
+              {item.type === "section" && (
+                <button
+                  type="button"
+                  // The keyboard folds with ← and → on the item.
+                  tabIndex={-1}
+                  aria-label={folded ? "Expand section" : "Collapse section"}
+                  title={folded ? "Expand section (→)" : "Collapse section (←)"}
+                  onClick={() => toggle(item.id)}
+                  className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-sidebar-foreground/5"
+                >
+                  <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")} />
+                </button>
+              )}
+              <button
+                type="button"
+                aria-current={item.id === selectedId || undefined}
+                aria-expanded={item.type === "section" ? !folded : undefined}
+                // ⇧-click selects a range, not text.
+                onMouseDown={(e) => e.shiftKey && e.preventDefault()}
+                onClick={(e) => {
+                  if (e.shiftKey && selectedId !== null && selectedId !== item.id) {
+                    setRange({ anchor: selection.length > 0 ? range!.anchor : selectedId, focus: item.id });
+                  } else {
+                    setRange(null);
+                  }
+                  select(item.id);
+                }}
+                onContextMenu={item.type === "step" && !readOnly ? (e) => void showStepMenu(e, item, annotated) : undefined}
+                onKeyDown={(e) => onItemKeyDown(e, item)}
+                data-outline-item={item.id}
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-[13px] compact:py-1 text-sidebar-foreground/85 outline-none hover:bg-sidebar-foreground/5 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                  item.type === "section" && "py-1 compact:py-0.5 pl-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase",
+                  item.type === "note" && "bg-sidebar-foreground/[0.04] text-xs",
+                  selection.includes(item.id) && "bg-sidebar-accent/60 text-sidebar-accent-foreground",
+                  item.id === selectedId &&
+                    "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm hover:bg-sidebar-accent",
+                )}
+              >
+                {item.type === "step" ? (
+                  <>
+                    <span
+                      className={cn(
+                        "w-4 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums",
+                        item.id === selectedId && "font-semibold text-brand",
+                      )}
+                    >
+                      {numbers.get(item.id)}
+                    </span>
+                    <StepThumb guideId={guide.id} step={item} />
+                  </>
+                ) : (
+                  item.type === "note" && (
+                    <span className="flex w-4 shrink-0 justify-end">
+                      <ItemIcon item={item} />
+                    </span>
+                  )
+                )}
+                <span className={cn(item.type === "step" ? "line-clamp-2 leading-snug" : "truncate")}>
+                  {itemLabel(item, annotated)}
+                </span>
+                {item.id === cover && (
                   <span
-                    className={cn(
-                      "w-4 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums",
-                      item.id === selectedId && "font-semibold text-brand",
-                    )}
+                    className="shrink-0 rounded-full bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                    title={`This ${annotated ? "page" : "step"}'s screenshot is the guide's cover`}
                   >
-                    {numbers.get(item.id)}
+                    Cover
                   </span>
-                  <StepThumb guideId={guide.id} step={item} />
-                </>
-              ) : (
-                <span className="flex w-4 shrink-0 justify-end">
-                  <ItemIcon item={item} />
+                )}
+                {folded && (
+                  <span className="ml-auto shrink-0 rounded-full bg-sidebar-foreground/[0.06] px-1.5 py-px text-[10px] font-medium tracking-normal normal-case tabular-nums">
+                    {count} {count === 1 ? noun : `${noun}s`}
+                  </span>
+                )}
+                {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
+              </button>
+              {!readOnly && (
+                <span className="flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+                  <span
+                    aria-hidden
+                    title="Drag to reorder"
+                    className="flex h-7 w-4 cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
+                  >
+                    <GripVertical className="size-3.5" />
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Move up"
+                    title="Move up (⌥↑)"
+                    disabled={index === 0}
+                    onClick={() => shift(targets(item.id), -1)}
+                  >
+                    <ArrowUp />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Move down"
+                    title="Move down (⌥↓)"
+                    disabled={index === guide.items.length - 1}
+                    onClick={() => shift(targets(item.id), 1)}
+                  >
+                    <ArrowDown />
+                  </Button>
                 </span>
               )}
-              <span className={cn(item.type === "step" ? "line-clamp-2 leading-snug" : "truncate")}>
-                {itemLabel(item, annotated)}
-              </span>
-              {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
-            </button>
-            {!readOnly && (
-              <span className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Move up"
-                  title="Move up"
-                  disabled={index === 0}
-                  onClick={() => move(item.id, index - 1)}
-                >
-                  <ArrowUp />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Move down"
-                  title="Move down"
-                  disabled={index === guide.items.length - 1}
-                  onClick={() => move(item.id, index + 1)}
-                >
-                  <ArrowDown />
-                </Button>
-              </span>
-            )}
-          </li>
-        ))}
-        {dragId && (
+            </li>
+          );
+        })}
+        {dragIds.length > 0 && (
           // Drop target after the last item.
-          <li
-            aria-hidden
-            {...dropZone(guide.items.length)}
-            className={cn(
-              "h-8 rounded-md border-t-2 border-transparent",
-              dropIndex === guide.items.length && "border-[var(--status-info)]",
-            )}
-          />
+          <li aria-hidden {...dropZone(guide.items.length)} className="relative h-8">
+            {dropIndex === guide.items.length && !dropsInPlace(guide.items.length) && <DropLine />}
+          </li>
         )}
       </ol>
+      {selection.length > 0 && (
+        <div role="toolbar" aria-label="Selected items" className="flex items-center gap-0.5 border-t border-sidebar-border px-2 py-1.5 text-xs">
+          <span className="flex-1 pl-1 font-medium tabular-nums">{selection.length} items selected</span>
+          {!readOnly && (
+            <>
+              <Button variant="ghost" size="icon" aria-label="Move selected items up" title="Move up (⌥↑)" onClick={() => shift(selection, -1)}>
+                <ArrowUp />
+              </Button>
+              <Button variant="ghost" size="icon" aria-label="Move selected items down" title="Move down (⌥↓)" onClick={() => shift(selection, 1)}>
+                <ArrowDown />
+              </Button>
+              {canMergeRange(guide.items, selection) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Merge ${selection.length} ${noun}s`}
+                  title={`Merge these ${noun}s into the first`}
+                  onClick={() => merge(selection)}
+                >
+                  <Merge />
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" aria-label="Delete selected items" title="Delete (⌫)" onClick={() => remove(selection)}>
+                <Trash2 />
+              </Button>
+            </>
+          )}
+          <Button variant="ghost" size="icon" aria-label="Clear the selection" title="Clear the selection (Esc)" onClick={() => setRange(null)}>
+            <X />
+          </Button>
+        </div>
+      )}
+      <p
+        className="border-t border-sidebar-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground"
+        title={[
+          "J / K or ⌘[ / ⌘]: previous and next, anywhere",
+          "⌘D: guide details",
+          "Home / End: first and last",
+          "Enter: edit the title; Esc: back to the outline",
+          "← / →: collapse and expand a section",
+          "⇧-click or ⇧↑ / ⇧↓: select a range",
+        ].join("\n")}
+      >
+        <Kbd>↑</Kbd> <Kbd>↓</Kbd> to move between {noun}s
+        {!readOnly && (
+          <>
+            , <Kbd>⌥↑</Kbd> <Kbd>⌥↓</Kbd> to reorder
+          </>
+        )}
+      </p>
+      <div aria-live="polite" aria-atomic className="sr-only" data-testid="outline-announcement">
+        {announcement}
+      </div>
     </div>
   );
 }
+

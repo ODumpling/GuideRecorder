@@ -1176,12 +1176,13 @@ async fn no_call_writes_to_the_library_or_index() {
 // ---------------------------------------------------------------------------
 // Write tools (`--writable`)
 
-const WRITE_TOOLS: [&str; 7] = [
+const WRITE_TOOLS: [&str; 8] = [
     "add_note",
     "add_tags",
     "create_guide_from_images",
     "remove_tags",
     "reorder_items",
+    "set_cover",
     "update_guide_fields",
     "update_step",
 ];
@@ -1426,6 +1427,82 @@ async fn add_and_remove_tags() {
         )
         .await;
     assert_eq!(result["structuredContent"]["changed"], false);
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[tokio::test]
+async fn set_cover_chooses_changes_and_clears_the_cover() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.writable()).await;
+    let markdown = text(&client.ok("get_guide", json!({ "id": ROTATE })).await, 0).to_owned();
+    assert!(!markdown.contains("Cover:"), "{markdown}");
+
+    let result = client
+        .ok(
+            "set_cover",
+            json!({ "guide_id": ROTATE, "step_id": format!("step-{ROTATE_PASSWORD_STEP}") }),
+        )
+        .await;
+    let out = &result["structuredContent"];
+    assert_eq!(out["changed"], true);
+    assert_eq!(out["cover_step_id"], ROTATE_PASSWORD_STEP);
+    assert_eq!(
+        (&out["cover_image"], &out["cover_annotations"]),
+        (&json!("full"), &json!(false))
+    );
+    let saved = fx.saved(ROTATE);
+    assert_eq!(
+        saved.cover_step_id.map(|id| id.to_string()).as_deref(),
+        Some(ROTATE_PASSWORD_STEP)
+    );
+    let markdown = text(&client.ok("get_guide", json!({ "id": ROTATE })).await, 0).to_owned();
+    assert!(
+        markdown.contains(&format!(
+            "{{#step-{ROTATE_PASSWORD_STEP}}} (full screenshot, without annotations)"
+        )),
+        "{markdown}"
+    );
+
+    // Options alone keep the chosen step.
+    let result = client
+        .ok(
+            "set_cover",
+            json!({ "guide_id": ROTATE, "image": "crop", "annotations": true }),
+        )
+        .await;
+    let out = &result["structuredContent"];
+    assert_eq!(out["cover_step_id"], ROTATE_PASSWORD_STEP);
+    assert_eq!(
+        (&out["cover_image"], &out["cover_annotations"]),
+        (&json!("crop"), &json!(true))
+    );
+    assert_eq!(fx.saved(ROTATE).cover_options.image, ImageShow::Crop);
+
+    let result = client
+        .ok("set_cover", json!({ "guide_id": ROTATE, "clear": true }))
+        .await;
+    assert_eq!(result["structuredContent"]["cover_step_id"], Value::Null);
+    assert_eq!(fx.saved(ROTATE).cover_step_id, None);
+
+    let before = fx.snapshot();
+    let error = client
+        .tool_error(
+            "set_cover",
+            json!({ "guide_id": ROTATE, "step_id": ROTATE_NOTE }),
+        )
+        .await;
+    assert!(error.contains("is a note"), "{error}");
+    let error = client
+        .tool_error("set_cover", json!({ "guide_id": ROTATE }))
+        .await;
+    assert!(error.contains("nothing to change"), "{error}");
+    let error = client
+        .tool_error(
+            "set_cover",
+            json!({ "guide_id": ROTATE, "step_id": ROTATE_FIRST_STEP, "clear": true }),
+        )
+        .await;
+    assert!(error.contains("not both"), "{error}");
     assert_eq!(fx.snapshot(), before);
 }
 

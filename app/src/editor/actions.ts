@@ -2,6 +2,7 @@
 // the current guide and selection and dispatches it (#351).
 
 import {
+  coverStepId,
   deleteItem,
   insertItemAfter,
   insertItemBefore,
@@ -10,12 +11,14 @@ import {
   newNote,
   newSection,
   nextStep,
+  setCover,
+  setCoverOptions,
   splitStep,
 } from "@/editor/commands";
 import { insertImageSteps } from "@/editor/images";
 import type { EditorStore } from "@/editor/store";
 import { addAnnotatedPages, copyStepImages, errorMessage } from "@/lib/ipc";
-import type { NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { CoverOptions, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
 
 function current(store: EditorStore) {
@@ -52,6 +55,19 @@ export function mergeSelected(store: EditorStore): boolean {
   const state = current(store);
   if (!state?.selected || !canMergeSelected(store)) return false;
   return state.dispatch(mergeWithNext(state.guide, state.selected.id));
+}
+
+/** Makes step `id` the guide's cover or, if it already is, goes back to the first screenshot. */
+export function toggleCover(store: EditorStore, id: string): boolean {
+  const state = current(store);
+  if (!state) return false;
+  return state.dispatch(setCover(state.guide, coverStepId(state.guide) === id ? null : id));
+}
+
+/** Changes how the cover is drawn. */
+export function changeCover(store: EditorStore, change: Partial<CoverOptions>): boolean {
+  const state = current(store);
+  return !!state && state.dispatch(setCoverOptions(state.guide, change));
 }
 
 /**

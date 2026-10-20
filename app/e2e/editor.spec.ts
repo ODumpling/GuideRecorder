@@ -148,6 +148,120 @@ test("splits a step, and both halves keep the blur", async ({ page, backend }) =
   await expect(screenshot(page).locator(`filter[id="redact-${blurs(second)[0].id}-blur"]`)).toHaveCount(1);
 });
 
+test.describe("the outline from the keyboard", () => {
+  // Section, step, step, note, section, step, step, step, note.
+  const [SECTION, STEP_1, STEP_2, , , , , , LAST] = [
+    "01M4WT7MM000000000000002G1",
+    "01M4WT7MM000000000000002G4",
+    "01M4WT7MM000000000000002G7",
+    "01M4WT7MM000000000000002G8",
+    "01M4WT7MM000000000000002G9",
+    "01M4WT7MM000000000000002GA",
+    "01M4WT7MM000000000000002GC",
+    "01M4WT7MM000000000000002GD",
+    "01M4WT7MM000000000000002GE",
+  ];
+  const item = (page: Page, id: string) => page.locator(`[data-outline-item="${id}"]`);
+  const announcement = (page: Page) => page.getByTestId("outline-announcement");
+  const title = (page: Page) => page.getByRole("textbox", { name: "Step title" });
+
+  test("selects with the arrows, reorders with Option and announces both", async ({ page, backend }) => {
+    await openGuide(page, "Share a calendar event");
+    await item(page, STEP_1).focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(item(page, STEP_2)).toBeFocused();
+    await expect(title(page)).toHaveText("Double-click the Team sync event");
+    await expect(announcement(page)).toHaveText("Step 2 of 5 selected");
+
+    await page.keyboard.press("Alt+ArrowUp");
+    const before = backend.guide(CALENDAR).items.map((i) => i.id);
+    await expect.poll(() => lastItems(backend).map((i) => i.id)).toEqual([before[0], STEP_2, STEP_1, ...before.slice(3)]);
+    await expect(announcement(page)).toHaveText("Moved to position 2 of 9");
+    await expect(item(page, STEP_2)).toBeFocused();
+    await expect(item(page, STEP_2)).toHaveText(/^1/);
+
+    await page.keyboard.press("End");
+    await expect(item(page, LAST)).toBeFocused();
+    await expect(item(page, LAST)).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("Home");
+    await expect(item(page, before[0])).toBeFocused();
+  });
+
+  test("Enter edits the step title and Esc goes back to the outline", async ({ page, backend: _ }) => {
+    await openGuide(page, "Share a calendar event");
+    await item(page, STEP_2).focus();
+    await page.keyboard.press("Enter");
+    await expect(title(page)).toBeFocused();
+    await expect(title(page)).toHaveText("Double-click the Team sync event");
+    await page.keyboard.press("Escape");
+    await expect(item(page, STEP_2)).toBeFocused();
+  });
+
+  test("J, K and Cmd+D move around, but not while typing", async ({ page, backend: _ }) => {
+    await openGuide(page, "Share a calendar event");
+    await item(page, STEP_1).focus();
+    await page.keyboard.press("j");
+    await expect(title(page)).toHaveText("Double-click the Team sync event");
+    await expect(item(page, STEP_2)).toBeFocused();
+    await page.keyboard.press("ControlOrMeta+]");
+    await expect(item(page, STEP_2)).not.toHaveAttribute("aria-current");
+    await page.keyboard.press("k");
+    await expect(item(page, STEP_2)).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("ControlOrMeta+d");
+    await expect(page.getByRole("button", { name: "Guide details", exact: true })).toHaveAttribute("aria-current", "true");
+    // From the guide details, J goes to the first item.
+    await page.keyboard.press("j");
+    await expect(item(page, SECTION)).toHaveAttribute("aria-current", "true");
+
+    // In a text field, J is a letter.
+    await item(page, STEP_1).click();
+    await title(page).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("j");
+    await expect(title(page)).toHaveText("Click Calendar in the Dockj");
+  });
+
+  test("collapses a section to its step count", async ({ page, backend: _ }) => {
+    await openGuide(page, "Share a calendar event");
+    await expect(outlineItems(page)).toHaveCount(9);
+    await page.getByRole("button", { name: "Collapse section" }).first().click();
+    await expect(outlineItems(page)).toHaveCount(6);
+    await expect(outlineItems(page).first()).toHaveText(/Open the event\s*2 steps/);
+    await expect(outlineItems(page).first()).toHaveAttribute("aria-expanded", "false");
+    // Folding moved the selection from its first step to the section.
+    await expect(outlineItems(page).first()).toHaveAttribute("aria-current", "true");
+    // Selecting a hidden step unfolds the section.
+    await page.getByRole("button", { name: "Next item" }).click();
+    await expect(outlineItems(page)).toHaveCount(9);
+    await expect(title(page)).toHaveText("Click Calendar in the Dock");
+    await page.getByRole("button", { name: "Collapse section" }).first().click();
+    await page.getByRole("button", { name: "Expand section" }).click();
+    await expect(outlineItems(page)).toHaveCount(9);
+  });
+
+  test("selects a range with Shift-click, then merges or deletes it as one step", async ({ page, backend }) => {
+    await openGuide(page, "Share a calendar event");
+    const count = backend.guide(CALENDAR).items.length;
+    await item(page, STEP_1).click();
+    await item(page, STEP_2).click({ modifiers: ["Shift"] });
+    const bar = page.getByRole("toolbar", { name: "Selected items" });
+    await expect(bar).toContainText("2 items selected");
+    await bar.getByRole("button", { name: "Merge 2 steps" }).click();
+    await expect.poll(() => lastItems(backend).length).toBe(count - 1);
+    await expect(bar).toHaveCount(0);
+
+    await item(page, STEP_1).click();
+    await page.keyboard.press("Shift+ArrowDown");
+    await expect(bar).toContainText("2 items selected");
+    // The note after the merged step can't merge.
+    await expect(bar.getByRole("button", { name: /Merge/ })).toHaveCount(0);
+    await page.keyboard.press("Delete");
+    await expect.poll(() => lastItems(backend).length).toBe(count - 3);
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(outlineItems(page)).toHaveCount(count - 1);
+  });
+});
+
 test.describe("a guide from a newer GuideRecorder", () => {
   test.use({ backendOptions: { schemaVersions: { [API_KEY]: SCHEMA_VERSION + 1 } } });
 

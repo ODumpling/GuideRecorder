@@ -11,6 +11,10 @@ export type SuggestionSource = ("ai" | "onDevice")
 export type AiStatus = ("generating" | "template" | "ai" | "edited")
 export type Audience = ("beginner" | "expert")
 /**
+ * Which image the step displays.
+ */
+export type ImageShow = ("crop" | "full")
+/**
  * A guide-level field the AI guide pass writes.
  */
 export type GuideField = ("title" | "intro" | "prerequisites" | "summary" | "tags")
@@ -50,10 +54,6 @@ type: "crop"
 geometry: HotspotGeometry
 type: "hotspot"
 })
-/**
- * Which image the step displays.
- */
-export type ImageShow = ("crop" | "full")
 export type StepKind = ("click" | "doubleClick" | "rightClick" | "type" | "shortcut" | "drag" | "manual")
 export type NoteKind = ("tip" | "warning" | "note")
 /**
@@ -71,6 +71,15 @@ export type GuideStatus = (("draft" | "inReview" | "published") | "needsUpdate")
 export interface Guide {
 aiState?: AiState
 audience: Audience
+coverOptions?: CoverOptions
+/**
+ * The step the author chose as the cover: the guide's library card,
+ * the cover page of a PDF or Word export and an HTML export's
+ * `og:image`. Unset, or naming a step that is gone or has no
+ * screenshot, the card shows the first screenshot and exports show no
+ * cover image (see [`Guide::cover_step`]).
+ */
+coverStepId?: (string | null)
 createdAt: string
 /**
  * The guide-level fields the user wrote by hand; the AI guide pass
@@ -178,6 +187,19 @@ height: number
 width: number
 x: number
 y: number
+}
+/**
+ * How a guide's cover is drawn from its step ([`Guide::cover_step_id`]).
+ * Blur and pixelation are burned in either way, and a crop annotation
+ * still cuts the view.
+ */
+export interface CoverOptions {
+/**
+ * Draw the step's annotations (arrows, boxes, callouts, hotspots) on
+ * it; off by default.
+ */
+annotations: boolean
+image: ImageShow
 }
 export interface Step {
 type: "step"
@@ -367,6 +389,17 @@ export const guideJsonSchema = {
     "audience": {
       "$ref": "#/$defs/Audience",
       "default": "beginner"
+    },
+    "coverOptions": {
+      "description": "How the cover is drawn; left out while default.",
+      "$ref": "#/$defs/CoverOptions"
+    },
+    "coverStepId": {
+      "description": "The step the author chose as the cover: the guide's library card,\nthe cover page of a PDF or Word export and an HTML export's\n`og:image`. Unset, or naming a step that is gone or has no\nscreenshot, the card shows the first screenshot and exports show no\ncover image (see [`Guide::cover_step`]).",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "createdAt": {
       "type": "string",
@@ -841,6 +874,22 @@ export const guideJsonSchema = {
         "height",
         "text"
       ]
+    },
+    "CoverOptions": {
+      "description": "How a guide's cover is drawn from its step ([`Guide::cover_step_id`]).\nBlur and pixelation are burned in either way, and a crop annotation\nstill cuts the view.",
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "description": "Draw the step's annotations (arrows, boxes, callouts, hotspots) on\nit; off by default.",
+          "type": "boolean",
+          "default": false
+        },
+        "image": {
+          "description": "The close-up (`crop`) or the full screenshot (`full`, the default).\nA step without a close-up shows its full screenshot.",
+          "$ref": "#/$defs/ImageShow",
+          "default": "full"
+        }
+      }
     },
     "DisplayInfo": {
       "type": "object",

@@ -78,8 +78,9 @@ export const tauriHistoryApi: HistoryApi = {
 };
 
 /**
- * WebP bytes of a library guide's first screenshot, for its card; empty if
- * it has none. The guide needn't be open.
+ * WebP bytes of a library guide's cover, for its card: the step the author
+ * chose (`coverStepId`) drawn as its cover options ask, else the first
+ * screenshot; empty if it has none. The guide needn't be open.
  */
 export async function guideCover(guideId: string): Promise<ArrayBuffer> {
   return toArrayBuffer(await invoke("guide_cover", { guideId }));
@@ -473,6 +474,8 @@ export interface SyncApi {
   signInStart(server: string): Promise<DeviceCode>;
   signInPoll(deviceCode: string): Promise<SignInStatus>;
   signOut(): Promise<void>;
+  /** Opens a page of the signed-in web app (e.g. `/profile`) in the browser. */
+  openWeb(path: string): Promise<void>;
   loadState(): Promise<unknown>;
   saveState(state: unknown): Promise<void>;
 }
@@ -482,6 +485,7 @@ export const tauriSyncApi: SyncApi = {
   signInStart: (server) => invoke("sync_sign_in_start", { server }),
   signInPoll: (deviceCode) => invoke("sync_sign_in_poll", { deviceCode }),
   signOut: () => invoke("sync_sign_out"),
+  openWeb: (path) => invoke("sync_open_web", { path }),
   loadState: () => invoke("sync_load_state"),
   saveState: (state) => invoke("sync_save_state", { state }),
 };

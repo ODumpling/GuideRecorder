@@ -30,7 +30,7 @@ use guiderecorder_core::export::{render_step_image, ImageOptions, RenderGuide, R
 use guiderecorder_core::index::{self, ListFilter};
 use guiderecorder_core::library::{Library, LibraryError, LoadedGuide};
 use guiderecorder_core::model::{
-    local_today, Guide, GuideField, GuideStatus, ImageShow, Item, NoteKind,
+    local_today, CoverOptions, Guide, GuideField, GuideStatus, ImageShow, Item, NoteKind,
 };
 use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
@@ -75,8 +75,8 @@ const WRITABLE_INSTRUCTIONS: &str = "GuideRecorder step-by-step guides recorded 
 Use list_guides or search_steps to find a guide, get_guide for its full Markdown (items carry \
 {#step-<id>}, {#section-<id>} and {#note-<id>} anchors), and get_step for one step with its \
 screenshot. Screenshots are rendered with the author's annotations and redactions. \
-Editing is allowed: update_guide_fields, update_step, add_note, reorder_items, add_tags and \
-remove_tags change a guide, and create_guide_from_images makes an annotation guide from image \
+Editing is allowed: update_guide_fields, update_step, add_note, reorder_items, add_tags, \
+remove_tags and set_cover change a guide, and create_guide_from_images makes an annotation guide from image \
 files. Text you change counts as written by the user, so GuideRecorder's AI passes will not \
 overwrite it. A guide open in the GuideRecorder editor, or read-only, cannot be changed.";
 
@@ -254,6 +254,39 @@ pub struct TagsArgs {
     pub guide_id: String,
     /// Tags (case-insensitive; commas separate tags too).
     pub tags: Vec<String>,
+}
+
+/// Which screenshot of the cover step a cover shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverImageArg {
+    /// The close-up around the action.
+    Crop,
+    /// The full screenshot.
+    Full,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct SetCoverArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// The step (or page) whose screenshot becomes the cover (the
+    /// `{#step-<id>}` anchor in get_guide, with or without `step-`).
+    /// Default: the current cover, to change only its options.
+    #[serde(default)]
+    pub step_id: Option<String>,
+    /// Remove the chosen cover instead: the first screenshot is the cover
+    /// again. Default false.
+    #[serde(default)]
+    pub clear: bool,
+    /// "crop" (the close-up) or "full" (the full screenshot). Default: as
+    /// it is ("full" for a new guide).
+    #[serde(default)]
+    pub image: Option<CoverImageArg>,
+    /// Draw the step's annotations on the cover. Default: as it is (off
+    /// for a new guide).
+    #[serde(default)]
+    pub annotations: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -459,6 +492,25 @@ impl GuideRecorderMcp {
     ) -> Result<CallToolResult, McpError> {
         self.blocking(move |config| remove_tags(config, &args))
             .await
+    }
+
+    #[tool(
+        description = "Choose the step whose screenshot is a guide's cover (its library card, \
+                       the cover page of PDF and Word exports, and the HTML og:image), and \
+                       whether the cover shows the close-up or the full screenshot, with or \
+                       without annotations. Pass clear to go back to the first screenshot. \
+                       Returns the cover now.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn set_cover(
+        &self,
+        Parameters(args): Parameters<SetCoverArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| set_cover(config, &args)).await
     }
 
     #[tool(
@@ -871,6 +923,51 @@ fn remove_tags(config: &Config, args: &TagsArgs) -> ToolResult<CallToolResult> {
     Ok(edit_result(
         &edited,
         json!({ "removed": edited.value, "tags": edited.guide.tags }),
+    ))
+}
+
+fn set_cover(config: &Config, args: &SetCoverArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let step_id = match &args.step_id {
+        Some(_) if args.clear => {
+            return Err(ToolError("pass step_id or clear, not both".into()));
+        }
+        Some(id) => Some(parse_item_id(id, "step")?),
+        None => None,
+    };
+    if step_id.is_none() && !args.clear && args.image.is_none() && args.annotations.is_none() {
+        return Err(ToolError(
+            "nothing to change; pass step_id, clear, image or annotations".into(),
+        ));
+    }
+    let edited = edit_guide(config, guide_id, |guide| {
+        let step = match step_id {
+            Some(id) => Some(id),
+            None if args.clear => None,
+            // Options only: keep the chosen cover, if it is still there.
+            None => guide.chosen_cover_step().map(|s| s.id),
+        };
+        let options = CoverOptions {
+            image: match args.image {
+                Some(CoverImageArg::Crop) => ImageShow::Crop,
+                Some(CoverImageArg::Full) => ImageShow::Full,
+                None => guide.cover_options.image,
+            },
+            annotations: args.annotations.unwrap_or(guide.cover_options.annotations),
+        };
+        edit::set_cover(guide, step, Some(options))
+    })?;
+    let guide = &edited.guide;
+    Ok(edit_result(
+        &edited,
+        json!({
+            "cover_step_id": guide.chosen_cover_step().map(|s| s.id.to_string()),
+            "cover_image": match guide.cover_options.image {
+                ImageShow::Crop => "crop",
+                ImageShow::Full => "full",
+            },
+            "cover_annotations": guide.cover_options.annotations,
+        }),
     ))
 }
 

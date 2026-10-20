@@ -1,4 +1,4 @@
-import type { Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { CoverOptions, Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import type { ReviewFields } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@guiderecorder/ui/markdown";
@@ -224,6 +224,39 @@ export function moveItem(guide: Guide, id: string, to: number): Command {
   };
 }
 
+/** `moveItem` patches that turn the order `from` into `to` (the same ids). */
+function reorderPatches(from: string[], to: string[]): Patch[] {
+  const current = from.slice();
+  const patches: Patch[] = [];
+  to.forEach((id, index) => {
+    const at = current.indexOf(id);
+    if (at === index) return;
+    current.splice(at, 1);
+    current.splice(index, 0, id);
+    patches.push({ op: "moveItem", id, to: index });
+  });
+  return patches;
+}
+
+/**
+ * Moves the items `ids` together, in guide order, so the first of them ends
+ * up at `to` (its index after the move). One undo step.
+ */
+export function moveItems(guide: Guide, ids: string[], to: number): Command {
+  const moving = new Set(ids);
+  const block = guide.items.filter((item) => moving.has(item.id));
+  if (block.length === 0 || block.length !== moving.size) throw new PatchError("moving an item that is not in the guide");
+  const rest = guide.items.filter((item) => !moving.has(item.id));
+  if (to < 0 || to > rest.length) throw new PatchError(`move target ${to} out of range`);
+  const before = guide.items.map((item) => item.id);
+  const after = [...rest.slice(0, to), ...block, ...rest.slice(to)].map((item) => item.id);
+  return {
+    label: block.length === 1 ? "Move item" : `Move ${block.length} items`,
+    forward: reorderPatches(before, after),
+    inverse: reorderPatches(after, before),
+  };
+}
+
 /**
  * The `to` for {@link moveItem} when the item at `from` is dropped before
  * position `before` (0..items.length, where items.length means the end).
@@ -244,6 +277,51 @@ export function setImageShow(guide: Guide, id: string, show: ImageShow): Command
     label: show === "crop" ? "Show click crop" : "Show full screenshot",
     forward: [{ op: "setItem", id, key: "image", value: { ...step.image, show } }],
     inverse: [{ op: "setItem", id, key: "image", value: step.image }],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cover (#44)
+
+/** How a cover is drawn when `coverOptions` is absent (core `CoverOptions::default`). */
+export const DEFAULT_COVER_OPTIONS: CoverOptions = { image: "full", annotations: false };
+
+/** The step chosen as the cover, if it is still a step with a screenshot; else null (the first screenshot is the cover). */
+export function coverStepId(guide: Guide): string | null {
+  const id = guide.coverStepId;
+  const step = id ? guide.items.find((item) => item.id === id) : undefined;
+  return step?.type === "step" && step.image.full ? step.id : null;
+}
+
+export function coverOptions(guide: Guide): CoverOptions {
+  return { ...DEFAULT_COVER_OPTIONS, ...guide.coverOptions };
+}
+
+/** Makes step `id` the guide's cover, or (null) goes back to the first screenshot. */
+export function setCover(guide: Guide, id: string | null): Command {
+  if (id !== null) findStep(guide, id);
+  return {
+    label: id === null ? "Remove cover" : "Set as cover",
+    forward: [{ op: "setGuide", key: "coverStepId", value: id ?? undefined }],
+    inverse: [{ op: "setGuide", key: "coverStepId", value: guide.coverStepId }],
+  };
+}
+
+/** Changes how the cover is drawn: the close-up or the full screenshot, with or without annotations. */
+export function setCoverOptions(guide: Guide, change: Partial<CoverOptions>): Command {
+  return {
+    label: "Change cover",
+    forward: [{ op: "setGuide", key: "coverOptions", value: { ...coverOptions(guide), ...change } }],
+    inverse: [{ op: "setGuide", key: "coverOptions", value: guide.coverOptions }],
+  };
+}
+
+/** Patches that unset the cover when it is step `id`, which is going; empty otherwise. */
+function dropCover(guide: Guide, id: string): { forward: Patch[]; inverse: Patch[] } {
+  if (guide.coverStepId !== id) return { forward: [], inverse: [] };
+  return {
+    forward: [{ op: "setGuide", key: "coverStepId", value: undefined }],
+    inverse: [{ op: "setGuide", key: "coverStepId", value: id }],
   };
 }
 
@@ -320,11 +398,46 @@ export function deleteItem(guide: Guide, id: string): Command {
   const index = indexOf(guide, id);
   const item = guide.items[index];
   const neighbour = guide.items[index + 1] ?? guide.items[index - 1] ?? null;
+  // A deleted cover step stops being the cover; undo makes it the cover again.
+  const cover = dropCover(guide, id);
   return {
     label: `Delete ${item.type === "note" ? item.kind : ITEM_NAMES[item.type]}`,
-    forward: [{ op: "removeItem", id }],
-    inverse: [{ op: "insertItem", index, item }],
+    forward: [{ op: "removeItem", id }, ...cover.forward],
+    inverse: [...cover.inverse, { op: "insertItem", index, item }],
     select: { forward: neighbour?.id ?? null, inverse: id },
+  };
+}
+
+/**
+ * Deletes several items as one undo step; the item after the last of them
+ * (or else the one before the first) is selected.
+ */
+export function deleteItems(guide: Guide, ids: string[]): Command {
+  if (ids.length === 1) return deleteItem(guide, ids[0]);
+  const doomed = new Set(ids);
+  const indices = guide.items.flatMap((item, index) => (doomed.has(item.id) ? [index] : []));
+  if (indices.length === 0 || indices.length !== doomed.size) {
+    throw new PatchError("deleting an item that is not in the guide");
+  }
+  const kept = (item: Item) => !doomed.has(item.id);
+  const neighbour =
+    guide.items.slice(indices[indices.length - 1] + 1).find(kept) ??
+    guide.items.slice(0, indices[0]).filter(kept).at(-1) ??
+    null;
+  // A deleted cover step stops being the cover; undo makes it the cover again.
+  const cover = guide.coverStepId && doomed.has(guide.coverStepId) ? dropCover(guide, guide.coverStepId) : null;
+  return {
+    label: `Delete ${indices.length} items`,
+    forward: [
+      ...indices.map((index): Patch => ({ op: "removeItem", id: guide.items[index].id })),
+      ...(cover?.forward ?? []),
+    ],
+    // In guide order, so each goes back where it was.
+    inverse: [
+      ...(cover?.inverse ?? []),
+      ...indices.map((index): Patch => ({ op: "insertItem", index, item: guide.items[index] })),
+    ],
+    select: { forward: neighbour?.id ?? null, inverse: guide.items[indices[0]].id },
   };
 }
 
@@ -371,7 +484,30 @@ export function mergeWithNext(guide: Guide, id: string): Command {
   }
   forward.push({ op: "removeItem", id: second.id });
   inverse.unshift({ op: "insertItem", index: indexOf(guide, second.id), item: second });
+  const cover = dropCover(guide, second.id);
+  forward.push(...cover.forward);
+  inverse.unshift(...cover.inverse);
   return { label: "Merge steps", forward, inverse, select: { forward: id, inverse: id } };
+}
+
+/**
+ * Merges consecutive steps `ids` (in guide order) into the first, as
+ * {@link mergeWithNext} would one after another, in one undo step.
+ */
+export function mergeSteps(guide: Guide, ids: string[]): Command {
+  if (ids.length < 2) throw new PatchError("merging needs two steps or more");
+  const [first, ...rest] = ids;
+  let current = guide;
+  const forward: Patch[] = [];
+  const inverse: Patch[] = [];
+  for (const id of rest) {
+    if (nextStep(current, first)?.id !== id) throw new PatchError(`step ${id} does not follow the merged steps`);
+    const command = mergeWithNext(current, first);
+    forward.push(...command.forward);
+    inverse.unshift(...command.inverse);
+    current = applyPatches(current, command.forward);
+  }
+  return { label: `Merge ${ids.length} steps`, forward, inverse, select: { forward: first, inverse: first } };
 }
 
 /**

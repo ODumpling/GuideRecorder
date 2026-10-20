@@ -9,16 +9,20 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use guiderecorder_core::edit::DetailsEdit;
+use guiderecorder_core::export::{render_cover_image, ImageOptions, RenderWarning};
 use guiderecorder_core::history::{self, Retention, VersionInfo, VersionReason};
 use guiderecorder_core::index::{self, Index, IndexedGuide, ListFilter};
 use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
     StepImageVariant, GUIDE_FILE, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
-use guiderecorder_core::model::{Guide, GuideKind, NaiveDate, ReviewInfo, Step, StepImage};
+use guiderecorder_core::model::{
+    CoverOptions, Guide, GuideKind, NaiveDate, ReviewInfo, Step, StepImage,
+};
 use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
-use image::{ImageFormat, RgbaImage};
+use image::codecs::webp::WebPEncoder;
+use image::{ExtendedColorType, ImageEncoder, ImageFormat, RgbaImage};
 use serde::Serialize;
 
 /// Environment variable that overrides the library folder.
@@ -434,9 +438,11 @@ impl Session {
         std::fs::read(&path).map_err(|e| file_error(&path, e))
     }
 
-    /// The first step's screenshot of a guide in the library, for its card
-    /// in the library; empty if no step has one. Reads `guide.json` only:
-    /// the guide needn't be open, and nothing is migrated or written.
+    /// The cover of a guide in the library, as WebP, for its card: the step
+    /// the author chose (`coverStepId`) drawn as its cover options ask, at
+    /// most [`COVER_MAX_WIDTH`] wide, else the first step's screenshot as
+    /// stored; empty if no step has one. Reads `guide.json` only: the guide
+    /// needn't be open, and nothing is migrated or written.
     pub fn guide_cover(&self, guide_id: &str) -> Result<Vec<u8>> {
         let id = parse_id(guide_id)?;
         let handle = self.library.find(id)?.ok_or(LibraryError::NotFound(id))?;
@@ -444,6 +450,9 @@ impl Session {
         let bytes = std::fs::read(&json).map_err(|e| file_error(&json, e))?;
         let value: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|e| AppError::new(ErrorKind::Conflict, format!("{}: {e}", json.display())))?;
+        if let Some(cover) = chosen_cover(&handle, &value) {
+            return Ok(cover);
+        }
         let Some(path) = cover_image(&value) else {
             return Ok(Vec::new());
         };
@@ -827,6 +836,57 @@ fn cover_image(guide: &serde_json::Value) -> Option<&str> {
             let path = step.get("image")?.get("full")?.as_str()?;
             (!path.is_empty()).then_some(path)
         })
+}
+
+/// Widest cover [`Session::guide_cover`] draws: twice a card's 480 px.
+pub const COVER_MAX_WIDTH: u32 = 960;
+
+/// The cover the author chose in a `guide.json` value, drawn as its cover
+/// options ask and encoded as WebP; `None` if none was chosen, the step is
+/// gone or doesn't decode, or its screenshot can't be read (the first
+/// screenshot is the cover then).
+fn chosen_cover(handle: &GuideHandle, guide: &serde_json::Value) -> Option<Vec<u8>> {
+    let id = guide.get("coverStepId")?.as_str()?;
+    let item = guide.get("items")?.as_array()?.iter().find(|item| {
+        item.get("type").and_then(|t| t.as_str()) == Some("step")
+            && item.get("id").and_then(|i| i.as_str()) == Some(id)
+    })?;
+    let step: Step = serde_json::from_value(item.clone()).ok()?;
+    if step.image.full.is_empty() {
+        return None;
+    }
+    let options: CoverOptions = guide
+        .get("coverOptions")
+        .and_then(|o| serde_json::from_value(o.clone()).ok())
+        .unwrap_or_default();
+    let image = render_cover_image(
+        handle,
+        &step,
+        &options,
+        &ImageOptions {
+            max_width: Some(COVER_MAX_WIDTH),
+            ..ImageOptions::default()
+        },
+    );
+    // A missing close-up falls back to the full screenshot; a missing full
+    // screenshot leaves only a placeholder.
+    let placeholder = image.warnings.iter().any(
+        |w| matches!(w, RenderWarning::ImageUnavailable { path, .. } if *path == step.image.full),
+    );
+    if placeholder {
+        return None;
+    }
+    let rgba = image.to_rgba()?;
+    let mut out = Vec::new();
+    WebPEncoder::new_lossless(&mut out)
+        .write_image(
+            rgba.as_raw(),
+            rgba.width(),
+            rgba.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+    Some(out)
 }
 
 pub(crate) fn check_image_path(path: &str) -> Result<()> {
@@ -1597,6 +1657,72 @@ pub(crate) mod tests {
                 .kind,
             ErrorKind::NotFound
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guide_cover_is_the_chosen_step_drawn_as_asked() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let id = fixture_id(&root);
+        let json_path = root.join(FIXTURE).join("guide.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+        let steps: Vec<serde_json::Value> = json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "step")
+            .cloned()
+            .collect();
+        let first = fs::read(
+            root.join(FIXTURE)
+                .join(steps[0]["image"]["full"].as_str().unwrap()),
+        )
+        .unwrap();
+        let write = |json: &serde_json::Value| {
+            fs::write(&json_path, serde_json::to_vec_pretty(json).unwrap()).unwrap();
+        };
+        let decode =
+            |bytes: &[u8]| image::load_from_memory_with_format(bytes, ImageFormat::WebP).unwrap();
+
+        // The full screenshot of the chosen step (an arrow, not drawn), scaled
+        // down.
+        let chosen = &steps[3];
+        json["coverStepId"] = chosen["id"].clone();
+        write(&json);
+        let cover = session.guide_cover(&id).unwrap();
+        assert_ne!(cover, first);
+        let full = decode(
+            &fs::read(
+                root.join(FIXTURE)
+                    .join(chosen["image"]["full"].as_str().unwrap()),
+            )
+            .unwrap(),
+        );
+        let drawn = decode(&cover);
+        assert_eq!(drawn.width(), full.width().min(COVER_MAX_WIDTH));
+
+        // Its close-up, when asked.
+        json["coverOptions"] = serde_json::json!({ "image": "crop" });
+        write(&json);
+        let crop = decode(
+            &fs::read(
+                root.join(FIXTURE)
+                    .join(chosen["image"]["crop"].as_str().unwrap()),
+            )
+            .unwrap(),
+        );
+        let close_up = decode(&session.guide_cover(&id).unwrap());
+        assert_eq!(
+            (close_up.width(), close_up.height()),
+            (crop.width(), crop.height())
+        );
+
+        // A step that is gone falls back to the first screenshot.
+        json["coverStepId"] = Ulid::new().to_string().into();
+        write(&json);
+        assert_eq!(session.guide_cover(&id).unwrap(), first);
         fs::remove_dir_all(root).unwrap();
     }
 

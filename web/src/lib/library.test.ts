@@ -55,6 +55,22 @@ describe("library", () => {
     expect(tags.map((t) => t.name)).toEqual(["api", "console", "Drucker", "office", "security"]);
   });
 
+  it("shows the cover step the author chose, else the first step", async () => {
+    const steps = apiKey.items.filter((i) => i.type === "step");
+    const cover = async () => (await library(db, "org", vic, {}, today)).guides.find((g) => g.id === apiKey.id)!.cover;
+    expect(await cover()).toBe(hash(steps[0]!.image.full));
+    const choose = async (coverStepId: string) => {
+      const head = (await getGuide(db, "org", ada, apiKey.id))!.head;
+      const result = await push(db, "org", ada, pushRequest.parse({ guideId: apiKey.id, baseRevision: head.id, guide: { ...head.guide, coverStepId }, assets: head.assets }), "app");
+      expect(result.status).toBe(200);
+    };
+    await choose(steps[2]!.id);
+    expect(await cover()).toBe(hash(steps[2]!.image.full));
+    // A step that is gone falls back to the first.
+    await choose("01J9ZQ3K8V4N6T2W5X7Y8Z9ZZZ");
+    expect(await cover()).toBe(hash(steps[0]!.image.full));
+  });
+
   it("finds guides by title, step text, notes, hotspots and tags, by word prefix", async () => {
     expect(await titles(vic, { query: "rotat" })).toEqual(["Rotate an API key"]);
     expect(await titles(vic, { query: "production" })).toEqual(["Rotate an API key"]);

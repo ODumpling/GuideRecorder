@@ -533,6 +533,7 @@ fn validate_fixtures_ok() {
         assert_eq!(
             keys,
             [
+                "coverStepId",
                 "currentSchemaVersion",
                 "errors",
                 "id",
@@ -595,6 +596,42 @@ fn validate_reports_broken_images() {
     assert_eq!(out.status.code(), Some(1));
     assert!(stdout(&out).contains("FAILED"));
     assert!(stdout(&out).contains("error: step 01M4WZCE2000000000000002R2"));
+}
+
+#[test]
+fn validate_reports_the_cover() {
+    let fx = Fixture::new();
+    let bundle = fx.bundle(ROTATE);
+    let report = |fx: &Fixture| {
+        let out = fx.run(&["validate", bundle.to_str().unwrap(), "--json"]);
+        assert_success(&out);
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        value["bundles"][0].clone()
+    };
+    assert_eq!(report(&fx)["coverStepId"], Value::Null);
+
+    edit_guide_json(&bundle, |guide| {
+        guide["coverStepId"] = "01M4WZCE2000000000000002R4".into();
+    });
+    let chosen = report(&fx);
+    assert_eq!(chosen["coverStepId"], "01M4WZCE2000000000000002R4");
+    assert!(!chosen["warnings"].to_string().contains("cover"));
+    let text = stdout(&fx.run(&["validate", bundle.to_str().unwrap()]));
+    assert!(
+        text.contains("cover: step 01M4WZCE2000000000000002R4"),
+        "{text}"
+    );
+
+    // A cover whose step is gone is a warning, not an error.
+    edit_guide_json(&bundle, |guide| {
+        guide["coverStepId"] = "01M4WZCE2000000000000002ZZ".into();
+    });
+    let gone = report(&fx);
+    assert_eq!(gone["coverStepId"], Value::Null);
+    assert!(gone["warnings"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("cover step 01M4WZCE2000000000000002ZZ"));
 }
 
 #[test]

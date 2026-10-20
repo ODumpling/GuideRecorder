@@ -34,6 +34,8 @@ import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
 // The annotation layer, likewise; the plain image shows until it loads.
 const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
+// The step's ⋯ menu (Radix and its positioning), likewise.
+const StepMenu = lazy(() => import("@/components/StepMenu"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
@@ -119,6 +121,7 @@ function TextEditor({
 /**
  * Delete, merge and split for the selected item. A page of an annotation
  * guide is only deleted: merging would drop the next page's image.
+ * A step's ⋯ menu sets it as the guide's cover.
  */
 function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
   // Re-render when the guide changes, so merge availability stays current.
@@ -153,11 +156,17 @@ function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
       <Button variant="ghost" size="sm" title={`Delete this ${name}`} onClick={() => deleteSelected(editorStore)}>
         <Trash2 /> Delete
       </Button>
+      {item.type === "step" && (
+        <Suspense fallback={null}>
+          <StepMenu step={item} />
+        </Suspense>
+      )}
     </div>
   );
 }
 
-const REWRITES: { style: RewriteStyleArg; label: string; icon: typeof Minimize2 }[] = [
+/** The rewrite styles under a step, also in the command palette. */
+export const REWRITES: { style: RewriteStyleArg; label: string; icon: typeof Minimize2 }[] = [
   { style: { kind: "shorter" }, label: "Shorter", icon: Minimize2 },
   { style: { kind: "beginner" }, label: "For beginners", icon: GraduationCap },
   { style: { kind: "expert" }, label: "For experts", icon: Rocket },
@@ -235,14 +244,14 @@ function ItemHeader({ item }: { item: Item }) {
         </span>
       )}
       <span className="ml-auto flex items-center">
-        <Button variant="ghost" size="icon" aria-label="Previous item" title="Previous (↑ in the outline)" disabled={index <= 0} onClick={() => select(index - 1)}>
+        <Button variant="ghost" size="icon" aria-label="Previous item" title="Previous (K)" disabled={index <= 0} onClick={() => select(index - 1)}>
           <ChevronLeft />
         </Button>
         <Button
           variant="ghost"
           size="icon"
           aria-label="Next item"
-          title="Next (↓ in the outline)"
+          title="Next (J)"
           disabled={index < 0 || index >= items.length - 1}
           onClick={() => select(index + 1)}
         >
@@ -276,7 +285,7 @@ export function StepView() {
     void splitSelected(editorStore, description.current?.splitAtCursor() ?? [item.description, ""]);
   };
   return (
-    <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
+    <div data-item={item.id} className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
       <ItemHeader item={item} />
       {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
       <ItemView
