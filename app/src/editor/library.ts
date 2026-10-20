@@ -1,4 +1,4 @@
-import type { GuideStatus } from "@guiderecorder/guide-schema";
+import type { GuideKind, GuideStatus } from "@guiderecorder/guide-schema";
 import type { GuideListItem, ReviewFields } from "@/lib/types";
 
 /** How the library sidebar orders guides (a search orders by best match instead). */
@@ -112,6 +112,19 @@ export function libraryOwners(guides: GuideListItem[]): string[] {
 /** Whether `owner` owns a guide, ignoring case. */
 export function hasOwner(guide: GuideListItem, owner: string): boolean {
   return guide.owner?.trim().toLowerCase() === owner.trim().toLowerCase();
+}
+
+export const GUIDE_KINDS: { value: GuideKind; label: string }[] = [
+  { value: "walkthrough", label: "Step-by-step" },
+  { value: "annotated", label: "Annotation" },
+];
+
+/** What a guide holds, for its card: "7 steps", or "4 pages · 12 hotspots" for an annotation guide. */
+export function guideContents(guide: Pick<GuideListItem, "kind" | "stepCount" | "hotspotCount">): string {
+  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  return guide.kind === "annotated"
+    ? `${count(guide.stepCount, "page")} · ${count(guide.hotspotCount, "hotspot")}`
+    : count(guide.stepCount, "step");
 }
 
 /** The last part of a folder path (`Work/Team` → `Team`). */

@@ -624,6 +624,10 @@ export class Backend {
               summary: bundle.guide.summary,
               tags: bundle.guide.tags,
               stepCount: bundle.guide.items.filter((item) => item.type === "step").length,
+              kind: bundle.guide.kind ?? "walkthrough",
+              hotspotCount: bundle.guide.items
+                .flatMap((item) => (item.type === "step" ? item.annotations : []))
+                .filter((a) => a.type === "hotspot").length,
               createdAt: bundle.guide.createdAt,
               updatedAt: bundle.guide.updatedAt,
               folder: "",

@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type EditorApi } from "@/lib/ipc";
-import type { Guide } from "@guiderecorder/guide-schema";
+import type { Guide, GuideKind } from "@guiderecorder/guide-schema";
 import type { GuideListItem } from "@/lib/types";
 import { applyPatches, coalesce, type Command, type Patch } from "@/editor/commands";
 import { createDebouncer, type Timers } from "@/editor/debounce";
@@ -39,6 +39,8 @@ export interface EditorState {
   statusFilter: StatusFilter | null;
   /** The sidebar's owner filter (case-insensitive); null shows every guide. */
   owner: string | null;
+  /** The sidebar's kind filter; null shows every guide. */
+  kind: GuideKind | null;
   /** The library folder shown, with its subfolders; null shows every guide. */
   folder: string | null;
   sort: GuideSort;
@@ -73,6 +75,7 @@ export interface EditorState {
   setTag(tag: string | null): void;
   setStatusFilter(filter: StatusFilter | null): void;
   setOwner(owner: string | null): void;
+  setKind(kind: GuideKind | null): void;
   setFolder(folder: string | null): void;
   setSort(sort: GuideSort): void;
   /** Makes a folder in `parent` (`""`: the top). False if it failed (in `notice`). */
@@ -439,6 +442,7 @@ export function createEditorStore({
       tag: null,
       statusFilter: null,
       owner: null,
+      kind: null,
       folder: null,
       sort: "updated",
       listError: null,
@@ -487,6 +491,10 @@ export function createEditorStore({
 
       setOwner(owner) {
         set({ owner });
+      },
+
+      setKind(kind) {
+        set({ kind });
       },
 
       setFolder(folder) {

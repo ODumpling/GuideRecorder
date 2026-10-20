@@ -70,7 +70,7 @@ use serde_json::Value;
 use ulid::Ulid;
 
 use crate::migrate::{self, MigrationError, Schema};
-use crate::model::{Guide, ReviewInfo};
+use crate::model::{Guide, GuideKind, ReviewInfo};
 
 /// Extension of a guide bundle folder.
 pub const BUNDLE_EXTENSION: &str = "guiderecorder";
@@ -293,6 +293,11 @@ pub struct GuideSummary {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    /// Walkthrough or annotation guide. A kind this app does not know reads
+    /// as [`GuideKind::Walkthrough`].
+    pub kind: GuideKind,
+    /// Hotspot annotations across all steps (an annotation guide's pages).
+    pub hotspot_count: usize,
     /// `createdAt`, or `updatedAt` if the file has none.
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1546,6 +1551,14 @@ struct RawSummary {
 struct RawItem {
     #[serde(rename = "type")]
     kind: Option<String>,
+    #[serde(default)]
+    annotations: Vec<RawAnnotation>,
+}
+
+#[derive(Deserialize)]
+struct RawAnnotation {
+    #[serde(rename = "type")]
+    kind: Option<String>,
 }
 
 /// Backs up the `original` bytes (at `version`) and rewrites `guide.json`
@@ -1589,12 +1602,28 @@ fn read_summary(bundle: &Path, schema: &Schema) -> Result<GuideSummary> {
             .iter()
             .filter(|item| item.kind.as_deref() == Some("step"))
             .count(),
+        kind: read_kind(&value),
+        hotspot_count: raw
+            .items
+            .iter()
+            .filter(|item| item.kind.as_deref() == Some("step"))
+            .flat_map(|item| &item.annotations)
+            .filter(|annotation| annotation.kind.as_deref() == Some("hotspot"))
+            .count(),
         created_at: raw.created_at.unwrap_or(raw.updated_at),
         updated_at: raw.updated_at,
         folder: String::new(),
         review: read_review(&value),
         duplicate_of: None,
     })
+}
+
+/// The `kind` of a `guide.json` value; missing or unknown is a walkthrough.
+fn read_kind(value: &Value) -> GuideKind {
+    value
+        .get("kind")
+        .and_then(|kind| GuideKind::deserialize(kind).ok())
+        .unwrap_or_default()
 }
 
 /// The review fields of a `guide.json` value, each one dropped if it does
@@ -1651,6 +1680,8 @@ fn newer_placeholder(
         summary: String::new(),
         tags: Vec::new(),
         step_count: 0,
+        kind: read_kind(value),
+        hotspot_count: 0,
         created_at,
         updated_at,
         folder: String::new(),
@@ -2339,6 +2370,46 @@ mod tests {
         let fresh = Library::open(lib.root()).unwrap();
         assert_eq!(fresh.find(b.id).unwrap(), Some(hb));
         assert_eq!(fresh.find(Ulid::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn list_reads_kind_and_hotspot_count() {
+        let (_tmp, lib) = library();
+        let mut guide = Guide::new("Pages", "en");
+        guide.kind = GuideKind::Annotated;
+        guide.items = sample_guide().items;
+        let handle = lib.create(&guide).unwrap();
+        let mut json: Value =
+            serde_json::from_slice(&fs::read(handle.guide_json()).unwrap()).unwrap();
+        let step = json["items"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["type"] == "step")
+            .unwrap();
+        step["annotations"] = serde_json::json!([
+            { "id": Ulid::new().to_string(), "type": "hotspot",
+              "geometry": { "x": 0, "y": 0, "width": 1, "height": 1 } },
+            { "id": Ulid::new().to_string(), "type": "hotspot",
+              "geometry": { "x": 0, "y": 0, "width": 1, "height": 1 } },
+            { "id": Ulid::new().to_string(), "type": "box",
+              "geometry": { "x": 0, "y": 0, "width": 1, "height": 1 } },
+        ]);
+        fs::write(handle.guide_json(), serde_json::to_vec(&json).unwrap()).unwrap();
+        let listed = &lib.list().unwrap()[0];
+        assert_eq!(
+            (listed.kind, listed.hotspot_count),
+            (GuideKind::Annotated, 2)
+        );
+        assert_eq!(
+            listed.hotspot_count,
+            lib.load(&handle.path).unwrap().guide.hotspot_count()
+        );
+
+        // A kind from a newer app lists as a walkthrough.
+        json["kind"] = "storyboard".into();
+        fs::write(handle.guide_json(), serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(lib.list().unwrap()[0].kind, GuideKind::Walkthrough);
     }
 
     /// Copies a bundle's guide.json into a new bundle folder, as Finder's

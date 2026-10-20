@@ -1,7 +1,7 @@
 // The app's IPC types. The guide.json model comes from
 // `@guiderecorder/guide-schema`, generated from guiderecorder_core::model.
 
-import type { AiState, Guide, GuideField, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
+import type { AiState, Guide, GuideField, GuideKind, Point, Rect, RedactionSuggestion, Step } from "@guiderecorder/guide-schema";
 
 export type Ulid = string;
 
@@ -17,7 +17,11 @@ export interface GuideListItem extends ReviewFields {
   title: string;
   summary: string;
   tags: string[];
+  /** Steps, or an annotation guide's pages. */
   stepCount: number;
+  kind: GuideKind;
+  /** Hotspots across all steps (an annotation guide's pages). */
+  hotspotCount: number;
   createdAt: string;
   updatedAt: string;
   /** The library folder holding it, `/` separated; `""` at the top. */
