@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { RECORDING_SAVED_EVENT, RECORDING_SNAPSHOT_EVENT, RECORDING_STATUS_EVENT, type RecordingApi } from "@/lib/ipc";
+import {
+  RECORDING_SAVED_EVENT,
+  RECORDING_SNAPSHOT_EVENT,
+  RECORDING_SNAPSHOT_REMOVED_EVENT,
+  RECORDING_SNAPSHOT_TITLE_EVENT,
+  RECORDING_STATUS_EVENT,
+  type RecordingApi,
+} from "@/lib/ipc";
 import type { RecordingSaved, RecordingSnapshot, RecordingStatus, StampedStatus } from "@/lib/types";
 import {
   captureLostLabel,
@@ -18,8 +25,8 @@ const run = { startedAt: STARTED, title: null, captureAreaFallback: false, pause
 const recording: RecordingStatus = { state: "recording", ...run };
 const paused: RecordingStatus = { state: "paused", ...run, pausedAt: "2026-10-15T10:00:10.000Z" };
 const SAVED: RecordingSaved = { guideId: "G1", steps: 4, skipped: 0, suggestedBlurs: 0, appliedBlurs: 0, unscannedSteps: 0 };
-const SNAP1: RecordingSnapshot = { id: "0-5000000", ts: 7_000_000, width: 16, height: 10, point: { x: 8, y: 5 } };
-const SNAP2: RecordingSnapshot = { id: "0-9000000", ts: 12_000_000, width: 16, height: 10, point: null };
+const SNAP1: RecordingSnapshot = { id: "0-5000000", ts: 7_000_000, width: 16, height: 10, point: { x: 8, y: 5 }, title: "Click **Save**", elapsedMs: 1000 };
+const SNAP2: RecordingSnapshot = { id: "0-9000000", ts: 12_000_000, width: 16, height: 10, point: null, title: "Type", elapsedMs: 2000 };
 
 /** `status` as the recorder would send it, with `seq`. */
 const stamp = (status: RecordingStatus, seq: number): StampedStatus => ({ ...status, seq });
@@ -213,9 +220,25 @@ describe("recording store", () => {
     handlers.get(RECORDING_STATUS_EVENT)!(recording);
     handlers.get(RECORDING_SNAPSHOT_EVENT)!(SNAP1);
     expect(store.getState().snapshots).toEqual([SNAP1]);
+    handlers.get(RECORDING_SNAPSHOT_EVENT)!(SNAP2);
+    handlers.get(RECORDING_SNAPSHOT_TITLE_EVENT)!({ id: SNAP1.id, title: "Click **Submit**" });
+    expect(store.getState().snapshots[0].title).toBe("Click **Submit**");
+    handlers.get(RECORDING_SNAPSHOT_REMOVED_EVENT)!({ id: SNAP1.id });
+    expect(store.getState().snapshots).toEqual([SNAP2]);
 
     unsubscribe();
-    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(5));
+  });
+
+  it("ignores titles and removals of captures it does not have", async () => {
+    const { store } = setup();
+    store.getState().setStatus(recording);
+    store.getState().addSnapshot(SNAP1);
+    const before = store.getState().snapshots;
+    store.getState().retitleSnapshot({ id: "0-1", title: "x" });
+    store.getState().retitleSnapshot({ id: SNAP1.id, title: SNAP1.title });
+    store.getState().removeSnapshot("0-1");
+    expect(store.getState().snapshots).toBe(before);
   });
 
   it("collects the screenshots of the running recording, once each, until it ends", async () => {

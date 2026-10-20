@@ -148,6 +148,7 @@ export class Backend {
       afterFrameDelayMs: 400,
       excludedApps: [...DEFAULT_EXCLUDED_IDS],
       typingIdleMs: 1500,
+      clickRing: false,
     },
     ai: {
       enabled: true,
@@ -548,7 +549,15 @@ export class Backend {
    */
   takeSnapshot(id: string, point: RecordingSnapshot["point"] = null): RecordingSnapshot {
     this.active();
-    const snapshot: RecordingSnapshot = { id, ts: this.snapshots.size * 1_000_000, width: 1600, height: 1000, point };
+    const snapshot: RecordingSnapshot = {
+      id,
+      ts: this.snapshots.size * 1_000_000,
+      width: 1600,
+      height: 1000,
+      point,
+      title: point ? "Click" : "Type",
+      elapsedMs: this.snapshots.size * 1000,
+    };
     this.snapshots.set(id, snapshot);
     this.events.push({ event: "recording://snapshot", payload: structuredClone(snapshot) });
     return snapshot;
@@ -890,6 +899,8 @@ export class Backend {
         this.manualSteps += 1;
         return null;
       }
+      case "resize_toolbar":
+        return null;
       case "recording_snapshot": {
         const id = String(args.id);
         if (!/^[0-9-]+$/.test(id)) fail("invalid", "not a snapshot id");

@@ -13,6 +13,7 @@ const DEFAULTS: Settings = {
     afterFrameDelayMs: 400,
     excludedApps: [],
     typingIdleMs: 1500,
+    clickRing: false,
   },
   ai: {
     enabled: true,
