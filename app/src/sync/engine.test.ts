@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { equal, imagePaths, type AssetMap, type Change, type Revision } from "@guiderecorder/sync";
-import type { Guide as SchemaGuide } from "@guiderecorder/guide-schema";
-import type { Guide, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
 import {
   emptyState,
   resolveConflict,
@@ -29,7 +28,7 @@ class FakeServer {
       id: `r${++this.seq}`,
       guideId: id,
       parentId,
-      guide: structuredClone(guide) as unknown as SchemaGuide,
+      guide: structuredClone(guide),
       assets,
       authorId: "u",
       source,
@@ -104,7 +103,7 @@ class FakeLibrary implements SyncBackend {
   }
   async prepareGuide(id: string) {
     const guide = structuredClone(this.guides.get(id)!);
-    const images = imagePaths(guide as unknown as SchemaGuide).map((path) => ({ path, sha256: sha(path), size: 1, contentType: "image/webp" }));
+    const images = imagePaths(guide).map((path) => ({ path, sha256: sha(path), size: 1, contentType: "image/webp" }));
     return { guide, images };
   }
   async upload() {}
@@ -131,8 +130,8 @@ class FakeLibrary implements SyncBackend {
   }
 }
 
-const steps = (guide: Guide | SchemaGuide) => (guide.items as Step[]).filter((i) => i.type === "step");
-const stepTitle = (guide: Guide | SchemaGuide, n: number) => steps(guide)[n]!.title;
+const steps = (guide: Guide) => (guide.items as Step[]).filter((i) => i.type === "step");
+const stepTitle = (guide: Guide, n: number) => steps(guide)[n]!.title;
 const setStepTitle = (n: number, title: string) => (g: Guide) => (steps(g)[n]!.title = title);
 
 let server: FakeServer;
@@ -278,7 +277,7 @@ describe("syncOnce", () => {
 
   it("syncing the library pulls guides made elsewhere and pushes every local guide", async () => {
     const other = { ...structuredClone(fixture), id: "01M4WZCE2000000000000009AA", title: "From elsewhere" };
-    server.commit(other.id, other, Object.fromEntries(imagePaths(other as unknown as SchemaGuide).map((p) => [p, sha(p)])), null);
+    server.commit(other.id, other, Object.fromEntries(imagePaths(other).map((p) => [p, sha(p)])), null);
     state = { ...state, library: true };
     await run();
     expect(library.guides.get(other.id)!.title).toBe("From elsewhere");

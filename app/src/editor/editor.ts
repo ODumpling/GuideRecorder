@@ -1,6 +1,6 @@
 import { useStore } from "zustand";
 import { tauriApi } from "@/lib/ipc";
-import type { Item, Step } from "@/lib/types";
+import type { Item, Step } from "@guiderecorder/guide-schema";
 import { createEditorStore, type EditorState } from "@/editor/store";
 
 /** The app's single editor store. */

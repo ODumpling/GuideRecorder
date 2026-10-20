@@ -1,0 +1,61 @@
+{
+  "name": "@guiderecorder/ui",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.1",
+  "type": "module",
+  "exports": {
+    "./annotated-image": "./src/annotations/AnnotatedImage.tsx",
+    "./button": "./src/button.tsx",
+    "./color": "./src/annotations/color.ts",
+    "./extensions": "./src/text/extensions.ts",
+    "./geometry": "./src/annotations/geometry.ts",
+    "./input": "./src/input.tsx",
+    "./markdown": "./src/text/markdown.ts",
+    "./markdown-editor": "./src/MarkdownEditor.tsx",
+    "./shapes": "./src/annotations/Shapes.tsx",
+    "./split": "./src/text/split.ts",
+    "./step-view": "./src/StepView.tsx",
+    "./theme.css": "./src/theme.css",
+    "./utils": "./src/utils.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@guiderecorder/guide-schema": "workspace:*",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-bold": "3.32.0",
+    "@tiptap/extension-code": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-hard-break": "3.32.0",
+    "@tiptap/extension-italic": "3.32.0",
+    "@tiptap/extension-link": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/extension-paragraph": "3.32.0",
+    "@tiptap/extension-text": "3.32.0",
+    "@tiptap/extensions": "3.32.0",
+    "@tiptap/pm": "3.32.0",
+    "@tiptap/react": "3.32.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.26.0",
+    "markdown-it": "15.0.2",
+    "tailwind-merge": "^3.6.0"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  }
+}

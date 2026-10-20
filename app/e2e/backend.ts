@@ -3,32 +3,8 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import type {
-  AiFinishedEvent,
-  AiGuideEvent,
-  AiRewriteResult,
-  AiStepEvent,
-  CaptureArea,
-  CaptureTargetArg,
-  CaptureWindow,
-  ExportBranding,
-  ExportResult,
-  Guide,
-  HotkeyErrors,
-  GuideListItem,
-  OpenedGuide,
-  Rect,
-  RecordingSaved,
-  RecordingSnapshot,
-  RecordingStatus,
-  RedactionSuggestion,
-  RewriteStyleArg,
-  Settings,
-  StampedStatus,
-  Step,
-  StepImage,
-  UpdateStatus,
-} from "../src/lib/types";
+import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -657,6 +633,10 @@ export class Backend {
               summary: bundle.guide.summary,
               tags: bundle.guide.tags,
               stepCount: bundle.guide.items.filter((item) => item.type === "step").length,
+              kind: bundle.guide.kind ?? "walkthrough",
+              hotspotCount: bundle.guide.items
+                .flatMap((item) => (item.type === "step" ? item.annotations : []))
+                .filter((a) => a.type === "hotspot").length,
               createdAt: bundle.guide.createdAt,
               updatedAt: bundle.guide.updatedAt,
               folder: "",

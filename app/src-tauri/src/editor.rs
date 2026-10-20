@@ -13,7 +13,7 @@ use guiderecorder_core::library::{
     step_image_path, write_atomic, Durability, GuideHandle, Library, LibraryError,
     StepImageVariant, GUIDE_FILE, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
-use guiderecorder_core::model::{Guide, NaiveDate, ReviewInfo, Step, StepImage};
+use guiderecorder_core::model::{Guide, GuideKind, NaiveDate, ReviewInfo, Step, StepImage};
 use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
 use image::{ImageFormat, RgbaImage};
@@ -109,6 +109,8 @@ pub struct GuideListItem {
     pub summary: String,
     pub tags: Vec<String>,
     pub step_count: usize,
+    pub kind: GuideKind,
+    pub hotspot_count: usize,
     pub created_at: String,
     pub updated_at: String,
     /// The library folder holding it, `/` separated; `""` at the top.
@@ -130,6 +132,8 @@ impl From<IndexedGuide> for GuideListItem {
             summary: g.summary,
             tags: g.tags,
             step_count: g.step_count,
+            kind: g.kind,
+            hotspot_count: g.hotspot_count,
             created_at: g.created_at.to_rfc3339(),
             updated_at: g.updated_at.to_rfc3339(),
             folder: g.folder,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { LoaderCircle, Pencil, Pin, PinOff, Trash2, TriangleAlert, Undo2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@guiderecorder/ui/button";
 import { elapsedMs, type RecordingStore } from "@/recording/store";
 import { useThumbnail } from "@/recording/useThumbnail";
 import { feedItems, feedVisible, takenLabel, titleRuns, type FeedItem, type FeedStore } from "@/toolbar/feed";

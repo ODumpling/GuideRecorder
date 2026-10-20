@@ -8,7 +8,7 @@ import { compile } from "json-schema-to-typescript";
 const root = new URL("..", import.meta.url);
 const schema = JSON.parse(await readFile(new URL("guide.schema.json", root), "utf8"));
 
-const types = await compile(structuredClone(schema), "Guide", {
+const types = await compile(forTypes(structuredClone(schema)), "Guide", {
   bannerComment: "",
   additionalProperties: false,
   format: false,
@@ -38,4 +38,40 @@ function normalize(node) {
     return { ...(description ? { description } : {}), allOf: [{ $ref }, rest] };
   }
   return out;
+}
+
+/**
+ * The schema as the types should read it. Tagged enum variants
+ * (\`{ $ref: Step, properties: { type: ... } }\`) get their tag moved into
+ * the referenced definition, which json-schema-to-typescript would drop.
+ * Fields with a default are required: core always writes them, so the
+ * types describe guide.json as saved (Zod fills them in when parsing).
+ * Not an empty object (an annotation's \`style\`): absent reads the same.
+ * A \`$ref\` with siblings would become a copy of its type (\`AiState1\`),
+ * so the siblings go.
+ */
+function forTypes(schema) {
+  for (const def of Object.values(schema.$defs)) {
+    for (const variant of def.oneOf ?? []) {
+      if (!variant.$ref || !variant.properties) continue;
+      const target = schema.$defs[variant.$ref.replace("#/$defs/", "")];
+      target.properties = { ...variant.properties, ...target.properties };
+      target.required = [...new Set([...(variant.required ?? []), ...(target.required ?? [])])];
+    }
+  }
+  for (const node of [schema, ...Object.values(schema.$defs), ...Object.values(schema.$defs).flatMap((d) => d.oneOf ?? [])]) {
+    const defaulted = Object.keys(node.properties ?? {}).filter((key) => {
+      const value = node.properties[key].default;
+      return value !== undefined && !(value?.constructor === Object && !Object.keys(value).length);
+    });
+    if (defaulted.length) node.required = [...new Set([...(node.required ?? []), ...defaulted])];
+  }
+  return bareRefs(schema);
+}
+
+function bareRefs(node) {
+  if (Array.isArray(node)) return node.map(bareRefs);
+  if (!node || typeof node !== "object") return node;
+  if (node.$ref) return { $ref: node.$ref };
+  return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, bareRefs(v)]));
 }

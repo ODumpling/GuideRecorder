@@ -2,7 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, type FeedApi } from "@/lib/ipc";
 import type { RecordingSnapshot } from "@/lib/types";
 import { formatElapsed, type RecordingStore } from "@/recording/store";
-import { markdownToPlainText, parseMarkdown } from "@/text/markdown";
+import { markdownToPlainText, parseMarkdown } from "@guiderecorder/ui/markdown";
 
 /** How many of the newest captures the feed shows. */
 export const FEED_SIZE = 4;

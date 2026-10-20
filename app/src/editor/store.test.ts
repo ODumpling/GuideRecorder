@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorApi } from "@/lib/ipc";
-import type { Guide, OpenedGuide, Step } from "@/lib/types";
+import type { Guide, Step } from "@guiderecorder/guide-schema";
+import type { OpenedGuide } from "@/lib/types";
 import {
   deleteItem,
   insertItemAfter,
@@ -29,6 +30,8 @@ function fakeApi(opened: Partial<OpenedGuide> = {}) {
               summary: "",
               tags: [],
               stepCount: 3,
+              kind: "walkthrough" as const,
+              hotspotCount: 0,
               createdAt: "",
               updatedAt: "",
               folder: "",
