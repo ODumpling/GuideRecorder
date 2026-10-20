@@ -19,6 +19,10 @@ import {
   setReviewField,
   editedGuideFields,
   setImageShow,
+  setCover,
+  setCoverOptions,
+  coverOptions,
+  coverStepId,
   setItemText,
   setItemTitle,
   type Command,
@@ -385,5 +389,49 @@ describe("guide-level fields", () => {
   it("change nothing, not even the AI state, when the value is the same", () => {
     const command = setGuideField(guide(), "title", "Guide");
     expect(command.forward).toEqual(command.inverse);
+  });
+});
+
+describe("cover", () => {
+  it("is set, changed and cleared undoably", () => {
+    const g0 = guide();
+    expect(coverStepId(g0)).toBeNull();
+    expect(coverOptions(g0)).toEqual({ image: "full", annotations: false });
+    const g1 = roundTrip(setCover(g0, "B"));
+    expect(coverStepId(g1)).toBe("B");
+    expect(setCover(g1, "B").forward).toEqual(setCover(g1, "B").inverse);
+    const options = setCoverOptions(g1, { image: "crop" });
+    const g2 = applyPatches(g1, options.forward);
+    expect(coverOptions(g2)).toEqual({ image: "crop", annotations: false });
+    expect(applyPatches(g2, options.inverse)).toEqual(g1);
+    const cleared = setCover(g2, null);
+    const g3 = applyPatches(g2, cleared.forward);
+    expect("coverStepId" in JSON.parse(JSON.stringify(g3))).toBe(false);
+    expect(applyPatches(g3, cleared.inverse)).toEqual(g2);
+  });
+
+  it("is only a step with a screenshot", () => {
+    const g = guide();
+    expect(() => setCover(g, "S1")).toThrow(PatchError);
+    expect(coverStepId({ ...g, coverStepId: "S1" })).toBeNull();
+    expect(coverStepId({ ...g, coverStepId: "gone" })).toBeNull();
+    const items = g.items.map((item) => (item.id === "A" && item.type === "step" ? { ...item, image: { ...item.image, full: "" } } : item));
+    expect(coverStepId({ ...g, coverStepId: "A", items })).toBeNull();
+  });
+
+  it("goes with its step, and comes back on undo", () => {
+    const g = { ...guide(), coverStepId: "B" };
+    const deleted = deleteItem(g, "B");
+    const after = applyPatches(g, deleted.forward);
+    expect(after.coverStepId).toBeUndefined();
+    expect(applyPatches(after, deleted.inverse)).toEqual(g);
+    // Other deletes leave it alone.
+    expect(applyPatches(g, deleteItem(g, "C").forward).coverStepId).toBe("B");
+
+    // Merging removes the next step, the cover here.
+    const base = { ...g, coverStepId: "C", items: g.items.filter((item) => item.id !== "N1") };
+    const merged = mergeWithNext(base, "B");
+    expect(applyPatches(base, merged.forward).coverStepId).toBeUndefined();
+    expect(applyPatches(applyPatches(base, merged.forward), merged.inverse)).toEqual(base);
   });
 });

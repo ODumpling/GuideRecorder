@@ -790,7 +790,10 @@ export class Backend {
       }
       case "guide_cover": {
         const { guide, files } = this.bundle(String(args.guideId));
-        const step = guide.items.find((item) => item.type === "step" && item.image.full);
+        // The chosen cover's full screenshot (not drawn as its options ask), else the first.
+        const step =
+          guide.items.find((item) => item.type === "step" && item.image.full && item.id === guide.coverStepId) ??
+          guide.items.find((item) => item.type === "step" && item.image.full);
         const bytes = step?.type === "step" ? files.get(step.image.full) : undefined;
         return bytes ? [...bytes] : [];
       }

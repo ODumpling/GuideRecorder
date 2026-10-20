@@ -37,6 +37,15 @@ describe("guides made on the phone", () => {
     expect(stepCount(guide)).toBe(2);
     expect(coverImage(guide)).toBe("steps/01J00000000000000000000002.jpg");
   });
+
+  it("use the cover the author chose, else the first step", () => {
+    let guide = newGuide(ID, "t", "en", now);
+    guide = appendItem(guide, photoStep("01J00000000000000000000002", "a", ""));
+    guide = appendItem(guide, { ...photoStep("01J00000000000000000000003", "b", ""), image: { full: "steps/b.jpg", crop: "steps/b.crop.jpg", show: "crop" } });
+    expect(coverImage({ ...guide, coverStepId: "01J00000000000000000000003" })).toBe("steps/b.jpg");
+    expect(coverImage({ ...guide, coverStepId: "01J00000000000000000000003", coverOptions: { image: "crop", annotations: false } })).toBe("steps/b.crop.jpg");
+    expect(coverImage({ ...guide, coverStepId: "01J0000000000000000000GONE" })).toBe("steps/01J00000000000000000000002.jpg");
+  });
 });
 
 describe("applyChanges", () => {

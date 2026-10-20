@@ -54,7 +54,7 @@ use sha2::{Digest, Sha256};
 use super::ast::plain_text;
 use super::html::{
     base64_into, blocks_html, data_uri, environment, escape, hotspot_context, inlines_html,
-    language_tag, note_kind_class, percent, render_template, stylesheet, HtmlOptions,
+    language_tag, note_kind_class, og_image, percent, render_template, stylesheet, HtmlOptions,
 };
 use super::md::{Labels, Result};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderNote};
@@ -234,6 +234,7 @@ pub(super) fn render_string(
         language => language_tag(&guide.language),
         csp => csp(),
         title => &guide.title,
+        og_image => og_image(guide, handle, &opts.image),
         summary => &guide.summary,
         details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
         css => Value::from_safe_string(format!("{}{STYLE}", stylesheet(branding))),

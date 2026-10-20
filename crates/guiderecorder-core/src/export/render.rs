@@ -8,9 +8,11 @@
 use ulid::Ulid;
 
 use super::ast::{parse_blocks, parse_inlines, Block, Inline};
-use super::raster::{render_step_image, ImageOptions, RenderedImage};
+use super::raster::{render_cover_image, render_step_image, ImageOptions, RenderedImage};
 use crate::library::GuideHandle;
-use crate::model::{Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo, Shape, Step};
+use crate::model::{
+    CoverOptions, Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo, Shape, Step,
+};
 
 /// A guide ready for export.
 #[derive(Debug, Clone)]
@@ -33,6 +35,24 @@ pub struct RenderGuide {
     /// Owner, status, version and review schedule, as stored. Writers show
     /// some of it only when asked (their `review_details` option).
     pub review: ReviewInfo,
+    /// The cover the author chose ([`Guide::chosen_cover_step`]); `None`
+    /// if they chose none, and writers then show no cover image.
+    pub cover: Option<RenderCover>,
+}
+
+/// A guide's chosen cover: its step and how to draw it.
+#[derive(Debug, Clone)]
+pub struct RenderCover {
+    pub step: Step,
+    pub options: CoverOptions,
+}
+
+impl RenderCover {
+    /// Renders the cover from the bundle at `handle` (see
+    /// [`render_cover_image`]). Never fails, like step images.
+    pub fn image(&self, handle: &GuideHandle, opts: &ImageOptions) -> RenderedImage {
+        render_cover_image(handle, &self.step, &self.options, opts)
+    }
 }
 
 /// One resolved entry of [`Guide::items`].
@@ -125,6 +145,10 @@ impl RenderGuide {
             prerequisites: parse_blocks(&guide.prerequisites),
             items,
             review: guide.review.clone(),
+            cover: guide.chosen_cover_step().map(|step| RenderCover {
+                step: step.clone(),
+                options: guide.cover_options,
+            }),
         }
     }
 

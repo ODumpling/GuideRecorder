@@ -78,8 +78,9 @@ export const tauriHistoryApi: HistoryApi = {
 };
 
 /**
- * WebP bytes of a library guide's first screenshot, for its card; empty if
- * it has none. The guide needn't be open.
+ * WebP bytes of a library guide's cover, for its card: the step the author
+ * chose (`coverStepId`) drawn as its cover options ask, else the first
+ * screenshot; empty if it has none. The guide needn't be open.
  */
 export async function guideCover(guideId: string): Promise<ArrayBuffer> {
   return toArrayBuffer(await invoke("guide_cover", { guideId }));

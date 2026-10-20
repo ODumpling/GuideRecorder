@@ -568,6 +568,9 @@ struct Validation {
     needs_migration: bool,
     read_only: bool,
     step_count: usize,
+    /// The step chosen as the cover, if it is still a step with a
+    /// screenshot.
+    cover_step_id: Option<String>,
     errors: Vec<Problem>,
     warnings: Vec<Problem>,
 }
@@ -614,6 +617,16 @@ fn validate(bundle: &Path) -> Validation {
     out.schema_version = Some(migrated_from.unwrap_or(guide.schema_version));
     out.needs_migration = migrated_from.is_some();
     out.read_only = read_only;
+    out.cover_step_id = guide.chosen_cover_step().map(|step| step.id.to_string());
+    if let Some(id) = guide.cover_step_id.filter(|_| out.cover_step_id.is_none()) {
+        out.warnings.push(Problem {
+            step: None,
+            message: format!(
+                "cover step {id} is not a step with a screenshot; the first screenshot is \
+                 the cover"
+            ),
+        });
+    }
     if guide.schema_version > SCHEMA_VERSION {
         out.warnings.push(Problem {
             step: None,
@@ -690,6 +703,7 @@ fn print_validate(
                     "needsMigration": r.needs_migration,
                     "readOnly": r.read_only,
                     "stepCount": r.step_count,
+                    "coverStepId": r.cover_step_id,
                     "errors": r.errors.iter().map(Problem::json).collect::<Vec<_>>(),
                     "warnings": r.warnings.iter().map(Problem::json).collect::<Vec<_>>(),
                 })
@@ -713,6 +727,9 @@ fn print_validate(
                 "    {title}: schema {version}{migration}, {access}, {} steps",
                 r.step_count
             )?;
+            if let Some(cover) = &r.cover_step_id {
+                writeln!(out, "    cover: step {cover}")?;
+            }
         }
         for (label, problems) in [("error", &r.errors), ("warning", &r.warnings)] {
             for p in problems {

@@ -1,4 +1,4 @@
-import type { Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { CoverOptions, Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import type { ReviewFields } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@guiderecorder/ui/markdown";
@@ -247,6 +247,51 @@ export function setImageShow(guide: Guide, id: string, show: ImageShow): Command
   };
 }
 
+// ---------------------------------------------------------------------------
+// Cover (#44)
+
+/** How a cover is drawn when `coverOptions` is absent (core `CoverOptions::default`). */
+export const DEFAULT_COVER_OPTIONS: CoverOptions = { image: "full", annotations: false };
+
+/** The step chosen as the cover, if it is still a step with a screenshot; else null (the first screenshot is the cover). */
+export function coverStepId(guide: Guide): string | null {
+  const id = guide.coverStepId;
+  const step = id ? guide.items.find((item) => item.id === id) : undefined;
+  return step?.type === "step" && step.image.full ? step.id : null;
+}
+
+export function coverOptions(guide: Guide): CoverOptions {
+  return { ...DEFAULT_COVER_OPTIONS, ...guide.coverOptions };
+}
+
+/** Makes step `id` the guide's cover, or (null) goes back to the first screenshot. */
+export function setCover(guide: Guide, id: string | null): Command {
+  if (id !== null) findStep(guide, id);
+  return {
+    label: id === null ? "Remove cover" : "Set as cover",
+    forward: [{ op: "setGuide", key: "coverStepId", value: id ?? undefined }],
+    inverse: [{ op: "setGuide", key: "coverStepId", value: guide.coverStepId }],
+  };
+}
+
+/** Changes how the cover is drawn: the close-up or the full screenshot, with or without annotations. */
+export function setCoverOptions(guide: Guide, change: Partial<CoverOptions>): Command {
+  return {
+    label: "Change cover",
+    forward: [{ op: "setGuide", key: "coverOptions", value: { ...coverOptions(guide), ...change } }],
+    inverse: [{ op: "setGuide", key: "coverOptions", value: guide.coverOptions }],
+  };
+}
+
+/** Patches that unset the cover when it is step `id`, which is going; empty otherwise. */
+function dropCover(guide: Guide, id: string): { forward: Patch[]; inverse: Patch[] } {
+  if (guide.coverStepId !== id) return { forward: [], inverse: [] };
+  return {
+    forward: [{ op: "setGuide", key: "coverStepId", value: undefined }],
+    inverse: [{ op: "setGuide", key: "coverStepId", value: id }],
+  };
+}
+
 /**
  * Merges `next` into `prev` when they edit the same thing: the result goes
  * from before `prev` to after `next`.
@@ -320,10 +365,12 @@ export function deleteItem(guide: Guide, id: string): Command {
   const index = indexOf(guide, id);
   const item = guide.items[index];
   const neighbour = guide.items[index + 1] ?? guide.items[index - 1] ?? null;
+  // A deleted cover step stops being the cover; undo makes it the cover again.
+  const cover = dropCover(guide, id);
   return {
     label: `Delete ${item.type === "note" ? item.kind : ITEM_NAMES[item.type]}`,
-    forward: [{ op: "removeItem", id }],
-    inverse: [{ op: "insertItem", index, item }],
+    forward: [{ op: "removeItem", id }, ...cover.forward],
+    inverse: [...cover.inverse, { op: "insertItem", index, item }],
     select: { forward: neighbour?.id ?? null, inverse: id },
   };
 }
@@ -371,6 +418,9 @@ export function mergeWithNext(guide: Guide, id: string): Command {
   }
   forward.push({ op: "removeItem", id: second.id });
   inverse.unshift({ op: "insertItem", index: indexOf(guide, second.id), item: second });
+  const cover = dropCover(guide, second.id);
+  forward.push(...cover.forward);
+  inverse.unshift(...cover.inverse);
   return { label: "Merge steps", forward, inverse, select: { forward: id, inverse: id } };
 }
 

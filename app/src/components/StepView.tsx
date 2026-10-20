@@ -34,6 +34,8 @@ import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
 // The annotation layer, likewise; the plain image shows until it loads.
 const AnnotationEditor = lazy(() => import("@/components/annotations/AnnotationEditor"));
+// The step's ⋯ menu (Radix and its positioning), likewise.
+const StepMenu = lazy(() => import("@/components/StepMenu"));
 
 function StepImage({ guideId, step }: { guideId: string; step: Step }) {
   const path = step.image.show === "crop" && step.image.crop ? step.image.crop : step.image.full;
@@ -119,6 +121,7 @@ function TextEditor({
 /**
  * Delete, merge and split for the selected item. A page of an annotation
  * guide is only deleted: merging would drop the next page's image.
+ * A step's ⋯ menu sets it as the guide's cover.
  */
 function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
   // Re-render when the guide changes, so merge availability stays current.
@@ -153,6 +156,11 @@ function ItemActions({ item, onSplit }: { item: Item; onSplit(): void }) {
       <Button variant="ghost" size="sm" title={`Delete this ${name}`} onClick={() => deleteSelected(editorStore)}>
         <Trash2 /> Delete
       </Button>
+      {item.type === "step" && (
+        <Suspense fallback={null}>
+          <StepMenu step={item} />
+        </Suspense>
+      )}
     </div>
   );
 }

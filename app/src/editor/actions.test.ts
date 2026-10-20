@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   canMergeSelected,
+  changeCover,
   deleteSelected,
   insertImages,
   insertNote,
@@ -8,6 +9,7 @@ import {
   insertSection,
   mergeSelected,
   splitSelected,
+  toggleCover,
 } from "@/editor/actions";
 import { createEditorStore } from "@/editor/store";
 import { guide, step } from "@/editor/test-fixtures";
@@ -147,6 +149,27 @@ describe("actions", () => {
     ipc.addAnnotatedPages.mockResolvedValueOnce([]);
     expect(await insertPages(s)).toBe(0);
     expect(s.getState().undoStack).toHaveLength(0);
+  });
+
+  it("toggle the cover and change its options, undoably", async () => {
+    const s = await store();
+    const cover = () => s.getState().doc!.guide.coverStepId;
+    expect(toggleCover(s, "C")).toBe(true);
+    expect(cover()).toBe("C");
+    // The cover's own toggle goes back to the first screenshot.
+    expect(toggleCover(s, "C")).toBe(true);
+    expect(cover()).toBeUndefined();
+    toggleCover(s, "B");
+    expect(changeCover(s, { annotations: true })).toBe(true);
+    expect(s.getState().doc!.guide.coverOptions).toEqual({ image: "full", annotations: true });
+    s.getState().undo();
+    expect(s.getState().doc!.guide.coverOptions).toBeUndefined();
+    s.getState().undo();
+    expect(cover()).toBeUndefined();
+
+    const readOnly = await store(true);
+    expect(toggleCover(readOnly, "C")).toBe(false);
+    expect(changeCover(readOnly, { image: "crop" })).toBe(false);
   });
 
   it("report failed pages as a notice", async () => {

@@ -11,6 +11,9 @@
 //!   on (under the date), and the optional [`CheckedBranding`] logo (top of the cover; the
 //!   checked, upright PNG) and accent colour (cover rule and section
 //!   headings).
+//!   With a chosen cover ([`RenderGuide::cover`]), its image sits under the
+//!   title and summary, at its 96 dpi size, at most the text width and
+//!   [`MAX_COVER_HEIGHT_RATIO`] of the text height.
 //! - Every later page has the guide title as a header and "page / total" as
 //!   a footer.
 //! - Intro, then a prerequisites heading with its text. Sections are level 1
@@ -49,9 +52,9 @@
 //! file; all guide text reaches it as JSON strings in a virtual
 //! `/guide.json`, and the template only places those strings as text. So
 //! `#panic("x")`, `$x$`, `@ref` or `<label>` in a guide print literally.
-//! The [`World`] serves exactly the template, `/guide.json`, the step images
-//! and the logo from memory: it has no file system access, rejects every
-//! package import, and offers no other source file.
+//! The [`World`] serves exactly the template, `/guide.json`, the step images,
+//! the cover and the logo from memory: it has no file system access, rejects
+//! every package import, and offers no other source file.
 //!
 //! # Determinism
 //!
@@ -116,6 +119,10 @@ pub const MAX_URL_LEN: usize = 8000;
 /// Largest share of the text height a step image may take, leaving room for
 /// the heading and the first description block on the same page.
 pub const MAX_IMAGE_HEIGHT_RATIO: f64 = 0.5;
+
+/// Largest share of the text height the cover image may take on the cover
+/// page.
+pub const MAX_COVER_HEIGHT_RATIO: f64 = 0.45;
 
 /// Accent colour when [`CheckedBranding::accent`] is unset.
 const DEFAULT_ACCENT: [u8; 3] = [0x1a, 0x73, 0xe8];
@@ -481,6 +488,16 @@ fn guide_data(
             }
         })
         .collect();
+    // Its warnings are left out: the step reports its own.
+    let cover = guide.cover.as_ref().map(|cover| {
+        let image = cover.image(handle, &opts.image);
+        files.push(("/cover.png".to_owned(), image.png));
+        json!({
+            "path": "/cover.png",
+            "width": image.width.max(1),
+            "height": image.height.max(1),
+        })
+    });
     let intro = cx.blocks(&guide.intro);
     let prerequisites = cx.blocks(&guide.prerequisites);
     report.notes.append(&mut cx.notes);
@@ -518,6 +535,8 @@ fn guide_data(
             "width": width,
             "height": height,
         })),
+        "cover": cover,
+        "max_cover_height": (text_height * MAX_COVER_HEIGHT_RATIO).round(),
         "max_image_height": (text_height * MAX_IMAGE_HEIGHT_RATIO).round(),
         "labels": {
             "prerequisites": clean(&labels.prerequisites),
