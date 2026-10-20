@@ -12,6 +12,7 @@ import {
   type Conflict,
   type PushConflict,
   type PushResponse,
+  type ReviewState,
   type Revision,
   type Side,
 } from "@guiderecorder/sync";
@@ -78,6 +79,8 @@ export interface GuideSync {
   /** The server's version: in conflict, or still to be written here. */
   head?: Revision;
   conflicts?: Conflict[];
+  /** Where it stands in review on the web (workspaces with approvals). */
+  review?: ReviewState;
 }
 
 export interface SyncState {
@@ -166,7 +169,7 @@ export async function syncOnce(backend: SyncBackend, initial: SyncState, onChang
           state.guides[change.guideId] = { ...entry, enabled: false, status: "deleted", head: undefined, conflicts: undefined };
         }
       } else {
-        await guarded(ctx, change.guideId, () => pull(ctx, change.revision));
+        await guarded(ctx, change.guideId, () => pull(ctx, change.revision, change.review));
       }
     }
     state.cursor = response.body.cursor;
@@ -223,11 +226,15 @@ async function guarded(ctx: Ctx, id: string, step: () => Promise<void>) {
 const newEntry = (): GuideSync => ({ enabled: false, revisionId: null, base: null, status: "pending" });
 
 /** Takes a revision from the feed: write it here, merge it in, or flag a conflict. */
-async function pull(ctx: Ctx, revision: Revision) {
+async function pull(ctx: Ctx, revision: Revision, review?: ReviewState) {
   const { backend, state } = ctx;
   const id = revision.guideId;
+  if (!isTracked(state, id)) return;
+  // Review steps move a guide in the feed without a new revision.
+  if (review) state.guides[id] = { ...(state.guides[id] ?? newEntry()), review };
   const entry = state.guides[id];
-  if (!isTracked(state, id) || entry?.revisionId === revision.id) return;
+  // Already here, unless it's a revision still to be written (`head`).
+  if (entry?.revisionId === revision.id && entry.head?.id !== revision.id) return;
 
   // Kept until it's written here, so a pull that fails (the guide is open
   // in the editor) is retried next run; the cursor has moved past it.
@@ -310,8 +317,15 @@ async function push(ctx: Ctx, id: string) {
       assets,
     });
     if (response.status === 200) {
-      const { revision } = response.body as PushResponse;
-      ctx.state.guides[id] = { ...entry, revisionId: revision.id, base: prepared.guide, status: "synced", error: undefined };
+      const { revision, review } = response.body as PushResponse;
+      ctx.state.guides[id] = { ...entry, revisionId: revision.id, base: prepared.guide, status: "synced", error: undefined, review };
+      // The server owns a gated guide's status, version and review date, so
+      // a push can't publish it: write the server's version back here (kept
+      // as `head` until written, if the guide is open in the editor).
+      if (!equal(content(revision.guide), content(prepared.guide))) {
+        ctx.state.guides[id] = { ...ctx.state.guides[id]!, head: revision };
+        await accept(ctx, revision, revision.guide, revision.assets);
+      }
       return;
     }
     if (response.status === 409) {
@@ -375,6 +389,41 @@ export async function resolveConflict(backend: SyncBackend, initial: SyncState, 
     await push(ctx, id);
   });
   return state;
+}
+
+/**
+ * Submits a synced guide for review on the web (approval-gated guides in
+ * workspaces with approvals). The guide must be synced as it is here: what
+ * reviewers see is the server's revision. Returns the new state, and why
+ * the server refused, if it did.
+ */
+export async function submitForReview(
+  backend: SyncBackend,
+  initial: SyncState,
+  id: string,
+  note = "",
+): Promise<{ state: SyncState; error: string | null }> {
+  const state = structuredClone(initial);
+  const entry = state.guides[id];
+  if (!state.workspaceId || !entry?.revisionId) return { state, error: "Sync the guide first." };
+  const local = await backend.readGuide(id);
+  if (!local || entry.status !== "synced" || changedLocally(local.guide, entry)) {
+    return { state, error: "Wait for the guide to finish syncing, then submit it." };
+  }
+  const response = await backend.request<{ review: ReviewState } | { error: string }>(
+    "POST",
+    `/api/workspaces/${state.workspaceId}/sync/guides/${id}/review`,
+    { revisionId: entry.revisionId, note },
+  );
+  if (response.status !== 200) return { state, error: refusal(response) };
+  state.guides[id] = { ...entry, review: (response.body as { review: ReviewState }).review };
+  return { state, error: null };
+}
+
+/** Whether the guide can be submitted for review: gated on the web, not published as is, nothing open. */
+export function canSubmitForReview(entry: GuideSync | undefined): boolean {
+  const review = entry?.review;
+  return Boolean(entry?.status === "synced" && review?.gated && !review.changeRequestId && review.status !== "published");
 }
 
 /** Turns sync on or off for one guide. */

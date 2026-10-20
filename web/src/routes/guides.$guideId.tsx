@@ -19,13 +19,15 @@ export const Route = createFileRoute("/guides/$guideId")({
 });
 
 function Page() {
-  const { workspaceId, revision, folder, canEdit, exportFormats, shares } = Route.useLoaderData();
+  const { workspaceId, revision, folder, canEdit, canReview, unpublished, exportFormats, shares } = Route.useLoaderData();
   return (
     // Remount for a new revision so the viewer starts afresh.
     <GuideView
       key={revision.id}
       revision={revision}
       canEdit={canEdit}
+      canReview={canReview}
+      unpublished={unpublished}
       assetUrl={(sha) => `/api/workspaces/${workspaceId}/assets/${sha}`}
       header={
         <>

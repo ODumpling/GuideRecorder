@@ -44,7 +44,7 @@ describe("saveEdit", () => {
     const edited = setItemText(setGuideText(fixture, "intro", "Rotate it yearly."), first!.id, "title", "Open the API page");
     const result = await saveEdit(db, "org", grace, { guideId: fixture.id, baseRevision: synced.id, guide: edited });
     expect(result).toMatchObject({ status: 200, merged: false, revision: { parentId: synced.id, source: "web", authorId: "grace" } });
-    const head = (await getGuide(db, "org", "ada", fixture.id))!.head;
+    const head = (await getGuide(db, "org", ada, fixture.id))!.head;
     expect(head.guide.intro).toBe("Rotate it yearly.");
     expect(steps(head.guide)[0]).toMatchObject({ title: "Open the API page", aiState: { status: "edited" } });
     expect(head.assets).toEqual(synced.assets);
@@ -71,7 +71,7 @@ describe("saveEdit", () => {
     const edited = setItemText(fixture, first!.id, "title", "From the web");
     const result = await saveEdit(db, "org", grace, { guideId: fixture.id, baseRevision: synced.id, guide: edited });
     expect(result).toMatchObject({ status: 200, merged: true, revision: { parentId: fromDesktop.id } });
-    const head = (await getGuide(db, "org", "ada", fixture.id))!.head;
+    const head = (await getGuide(db, "org", ada, fixture.id))!.head;
     expect(steps(head.guide).map((s) => [s.title, s.description]).slice(0, 2)).toEqual([
       ["From the web", first!.description],
       [second!.title, "From the app"],
@@ -86,11 +86,11 @@ describe("saveEdit", () => {
 
     expect(await saveEdit(db, "org", grace, request)).toMatchObject({ status: 409, conflicts: ["Step 1 title"] });
     expect(await saveEdit(db, "org", grace, { ...request, prefer: "theirs" })).toMatchObject({ status: 200 });
-    expect(steps((await getGuide(db, "org", "ada", fixture.id))!.head.guide)[0]!.title).toBe("App title");
+    expect(steps((await getGuide(db, "org", ada, fixture.id))!.head.guide)[0]!.title).toBe("App title");
 
     // Settled on the head now: a fresh clash, kept as this edit's.
     expect(await saveEdit(db, "org", grace, { ...request, prefer: "ours" })).toMatchObject({ status: 200, merged: true });
-    expect(steps((await getGuide(db, "org", "ada", fixture.id))!.head.guide)[0]!.title).toBe("Web title");
+    expect(steps((await getGuide(db, "org", ada, fixture.id))!.head.guide)[0]!.title).toBe("Web title");
   });
 
   it("checks the role, the base revision and the trash", async () => {

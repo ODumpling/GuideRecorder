@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ApprovalPolicies } from "@/components/dashboard/ApprovalPolicies";
 import { Billing } from "@/components/dashboard/Billing";
 import { Members } from "@/components/dashboard/Members";
 import { SharingSettings } from "@/components/dashboard/SharingSettings";
@@ -9,12 +10,18 @@ import { Card } from "@/components/ui";
 import { title } from "@/lib/title";
 import { getDashboard } from "@/server/dashboard";
 import { getSyncedGuides } from "@/server/guides";
+import { getApprovalSettings } from "@/server/reviews";
 import { getWorkspaceSharing } from "@/server/shares";
 
 export const Route = createFileRoute("/dashboard")({
   loader: async () => {
-    const [dashboard, guides, sharing] = await Promise.all([getDashboard(), getSyncedGuides(), getWorkspaceSharing()]);
-    return { ...dashboard, guides, sharing };
+    const [dashboard, guides, approvals, sharing] = await Promise.all([
+      getDashboard(),
+      getSyncedGuides(),
+      getApprovalSettings(),
+      getWorkspaceSharing(),
+    ]);
+    return { ...dashboard, guides, approvals, sharing };
   },
   head: () => title("Dashboard"),
   component: Dashboard,
@@ -29,7 +36,7 @@ function formatBytes(bytes: number) {
 }
 
 function Dashboard() {
-  const { user, workspaces, active, billingEnabled, can, guides, sharing } = Route.useLoaderData();
+  const { user, workspaces, active, billingEnabled, can, guides, approvals, sharing } = Route.useLoaderData();
 
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-6 p-6">
@@ -39,6 +46,11 @@ function Dashboard() {
           <WorkspaceSwitcher workspaces={workspaces} activeId={active?.id ?? null} />
         </div>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          {can.readAudit ? (
+            <Link to="/audit" className="hover:underline">
+              Audit log
+            </Link>
+          ) : null}
           {user.email}
           <SignOutButton />
         </div>
@@ -72,6 +84,7 @@ function Dashboard() {
             </dl>
           </Card>
           {guides.available ? <SyncedGuides {...guides} /> : null}
+          {approvals.available ? <ApprovalPolicies {...approvals} /> : null}
           <Members
             workspaceId={active.id}
             currentUserId={user.id}

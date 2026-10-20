@@ -5,6 +5,7 @@ import {
   emptyState,
   loadedState,
   resolveConflict,
+  submitForReview,
   setGuideEnabled,
   setWorkspace,
   syncOnce,
@@ -45,6 +46,8 @@ export interface SyncStoreState {
   syncNow(): Promise<void>;
   openConflict(id: string | null): void;
   resolve(id: string, resolution: Resolution): Promise<void>;
+  /** Submits a synced guide for review on the web. */
+  submitForReview(id: string, note?: string): Promise<void>;
 }
 
 export type SyncStore = StoreApi<SyncStoreState>;
@@ -243,6 +246,20 @@ export function createSyncStore({
           set({ error: errorMessage(error) });
         } finally {
           set({ running: false });
+        }
+      },
+
+      async submitForReview(id, note = "") {
+        if (get().running) {
+          set({ error: "Sync is running; try again in a moment." });
+          return;
+        }
+        try {
+          const { state, error } = await submitForReview(backend, get().state, id, note);
+          set({ state, error });
+          await api.saveState(state);
+        } catch (error) {
+          set({ error: errorMessage(error) });
         }
       },
     };

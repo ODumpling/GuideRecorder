@@ -6,7 +6,7 @@ import type { Guide } from "@guiderecorder/guide-schema";
 import { imagePaths, pushRequest } from "@guiderecorder/sync";
 import { testDb } from "../../test/db";
 import type { Database } from "@/db";
-import { asset, guide, organization, user } from "@/db/schema";
+import { asset, guide, organization, subscription, user } from "@/db/schema";
 import { addMonths, library, reviewDue, reviewState, setFolder } from "./library";
 import { getGuide, push, trashGuide, type Actor } from "./sync";
 
@@ -29,8 +29,8 @@ async function pushed(actor: Actor, guide: Guide) {
   return result.revision;
 }
 
-const titles = async (userId: string, filter: Parameters<typeof library>[3] = {}) =>
-  (await library(db, "org", userId, filter, today)).guides.map((g) => g.title);
+const titles = async (reader: Actor, filter: Parameters<typeof library>[3] = {}) =>
+  (await library(db, "org", reader, filter, today)).guides.map((g) => g.title);
 
 beforeEach(async () => {
   db = await testDb();
@@ -45,7 +45,7 @@ beforeEach(async () => {
 
 describe("library", () => {
   it("lists the workspace's guides, newest change first, with what the list shows", async () => {
-    const { guides, tags } = await library(db, "org", "vic", {}, today);
+    const { guides, tags } = await library(db, "org", vic, {}, today);
     expect(guides.map((g) => g.title)).toEqual(["Kurzanleitung Drucker", "Office floor plan", "Rotate an API key"]);
     expect(guides[2]).toMatchObject({ steps: 5, tags: ["security", "api", "console"], owner: "Ada Lovelace", status: null, review: null, private: false });
     expect(guides[0]).toMatchObject({ owner: "IT", status: "needsUpdate", reviewDue: "2026-09-01", review: "overdue" });
@@ -53,49 +53,58 @@ describe("library", () => {
   });
 
   it("finds guides by title, step text, notes, hotspots and tags, by word prefix", async () => {
-    expect(await titles("vic", { query: "rotat" })).toEqual(["Rotate an API key"]);
-    expect(await titles("vic", { query: "production" })).toEqual(["Rotate an API key"]);
-    expect(await titles("vic", { query: "revokes" })).toEqual(["Rotate an API key"]);
-    expect(await titles("vic", { query: "kitchen" })).toEqual(["Office floor plan"]);
-    expect(await titles("vic", { query: "papierfach" })).toEqual(["Kurzanleitung Drucker"]);
-    expect(await titles("vic", { query: "security console" })).toEqual(["Rotate an API key"]);
-    expect(await titles("vic", { query: "reception" })).toEqual(["Office floor plan"]);
-    expect(await titles("vic", { query: "nothing like this" })).toEqual([]);
+    expect(await titles(vic, { query: "rotat" })).toEqual(["Rotate an API key"]);
+    expect(await titles(vic, { query: "production" })).toEqual(["Rotate an API key"]);
+    expect(await titles(vic, { query: "revokes" })).toEqual(["Rotate an API key"]);
+    expect(await titles(vic, { query: "kitchen" })).toEqual(["Office floor plan"]);
+    expect(await titles(vic, { query: "papierfach" })).toEqual(["Kurzanleitung Drucker"]);
+    expect(await titles(vic, { query: "security console" })).toEqual(["Rotate an API key"]);
+    expect(await titles(vic, { query: "reception" })).toEqual(["Office floor plan"]);
+    expect(await titles(vic, { query: "nothing like this" })).toEqual([]);
     // Only words count; tsquery syntax is ignored, not an error.
-    expect(await titles("vic", { query: "!&|:*" })).toEqual([]);
+    expect(await titles(vic, { query: "!&|:*" })).toEqual([]);
   });
 
   it("ranks title matches above matches in the text", async () => {
     await pushed(ada, { ...structuredClone(printer), id: "01M4TZVZ000000000000000399", title: "Reception desk", tags: [], items: [] });
-    expect(await titles("vic", { query: "reception" })).toEqual(["Reception desk", "Office floor plan"]);
+    expect(await titles(vic, { query: "reception" })).toEqual(["Reception desk", "Office floor plan"]);
   });
 
   it("filters by folder, tag, status and review", async () => {
     expect(await setFolder(db, "org", ada, floorPlan.id, "  Office   life ")).toEqual({ status: 200, folder: "Office life" });
-    expect(await titles("vic", { folder: "Office life" })).toEqual(["Office floor plan"]);
-    expect(await titles("vic", { folder: "" })).toEqual(["Kurzanleitung Drucker", "Rotate an API key"]);
-    expect(await titles("vic", { tag: "API" })).toEqual(["Rotate an API key"]);
-    expect(await titles("vic", { status: "needsUpdate" })).toEqual(["Kurzanleitung Drucker"]);
-    expect(await titles("vic", { reviewDue: true })).toEqual(["Kurzanleitung Drucker"]);
-    expect(await titles("vic", { folder: "Office life", query: "kitchen" })).toEqual(["Office floor plan"]);
-    expect((await library(db, "org", "vic")).folders).toEqual([{ name: "Office life", count: 1 }]);
+    expect(await titles(vic, { folder: "Office life" })).toEqual(["Office floor plan"]);
+    expect(await titles(vic, { folder: "" })).toEqual(["Kurzanleitung Drucker", "Rotate an API key"]);
+    expect(await titles(vic, { tag: "API" })).toEqual(["Rotate an API key"]);
+    expect(await titles(vic, { status: "needsUpdate" })).toEqual(["Kurzanleitung Drucker"]);
+    expect(await titles(vic, { reviewDue: true })).toEqual(["Kurzanleitung Drucker"]);
+    expect(await titles(vic, { folder: "Office life", query: "kitchen" })).toEqual(["Office floor plan"]);
+    expect((await library(db, "org", vic)).folders).toEqual([{ name: "Office life", count: 1 }]);
   });
 
   it("only shows private guides to their owner, and never trashed ones", async () => {
     await db.update(guide).set({ visibility: "private" }).where(eq(guide.id, floorPlan.id));
-    expect(await titles("vic")).not.toContain("Office floor plan");
-    expect(await titles("vic", { query: "kitchen" })).toEqual([]);
-    expect((await library(db, "org", "ada")).guides.find((g) => g.title === "Office floor plan")?.private).toBe(true);
+    expect(await titles(vic)).not.toContain("Office floor plan");
+    expect(await titles(vic, { query: "kitchen" })).toEqual([]);
+    expect((await library(db, "org", ada)).guides.find((g) => g.title === "Office floor plan")?.private).toBe(true);
     await trashGuide(db, "org", ada, apiKey.id);
-    expect(await titles("ada", { query: "rotate" })).toEqual([]);
+    expect(await titles(ada, { query: "rotate" })).toEqual([]);
+  });
+
+  it("shows viewers the published revision when approvals gate a guide", async () => {
+    await db.insert(subscription).values({ id: "sub", plan: "enterprise", referenceId: "org", status: "active", seats: 10 });
+    const head = (await getGuide(db, "org", ada, printer.id))!.head;
+    await push(db, "org", ada, pushRequest.parse({ guideId: printer.id, baseRevision: head.id, guide: { ...head.guide, title: "Entwurf" }, assets: head.assets }), "web");
+    expect(await titles(ada)).toContain("Entwurf");
+    expect(await titles(vic)).toContain("Kurzanleitung Drucker");
+    expect(await titles(vic)).not.toContain("Entwurf");
   });
 
   it("keeps the search document current with the head revision", async () => {
-    const head = (await getGuide(db, "org", "ada", printer.id))!.head;
+    const head = (await getGuide(db, "org", ada, printer.id))!.head;
     const next = { ...head.guide, title: "Toner wechseln" };
     await push(db, "org", ada, pushRequest.parse({ guideId: printer.id, baseRevision: head.id, guide: next, assets: head.assets }), "web");
-    expect(await titles("vic", { query: "toner" })).toEqual(["Toner wechseln"]);
-    expect(await titles("vic", { query: "kurzanleitung" })).toEqual([]);
+    expect(await titles(vic, { query: "toner" })).toEqual(["Toner wechseln"]);
+    expect(await titles(vic, { query: "kurzanleitung" })).toEqual([]);
   });
 });
 

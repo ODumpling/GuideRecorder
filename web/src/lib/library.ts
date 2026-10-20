@@ -5,11 +5,12 @@ import { guide, revision, user } from "@/db/schema";
 import { GUIDE_STATUSES } from "./library-search";
 import { roles } from "./permissions";
 import { prefixQuery } from "./search";
-import { visibleTo, type Actor, type SyncError } from "./sync";
+import { readsDrafts, visibleTo, type Actor, type Reader, type SyncError } from "./sync";
 
 // The cloud library: the workspace's synced guides as the signed-in member
-// may see them, with folders, tags, status and review dates from each head
-// revision's guide.json, and full-text search (see search.ts).
+// may see them, with folders, tags, status and review dates from the
+// guide.json of the revision they see (the head, or for viewers the
+// published one), and full-text search (see search.ts).
 
 /** A review due within this many days shows as due soon. */
 export const DUE_SOON_DAYS = 30;
@@ -89,11 +90,11 @@ const json = revision.guideJson;
 export async function library(
   db: Database,
   organizationId: string,
-  userId: string,
+  reader: Reader,
   filter: LibraryFilter = {},
   today = new Date(),
 ): Promise<{ guides: LibraryGuide[]; folders: Facet[]; tags: Facet[] }> {
-  const visible = and(eq(guide.organizationId, organizationId), visibleTo(userId), isNotNull(guide.headRevisionId), isNull(guide.deletedAt));
+  const visible = and(eq(guide.organizationId, organizationId), visibleTo(reader.userId), isNotNull(guide.headRevisionId), isNull(guide.deletedAt));
   const rows = await db
     .select({
       id: guide.id,
@@ -113,7 +114,7 @@ export async function library(
       steps: sql<number>`jsonb_array_length(jsonb_path_query_array(${json}, '$.items[*] ? (@.type == "step")'))`,
     })
     .from(guide)
-    .innerJoin(revision, eq(revision.id, guide.headRevisionId))
+    .innerJoin(revision, eq(revision.id, readsDrafts(reader.role) ? guide.headRevisionId : guide.publishedRevisionId))
     .leftJoin(user, eq(user.id, guide.ownerId))
     .where(visible)
     .orderBy(desc(guide.seq));

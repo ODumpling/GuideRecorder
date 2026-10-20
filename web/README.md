@@ -2,8 +2,8 @@
 
 The web app for Pro and Enterprise workspaces: accounts, workspaces and
 roles, billing, image storage for synced guides, the cloud library (search,
-reading, downloads), the web editor, and share links. Later phases add
-approvals and audit.
+reading, downloads), the web editor, share links, and approvals and an
+audit log for Enterprise.
 
 TanStack Start (Vite, file routes in `src/routes`, server functions in
 `src/server`), Better Auth (email/password, magic link, Google, Microsoft,
@@ -92,9 +92,41 @@ Without Resend, emails (magic links, invitations) are printed to the console.
   choose which to keep. Text the user writes is marked edited, so the
   app's AI passes leave it. Needs the `guide:update` permission and a plan
   with `webEditor`.
+- Approvals (Enterprise, `src/lib/review.ts`, `src/lib/approvals.ts`): a guide
+  has a head (the latest revision) and a published revision. Viewers (no
+  `guide:update`) and unpinned share links (`publishedRevisionFor`) only
+  see the published one. Ungated guides publish on every push. A guide is gated
+  when the workspace has `approvals` and its folder's nearest policy
+  (`approval_policy`, keyed by folder path, "" for the whole workspace;
+  default 1 approval, no self-approval, reset on new revisions) needs at
+  least one approval. Pushes to a gated guide only move the head, and the
+  server sets its `status`, `lastReviewed` and `version`, so neither the app
+  nor the editor can publish it. Submitting opens a `change_request` that
+  follows the head while open; reviewers (`guide:approve`) approve, reject,
+  request changes or comment (`review`, optionally on one item by ULID) on
+  `/guides/:id/review`, which diffs the head against the published revision
+  item by item with old and new screenshots side by side. Once the policy's
+  N of M approvals count and nobody's request for changes is outstanding,
+  the server publishes: a new revision with `status: published`, today's
+  `lastReviewed` and the next `version`. Status maps onto `GuideStatus`:
+  draft, inReview (open request), needsUpdate (changes requested),
+  published (head is published). Review steps move the guide in the sync
+  feed, which carries each guide's `review` state. A guide's folder is its
+  library folder (`guide.folder`).
+- Audit log (Enterprise, `src/lib/audit.ts`): `audit_event` is append-only (a
+  trigger refuses updates and deletes, except retention pruning) and
+  hash-chained per workspace: each event hashes its fields (actor, action,
+  target, before/after state hashes, IP, user agent, time, metadata) and the
+  previous event's hash. Sign-ins, membership, role and invitation changes,
+  billing webhooks, guide create/edit/delete/restore/publish, reviews,
+  policies, audit exports and retention changes are logged; `share.*` and
+  `guide.export` are reserved for share links and exports. `/audit` filters
+  the log, checks the chain, exports CSV or JSON and sets retention (30 to
+  3650 days, or forever); pruning records where the chain now starts.
+  Reading needs `audit:read` and the `audit` entitlement.
 - Share links (`src/lib/sharing.ts`) show a guide to anyone with the link at
-  `/s/<token>`: a pinned revision or the latest published one (the head,
-  until approvals publish), optionally with an expiry, a password (scrypt
+  `/s/<token>`: a pinned revision or the latest published one (see
+  Approvals), optionally with an expiry, a password (scrypt
   hash; a correct one sets a signed cookie for 12 hours) and download
   allowed. The page is `noindex`, rate limited per address (in memory, per
   process), and serves only the guide and its images, through the token.
@@ -118,6 +150,8 @@ Without Resend, emails (magic links, invitations) are printed to the console.
 | `GET` | `/api/workspaces/:id/sync/events` | Server-sent `change` events when a guide changes |
 | `GET` / `DELETE` | `/api/workspaces/:id/sync/guides/:guideId` | The head revision / move to the trash |
 | `POST` | `/api/workspaces/:id/sync/guides/:guideId/restore` | Take out of the trash |
+| `GET` / `POST` | `/api/workspaces/:id/sync/guides/:guideId/review` | `{ review }`: where the guide stands in review / submit `{ revisionId, note }` for review (Enterprise) |
+| `GET` | `/api/workspaces/:id/audit/export?format=csv\|json&action=&actorId=&targetId=&from=&to=` | The audit log (`audit:read`, Enterprise) |
 | `GET` | `/api/workspaces/:id/shares?guideId=<id>` | `{ links: [{ id, url, revisionId, expiresAt, hasPassword, allowDownload, views, lastViewedAt, state }], settings }` |
 | `POST` | `/api/workspaces/:id/shares` | `{ guideId, revisionId?, expiresAt?, password?, allowDownload? }` → `{ link }`; `revisionId` null shares the latest published revision |
 | `DELETE` | `/api/workspaces/:id/shares/:shareId` | Revoke a link |

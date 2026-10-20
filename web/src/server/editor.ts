@@ -1,9 +1,11 @@
 import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { getRequestHeaders } from "@tanstack/react-start/server";
 import { z } from "zod";
 import type { Guide } from "@guiderecorder/guide-schema";
 import { ulid } from "@guiderecorder/sync";
 import { db } from "@/db";
+import { requestMeta } from "@/lib/audit";
 import { getSession } from "@/lib/auth";
 import { editorAccess, saveEdit } from "@/lib/edit";
 import { getGuide } from "@/lib/sync";
@@ -15,7 +17,7 @@ async function editorSession(guideId: string) {
   const workspaceId = session.session.activeOrganizationId;
   if (!workspaceId) throw redirect({ to: "/dashboard" });
   const access = await editorAccess(db(), session.user.id, workspaceId);
-  return { userId: session.user.id, workspaceId, access };
+  return { userId: session.user.id, workspaceId, access, meta: requestMeta(getRequestHeaders() as unknown as Headers) };
 }
 
 /** A synced guide's head revision, to edit on the web. */
@@ -24,7 +26,7 @@ export const getGuideToEdit = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const { userId, workspaceId, access } = await editorSession(data.guideId);
     if (!access.ok) return { allowed: false as const, error: access.error };
-    const found = await getGuide(db(), workspaceId, userId, data.guideId);
+    const found = await getGuide(db(), workspaceId, { userId, role: access.role }, data.guideId);
     if (!found || found.guide.deletedAt) throw redirect({ to: "/dashboard" });
     return { allowed: true as const, workspaceId, revision: found.head };
   });
@@ -43,9 +45,9 @@ export const saveGuideEdit = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    const { userId, workspaceId, access } = await editorSession(data.guideId);
+    const { userId, workspaceId, access, meta } = await editorSession(data.guideId);
     if (!access.ok) return { ok: false as const, error: access.error, conflicts: [] };
-    const result = await saveEdit(db(), workspaceId, { userId, role: access.role }, { ...data, guide: data.guide as unknown as Guide });
+    const result = await saveEdit(db(), workspaceId, { userId, role: access.role, ...meta }, { ...data, guide: data.guide as unknown as Guide });
     if (result.status === 200) return { ok: true as const, revisionId: result.revision.id, merged: result.merged };
     return { ok: false as const, error: result.error, conflicts: result.status === 409 ? result.conflicts : [] };
   });

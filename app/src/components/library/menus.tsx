@@ -11,6 +11,7 @@ import { Input } from "@guiderecorder/ui/input";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
 import type { GuideListItem } from "@/lib/types";
+import { canSubmitForReview } from "@/sync/engine";
 import { guideSyncStatus } from "@/sync/store";
 import { shareStore, syncStore } from "@/sync/sync";
 
@@ -99,6 +100,10 @@ function syncItems(guide: GuideListItem) {
       enabled: !guide.readOnly,
       action: () => void syncStore.getState().setGuideEnabled(guide.id, !on),
     });
+  }
+  // Approval-gated guides publish on the web, once approved; pushes never publish them.
+  if (canSubmitForReview(sync.state.guides[guide.id])) {
+    items.push({ id: "submit-for-review", text: "Submit for Review", action: () => void syncStore.getState().submitForReview(guide.id) });
   }
   if (status === "conflict") {
     items.push({ id: "resolve-sync-conflict", text: "Resolve Sync Conflict…", action: () => syncStore.getState().openConflict(guide.id) });

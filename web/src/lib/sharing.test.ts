@@ -86,6 +86,18 @@ describe("share links", () => {
     expect(other.status).toBe(404);
   });
 
+  it("shows only what's published when approvals gate the guide", async () => {
+    await db.update(subscription).set({ plan: "enterprise", seats: 10 });
+    const draft = await pushed(fixture, null);
+    const link = await created();
+    expect((await open(link.token)).status).toBe(404);
+
+    // Approved (as approvals.ts would), then edited again: the link keeps the approved one.
+    await db.update(guide).set({ publishedRevisionId: draft.id });
+    await pushed({ ...structuredClone(fixture), title: "Unapproved" }, draft.id);
+    expect(await open(link.token)).toMatchObject({ status: 200, shared: { guide: { title: fixture.title } } });
+  });
+
   it("follows roles and guide visibility", async () => {
     await pushed(fixture, null);
     expect((await createShareLink(db, "org", vic, createShareRequest.parse({ guideId: fixture.id }))).status).toBe(403);

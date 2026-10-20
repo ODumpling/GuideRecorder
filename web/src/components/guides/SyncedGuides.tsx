@@ -2,6 +2,7 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { setGuideTrashed, type getSyncedGuides } from "@/server/guides";
 import { Button, Card, ErrorText } from "../ui";
+import { StatusBadge } from "./ReviewPage";
 
 type Data = Extract<Awaited<ReturnType<typeof getSyncedGuides>>, { available: true }>;
 
@@ -31,9 +32,17 @@ export function SyncedGuides({ guides, trash, canDelete }: Data) {
         <ul className="divide-y divide-border">
           {guides.map((g) => (
             <li key={g.id} className="flex items-center justify-between gap-4 py-2 text-sm">
-              <Link to="/guides/$guideId" params={{ guideId: g.id }} className="font-medium hover:underline">
-                {g.title}
-              </Link>
+              <span className="flex items-center gap-2">
+                <Link to="/guides/$guideId" params={{ guideId: g.id }} className="font-medium hover:underline">
+                  {g.title}
+                </Link>
+                {g.review.gated ? <StatusBadge status={g.review.status} /> : null}
+                {g.review.changeRequestId ? (
+                  <Link to="/guides/$guideId/review" params={{ guideId: g.id }} className="text-xs text-brand hover:underline">
+                    {g.review.approvals} of {g.review.required} approvals
+                  </Link>
+                ) : null}
+              </span>
               <span className="flex items-center gap-3 text-muted-foreground">
                 {g.steps} {g.steps === 1 ? "step" : "steps"} · {date(g.updatedAt)} {g.source === "web" ? "on the web" : "in the app"}
                 {canDelete ? (

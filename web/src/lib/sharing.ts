@@ -7,7 +7,7 @@ import type { AssetMap, RevisionSource } from "@guiderecorder/sync";
 import type { Database } from "@/db";
 import { guide, revision, revisionAsset, shareLink, user, workspaceSettings } from "@/db/schema";
 import { roles } from "./permissions";
-import { getGuide, type Actor } from "./sync";
+import { getGuide, publishedRevisionFor, type Actor } from "./sync";
 import { workspacePlan } from "./workspace";
 
 // Share links: a guide for people outside the workspace at `/s/<token>`.
@@ -122,7 +122,7 @@ function info(link: Row, createdBy: string | null, settings: SharingSettings, no
 /** The guide, if the actor may share it and it isn't in the trash. */
 async function shareableGuide(db: Database, organizationId: string, actor: Actor, guideId: string): Promise<ShareError | null> {
   if (!canShare(actor)) return { status: 403, error: "Your role doesn't allow sharing." };
-  const found = await getGuide(db, organizationId, actor.userId, guideId);
+  const found = await getGuide(db, organizationId, actor, guideId);
   if (!found || found.guide.deletedAt) return { status: 404, error: "Guide not found." };
   return null;
 }
@@ -211,7 +211,7 @@ export async function revokeShareLink(
   if (!link) return { status: 404, error: "Link not found." };
   if (!canShare(actor)) return { status: 403, error: "Your role doesn't allow sharing." };
   // A trashed guide's links can still be revoked; a private one's only by its owner.
-  if (!(await getGuide(db, organizationId, actor.userId, link.guideId))) return { status: 404, error: "Link not found." };
+  if (!(await getGuide(db, organizationId, actor, link.guideId))) return { status: 404, error: "Link not found." };
   await db.update(shareLink).set({ revokedAt: now }).where(eq(shareLink.id, linkId));
   return { status: 200 };
 }
@@ -246,8 +246,9 @@ async function resolve(db: Database, token: string, now: Date): Promise<{ link: 
   if (state === "blocked") return notFound;
   if (state === "expired") return { status: 410, error: "This link has expired." };
   if (!g?.headRevisionId || g.deletedAt) return notFound;
-  // Until approvals publish revisions, the latest published is the head.
-  return { link, revisionId: link.revisionId ?? g.publishedRevisionId ?? g.headRevisionId };
+  // Unpinned links show what's published; a gated guide may have nothing published yet.
+  const revisionId = link.revisionId ?? publishedRevisionFor(g);
+  return revisionId ? { link, revisionId } : notFound;
 }
 
 export const unlockCookieName = (link: { id: string }) => `gr_share_${link.id}`;
