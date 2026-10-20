@@ -14,6 +14,8 @@ pub mod permissions;
 pub mod session;
 #[cfg(not(target_os = "macos"))]
 pub mod unsupported;
+#[cfg(windows)]
+mod windows_ocr;
 
 /// The capture backend compiled for this platform: its `frames` module
 /// lists displays and windows, its `session` module records.
