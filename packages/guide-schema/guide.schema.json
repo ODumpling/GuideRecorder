@@ -766,6 +766,86 @@
         "y"
       ]
     },
+    "RecordedArea": {
+      "description": "The capture area of a recording ([`RecordingInfo::capture_area`]).\nTagged by `kind`.",
+      "oneOf": [
+        {
+          "description": "One display, or every display when `displayId` is absent.",
+          "type": "object",
+          "properties": {
+            "displayId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "display"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "One window. Window ids do not outlive the window, so it is found\nagain by its app and title.",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string"
+            },
+            "bundleId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "window"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "app"
+          ]
+        },
+        {
+          "description": "A region of a display, in global display points.",
+          "type": "object",
+          "properties": {
+            "displayId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "region"
+            },
+            "rect": {
+              "$ref": "#/$defs/Rect"
+            }
+          },
+          "required": [
+            "kind",
+            "rect"
+          ]
+        }
+      ]
+    },
     "RecordingInfo": {
       "description": "Environment the guide was recorded in.",
       "type": "object",
@@ -781,6 +861,17 @@
           "items": {
             "$ref": "#/$defs/AppInfo"
           }
+        },
+        "captureArea": {
+          "description": "What the recording captured, so a re-capture of a step (or steps\nrecorded into the guide later) can capture the same. Absent in\nguides recorded before it was kept.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecordedArea"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "displays": {
           "type": "array",

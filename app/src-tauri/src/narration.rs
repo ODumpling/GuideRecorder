@@ -271,6 +271,55 @@ pub fn finish(
     }
 }
 
+/// [`finish`] for steps recorded into an existing guide (see
+/// [`crate::recapture`]): what was heard goes into `steps`, which the
+/// editor adds to the guide. The guide's audio, if any, is the first
+/// recording's, so this one's is not kept.
+pub fn finish_steps(
+    heard: JoinHandle<std::result::Result<Narration, NarrationError>>,
+    steps: &mut Vec<guiderecorder_core::model::Step>,
+    step_times: &[(
+        guiderecorder_core::Ulid,
+        guiderecorder_core::events::Timestamp,
+    )],
+) -> usize {
+    let narration = match heard.join() {
+        Ok(Ok(narration)) => narration,
+        Ok(Err(e)) => {
+            eprintln!("guiderecorder: narration: {e}");
+            return 0;
+        }
+        Err(_) => {
+            eprintln!("guiderecorder: narration: the narrator panicked");
+            return 0;
+        }
+    };
+    if let Some(audio) = &narration.audio {
+        let _ = std::fs::remove_file(audio);
+    }
+    apply_to_steps(steps, step_times, &narration.words)
+}
+
+/// Core's `narration::apply` on bare steps, through a scratch guide.
+fn apply_to_steps(
+    steps: &mut Vec<guiderecorder_core::model::Step>,
+    step_times: &[(
+        guiderecorder_core::Ulid,
+        guiderecorder_core::events::Timestamp,
+    )],
+    words: &[guiderecorder_core::narration::SpokenWord],
+) -> usize {
+    use guiderecorder_core::model::{Guide, Item};
+    let mut scratch = Guide::new("", "en");
+    scratch.items = steps.drain(..).map(Item::Step).collect();
+    let count = narration::apply(&mut scratch, step_times, words);
+    steps.extend(scratch.items.into_iter().filter_map(|item| match item {
+        Item::Step(step) => Some(step),
+        _ => None,
+    }));
+    count
+}
+
 /// Moves the audio at `from` into the bundle as [`NARRATION_AUDIO_FILE`]
 /// (copied when it is on another volume).
 fn keep_audio(from: &Path, handle: &GuideHandle) -> std::result::Result<(), String> {
@@ -301,6 +350,35 @@ mod tests {
             serde_json::to_value(&state).unwrap(),
             serde_json::json!({ "supported": true, "on": false, "enabled": true, "error": "No microphone was found." })
         );
+    }
+
+    #[test]
+    fn steps_recorded_into_a_guide_get_their_narration_in_order() {
+        use guiderecorder_core::events::Timestamp;
+        use guiderecorder_core::model::Step;
+        let step = |n: u32| -> Step {
+            serde_json::from_value(serde_json::json!({
+                "id": guiderecorder_core::Ulid::new().to_string(),
+                "kind": "click",
+                "title": format!("Step {n}"),
+                "image": { "full": "" },
+            }))
+            .unwrap()
+        };
+        let mut steps = vec![step(1), step(2)];
+        let ids: Vec<_> = steps.iter().map(|s| s.id).collect();
+        let s = |secs: u64| Timestamp(secs * 1_000_000_000);
+        let times = [(ids[0], s(1)), (ids[1], s(10))];
+        let word = |at: u64, text: &str| narration::SpokenWord {
+            start: s(at),
+            end: s(at),
+            text: text.into(),
+        };
+        let words = [word(2, "open settings."), word(11, "now save.")];
+        assert_eq!(apply_to_steps(&mut steps, &times, &words), 2);
+        assert_eq!(steps.iter().map(|s| s.id).collect::<Vec<_>>(), ids);
+        assert!(steps[0].narration.contains("open settings"));
+        assert!(steps[1].narration.contains("now save"));
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub mod session {
 
     use guiderecorder_core::events::Timestamp;
     use guiderecorder_core::library::{GuideHandle, Library, LibraryError};
-    use guiderecorder_core::model::Guide;
+    use guiderecorder_core::model::{Guide, RecordedArea, Step};
     use guiderecorder_core::Ulid;
 
     pub use crate::session::*;
@@ -137,6 +137,8 @@ pub mod session {
         /// Changes made to the live feed, applied by
         /// [`Recording::save_guide`].
         pub edits: CaptureEdits,
+        /// What was captured, kept by [`Recording::save_guide`].
+        pub capture_area: Option<RecordedArea>,
         never: Infallible,
     }
 
@@ -152,6 +154,15 @@ pub mod session {
         pub step_times: Vec<(Ulid, Timestamp)>,
     }
 
+    /// The result of [`Recording::save_steps`].
+    #[derive(Debug, Clone)]
+    pub struct SavedSteps {
+        pub steps: Vec<Step>,
+        /// Draft steps left out because no snapshot was close enough.
+        pub skipped: usize,
+        pub step_times: Vec<(Ulid, Timestamp)>,
+    }
+
     impl Recording {
         pub fn session_dir(&self) -> &Path {
             match self.never {}
@@ -162,6 +173,14 @@ pub mod session {
             _library: &Library,
             _title: &str,
         ) -> Result<SavedGuide, SessionError> {
+            match self.never {}
+        }
+
+        pub fn save_steps(
+            &self,
+            _handle: &GuideHandle,
+            _limit: Option<usize>,
+        ) -> Result<SavedSteps, SessionError> {
             match self.never {}
         }
     }

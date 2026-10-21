@@ -1,21 +1,25 @@
 import { useRef } from "react";
 import { DropdownMenu } from "radix-ui";
-import { FilePlus2, Heading, ImagePlus, Info, Lightbulb, Plus, TriangleAlert } from "lucide-react";
+import { FilePlus2, Heading, ImagePlus, Info, Lightbulb, ListPlus, Plus, TriangleAlert } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import { insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { IMAGE_EXTENSIONS } from "@/editor/images";
+import { startInsert } from "@/editor/recapture";
+import { startFlow, useRecording } from "@/recording/recording";
 
 const ITEM =
   "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground";
 
 /**
- * Adds sections, notes and image steps around the selected item; in an
- * annotation guide, pages from images or a PDF instead of image steps.
+ * Adds sections, notes, image steps and recorded steps around the selected
+ * item; in an annotation guide, pages from images or a PDF instead of
+ * image and recorded steps.
  */
 export default function InsertMenu({ disabled }: { disabled: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const annotated = useAnnotated();
+  const recording = useRecording((s) => s.status.state !== "idle" || s.pending !== null);
   return (
     <>
       <DropdownMenu.Root>
@@ -24,7 +28,7 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
             variant="outline"
             size="sm"
             aria-label="Insert"
-            title={annotated ? "Add pages, a section or a note" : "Add a step from an image, a section or a note"}
+            title={annotated ? "Add pages, a section or a note" : "Add a step from an image, recorded steps, a section or a note"}
           >
             <Plus /> Insert
           </Button>
@@ -41,9 +45,18 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
                 <FilePlus2 /> Add pages…
               </DropdownMenu.Item>
             ) : (
-              <DropdownMenu.Item className={ITEM} onSelect={() => fileInput.current?.click()}>
-                <ImagePlus /> Step from image…
-              </DropdownMenu.Item>
+              <>
+                <DropdownMenu.Item className={ITEM} onSelect={() => fileInput.current?.click()}>
+                  <ImagePlus /> Step from image…
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  className={`${ITEM} data-[disabled]:opacity-50`}
+                  disabled={recording}
+                  onSelect={() => void startInsert(editorStore, startFlow, editorStore.getState().selectedId)}
+                >
+                  <ListPlus /> Recorded steps…
+                </DropdownMenu.Item>
+              </>
             )}
             <DropdownMenu.Separator className="my-1 h-px bg-border" />
             <DropdownMenu.Item className={ITEM} onSelect={() => insertSection(editorStore)}>

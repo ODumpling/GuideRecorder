@@ -28,6 +28,8 @@ import { Input } from "@guiderecorder/ui/input";
 import { useStepThumbnail } from "@/components/useStepThumbnail";
 import { coverOptions, coverStepId, deleteItems, mergeSteps, moveItems, renameGuide } from "@/editor/commands";
 import { editorStore, stepNoun, stepNumbers, useEditor } from "@/editor/editor";
+import { startInsert, startRecapture } from "@/editor/recapture";
+import { recordingStore, startFlow } from "@/recording/recording";
 import {
   blockDropTarget,
   canMergeRange,
@@ -97,9 +99,9 @@ function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
 }
 
 /**
- * The native context menu of a step in the outline: Set as Cover (or
- * Remove as Cover) and, on the cover, how it is drawn. Each is one undoable
- * change.
+ * The native context menu of a step in the outline: Re-capture Step and
+ * Insert Recorded Steps Here (not for pages), Set as Cover (or Remove as
+ * Cover) and, on the cover, how it is drawn. Each is one undoable change.
  */
 async function showStepMenu(event: MouseEvent, step: Step, page: boolean) {
   event.preventDefault();
@@ -108,9 +110,28 @@ async function showStepMenu(event: MouseEvent, step: Step, page: boolean) {
   const isCover = coverStepId(doc.guide) === step.id;
   const options = coverOptions(doc.guide);
   const noun = page ? "Page" : "Step";
+  const { status, pending } = recordingStore.getState();
+  const idle = status.state === "idle" && pending === null;
   try {
     const menu = await Menu.new({
       items: [
+        ...(page
+          ? []
+          : [
+              {
+                id: "recapture",
+                text: "Re-capture Step",
+                enabled: idle,
+                action: () => void startRecapture(editorStore, startFlow, step.id),
+              },
+              {
+                id: "insert-recorded",
+                text: "Insert Recorded Steps Here",
+                enabled: idle,
+                action: () => void startInsert(editorStore, startFlow, step.id),
+              },
+              { item: "Separator" as const },
+            ]),
         {
           id: "toggle-cover",
           text: isCover ? "Remove as Cover" : "Set as Cover",

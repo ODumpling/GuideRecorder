@@ -38,6 +38,15 @@ LM Studio, in which case nothing leaves your Mac.
    title and description (written for you from what you clicked, e.g. "Click
    **Save**"), and you can:
    - reword, reorder, merge, split or delete steps, and add sections and notes;
+   - **Re-capture** a step when the app has changed (in the step's ⋯ menu or
+     its right-click menu): a short recording starts on the same screen,
+     window or region the guide was recorded on, and your next click,
+     shortcut or manual step replaces the step's screenshots, click point,
+     element and keystrokes. The step's text and your edits stay; if it has
+     annotations, you choose whether to move them by how far the click
+     moved, clear them or keep them as they are;
+   - **Insert recorded steps here** (same menus, or Insert → Recorded
+     steps…) to record new steps into the middle of a guide;
    - annotate screenshots with arrows, boxes, highlights, callouts and blurs,
      and switch between a close-up crop and the full screenshot;
    - review blurs suggested for sensitive text found in the screenshots

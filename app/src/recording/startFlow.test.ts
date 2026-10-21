@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PickerApi, RecordingApi } from "@/lib/ipc";
-import type { CaptureArea, CaptureDisplay, CaptureWindow, RecordingStatus, StampedStatus } from "@/lib/types";
-import { createStartFlow, startChoice } from "@/recording/startFlow";
+import type { CaptureArea, CaptureDisplay, CaptureWindow, RecordInto, RecordingStatus, StampedStatus } from "@/lib/types";
+import { createStartFlow, findWindow, startChoice } from "@/recording/startFlow";
 import { createRecordingStore } from "@/recording/store";
 
 const recording: RecordingStatus = {
@@ -233,5 +233,64 @@ describe("start flow", () => {
     expect(api.start).toHaveBeenCalledTimes(1);
     expect(picker.listCaptureWindows).not.toHaveBeenCalled();
     expect(flow.getState().windowPicker).toBeNull();
+  });
+});
+
+describe("recording into a guide", () => {
+  const INTO: RecordInto = { mode: "replace", guideId: "G1", stepId: "B" };
+
+  it("finds the recorded window by its app and title, else the app's only window", () => {
+    const safari = { kind: "window", app: "Safari", bundleId: "com.apple.Safari" } as const;
+    expect(findWindow(WINDOWS, { ...safari, title: "Apple" })?.windowId).toBe(7);
+    expect(findWindow(WINDOWS, { ...safari, title: "Other" })?.windowId).toBe(7);
+    expect(findWindow(WINDOWS, { kind: "window", app: "Notes" })?.windowId).toBe(9);
+    const two = [...WINDOWS, { ...WINDOWS[0], windowId: 8, title: "Docs" }];
+    expect(findWindow(two, { ...safari, title: "Docs" })?.windowId).toBe(8);
+    expect(findWindow(two, { ...safari, title: "Other" })).toBeNull();
+    expect(findWindow(WINDOWS, { kind: "window", app: "Mail", bundleId: "com.apple.mail" })).toBeNull();
+  });
+
+  it("starts on the same display, region or window", async () => {
+    const { api, flow, store } = setup("display");
+    await flow.getState().recordInto(INTO, { kind: "display", displayId: 4 });
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "display", displayId: 4 }, INTO);
+    await store.getState().cancel();
+
+    await flow.getState().recordInto(INTO, { kind: "display" });
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "display" }, INTO);
+    await store.getState().cancel();
+
+    await flow.getState().recordInto(INTO, { kind: "region", ...REGION });
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "region", ...REGION }, INTO);
+    await store.getState().cancel();
+
+    await flow.getState().recordInto(INTO, { kind: "window", app: "Safari", bundleId: "com.apple.Safari", title: "Apple" });
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "window", windowId: 7 }, INTO);
+  });
+
+  it("lets the user pick when the display or window is gone, still into the guide", async () => {
+    const { api, flow, store } = setup("display");
+    await flow.getState().recordInto(INTO, { kind: "display", displayId: 99 });
+    expect(api.start).not.toHaveBeenCalled();
+    expect(flow.getState().displayPicker?.displays).toEqual(DISPLAYS);
+    await flow.getState().chooseDisplay(1);
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "display", displayId: 1 }, INTO);
+    await store.getState().cancel();
+
+    await flow.getState().recordInto(INTO, { kind: "window", app: "Mail", bundleId: "com.apple.mail" });
+    expect(flow.getState().windowPicker?.windows).toEqual(WINDOWS);
+    await flow.getState().chooseWindow(9);
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "window", windowId: 9 }, INTO);
+    await store.getState().cancel();
+
+    // A plain start afterwards records a new guide.
+    await flow.getState().begin();
+    expect(api.start).toHaveBeenLastCalledWith(null);
+  });
+
+  it("starts as the settings say for a guide that doesn't remember its area", async () => {
+    const { api, flow } = setup("region");
+    await flow.getState().recordInto(INTO, undefined);
+    expect(api.start).toHaveBeenLastCalledWith(null, { kind: "region", ...REGION }, INTO);
   });
 });

@@ -69,6 +69,14 @@
 //!
 //! With the toolbar's microphone on, what the author says is transcribed on
 //! the device and split across the steps at stop (see [`crate::narration`]).
+//!
+//! A new guide remembers what was captured (`recording.captureArea`), so
+//! a recording into it later can capture the same. `start_recording`
+//! with `into` records into a guide open in the editor instead (a
+//! re-capture of one step, or steps inserted at a point): the status
+//! says which in `into`, and the steps come back in
+//! [`RecordingSaved::recorded`] for the editor to add (see
+//! [`crate::recapture`]).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,7 +91,7 @@ use guiderecorder_capture::session::{
     SessionConfig, SnapshotSink, UndoSink,
 };
 use guiderecorder_core::events::Modifiers;
-use guiderecorder_core::model::Point;
+use guiderecorder_core::model::{Point, RecordedArea};
 use serde::Serialize;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
@@ -92,6 +100,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use crate::blocking::blocking;
 use crate::editor::{AppError, ErrorKind, Result, SessionCell};
 use crate::picker::{self, CaptureTargetArg};
+use crate::recapture::{self, RecordInto, RecordedSteps};
 use crate::settings::{CaptureArea, Redaction, Settings, SettingsStore};
 use crate::settings_commands;
 
@@ -176,15 +185,21 @@ pub struct StampedStatus {
     pub seq: u64,
     #[serde(flatten)]
     pub status: RecordingStatus,
+    /// The guide the running recording goes into, when it is a re-capture
+    /// or steps inserted into a guide ([`crate::recapture`]); left out for
+    /// a new guide, and once idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub into: Option<RecordInto>,
 }
 
 /// A recording saved into the library (returned by `stop_recording` and
 /// sent as [`SAVED_EVENT`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingSaved {
+    /// The new guide, or the guide recorded into.
     pub guide_id: String,
-    /// Steps in the new guide.
+    /// Steps in the new guide (or recorded into it).
     pub steps: usize,
     /// Detected steps left out because no snapshot was close enough.
     pub skipped: usize,
@@ -198,6 +213,10 @@ pub struct RecordingSaved {
     pub unscanned_steps: usize,
     /// Steps that got some narration (see [`crate::narration`]).
     pub narrated_steps: usize,
+    /// For a recording into a guide ([`StampedStatus::into`]): the steps,
+    /// for the editor to add. Left out for a new guide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded: Option<RecordedSteps>,
 }
 
 /// A screenshot the running session took (sent as [`SNAPSHOT_EVENT`]).
@@ -245,6 +264,11 @@ pub struct Recorder {
     /// A [`control`] is running; another one meanwhile is ignored (a
     /// double press must not start a second recording or show an error).
     controlling: AtomicBool,
+    /// What the running session captures, as the guide will remember it
+    /// (see [`crate::picker::recorded_area`]).
+    area: Mutex<Option<RecordedArea>>,
+    /// A re-capture's stop is scheduled (see [`crate::recapture::on_snapshot`]).
+    pub(crate) stop_scheduled: AtomicBool,
 }
 
 impl Recorder {
@@ -253,11 +277,25 @@ impl Recorder {
         lock(&self.status).clone()
     }
 
-    /// Stores `status` under the next `seq` and returns it stamped.
+    /// Stores `status` under the next `seq` and returns it stamped. Idle
+    /// forgets the guide recorded into.
     fn set_status(&self, status: RecordingStatus) -> StampedStatus {
         let mut stored = lock(&self.status);
         stored.seq += 1;
+        if status == RecordingStatus::Idle {
+            stored.into = None;
+        }
         stored.status = status;
+        stored.clone()
+    }
+
+    /// [`Recorder::set_status`] for a start, recording `into` a guide or
+    /// not.
+    fn set_started(&self, status: RecordingStatus, into: Option<RecordInto>) -> StampedStatus {
+        let mut stored = lock(&self.status);
+        stored.seq += 1;
+        stored.status = status;
+        stored.into = into;
         stored.clone()
     }
 
@@ -357,7 +395,7 @@ fn emit<R: Runtime>(app: &AppHandle<R>, status: &StampedStatus) {
     crate::toolbar::sync(app);
 }
 
-fn session_error(e: SessionError) -> AppError {
+pub(crate) fn session_error(e: SessionError) -> AppError {
     match e {
         SessionError::Library(e) => e.into(),
         SessionError::CaptureLost(reason) => capture_lost_error(&reason),
@@ -593,8 +631,10 @@ fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (Sessio
 /// prompts). The session is configured from the stored settings and
 /// captures `target` when given (`invalid` for a window no longer open or
 /// a region under 40×40 points; see [`crate::picker::capture_target`]),
-/// else the stored area (see the module docs). Returns the new status,
-/// which is also sent as [`STATUS_EVENT`].
+/// else the stored area (see the module docs). With `into`, the recording
+/// goes into a guide open in the editor instead of a new one (see
+/// [`crate::recapture`]; refused unless that guide is open and writable).
+/// Returns the new status, which is also sent as [`STATUS_EVENT`].
 #[tauri::command]
 pub async fn start_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -603,11 +643,12 @@ pub async fn start_recording<R: Runtime>(
     cell: State<'_, Arc<SessionCell>>,
     title: Option<String>,
     target: Option<CaptureTargetArg>,
+    into: Option<RecordInto>,
 ) -> Result<StampedStatus> {
     let recorder = Arc::clone(&recorder);
     let store = Arc::clone(&store);
     let cell = Arc::clone(&cell);
-    blocking(move || start(&app, &recorder, &store, &cell, title, target)).await
+    blocking(move || start(&app, &recorder, &store, &cell, title, target, into)).await
 }
 
 /// The body of `start_recording` (blocking), also run from [`control`].
@@ -618,6 +659,7 @@ fn start<R: Runtime>(
     cell: &SessionCell,
     title: Option<String>,
     target: Option<CaptureTargetArg>,
+    into: Option<RecordInto>,
 ) -> Result<StampedStatus> {
     let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     let mut slot = recorder.slot();
@@ -625,13 +667,18 @@ fn start<R: Runtime>(
         return Err(AppError::new(ErrorKind::Invalid, ALREADY_RUNNING));
     }
     // Waits for the library still starting; refuses if it did not open.
-    cell.get()?;
+    let library = cell.get()?;
+    if let Some(into) = &into {
+        recapture::check(&library, into)?;
+    }
     settings_commands::ensure_can_record()?;
     let settings = store.get();
     let target = target
         .map(|t| picker::resolve_target(t, &settings.recording.excluded_apps))
         .transpose()?;
     let (mut cfg, capture_area_fallback) = session_config(&settings, target);
+    *lock(&recorder.area) = picker::area_of(cfg.frames.target);
+    recorder.stop_scheduled.store(false, Ordering::SeqCst);
     recorder.feed.reset();
     cfg.on_snapshot = Some(snapshot_sink(app, recorder));
     cfg.on_press = Some(press_sink(app, recorder, settings.recording.click_ring));
@@ -639,9 +686,7 @@ fn start<R: Runtime>(
     cfg.on_excluded = Some(exclusion_sink(app, recorder));
     cfg.on_capture_lost = Some(capture_lost_sink(app, recorder));
     let session = RecordingSession::start(cfg).map_err(session_error)?;
-    let status = emit_status(
-        app,
-        recorder,
+    let status = recorder.set_started(
         RecordingStatus::Recording {
             started_at: now_rfc3339(),
             title,
@@ -650,7 +695,9 @@ fn start<R: Runtime>(
             excluded_app: None,
             capture_lost: None,
         },
+        into,
     );
+    emit(app, &status);
     // The sink's initial read came while the status was still idle, so
     // it was ignored; from here on the sink applies its changes. Read
     // the session's state now, inside the status lock, so a change the
@@ -703,6 +750,7 @@ fn snapshot_sink<R: Runtime>(app: &AppHandle<R>, recorder: &Arc<Recorder>) -> Sn
         if let Err(e) = app.emit(SNAPSHOT_EVENT, sent) {
             eprintln!("guiderecorder: cannot emit {SNAPSHOT_EVENT}: {e}");
         }
+        recapture::on_snapshot(&app, &recorder, snapshot);
     })
 }
 
@@ -881,7 +929,9 @@ fn stop<R: Runtime>(
 ) -> Result<RecordingSaved> {
     let mut slot = recorder.slot();
     let session = slot.take().ok_or_else(not_recording)?;
-    let (started_at, title) = match recorder.status().status {
+    let stamped = recorder.status();
+    let into = stamped.into;
+    let (started_at, title) = match stamped.status {
         RecordingStatus::Recording {
             started_at, title, ..
         }
@@ -905,13 +955,18 @@ fn stop<R: Runtime>(
     let edits = recorder.feed.edits();
     recorder.feed.reset();
     let heard = recorder.narration.take();
+    let area = lock(&recorder.area).take();
     let saved = save(
         session,
-        heard,
         cell,
-        title.unwrap_or_else(default_title),
-        &redaction,
-        edits,
+        Save {
+            title: title.unwrap_or_else(default_title),
+            heard,
+            redaction: &redaction,
+            edits,
+            area,
+            into,
+        },
     );
     emit_status(app, recorder, RecordingStatus::Idle);
     let saved = saved?;
@@ -923,32 +978,45 @@ fn stop<R: Runtime>(
 
 /// What a narrator heard, still being recognised (see
 /// [`crate::narration::NarrationSlot::take`]).
-type Heard = std::thread::JoinHandle<
+pub(crate) type Heard = std::thread::JoinHandle<
     std::result::Result<
         guiderecorder_capture::narration::Narration,
         guiderecorder_capture::narration::NarrationError,
     >,
 >;
 
-/// Stops `session`, writes its guide into the library, adds what `heard`
-/// heard to its steps, scans its screenshots for sensitive text as
-/// `redaction` says and indexes it.
-fn save(
-    session: RecordingSession,
-    heard: Option<Heard>,
-    cell: Arc<SessionCell>,
+/// How [`save`] saves a stopped session.
+struct Save<'a> {
+    /// The new guide's title.
     title: String,
-    redaction: &Redaction,
+    /// What the narrator heard, if it was on.
+    heard: Option<Heard>,
+    redaction: &'a Redaction,
     edits: CaptureEdits,
-) -> Result<RecordingSaved> {
+    /// What was captured, for the new guide to remember.
+    area: Option<RecordedArea>,
+    /// The guide recorded into, instead of a new one.
+    into: Option<RecordInto>,
+}
+
+/// Stops `session`, writes its guide into the library, adds what was
+/// heard to its steps, scans its screenshots for sensitive text as
+/// `redaction` says and indexes it; or, recording `into` a guide, writes
+/// the steps' images into that guide and returns the steps (see
+/// [`crate::recapture`]).
+fn save(session: RecordingSession, cell: Arc<SessionCell>, how: Save) -> Result<RecordingSaved> {
     // Dropping the `Recording` on any error removes the session folder.
     let mut recording = session.stop().map_err(session_error)?;
-    recording.edits = edits;
+    recording.edits = how.edits;
+    recording.capture_area = how.area;
     let library = cell.get()?;
+    if let Some(into) = how.into {
+        return recapture::save_into(&recording, &library, into, how.heard, how.redaction);
+    }
     let mut saved = recording
-        .save_guide(library.library(), &title)
+        .save_guide(library.library(), &how.title)
         .map_err(session_error)?;
-    let narrated_steps = heard.map_or(0, |heard| {
+    let narrated_steps = how.heard.map_or(0, |heard| {
         crate::narration::finish(
             heard,
             library.library(),
@@ -961,7 +1029,7 @@ fn save(
         library.library(),
         &saved.handle,
         &mut saved.guide,
-        redaction,
+        how.redaction,
     );
     library.index_bundle(&saved.handle);
     Ok(RecordingSaved {
@@ -972,6 +1040,7 @@ fn save(
         applied_blurs: redacted.blurred,
         unscanned_steps: redacted.unscanned,
         narrated_steps,
+        recorded: None,
     })
 }
 
@@ -1180,7 +1249,9 @@ fn run_action<R: Runtime>(
         Control::Start => {
             let store = Arc::clone(app.state::<Arc<SettingsStore>>().inner());
             match StartFrom::of(store.get().recording.capture_area) {
-                StartFrom::Record => start(app, recorder, &store, &cell, None, None).map(drop),
+                StartFrom::Record => {
+                    start(app, recorder, &store, &cell, None, None, None).map(drop)
+                }
                 StartFrom::PickArea => {
                     // A pick already under way: bring its overlay forward.
                     if let Some(overlay) = app.get_webview_window(picker::LABEL) {
@@ -1535,6 +1606,7 @@ mod tests {
                 applied_blurs: 0,
                 unscanned_steps: 1,
                 narrated_steps: 2,
+                recorded: None,
             })
             .unwrap(),
             json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0, "unscannedSteps": 1, "narratedSteps": 2})
@@ -1843,6 +1915,7 @@ mod tests {
             serde_json::to_value(StampedStatus {
                 seq: 7,
                 status: RecordingStatus::Idle,
+                into: None,
             })
             .unwrap(),
             json!({"seq": 7, "state": "idle"})
@@ -1859,6 +1932,10 @@ mod tests {
                     excluded_app: Some("com.apple.MobileSMS".into()),
                     capture_lost: None,
                 },
+                into: Some(RecordInto::Replace {
+                    guide_id: "01J".into(),
+                    step_id: "01K".into(),
+                }),
             })
             .unwrap(),
             json!({
@@ -1871,8 +1948,39 @@ mod tests {
                 "pausedAt": "2026-10-15T01:05:00.000Z",
                 "excludedApp": "com.apple.MobileSMS",
                 "captureLost": null,
+                "into": {"mode": "replace", "guideId": "01J", "stepId": "01K"},
             })
         );
+    }
+
+    #[test]
+    fn a_recording_into_a_guide_is_forgotten_once_idle() {
+        let recorder = Recorder::default();
+        let into = RecordInto::Insert {
+            guide_id: "01J".into(),
+            after_id: None,
+        };
+        let recording = RecordingStatus::Recording {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: None,
+            capture_area_fallback: false,
+            paused_ms: 0,
+            excluded_app: None,
+            capture_lost: None,
+        };
+        let started = recorder.set_started(recording.clone(), Some(into.clone()));
+        assert_eq!(started.into, Some(into.clone()));
+        // Pausing, resuming and saving keep it.
+        let (paused, _) = recorder.update(|s| with_paused(s.clone(), true, Utc::now()));
+        assert_eq!(paused.into, Some(into.clone()));
+        let saving = recorder.set_status(RecordingStatus::Saving {
+            started_at: "2026-10-15T01:02:03.000Z".into(),
+            title: None,
+        });
+        assert_eq!(saving.into, Some(into));
+        assert_eq!(recorder.set_status(RecordingStatus::Idle).into, None);
+        // A plain start records a new guide.
+        assert_eq!(recorder.set_started(recording, None).into, None);
     }
 
     #[test]

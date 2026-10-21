@@ -11,6 +11,7 @@ import {
 import type {
   AppError,
   CaptureTargetArg,
+  RecordInto,
   RecordingSaved,
   RecordingSnapshot,
   RecordingStatus,
@@ -28,6 +29,8 @@ export interface RecordingError {
 
 export interface RecordingState {
   status: RecordingStatus;
+  /** The guide the running recording goes into (a re-capture, steps inserted); null for a new guide or when idle. */
+  into: RecordInto | null;
   /** The command in flight, if any; the controls are disabled meanwhile. */
   pending: RecordingAction | null;
   error: RecordingError | null;
@@ -51,16 +54,19 @@ export interface RecordingState {
   retitleSnapshot(change: SnapshotTitle): void;
   /** Handles a `recording://snapshot-removed` event: the capture was deleted. */
   removeSnapshot(id: string): void;
-  /** Handles a `recording://saved` event or `stop`'s result, once per guide. */
+  /** Handles a `recording://saved` event or `stop`'s result, once per guide (or per recording into a guide). */
   saved(saved: RecordingSaved): void;
-  /** Starts recording `target`; without one, the capture area comes from the settings. */
-  start(target?: CaptureTargetArg): Promise<boolean>;
+  /**
+   * Starts recording `target`; without one, the capture area comes from the
+   * settings. With `into`, into that guide instead of a new one.
+   */
+  start(target?: CaptureTargetArg, into?: RecordInto): Promise<boolean>;
   /**
    * Starts recording what `pick` resolves to (null: cancelled, nothing
    * starts). The pick runs as part of the start, so a second start
    * meanwhile is ignored and a failed pick is shown like a failed start.
    */
-  startPicked(pick: () => Promise<CaptureTargetArg | null>): Promise<boolean>;
+  startPicked(pick: () => Promise<CaptureTargetArg | null>, into?: RecordInto): Promise<boolean>;
   pause(): Promise<boolean>;
   resume(): Promise<boolean>;
   /**
@@ -173,21 +179,25 @@ export function createRecordingStore({ api, onSaved }: RecordingOptions): Record
      * `reset` (a fresh read) applies and becomes the baseline.
      */
     function applyStatus(status: RecordingStatus | StampedStatus, reset = false) {
+      // A stamped status says which guide it goes into; an unstamped one keeps the last.
+      let into = get().into;
       if ("seq" in status) {
         if (!reset && status.seq < lastSeq) return;
         lastSeq = status.seq;
-        const { seq: _, ...rest } = status;
+        const { seq: _, into: stamped, ...rest } = status;
+        into = stamped ?? null;
         status = rest as RecordingStatus;
       }
       const prev = get().status;
       const sameRun = prev.state !== "idle" && status.state !== "idle" && prev.startedAt === status.startedAt;
       // The strip stays up while saving; it is gone once the guide opens.
       const snapshots = status.state === "idle" ? [] : sameRun ? get().snapshots : [];
-      set({ status, snapshots });
+      set({ status, snapshots, into: status.state === "idle" ? null : into });
     }
 
     return {
       status: { state: "idle" },
+      into: null,
       pending: null,
       error: null,
       snapshots: [],
@@ -222,22 +232,26 @@ export function createRecordingStore({ api, onSaved }: RecordingOptions): Record
       },
 
       saved(saved) {
-        if (handled.has(saved.guideId)) return;
-        handled.add(saved.guideId);
+        // Steps recorded into a guide name that guide: each recording is its own.
+        const key = saved.recorded?.id ?? saved.guideId;
+        if (handled.has(key)) return;
+        handled.add(key);
         if (quietStop) return;
         onSaved?.(saved);
       },
 
-      async start(target) {
-        const status = await run("start", () => (target ? api.start(null, target) : api.start(null)));
+      async start(target, into) {
+        const status = await run("start", () =>
+          into ? api.start(null, target, into) : target ? api.start(null, target) : api.start(null),
+        );
         if (status) applyStatus(status);
         return status !== null;
       },
 
-      async startPicked(pick) {
+      async startPicked(pick, into) {
         const status = await run("start", async () => {
           const target = await pick();
-          return target && (await api.start(null, target));
+          return target && (await (into ? api.start(null, target, into) : api.start(null, target)));
         });
         if (status) applyStatus(status);
         return status !== null;

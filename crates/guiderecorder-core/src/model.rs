@@ -322,6 +322,41 @@ pub struct RecordingInfo {
     pub apps: Vec<AppInfo>,
     #[serde(default)]
     pub displays: Vec<DisplayInfo>,
+    /// What the recording captured, so a re-capture of a step (or steps
+    /// recorded into the guide later) can capture the same. Absent in
+    /// guides recorded before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_area: Option<RecordedArea>,
+}
+
+/// The capture area of a recording ([`RecordingInfo::capture_area`]).
+/// Tagged by `kind`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RecordedArea {
+    /// One display, or every display when `displayId` is absent.
+    #[serde(rename_all = "camelCase")]
+    Display {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_id: Option<u32>,
+    },
+    /// One window. Window ids do not outlive the window, so it is found
+    /// again by its app and title.
+    #[serde(rename_all = "camelCase")]
+    Window {
+        app: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundle_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// A region of a display, in global display points.
+    #[serde(rename_all = "camelCase")]
+    Region {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_id: Option<u32>,
+        rect: Rect,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1074,6 +1109,62 @@ mod tests {
         assert_eq!(guide.review_due(), NaiveDate::from_ymd_opt(2026, 10, 19));
         assert!(!guide.is_review_overdue(day(10, 19)));
         assert!(guide.is_review_overdue(day(10, 20)));
+    }
+
+    #[test]
+    fn capture_area_round_trips_and_is_left_out_while_unset() {
+        let old: Guide = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        let recording = old.recording.unwrap();
+        assert_eq!(recording.capture_area, None);
+        assert!(serde_json::to_value(&recording)
+            .unwrap()
+            .get("captureArea")
+            .is_none());
+        let areas = [
+            (
+                RecordedArea::Display { display_id: None },
+                json!({ "kind": "display" }),
+            ),
+            (
+                RecordedArea::Display {
+                    display_id: Some(2),
+                },
+                json!({ "kind": "display", "displayId": 2 }),
+            ),
+            (
+                RecordedArea::Window {
+                    app: "Safari".into(),
+                    bundle_id: Some("com.apple.Safari".into()),
+                    title: None,
+                },
+                json!({ "kind": "window", "app": "Safari", "bundleId": "com.apple.Safari" }),
+            ),
+            (
+                RecordedArea::Region {
+                    display_id: Some(1),
+                    rect: Rect {
+                        x: 10.0,
+                        y: 20.0,
+                        width: 300.0,
+                        height: 200.0,
+                    },
+                },
+                json!({
+                    "kind": "region",
+                    "displayId": 1,
+                    "rect": { "x": 10.0, "y": 20.0, "width": 300.0, "height": 200.0 }
+                }),
+            ),
+        ];
+        for (area, expected) in areas {
+            let info = RecordingInfo {
+                capture_area: Some(area),
+                ..recording.clone()
+            };
+            let json = serde_json::to_value(&info).unwrap();
+            assert_eq!(json["captureArea"], expected);
+            assert_eq!(serde_json::from_value::<RecordingInfo>(json).unwrap(), info);
+        }
     }
 
     #[test]

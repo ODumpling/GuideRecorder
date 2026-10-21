@@ -758,6 +758,7 @@ fn recording(apps: &[(&str, &str, &str)]) -> RecordingInfo {
             height: 1964,
             scale: 2.0,
         }],
+        capture_area: None,
     }
 }
 
