@@ -2358,6 +2358,7 @@ dependencies = [
  "guiderecorder-core",
  "serde_json",
  "tempfile",
+ "zip 8.6.0",
 ]
 
 [[package]]

@@ -190,3 +190,57 @@ test("exports an agent skill with the replay script, after naming an unclear ele
   await page.getByRole("button", { name: "Export…" }).click();
   await expect(dialog.getByLabel(/Include a replay script/)).toBeChecked();
 });
+
+test("exports a SCORM course with a quiz, remembering the course options", async ({ page, backend }) => {
+  await openGuide(page, "Rotate an API key");
+  await page.getByRole("button", { name: "Export…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Export guide" });
+  await dialog.getByRole("radio", { name: /SCORM course/ }).click();
+  // The walkthrough inside carries the branding; the preview is its page.
+  await expect(dialog.getByText("Branding (optional)")).toBeVisible();
+  await expect.poll(() => backend.previews.at(-1)?.format).toBe("scorm");
+  const completion = dialog.getByRole("radiogroup", { name: "Completion" });
+  await expect(completion.getByRole("radio", { name: /Last step reached/ })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByPlaceholder(`guiderecorder-${API_KEY}`)).toBeVisible();
+
+  backend.dialog.file = "/Users/me/Desktop/Rotate an API key";
+  await dialog.getByRole("button", { name: "Choose…" }).click();
+  await expect(dialog.getByText("Rotate an API key.zip")).toBeVisible();
+  await dialog.getByPlaceholder("Rotate an API key", { exact: true }).fill("API keys 101");
+
+  // Passing the quiz needs a quiz.
+  const exportButton = dialog.getByRole("button", { name: "Export", exact: true });
+  await completion.getByRole("radio", { name: /Quiz passed/ }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Add a quiz, or complete on the last step.");
+  await expect(exportButton).toBeDisabled();
+  const quiz = "Where are API keys?\n- [ ] Billing\n- [x] Settings";
+  await dialog.getByRole("textbox", { name: "Quiz" }).fill(quiz);
+  const mastery = dialog.getByRole("spinbutton");
+  await expect(mastery).toHaveValue("80");
+  await mastery.fill("");
+  await expect(exportButton).toBeDisabled();
+  await mastery.fill("70");
+  await expect
+    .poll(() => backend.previews.at(-1)?.scorm)
+    .toEqual({ title: "", identifier: "", completion: "quizPassed", masteryScore: 70, quiz });
+  await exportButton.click();
+
+  await expect(dialog.getByText(/Exported to/)).toContainText("Rotate an API key.zip");
+  expect(backend.exports.at(-1)).toEqual({
+    guideId: API_KEY,
+    format: "scorm",
+    out: "/Users/me/Desktop/Rotate an API key.zip",
+    overwrite: false,
+    branding: { logo: null, accent: null },
+    scorm: { title: "API keys 101", identifier: "", completion: "quizPassed", masteryScore: 70, quiz },
+  });
+
+  // Remembered for this guide's next export.
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Export…" }).click();
+  await expect(dialog.getByRole("radio", { name: /SCORM course/ })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByPlaceholder("Rotate an API key", { exact: true })).toHaveValue("API keys 101");
+  await expect(completion.getByRole("radio", { name: /Quiz passed/ })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByRole("textbox", { name: "Quiz" })).toHaveValue(quiz);
+  await expect(dialog.getByRole("spinbutton")).toHaveValue("70");
+});

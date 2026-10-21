@@ -18,3 +18,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Reads SCORM packages back.
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

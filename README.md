@@ -96,6 +96,19 @@ LM Studio, in which case nothing leaves your Mac.
    export dialog, in the step inspector, where you can name the element, and in
    `steps.json` and `SKILL.md`.
 
+   For a learning management system (LMS), export a **SCORM course**: a
+   SCORM 1.2 `.zip` with an `imsmanifest.xml` and the interactive
+   walkthrough, which tells the LMS where the learner is (and resumes there)
+   and marks the course completed once they reach the last step. Add a
+   short quiz for the end if you like, one line per question followed by
+   its choices (`- [x]` for the right one, `- [ ]` for the others); its score
+   is reported to the LMS, and with the "Quiz passed" rule the course is
+   passed or failed against the mastery score instead. Choose the course
+   title and identifier; the identifier stays the same for every export of a
+   guide by default, so the LMS sees a new version of the course. The quiz is
+   kept with the export options, not in the guide. The package also works
+   opened on its own, without an LMS.
+
 ## Annotation guides
 
 Not everything is a sequence of clicks. To explain a floor plan, a form, a
@@ -215,12 +228,14 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <p
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
 
-`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif|skill`
+`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif|skill|scorm`
 (`walkthrough` is an interactive click-through `guide.html`; `mp4` needs
-macOS; `skill` is an agent skill folder), `--out`, and optionally
-`--paper a4|letter` (DOCX and PDF; default A4), `--seconds-per-step`,
-`--size wide|square|vertical`, `--no-zoom` and `--no-captions` (MP4 and
-GIF), `--replay` (a skill's `replay.js`), `--logo`, `--accent`,
+macOS; `skill` is an agent skill folder; `scorm` is a SCORM 1.2 `.zip`),
+`--out`, and optionally `--paper a4|letter` (DOCX and PDF; default A4),
+`--seconds-per-step`, `--size wide|square|vertical`, `--no-zoom` and
+`--no-captions` (MP4 and GIF), `--replay` (a skill's `replay.js`),
+`--course-title`, `--course-id`, `--completion last-step|quiz-passed`,
+`--mastery-score` (default 80) and `--quiz <file>` (SCORM), `--logo`, `--accent`,
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.

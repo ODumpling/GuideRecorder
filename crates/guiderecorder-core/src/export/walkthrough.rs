@@ -47,6 +47,10 @@
 //!
 //! A comment at the top of the page holds an `<iframe>` snippet for
 //! embedding it in a help centre or wiki.
+//!
+//! A SCORM package ([`scorm`](super::scorm)) adds a second inline script
+//! (also allowed by its hash), some style, and markup on the end slide; see
+//! [`Extra`].
 
 use minijinja::{context, Value};
 use sha2::{Digest, Sha256};
@@ -70,12 +74,36 @@ pub const SCRIPT: &str = include_str!("templates/walkthrough.js");
 /// The Content-Security-Policy of a walkthrough: the document mode's
 /// [`CSP`](super::html::CSP) plus [`SCRIPT`] by its SHA-256 hash.
 pub fn csp() -> String {
-    let mut hash = String::new();
-    base64_into(&Sha256::digest(SCRIPT.as_bytes()), &mut hash);
+    csp_with(None)
+}
+
+/// [`csp`], also allowing `extra` (a second inline script) by its hash.
+pub(super) fn csp_with(extra: Option<&str>) -> String {
+    let mut hashes = String::new();
+    for script in std::iter::once(SCRIPT).chain(extra) {
+        if !hashes.is_empty() {
+            hashes.push(' ');
+        }
+        hashes.push_str("'sha256-");
+        base64_into(&Sha256::digest(script.as_bytes()), &mut hashes);
+        hashes.push('\'');
+    }
     format!(
         "default-src 'none'; img-src data:; style-src 'unsafe-inline'; \
-         script-src 'sha256-{hash}'; base-uri 'none'; form-action 'none'"
+         script-src {hashes}; base-uri 'none'; form-action 'none'"
     )
+}
+
+/// What another format adds to the page: a SCORM package's runtime and
+/// quiz.
+pub(super) struct Extra<'a> {
+    /// A static inline script, run before [`SCRIPT`]; it must not contain
+    /// `</script`.
+    pub script: &'static str,
+    /// Appended to the stylesheet.
+    pub style: &'static str,
+    /// Safe HTML on the end slide, above Restart.
+    pub end: &'a str,
 }
 
 /// The walkthrough's own words, by guide language like [`Labels`].
@@ -135,6 +163,16 @@ pub(super) fn render_string(
     guide: &RenderGuide,
     handle: &GuideHandle,
     opts: &HtmlOptions,
+) -> Result<(String, ExportReport)> {
+    render_with(guide, handle, opts, None)
+}
+
+/// [`render_string`] with what another format adds to the page.
+pub(super) fn render_with(
+    guide: &RenderGuide,
+    handle: &GuideHandle,
+    opts: &HtmlOptions,
+    extra: Option<&Extra>,
 ) -> Result<(String, ExportReport)> {
     let branding = &opts.branding;
     let labels = opts
@@ -232,13 +270,19 @@ pub(super) fn render_string(
         .map(|logo| Value::from_safe_string(data_uri("image/png", logo.png())));
     let ctx = context! {
         language => language_tag(&guide.language),
-        csp => csp(),
+        csp => csp_with(extra.map(|e| e.script)),
         title => &guide.title,
         og_image => og_image(guide, handle, &opts.image),
         summary => &guide.summary,
         details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
-        css => Value::from_safe_string(format!("{}{STYLE}", stylesheet(branding))),
+        css => Value::from_safe_string(format!(
+            "{}{STYLE}{}",
+            stylesheet(branding),
+            extra.map_or("", |e| e.style)
+        )),
         script => Value::from_safe_string(SCRIPT.to_owned()),
+        extra_script => extra.map(|e| Value::from_safe_string(e.script.to_owned())),
+        extra_end => extra.map(|e| Value::from_safe_string(e.end.to_owned())),
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,

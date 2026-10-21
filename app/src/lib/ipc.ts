@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, ScormOptions, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -186,6 +186,8 @@ export interface ExportApi {
     motion: MotionOptions,
     /** Used by agent skills. */
     skill: SkillOptions,
+    /** Used by SCORM packages. */
+    scorm: ScormOptions,
   ): Promise<ExportResult>;
   /** A preview of exporting from the saved bundle with these options; writes nothing. */
   previewExport(
@@ -196,6 +198,7 @@ export interface ExportApi {
     reviewDetails: boolean,
     motion: MotionOptions,
     skill: SkillOptions,
+    scorm: ScormOptions,
   ): Promise<ExportPreviewData>;
   /** A logo `chooseLogo` returned (PNG or JPEG, up to 2 MB) as a PNG data URI. */
   logoPreview(path: string): Promise<string>;
@@ -208,10 +211,10 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill }),
-  previewExport: (guideId, format, branding, paper, reviewDetails, motion, skill) =>
-    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm }),
+  previewExport: (guideId, format, branding, paper, reviewDetails, motion, skill, scorm) =>
+    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill, scorm }),
   logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
 };
