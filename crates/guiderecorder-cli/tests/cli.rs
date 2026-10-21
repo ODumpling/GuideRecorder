@@ -1497,6 +1497,28 @@ fn reindex_app_index_writes_the_default_path() {
     assert!(app_index.is_file());
 }
 
+#[cfg(windows)]
+#[test]
+fn reindex_app_index_writes_the_default_path() {
+    let fx = Fixture::new();
+    let local = TempDir::new().unwrap();
+    let out = guiderecorder()
+        .env("LOCALAPPDATA", local.path())
+        .arg("--library")
+        .arg(fx.library())
+        .args(["reindex", "--app-index", "--json"])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let app_index = local
+        .path()
+        .join("dev.dufflebear.guiderecorder")
+        .join("index.sqlite");
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["index"], app_index.display().to_string());
+    assert!(app_index.is_file());
+}
+
 #[test]
 fn reindex_refuses_another_format_without_full() {
     if Command::new("sqlite3").arg("-version").output().is_err() {

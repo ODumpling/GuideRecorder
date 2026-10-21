@@ -35,15 +35,12 @@ pub const SETTINGS_FILE: &str = "settings.json";
 /// Largest settings file read; a real one is a few kB.
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
-/// `~/Library/Application Support/dev.dufflebear.guiderecorder/settings.json` (macOS;
-/// the index lives next to it). `None` without a home folder.
+/// `settings.json` in the app's folder (core's `app_dir`):
+/// `~/Library/Application Support/dev.dufflebear.guiderecorder` on macOS,
+/// `%LOCALAPPDATA%\dev.dufflebear.guiderecorder` on Windows; the index
+/// lives next to it. `None` without that folder.
 pub fn default_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-    Some(
-        PathBuf::from(home)
-            .join("Library/Application Support/dev.dufflebear.guiderecorder")
-            .join(SETTINGS_FILE),
-    )
+    Some(guiderecorder_core::app_dir::app_data_dir()?.join(SETTINGS_FILE))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1003,13 +1000,19 @@ fn set_aside(path: &Path, error: String) -> (Settings, LoadState) {
     )
 }
 
-/// `s` quoted for a POSIX shell when it needs it.
+/// `s` quoted, when it needs it, for the shell it is pasted into: a POSIX
+/// shell on macOS, PowerShell (the default) on Windows. Both take single
+/// quotes; inside them PowerShell doubles a quote, where a POSIX shell
+/// closes and reopens them around an escaped one. A backslash always needs
+/// quotes, so Windows paths survive Git Bash too.
 pub fn shell_quote(s: &str) -> String {
     let plain = !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_./:@%+=,".contains(&b));
     if plain {
         s.to_owned()
+    } else if cfg!(windows) {
+        format!("'{}'", s.replace('\'', "''"))
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
@@ -1702,7 +1705,23 @@ mod tests {
         );
         assert_eq!(
             mcp_add_command(Path::new("/a b/mcp"), Path::new("/it's"), false),
-            r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it'\''s'"
+            if cfg!(windows) {
+                r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it''s'"
+            } else {
+                r"claude mcp add guiderecorder -- '/a b/mcp' --library '/it'\''s'"
+            }
+        );
+    }
+
+    #[test]
+    fn windows_paths_are_quoted_for_powershell_and_git_bash() {
+        assert_eq!(
+            mcp_add_command(
+                Path::new(r"C:\Users\me\AppData\Local\GuideRecorder\guiderecorder-mcp.exe"),
+                Path::new(r"C:\Users\me\Documents\GuideRecorder"),
+                false
+            ),
+            r"claude mcp add guiderecorder -- 'C:\Users\me\AppData\Local\GuideRecorder\guiderecorder-mcp.exe' --library 'C:\Users\me\Documents\GuideRecorder'"
         );
     }
 }

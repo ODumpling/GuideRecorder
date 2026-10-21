@@ -40,6 +40,7 @@ tempfile = "3.27.0"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
 
-# Windows draws them with Windows.Data.Pdf.
+# Windows draws them with Windows.Data.Pdf; the tray reads the taskbar's
+# theme from the registry.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Data_Pdf", "Storage_Streams", "UI"] }
+windows = { version = "0.62", features = ["Data_Pdf", "Storage_Streams", "UI", "Win32_System_Registry"] }

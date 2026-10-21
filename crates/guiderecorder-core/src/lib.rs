@@ -4,6 +4,7 @@
 //! See design scratchpads #444 (format), #443 (export) and #442 (AI).
 
 pub mod ai;
+pub mod app_dir;
 pub mod branch;
 pub mod confidence;
 pub mod edit;

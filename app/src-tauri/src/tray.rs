@@ -6,6 +6,12 @@
 //! While recording or paused the icon also shows the recorded time beside
 //! it ([`elapsed_title`]), ticking once a second from a thread of its own
 //! that ends at idle.
+//!
+//! On Windows it is a notification area icon, the Windows way: a click
+//! opens the main window and a right-click shows the menu, which also has
+//! Check for Updates… (Windows has no app menu). The time is in the
+//! tooltip, as Windows shows no text beside the icon, and the icons are
+//! drawn white on a dark taskbar ([`icon_image`]).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,7 +21,7 @@ use chrono::{DateTime, Utc};
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::recording::{self, Control, Recorder, RecordingStatus};
@@ -28,6 +34,8 @@ const RESUME_ID: &str = "tray-resume";
 const STOP_ID: &str = "tray-stop";
 const OPEN_ID: &str = "tray-open";
 const QUIT_ID: &str = "tray-quit";
+/// Windows only; see `create`.
+const CHECK_UPDATES_ID: &str = "tray-check-updates";
 
 const IDLE_ICON: &[u8] = include_bytes!("../icons/tray/idle.png");
 const RECORDING_ICON: &[u8] = include_bytes!("../icons/tray/recording.png");
@@ -144,6 +152,15 @@ pub fn elapsed_title(status: &RecordingStatus, now: DateTime<Utc>) -> Option<Str
     })
 }
 
+/// The tooltip for `state`, with the recorded time when there is one
+/// (Windows' stand-in for the time beside the icon).
+pub fn tooltip(state: TrayState, elapsed: Option<&str>) -> String {
+    match elapsed {
+        Some(time) => format!("{} · {time}", state.tooltip()),
+        None => state.tooltip().to_owned(),
+    }
+}
+
 /// Creates the tray icon in its state for the current status.
 pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let state = TrayState::of(&app.state::<Arc<Recorder>>().status().status);
@@ -170,12 +187,26 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             &quit,
         ],
     )?;
+    // Windows has no app menu (see `app_menu` in lib.rs): Check for
+    // Updates… is here, before Quit.
+    #[cfg(not(target_os = "macos"))]
+    menu.insert(
+        &item(CHECK_UPDATES_ID, "Check for Updates…", true)?,
+        menu.items()?.len() - 1,
+    )?;
     let icon = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(Image::from_bytes(state.icon())?)
+        .icon(icon_image(state)?)
         .icon_as_template(true)
         .tooltip(state.tooltip())
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        // A Windows tray icon opens its app on a click and shows its menu
+        // on a right-click; a Mac menu bar icon shows the menu either way.
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
+        .on_tray_icon_event(|tray, event| {
+            if cfg!(not(target_os = "macos")) && is_left_click(&event) {
+                show_main(tray.app_handle());
+            }
+        })
         .on_menu_event(on_menu_event)
         .build(app)?;
     app.manage(Tray {
@@ -197,7 +228,73 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         // The app menu's Quit path: the editor saves first.
         app.state::<Arc<crate::commands::QuitGate>>()
             .on_quit_menu(app);
+    } else if id == CHECK_UPDATES_ID {
+        show_main(app);
+        crate::updater::check_from_menu(app);
     }
+}
+
+fn is_left_click(event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+    )
+}
+
+/// The icon for `state` as shown. macOS tints the template images itself;
+/// Windows shows them as they are, black, so on its dark taskbar they are
+/// drawn white instead.
+fn icon_image(state: TrayState) -> tauri::Result<Image<'static>> {
+    let icon = Image::from_bytes(state.icon())?;
+    if cfg!(windows) && taskbar_is_dark() {
+        return Ok(in_white(&icon));
+    }
+    Ok(icon)
+}
+
+/// `icon` with every pixel white, keeping its transparency: a template
+/// image (black on clear) for a dark background.
+fn in_white(icon: &Image<'_>) -> Image<'static> {
+    let rgba = icon
+        .rgba()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|pixel| [255, 255, 255, pixel[3]])
+        .collect();
+    Image::new_owned(rgba, icon.width(), icon.height())
+}
+
+/// Whether Windows draws the taskbar dark ("Choose your default Windows
+/// mode"). A Windows without the setting (before 10 1903) has a dark one.
+#[cfg(windows)]
+fn taskbar_is_dark() -> bool {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut light = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: a DWORD value read into a DWORD, its size given.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut light as *mut u32).cast()),
+            Some(&mut size),
+        )
+    };
+    read.is_err() || light == 0
+}
+
+#[cfg(not(windows))]
+fn taskbar_is_dark() -> bool {
+    false
 }
 
 /// Puts the icon and the menu in line with the stored status. A no-op
@@ -209,7 +306,7 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let state = TrayState::of(&recorder.status().status);
-    let result = Image::from_bytes(state.icon())
+    let result = icon_image(state)
         .and_then(|icon| tray.icon.set_icon_with_as_template(Some(icon), true))
         .and_then(|()| tray.icon.set_tooltip(Some(state.tooltip())))
         .and_then(|()| tray.items.apply(Enabled::of(state)));
@@ -239,8 +336,17 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
         else {
             return;
         };
-        let title = elapsed_title(&recorder.status().status, Utc::now());
-        if let Err(e) = tray.icon.set_title(title.as_deref()) {
+        let status = recorder.status().status;
+        let title = elapsed_title(&status, Utc::now());
+        // Windows has no text beside a tray icon: the time is in its
+        // tooltip instead.
+        let shown = if cfg!(target_os = "macos") {
+            tray.icon.set_title(title.as_deref())
+        } else {
+            tray.icon
+                .set_tooltip(Some(tooltip(TrayState::of(&status), title.as_deref())))
+        };
+        if let Err(e) = shown {
             eprintln!("guiderecorder: cannot update the tray time: {e}");
         }
         if title.is_none() {
@@ -322,6 +428,38 @@ mod tests {
         }
         assert_ne!(TrayState::Idle.icon(), TrayState::Paused.icon());
         assert_ne!(TrayState::Recording.icon(), TrayState::Paused.icon());
+    }
+
+    #[test]
+    fn the_tooltip_carries_the_time_when_there_is_one() {
+        assert_eq!(tooltip(TrayState::Idle, None), "GuideRecorder");
+        assert_eq!(
+            tooltip(TrayState::Recording, Some("2:14")),
+            "GuideRecorder — recording · 2:14"
+        );
+    }
+
+    #[test]
+    fn icons_turn_white_keeping_their_shape() {
+        let icon = Image::from_bytes(RECORDING_ICON).unwrap();
+        let white = in_white(&icon);
+        assert_eq!(
+            (white.width(), white.height()),
+            (icon.width(), icon.height())
+        );
+        for (from, to) in icon
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(white.rgba().as_chunks::<4>().0)
+        {
+            assert_eq!(*to, [255, 255, 255, from[3]]);
+        }
+        // Something is drawn, so the shape is kept.
+        assert!(white.rgba().as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+        // Answers either way without failing.
+        let _ = taskbar_is_dark();
     }
 
     #[test]

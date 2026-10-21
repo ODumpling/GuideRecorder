@@ -378,17 +378,11 @@ enum Existing {
 
 impl Index {
     /// Where the app keeps its index and readers look for it:
-    /// `~/Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite` on
-    /// macOS (from `$HOME`); `None` elsewhere or without `$HOME`.
+    /// `index.sqlite` in the app's folder
+    /// ([`app_data_dir`](crate::app_dir::app_data_dir): Application
+    /// Support on macOS, `%LOCALAPPDATA%` on Windows); `None` without it.
     pub fn default_path() -> Option<PathBuf> {
-        if !cfg!(target_os = "macos") {
-            return None;
-        }
-        let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-        Some(
-            PathBuf::from(home)
-                .join("Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite"),
-        )
+        Some(crate::app_dir::app_data_dir()?.join("index.sqlite"))
     }
 
     /// Opens the index at `path` for writing, creating it (and its folder)
