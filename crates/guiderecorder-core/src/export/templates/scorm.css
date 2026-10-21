@@ -1,0 +1,11 @@
+/* SCORM package: the quiz on the end slide, over the walkthrough stylesheet. */
+.scorm-quiz { margin: 1.25rem 0 0; }
+.scorm-quiz > h3 { margin: 0 0 .75rem; }
+.scorm-question { margin: 0 0 1rem; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: 8px; }
+.scorm-question legend { padding: 0 .25rem; font-weight: 600; overflow-wrap: anywhere; }
+.scorm-question label { display: flex; gap: .5rem; align-items: baseline; padding: .2rem 0; overflow-wrap: anywhere; cursor: pointer; }
+.scorm-question input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.scorm-check { display: none; }
+.wt-js .scorm-check { display: block; margin: 0; }
+.scorm-result { margin: .75rem 0 0; font-weight: 600; }
+.scorm-result:empty { display: none; }

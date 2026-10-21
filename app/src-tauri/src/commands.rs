@@ -24,7 +24,7 @@ use crate::editor::{
 };
 use crate::export::{
     self, with_extension, BrandingRequest, ChosenPaths, ExportPreview, ExportResult, Format,
-    MotionRequest, SkillRequest,
+    MotionRequest, ScormRequest, SkillRequest,
 };
 use crate::settings::SettingsStore;
 
@@ -586,10 +586,12 @@ pub async fn export_guide(
     review_details: bool,
     motion: Option<MotionRequest>,
     skill: Option<SkillRequest>,
+    scorm: Option<ScormRequest>,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
     let skill = skill.unwrap_or_default();
+    let scorm = scorm.unwrap_or_default();
     with_session(cell, move |s| {
         export::export_guide(
             s,
@@ -603,6 +605,7 @@ pub async fn export_guide(
             review_details,
             &motion,
             &skill,
+            &scorm,
         )
     })
     .await
@@ -622,10 +625,12 @@ pub async fn preview_export(
     review_details: bool,
     motion: Option<MotionRequest>,
     skill: Option<SkillRequest>,
+    scorm: Option<ScormRequest>,
 ) -> Result<ExportPreview> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
     let skill = skill.unwrap_or_default();
+    let scorm = scorm.unwrap_or_default();
     with_session(cell, move |s| {
         export::preview_guide(
             s,
@@ -637,6 +642,7 @@ pub async fn preview_export(
             review_details,
             &motion,
             &skill,
+            &scorm,
         )
     })
     .await

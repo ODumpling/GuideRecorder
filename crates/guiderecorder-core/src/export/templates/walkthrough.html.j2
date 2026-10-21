@@ -68,6 +68,9 @@
 <h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1">{{ labels.done }}</h2>
 <p>{{ labels.done_text }}</p>
 {{- notes(slide.notes) }}
+{%- if extra_end %}
+{{ extra_end }}
+{%- endif %}
 <p class="wt-actions"><button type="button" class="wt-button wt-primary" data-restart>{{ labels.restart }}</button></p>
 {%- else %}
 {%- if slide.section %}
@@ -117,6 +120,9 @@
 </nav>
 </div>
 </main>
+{%- if extra_script %}
+<script>{{ extra_script }}</script>
+{%- endif %}
 <script>{{ script }}</script>
 </body>
 </html>

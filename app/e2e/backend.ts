@@ -102,9 +102,10 @@ export class Backend {
     branding: ExportBranding;
     motion?: unknown;
     skill?: unknown;
+    scorm?: unknown;
   }[] = [];
   /** Every `preview_export` call. */
-  readonly previews: { format: string; branding: ExportBranding }[] = [];
+  readonly previews: { format: string; branding: ExportBranding; scorm?: unknown }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
@@ -922,8 +923,8 @@ export class Backend {
       case "choose_logo":
         return this.dialog.logo;
       case "choose_export_file": {
-        const ext = String(args.format);
-        if (!["docx", "pdf", "pptx", "mp4", "gif"].includes(ext)) {
+        const ext = args.format === "scorm" ? "zip" : String(args.format);
+        if (!["docx", "pdf", "pptx", "mp4", "gif", "zip"].includes(ext)) {
           fail("invalid", "Markdown, HTML and skills export into a folder");
         }
         const file = this.dialog.file;
@@ -943,7 +944,9 @@ export class Backend {
             ? { ...record, motion: args.motion }
             : format === "skill"
               ? { ...record, skill: args.skill }
-              : record,
+              : format === "scorm"
+                ? { ...record, scorm: args.scorm }
+                : record,
         );
         const main =
           format === "md"
@@ -957,7 +960,11 @@ export class Backend {
       }
       case "preview_export": {
         this.bundle(String(args.guideId));
-        this.previews.push({ format: String(args.format), branding: args.branding as ExportBranding });
+        this.previews.push({
+          format: String(args.format),
+          branding: args.branding as ExportBranding,
+          ...(args.format === "scorm" ? { scorm: args.scorm } : {}),
+        });
         const page = (n: number) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="14"><text y="10">${n}</text></svg>`)}`;
         switch (String(args.format)) {
           case "md":
@@ -970,6 +977,7 @@ export class Backend {
             };
           case "html":
           case "walkthrough":
+          case "scorm":
             return { kind: "html", html: "<!doctype html><title>Guide</title><h1>Guide</h1>" };
           case "pptx":
             return { kind: "slides", images: [page(1), page(2)] };

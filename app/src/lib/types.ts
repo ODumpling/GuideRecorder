@@ -74,7 +74,23 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif" | "skill";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif" | "skill" | "scorm";
+
+/** When an LMS counts a SCORM course as done (core `export::scorm::Completion`). */
+export type ScormCompletion = "lastStep" | "quizPassed";
+
+/** SCORM package options (core `export::scorm::ScormOptions`). */
+export interface ScormOptions {
+  /** Course title; blank: the guide title. */
+  title: string;
+  /** Course identifier; blank: `guiderecorder-<guide id>`. */
+  identifier: string;
+  completion: ScormCompletion;
+  /** 0 to 100: the quiz score that passes. */
+  masteryScore: number;
+  /** The quiz as text (a line per question, `- [x]` / `- [ ]` choices); blank for none. */
+  quiz: string;
+}
 
 /** Agent skill options (core `export::skill::SkillOptions`). */
 export interface SkillOptions {

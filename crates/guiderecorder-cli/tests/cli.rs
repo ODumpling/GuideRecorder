@@ -816,6 +816,7 @@ fn export_each_format() {
         ("pptx", "drucker.pptx", ""),
         ("gif", "drucker.gif", ""),
         ("skill", "skill", "SKILL.md"),
+        ("scorm", "drucker.zip", ""),
     ];
     for (format, out_name, main) in cases {
         let out = fx.out(out_name);
@@ -853,6 +854,8 @@ fn export_each_format() {
     assert!(pptx.starts_with(b"PK"));
     let gif = fs::read(fx.out("drucker.gif")).unwrap();
     assert!(gif.starts_with(b"GIF89a"));
+    let scorm = fs::read(fx.out("drucker.zip")).unwrap();
+    assert!(scorm.starts_with(b"PK"));
     assert_eq!(fx.snapshot(), before, "export changed the library");
 }
 
@@ -929,6 +932,7 @@ fn export_refuses_to_overwrite_unless_asked() {
         ("pptx", "a.pptx"),
         ("gif", "a.gif"),
         ("skill", "skill"),
+        ("scorm", "a.zip"),
     ] {
         let out = fx.out(name);
         fx.export_json(DRUCKER, format, &out, &[]);
@@ -1075,6 +1079,81 @@ fn export_skill_with_replay_script() {
     // Without --replay, replacing the export drops the old script.
     fx.export_json(CALENDAR, "skill", &out, &["--overwrite"]);
     assert!(!out.join("replay.js").exists());
+}
+
+/// The entry `name` of the zip at `path`, as text.
+fn zip_entry(path: &Path, name: &str) -> String {
+    let mut zip = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut text).unwrap();
+    text
+}
+
+#[test]
+fn export_scorm_with_quiz_and_course_options() {
+    let fx = Fixture::new();
+    let quiz = fx.dir.path().join("quiz.md");
+    fs::write(
+        &quiz,
+        "Who gets the invite?\n- [ ] Nobody\n- [x] The people you add\n",
+    )
+    .unwrap();
+    let out = fx.out("course.zip");
+    let report = fx.export_json(
+        CALENDAR,
+        "scorm",
+        &out,
+        &[
+            "--course-title",
+            "Calendar basics",
+            "--course-id",
+            "cal-101",
+            "--completion",
+            "quiz-passed",
+            "--mastery-score",
+            "100",
+            "--quiz",
+            quiz.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(files(&report), std::slice::from_ref(&out));
+    let manifest = zip_entry(&out, "imsmanifest.xml");
+    assert!(manifest.contains("<manifest identifier=\"cal-101\""));
+    assert!(manifest.contains("<title>Calendar basics</title>"));
+    assert!(manifest.contains("<adlcp:masteryscore>100</adlcp:masteryscore>"));
+    let page = zip_entry(&out, "guide.html");
+    assert!(page.contains("data-completion=\"quiz-passed\" data-mastery=\"100\""));
+    assert!(page.contains("<legend>1. Who gets the invite?</legend>"));
+
+    // The quiz rule needs a quiz; a bad quiz names its line; a score over
+    // 100 is a usage error.
+    let none = fx.export(
+        CALENDAR,
+        "scorm",
+        &fx.out("none.zip"),
+        &["--completion", "quiz-passed"],
+    );
+    assert_eq!(none.status.code(), Some(1));
+    assert!(stderr(&none).contains("needs a quiz"), "{}", stderr(&none));
+    fs::write(&quiz, "Q?\n- [x] A\n").unwrap();
+    let bad = fx.export(
+        CALENDAR,
+        "scorm",
+        &fx.out("bad.zip"),
+        &["--quiz", quiz.to_str().unwrap()],
+    );
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stderr(&bad).contains("quiz line 1"), "{}", stderr(&bad));
+    let over = fx.export(
+        CALENDAR,
+        "scorm",
+        &fx.out("over.zip"),
+        &["--mastery-score", "101"],
+    );
+    assert_eq!(over.status.code(), Some(2));
+    for name in ["none.zip", "bad.zip", "over.zip"] {
+        assert!(!fx.out(name).exists(), "{name}");
+    }
 }
 
 #[test]
