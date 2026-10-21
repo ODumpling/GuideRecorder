@@ -301,9 +301,15 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            // After `QuitGate::restart` (an update, a Screen Recording grant).
-            RunEvent::Exit if app.state::<Arc<commands::QuitGate>>().restart_requested() => {
-                tauri::process::restart(&app.env());
+            RunEvent::Exit => {
+                // After `QuitGate::restart` (an update, a Screen Recording grant).
+                let restart = app.state::<Arc<commands::QuitGate>>().restart_requested();
+                // On Windows a downloaded update installs now, and the
+                // installer restarts the app; see `updater::install_on_exit`.
+                updater::install_on_exit(app, restart);
+                if restart {
+                    tauri::process::restart(&app.env());
+                }
             }
             _ => {}
         });

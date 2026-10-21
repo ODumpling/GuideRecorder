@@ -21,7 +21,7 @@ test.describe("with an update available", () => {
     const banner = page.getByRole("status", { name: "Update" });
     await expect(banner).toContainText("GuideRecorder 0.2.0 is available.");
     await banner.getByRole("button", { name: "Install update" }).click();
-    await expect(banner).toContainText("GuideRecorder 0.2.0 is installed");
+    await expect(banner).toContainText("GuideRecorder 0.2.0 is ready");
     await banner.getByRole("button", { name: "Restart now" }).click();
     await expect.poll(() => backend.restartedToUpdate).toBe(true);
   });

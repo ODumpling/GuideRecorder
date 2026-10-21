@@ -76,6 +76,11 @@ and holds the updater's public key. `src-tauri/src/updater.rs`:
   clicks **Install update**;
 - **Restart now** quits through the normal quit flow (the open guide is
   saved, a recording is stopped and saved) and starts the new version.
+- on Windows, **Install update** only downloads it: the updater's install
+  runs the installer and ends the app on the spot, past the quit flow. The
+  installer runs as the app exits instead, after the quit flow, and starts
+  the new version after **Restart now** (or just installs it after an
+  ordinary quit).
 
 The download is verified against the public key before it is installed.
 macOS keeps Screen Recording and Accessibility grants across updates
