@@ -475,6 +475,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
                 show: ImageShow::Full,
             },
             annotations: if i == 0 { hotspots.clone() } else { Vec::new() },
+            narration: String::new(),
             ai_state: AiState::default(),
         }));
         items.push(Item::Note(Note {

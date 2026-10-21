@@ -589,6 +589,7 @@ impl Builder {
                 show: ImageShow::Crop,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         })
     }
@@ -618,6 +619,7 @@ impl Builder {
                 show: ImageShow::Full,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         })
     }
@@ -644,6 +646,7 @@ impl Builder {
                 show: ImageShow::Full,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         })
     }

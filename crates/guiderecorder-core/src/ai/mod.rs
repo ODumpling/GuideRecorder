@@ -161,6 +161,9 @@ pub struct StepInput {
     pub next_title: Option<String>,
     /// Current guide title, if any.
     pub guide_title: Option<String>,
+    /// What the author said during the step, transcribed on the device
+    /// ([`Step::narration`](crate::model::Step)); `None` when nothing was.
+    pub narration: Option<String>,
     /// BCP 47 output language, e.g. `en`.
     pub language: String,
     pub audience: Audience,
@@ -186,6 +189,8 @@ pub struct GuideStepText {
     pub title: String,
     pub description: String,
     pub app: Option<String>,
+    /// What the author said during the step; `None` when nothing was.
+    pub narration: Option<String>,
     /// False for user-edited steps; edits proposed for them are dropped.
     pub editable: bool,
 }

@@ -207,6 +207,13 @@ export interface Settings {
     typingIdleMs: number;
     /** Briefly show a ring on screen where each click was captured. */
     clickRing: boolean;
+    /** Narrating while recording: the toolbar's microphone, transcribed on this computer. */
+    narration: {
+      /** The microphone is on when a recording starts (the toolbar turns it on and off). */
+      enabled: boolean;
+      /** Keep the audio in the guide's folder (`narration.m4a`); it is never synced. */
+      keepAudio: boolean;
+    };
   };
   ai: {
     enabled: boolean;
@@ -297,7 +304,8 @@ export interface LibraryInfo {
   defaultPath: string | null;
 }
 
-export type Permission = "screen_recording" | "accessibility" | "input_monitoring";
+/** Recording needs the first three; narration also needs `microphone` and `speech_recognition`. */
+export type Permission = "screen_recording" | "accessibility" | "input_monitoring" | "microphone" | "speech_recognition";
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unknown";
 
 /** A row of `permission_status`. */
@@ -368,6 +376,20 @@ export interface RecordingSaved {
   appliedBlurs: number;
   /** Steps that could not be scanned for sensitive text. */
   unscannedSteps: number;
+  /** Steps that got some of what was said while narrating. */
+  narratedSteps: number;
+}
+
+/** The toolbar's microphone (`narration_state`, `recording://narration`). */
+export interface NarrationState {
+  /** Narration works on this computer (macOS). */
+  supported: boolean;
+  /** On: what is said is transcribed while recording. Outside a recording, the same as `enabled`. */
+  on: boolean;
+  /** Whether the next recording starts with the microphone on (`recording.narration.enabled`). */
+  enabled: boolean;
+  /** Why the microphone could not be turned on. */
+  error: string | null;
 }
 
 /**

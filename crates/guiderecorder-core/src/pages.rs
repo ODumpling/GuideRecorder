@@ -184,6 +184,7 @@ pub fn image_step(
             show: ImageShow::Full,
         },
         annotations: Vec::new(),
+        narration: String::new(),
         ai_state: AiState::default(),
     })
 }

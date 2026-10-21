@@ -103,3 +103,42 @@ test("toolbar stops the recording and leaves the guide to the main window", asyn
   // The toolbar opens nothing itself.
   expect(backend.calls.filter((c) => c.cmd === "open_guide")).toHaveLength(0);
 });
+
+test("toolbar microphone narrates, says what is missing, and is remembered", async ({ page, backend }) => {
+  await startRecording(backend);
+  const toolbar = await openToolbar(page);
+  const turnOn = toolbar.getByRole("button", { name: "Turn the microphone on" });
+  await expect(turnOn).toHaveAttribute("aria-pressed", "false");
+
+  // Without its permissions it stays off and says why; it never prompts.
+  await turnOn.click();
+  await expect(turnOn).toHaveAttribute(
+    "title",
+    "Couldn't turn the microphone on: Allow GuideRecorder to use the microphone in Settings → Permissions.",
+  );
+  expect(backend.narrationOn).toBe(false);
+  expect(backend.calls.some((c) => c.cmd === "request_permission")).toBe(false);
+
+  // Allowed: on for this recording, and stored for the next one.
+  backend.narrationPermissions.microphone = "granted";
+  backend.narrationPermissions.speech_recognition = "granted";
+  await turnOn.click();
+  const turnOff = toolbar.getByRole("button", { name: "Turn the microphone off" });
+  await expect(turnOff).toHaveAttribute("aria-pressed", "true");
+  expect(backend.narrationOn).toBe(true);
+  expect(backend.settings.recording.narration.enabled).toBe(true);
+
+  // Pausing keeps it on, paused with the recording.
+  await toolbar.getByRole("button", { name: "Pause recording" }).click();
+  await expect(turnOff).toHaveAttribute("title", "Microphone on, and paused with the recording");
+  await toolbar.getByRole("button", { name: "Resume recording" }).click();
+  await expect(toolbar.getByRole("status")).toHaveText("Recording");
+
+  await toolbar.getByRole("button", { name: "Stop recording" }).click();
+  await expect.poll(() => backend.recordings.length).toBe(1);
+  expect(backend.recordings[0].narratedSteps).toBe(1);
+
+  // The next recording starts with it on.
+  await startRecording(backend);
+  expect(backend.narrationOn).toBe(true);
+});

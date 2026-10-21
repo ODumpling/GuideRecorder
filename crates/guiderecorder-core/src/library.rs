@@ -9,6 +9,7 @@
 //!     guide.json
 //!     steps/      <ulid>.webp, <ulid>.crop.webp, <ulid>.after.webp
 //!     assets/     manually inserted images
+//!     narration.m4a  audio of a narrated recording, when kept
 //!     .backup/    pre-migration copies of guide.json
 //!     .history/   saved versions (see [`crate::history`])
 //!   Work/                 a folder: any plain directory
@@ -85,6 +86,10 @@ pub const GUIDE_FILE: &str = "guide.json";
 pub const STEPS_DIR: &str = "steps";
 /// Manually inserted images.
 pub const ASSETS_DIR: &str = "assets";
+/// The audio of a narrated recording, kept when the settings ask for it
+/// (see [`crate::narration`]). Local only: sync never uploads it, and a
+/// duplicate does not copy it.
+pub const NARRATION_AUDIO_FILE: &str = "narration.m4a";
 /// Pre-migration copies of `guide.json`.
 pub const BACKUP_DIR: &str = ".backup";
 /// Largest WebP width or height.

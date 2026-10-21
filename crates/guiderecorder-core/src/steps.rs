@@ -158,6 +158,7 @@ impl DraftStep {
             keystrokes: self.keystrokes,
             image,
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         }
     }
@@ -829,7 +830,7 @@ fn contains(r: Rect, p: Point) -> bool {
 /// Escapes text for the guide Markdown subset. Runs of whitespace (including
 /// line breaks) become one space and the ends are trimmed, as normalizing
 /// would do.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for (i, word) in text.split_whitespace().enumerate() {
         if i > 0 {

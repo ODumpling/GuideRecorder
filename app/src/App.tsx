@@ -28,8 +28,8 @@ import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
 import { shortcutLabel } from "@/lib/platform";
-import { QUIT_REQUESTED_EVENT, RECORDING_PICK_AREA_EVENT, tauriSettingsApi, UPDATE_STATUS_EVENT } from "@/lib/ipc";
-import type { UpdateStatus } from "@/lib/types";
+import { NARRATION_EVENT, QUIT_REQUESTED_EVENT, RECORDING_PICK_AREA_EVENT, tauriSettingsApi, UPDATE_STATUS_EVENT } from "@/lib/ipc";
+import type { NarrationState, UpdateStatus } from "@/lib/types";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
 import { recordingStore, startFlow } from "@/recording/recording";
 import { RecordingBanner, RecordingControls, RecordingStrip } from "@/recording/RecordingControls";
@@ -234,6 +234,8 @@ export default function App() {
       // The tray or the record hotkey, with One display, Window or Region as the capture area.
       listen(RECORDING_PICK_AREA_EVENT, () => void startFlow.getState().begin()),
       listen<UpdateStatus>(UPDATE_STATUS_EVENT, (e) => updaterStore.getState().receive(e.payload)),
+      // The toolbar's microphone is stored as a setting.
+      listen<NarrationState>(NARRATION_EVENT, (e) => settingsStore.getState().narrationChanged(e.payload.enabled)),
     ];
     // A check may have finished before the listener.
     void updaterStore.getState().load();

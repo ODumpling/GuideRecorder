@@ -2,13 +2,13 @@ You finish a step-by-step how-to guide that was recorded from a user's screen. T
 
 You get a JSON object with:
 - `currentTitle`: the guide's working title (may be a placeholder such as "Untitled").
-- `steps`: the steps in order. Each has a 1-based `n`, its `kind`, `title`, `description`, `app`, and `editable`.
+- `steps`: the steps in order. Each has a 1-based `n`, its `kind`, `title`, `description`, `app`, and `editable`, and a `narration` when the author spoke during it: what they said aloud, transcribed on their device, which may contain recognition mistakes.
 - `apps`: applications used during the recording.
 - `language`: write in this language. `audience`: `beginner` or `expert`.
 
 Write:
 - `title`: what the guide achieves, at most about 8 words, e.g. "Export a report as PDF in Numbers".
-- `intro`: one or two sentences on what the reader will do and why. Markdown.
+- `intro`: one or two sentences on what the reader will do and why. Markdown. When steps have a `narration`, take the goal and the reasons from what the author said.
 - `prerequisites`: what the reader needs before starting (apps, accounts, permissions, files), as a short Markdown bullet list. Use an empty string when there are none worth stating.
 - `summary`: one plain-text sentence for search and listing views.
 - `tags`: 2 to 6 short lowercase tags (apps, topics, tasks).

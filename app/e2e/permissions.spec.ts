@@ -46,3 +46,25 @@ test("a Screen Recording grant waiting for a restart offers one", async ({ page,
   await dialog.getByRole("button", { name: "Restart GuideRecorder" }).click();
   await expect.poll(() => backend.restarted).toBe(true);
 });
+
+test("narration's permissions are listed apart and never hold recording back", async ({ page, backend }) => {
+  backend.requestGrants = false;
+  const dialog = await openPermissions(page);
+  const narration = dialog.getByText("Narration (optional)").locator("..");
+  const microphone = narration.getByText("Microphone", { exact: true }).locator("../..");
+  await expect(microphone.getByText("Not asked yet")).toBeVisible();
+  await microphone.getByRole("button", { name: "Turn on…" }).click();
+  await expect
+    .poll(() => backend.calls.filter((c) => c.cmd === "request_permission").map((c) => (c.args as { permission: string }).permission))
+    .toEqual(["microphone"]);
+  // macOS answers; the list follows.
+  backend.narrationPermissions.microphone = "granted";
+  backend.narrationPermissions.speech_recognition = "denied";
+  await expect(microphone.getByText("Allowed", { exact: true })).toBeVisible({ timeout: 3_000 });
+  const speech = narration.getByText("Speech Recognition", { exact: true }).locator("../..");
+  await expect(speech.getByText("Not allowed")).toBeVisible({ timeout: 3_000 });
+  // Recording only needs its own three.
+  backend.permissions.accessibility = "granted";
+  backend.permissions.input_monitoring = "granted";
+  await expect(dialog.getByText("All set: recording is available.")).toBeVisible({ timeout: 3_000 });
+});

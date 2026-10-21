@@ -37,6 +37,7 @@
     ],
     "macOS": {
       "signingIdentity": "GuideRecorder Local Dev",
+      "entitlements": "Entitlements.plist",
       "minimumSystemVersion": "12.3"
     }
   },

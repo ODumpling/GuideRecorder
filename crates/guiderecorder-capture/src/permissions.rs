@@ -2,7 +2,12 @@
 //!
 //! These are macOS's (TCC). Windows asks for none of them: desktop apps
 //! may capture the screen, hook input and use UI Automation, so every
-//! permission reports [`PermissionStatus::Granted`] there.
+//! permission recording needs reports [`PermissionStatus::Granted`] there.
+//!
+//! Recording needs [`Permission::ALL`]. Narration (#13, see
+//! [`crate::narration`]) needs [`Permission::NARRATION`] as well, but only
+//! when it is turned on: those never hold a recording back. Where narration
+//! is not supported they report [`PermissionStatus::Unknown`].
 //!
 //! [`check`] / [`check_all`] are side-effect free and cheap enough to poll for
 //! a live checklist. [`request`] may show a system prompt and must only be
@@ -26,21 +31,29 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A TCC permission GuideRecorder needs to record.
+/// A TCC permission GuideRecorder needs to record, or to narrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
     ScreenRecording,
     Accessibility,
     InputMonitoring,
+    /// Narration: hearing the microphone.
+    Microphone,
+    /// Narration: transcribing it (always on the device).
+    SpeechRecognition,
 }
 
 impl Permission {
+    /// What every recording needs.
     pub const ALL: [Permission; 3] = [
         Permission::ScreenRecording,
         Permission::Accessibility,
         Permission::InputMonitoring,
     ];
+
+    /// What narrating a recording needs, on top of [`Permission::ALL`].
+    pub const NARRATION: [Permission; 2] = [Permission::Microphone, Permission::SpeechRecognition];
 }
 
 /// Current grant state of a [`Permission`].
@@ -51,7 +64,8 @@ pub enum PermissionStatus {
     /// Not granted. For Screen Recording and Accessibility the OS cannot
     /// distinguish "denied" from "never asked", so both report `Denied`.
     Denied,
-    /// The user has not been asked yet (Input Monitoring only).
+    /// The user has not been asked yet (Input Monitoring, Microphone and
+    /// Speech Recognition only).
     NotDetermined,
     /// Status can't be determined: unsupported platform, or the OS returned
     /// an unexpected value (e.g. an undocumented `IOHIDAccessType`).
@@ -64,7 +78,8 @@ impl PermissionStatus {
     }
 }
 
-/// Snapshot of every [`Permission`]'s status.
+/// Snapshot of the status of every [`Permission`] recording needs
+/// ([`Permission::ALL`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionReport {
     pub screen_recording: PermissionStatus,
@@ -73,11 +88,14 @@ pub struct PermissionReport {
 }
 
 impl PermissionReport {
+    /// The status of `permission`; checked live for the narration ones,
+    /// which the report does not hold.
     pub fn get(&self, permission: Permission) -> PermissionStatus {
         match permission {
             Permission::ScreenRecording => self.screen_recording,
             Permission::Accessibility => self.accessibility,
             Permission::InputMonitoring => self.input_monitoring,
+            Permission::Microphone | Permission::SpeechRecognition => check(permission),
         }
     }
 
@@ -106,6 +124,12 @@ pub fn settings_url(permission: Permission) -> &'static str {
         Permission::InputMonitoring => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         }
+        Permission::Microphone => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        Permission::SpeechRecognition => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        }
     }
 }
 
@@ -118,12 +142,17 @@ pub fn check(permission: Permission) -> PermissionStatus {
             Permission::ScreenRecording => sys::check_screen_recording(),
             Permission::Accessibility => sys::check_accessibility(),
             Permission::InputMonitoring => sys::check_input_monitoring(),
+            Permission::Microphone => sys::check_microphone(),
+            Permission::SpeechRecognition => sys::check_speech_recognition(),
         }
     }
     #[cfg(windows)]
     {
-        let _ = permission;
-        PermissionStatus::Granted
+        if Permission::NARRATION.contains(&permission) {
+            PermissionStatus::Unknown
+        } else {
+            PermissionStatus::Granted
+        }
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
@@ -169,12 +198,13 @@ pub fn request(permission: Permission) -> PermissionStatus {
             Permission::ScreenRecording => sys::request_screen_recording(),
             Permission::Accessibility => sys::request_accessibility(),
             Permission::InputMonitoring => sys::request_input_monitoring(),
+            Permission::Microphone => sys::request_microphone(),
+            Permission::SpeechRecognition => sys::request_speech_recognition(),
         }
     }
     #[cfg(windows)]
     {
-        let _ = permission;
-        PermissionStatus::Granted
+        check(permission)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
@@ -196,7 +226,7 @@ mod tests {
     #[test]
     fn settings_url_covers_every_permission() {
         let mut seen = std::collections::HashSet::new();
-        for p in Permission::ALL {
+        for p in Permission::ALL.into_iter().chain(Permission::NARRATION) {
             let url = settings_url(p);
             assert!(url.starts_with("x-apple.systempreferences:"), "{url}");
             assert!(url.contains("?Privacy_"), "{url}");
@@ -216,6 +246,13 @@ mod tests {
         assert!(Permission::ALL
             .into_iter()
             .all(|p| check(p) == PermissionStatus::Unknown));
+        // Narration is never part of what recording needs.
+        for p in Permission::NARRATION {
+            assert!(!Permission::ALL.contains(&p));
+            assert_eq!(report.get(p), check(p));
+            #[cfg(not(target_os = "macos"))]
+            assert_eq!(check(p), PermissionStatus::Unknown);
+        }
     }
 
     #[test]
@@ -236,6 +273,8 @@ mod tests {
     fn serializes_snake_case() {
         let json = serde_json::to_string(&Permission::InputMonitoring).unwrap();
         assert_eq!(json, "\"input_monitoring\"");
+        let json = serde_json::to_string(&Permission::SpeechRecognition).unwrap();
+        assert_eq!(json, "\"speech_recognition\"");
         let json = serde_json::to_string(&PermissionStatus::NotDetermined).unwrap();
         assert_eq!(json, "\"not_determined\"");
     }

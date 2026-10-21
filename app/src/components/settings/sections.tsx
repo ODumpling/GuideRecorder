@@ -463,6 +463,8 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
   useEffect(refreshHotkeyErrors, [refreshHotkeyErrors]);
   const setRecording = (patch: Partial<Settings["recording"]>) =>
     change((s) => ({ ...s, recording: { ...s.recording, ...patch } }));
+  const setNarration = (patch: Partial<Settings["recording"]["narration"]>) =>
+    change((s) => ({ ...s, recording: { ...s.recording, narration: { ...s.recording.narration, ...patch } } }));
   // Record and pause are registered as the change is saved: check them after.
   const setHotkey = (name: keyof Settings["recording"]["hotkeys"], value: string) => {
     if (!isHotkey(value)) return;
@@ -535,6 +537,32 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
           onChange={(clickRing) => setRecording({ clickRing })}
         />
       </Row>
+      {narrationSupported() && (
+        <>
+          <Row
+            label="Narrate"
+            note={`Start recording with the microphone on, and say what you're doing. It is transcribed on ${thisComputer()} and becomes the steps' descriptions. The toolbar's microphone turns it on and off.`}
+          >
+            <Toggle
+              label="Narrate"
+              checked={r.narration.enabled}
+              disabled={readOnly}
+              onChange={(enabled) => setNarration({ enabled })}
+            />
+          </Row>
+          <Row
+            label="Keep narration audio"
+            note={`Save the audio in the guide's folder too (narration.m4a). It stays on ${thisComputer()} and is never synced.`}
+          >
+            <Toggle
+              label="Keep narration audio"
+              checked={r.narration.keepAudio}
+              disabled={readOnly}
+              onChange={(keepAudio) => setNarration({ keepAudio })}
+            />
+          </Row>
+        </>
+      )}
       <Row
         label="Typing pause"
         note={`A pause this long ends a typing step (${TYPING_IDLE_MS.min}–${TYPING_IDLE_MS.max} ms).`}
@@ -1070,7 +1098,17 @@ const PERMISSIONS: Record<Permission, { label: string; why: string }> = {
   screen_recording: { label: "Screen Recording", why: "Takes the screenshots for each step." },
   accessibility: { label: "Accessibility", why: "Names the button or field you clicked." },
   input_monitoring: { label: "Input Monitoring", why: "Notices your clicks and typing while recording." },
+  microphone: { label: "Microphone", why: "Hears you narrate, only while the toolbar's microphone is on." },
+  speech_recognition: {
+    label: "Speech Recognition",
+    why: "Turns what you say into text, on this Mac: the audio is never sent anywhere.",
+  },
 };
+
+/** Narration works on macOS only (the Speech framework, on the device). */
+export function narrationSupported(): boolean {
+  return !isWindows();
+}
 
 const STATUS: Record<PermissionStatus, { label: string; color: string }> = {
   granted: { label: "Allowed", color: "var(--status-success)" },
@@ -1106,14 +1144,23 @@ function howTo(permission: Permission): string {
  * has one button: the first time it asks macOS (which adds GuideRecorder
  * to the list in System Settings, and may show its own prompt); after
  * that it opens the right System Settings pane. A Screen Recording grant
- * that macOS applies only at launch offers a restart.
+ * that macOS applies only at launch offers a restart. With `narration`, it
+ * lists the optional ones narration needs instead.
  */
-export function PermissionList({ api, onRows }: { api: SettingsApi; onRows?(rows: PermissionRow[]): void }) {
+export function PermissionList({
+  api,
+  onRows,
+  narration = false,
+}: {
+  api: SettingsApi;
+  onRows?(rows: PermissionRow[]): void;
+  narration?: boolean;
+}) {
   const [rows, setRows] = useState<PermissionRow[] | null>(null);
   const [asked, setAsked] = useState<Permission[]>(readAsked);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
-    api.permissions().then(
+    (narration ? api.narrationPermissions() : api.permissions()).then(
       (r) => {
         setRows(r);
         onRows?.(r);
@@ -1121,7 +1168,7 @@ export function PermissionList({ api, onRows }: { api: SettingsApi; onRows?(rows
       },
       (e) => setError(errorMessage(e)),
     );
-  }, [api, onRows]);
+  }, [api, onRows, narration]);
   useEffect(() => {
     refresh();
     const onVisible = () => document.visibilityState === "visible" && refresh();
@@ -1216,7 +1263,22 @@ export function PermissionsSection({ api }: { api: SettingsApi }) {
           macOS applies Screen Recording when GuideRecorder starts. Restart saves the open guide first.
         </p>
       )}
+      {narrationSupported() && <NarrationPermissions api={api} />}
     </Section>
+  );
+}
+
+/** The optional permissions narration needs, under their own heading. */
+export function NarrationPermissions({ api }: { api: SettingsApi }) {
+  return (
+    <div className="mt-4 flex flex-col gap-1">
+      <span className="text-sm font-medium">Narration (optional)</span>
+      <span className="text-xs text-muted-foreground">
+        To narrate while you record, allow these too. Speech is transcribed on this Mac; the audio never leaves it.
+        Recording works without them.
+      </span>
+      <PermissionList api={api} narration />
+    </div>
   );
 }
 

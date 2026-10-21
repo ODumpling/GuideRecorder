@@ -407,6 +407,33 @@ pub async fn permission_status() -> Result<Vec<PermissionRow>> {
     .await
 }
 
+/// The status of the permissions narration needs (Microphone, Speech
+/// Recognition): none where narration is not supported. Optional: they
+/// never hold a recording back. Never prompts.
+#[tauri::command]
+pub async fn narration_permissions() -> Result<Vec<PermissionRow>> {
+    blocking(|| {
+        Ok(narration_rows(
+            guiderecorder_capture::narration::is_supported(),
+        ))
+    })
+    .await
+}
+
+fn narration_rows(supported: bool) -> Vec<PermissionRow> {
+    if !supported {
+        return Vec::new();
+    }
+    Permission::NARRATION
+        .into_iter()
+        .map(|permission| PermissionRow {
+            permission,
+            status: permissions::check(permission),
+            restart_needed: false,
+        })
+        .collect()
+}
+
 /// Quits through the quit flow (the editor saves first) and starts the app
 /// again, e.g. for a Screen Recording grant macOS applies only at launch.
 #[tauri::command]
@@ -455,6 +482,8 @@ pub fn ensure_can_record() -> Result<()> {
             Permission::ScreenRecording => "Screen Recording",
             Permission::Accessibility => "Accessibility",
             Permission::InputMonitoring => "Input Monitoring",
+            Permission::Microphone => "Microphone",
+            Permission::SpeechRecognition => "Speech Recognition",
         })
         .collect();
     Err(AppError::new(

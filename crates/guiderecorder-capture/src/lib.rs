@@ -15,6 +15,7 @@ pub mod frames;
 pub mod keys;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod narration;
 pub mod ocr;
 pub mod permissions;
 #[cfg(any(target_os = "macos", windows))]

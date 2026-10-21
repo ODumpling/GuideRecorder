@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the app's Info.plist by Tauri. The prompts narration (#13) needs. -->
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>GuideRecorder hears you narrate a recording, only while the toolbar's microphone is on.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>GuideRecorder turns your narration into step descriptions on this Mac. Your audio is never sent anywhere.</string>
+</dict>
+</plist>

@@ -26,6 +26,13 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await pause.press("Enter");
   await expect.poll(() => backend.settings.recording.typingIdleMs).toBe(2000);
 
+  // Narration: off by default, audio not kept.
+  const narrate = dialog.getByRole("switch", { name: "Narrate" });
+  await expect(narrate).not.toBeChecked();
+  await narrate.click();
+  await dialog.getByRole("switch", { name: "Keep narration audio" }).click();
+  await expect.poll(() => backend.settings.recording.narration).toEqual({ enabled: true, keepAudio: true });
+
   // Excluded apps: a vendor prefix is refused with a reason; a full id is added.
   const appId = dialog.getByLabel("App bundle id");
   await appId.fill("com.apple");

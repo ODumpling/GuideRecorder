@@ -149,6 +149,7 @@ mod tests {
             previous_title: None,
             next_title: None,
             guide_title: None,
+            narration: None,
             language: "en".into(),
             audience: Audience::Beginner,
         }
@@ -159,7 +160,7 @@ mod tests {
         let mock = MockProvider::new();
         let out = mock.generate_step(&step("Click OK")).await.unwrap();
         assert_eq!(out.title, "AI: Click OK");
-        assert_eq!(out.meta.prompt_version, "step.v1");
+        assert_eq!(out.meta.prompt_version, "step.v2");
         assert_eq!(mock.step_calls(), 1);
         assert_eq!(mock.seen_steps()[0].template_title, "Click OK");
     }

@@ -174,3 +174,64 @@ pub fn request_input_monitoring() -> PermissionStatus {
     unsafe { IOHIDRequestAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) };
     check_input_monitoring()
 }
+
+/// AVFoundation's microphone grant, for narration.
+pub fn check_microphone() -> PermissionStatus {
+    use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+    // SAFETY: a static NSString of AVFoundation's.
+    let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
+        return PermissionStatus::Unknown;
+    };
+    // SAFETY: a class method that never prompts.
+    match unsafe { AVCaptureDevice::authorizationStatusForMediaType(audio) } {
+        AVAuthorizationStatus::Authorized => PermissionStatus::Granted,
+        AVAuthorizationStatus::NotDetermined => PermissionStatus::NotDetermined,
+        AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted => {
+            PermissionStatus::Denied
+        }
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+/// Shows the microphone prompt if the user has not been asked yet
+/// (`NSMicrophoneUsageDescription` gives its text). Does not wait for the
+/// answer: returns the status as it is now, and the checklist polls.
+pub fn request_microphone() -> PermissionStatus {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
+    // SAFETY: as in `check_microphone`.
+    if let Some(audio) = unsafe { AVMediaTypeAudio } {
+        let answered = RcBlock::new(|_granted: Bool| {});
+        // SAFETY: the handler takes the grant as the method passes it, and
+        // is copied by it.
+        unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(audio, &answered) };
+    }
+    check_microphone()
+}
+
+/// The Speech framework's grant, for narration. Recognition only ever runs
+/// on the device (see `macos::narration`), but macOS asks all the same.
+pub fn check_speech_recognition() -> PermissionStatus {
+    use objc2_speech::{SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus as Status};
+    // SAFETY: a class method that never prompts.
+    match unsafe { SFSpeechRecognizer::authorizationStatus() } {
+        Status::Authorized => PermissionStatus::Granted,
+        Status::NotDetermined => PermissionStatus::NotDetermined,
+        Status::Denied | Status::Restricted => PermissionStatus::Denied,
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+/// Shows the speech recognition prompt if the user has not been asked yet
+/// (`NSSpeechRecognitionUsageDescription` gives its text; without it the
+/// app would crash). Does not wait for the answer.
+pub fn request_speech_recognition() -> PermissionStatus {
+    use block2::RcBlock;
+    use objc2_speech::{SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus};
+    let answered = RcBlock::new(|_status: SFSpeechRecognizerAuthorizationStatus| {});
+    // SAFETY: the handler takes the status as the method passes it, and is
+    // copied by it.
+    unsafe { SFSpeechRecognizer::requestAuthorization(&answered) };
+    check_speech_recognition()
+}

@@ -198,6 +198,7 @@ pub struct Recording {
     pub typing_idle_ms: u32,
     /// Briefly show a ring on screen where each click was captured.
     pub click_ring: bool,
+    pub narration: Narration,
 }
 
 impl Default for Recording {
@@ -210,8 +211,23 @@ impl Default for Recording {
             excluded_apps: default_excluded_apps(),
             typing_idle_ms: 1500,
             click_ring: false,
+            narration: Narration::default(),
         }
     }
+}
+
+/// Narrating while recording (#13): the microphone, transcribed on the
+/// device (see `recording`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Narration {
+    /// The toolbar's microphone: on when a recording starts. Off by
+    /// default; the toolbar turns it on and off, and the next recording
+    /// starts as the last one left it.
+    pub enabled: bool,
+    /// Keep the audio in the guide's folder (`narration.m4a`). It stays
+    /// on this computer: sync never uploads it.
+    pub keep_audio: bool,
 }
 
 /// The suggested exclusion list: password managers, Keychain Access,
@@ -1576,6 +1592,30 @@ mod tests {
         // Off unless chosen, also in a settings file from before the option.
         let old: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
         assert!(!old.mcp.writable);
+    }
+
+    #[test]
+    fn narration_is_off_by_default_and_round_trips() {
+        // Off, audio not kept, also in a settings file from before narration.
+        let old: Settings =
+            serde_json::from_str(r#"{"version":2,"recording":{"clickRing":true}}"#).unwrap();
+        assert_eq!(old.recording.narration, Narration::default());
+        assert!(!old.recording.narration.enabled);
+        assert!(!old.recording.narration.keep_audio);
+
+        let mut settings = Settings::default();
+        settings.recording.narration = Narration {
+            enabled: true,
+            keep_audio: true,
+        };
+        assert!(settings.validate().is_ok());
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            json["recording"]["narration"],
+            serde_json::json!({ "enabled": true, "keepAudio": true })
+        );
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back, settings);
     }
 
     #[test]

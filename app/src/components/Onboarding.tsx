@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
 import { Check, CircleAlert, FolderOpen, KeyRound, ShieldCheck } from "lucide-react";
-import { PermissionList } from "@/components/settings/sections";
+import { NarrationPermissions, narrationSupported, PermissionList } from "@/components/settings/sections";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { errorMessage, tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
@@ -35,6 +35,7 @@ function PermissionsStep({ api, onNext }: { api: SettingsApi; onNext(): void }) 
       <p className={cn("text-xs", granted ? "text-[var(--status-success)]" : "text-muted-foreground")}>
         {granted ? "All set: recording is available." : "Recording is off until every permission is allowed."}
       </p>
+      {narrationSupported() && <NarrationPermissions api={api} />}
       <div className="flex justify-end">
         <Button onClick={onNext}>{granted ? "Continue" : "Continue without recording"}</Button>
       </div>

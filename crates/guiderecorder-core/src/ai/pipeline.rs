@@ -281,6 +281,7 @@ pub fn step_input_text(guide: &Guide, index: usize) -> Option<StepInput> {
         previous_title: title_at(index.checked_sub(1)),
         next_title: title_at(Some(index + 1)),
         guide_title: (!guide.title.trim().is_empty()).then(|| guide.title.clone()),
+        narration: narration(step),
         language: guide.language.clone(),
         audience: guide.audience,
     })
@@ -430,6 +431,12 @@ pub fn encode_for_api(image: &RgbaImage, source_rect: Rect) -> Result<ImageData,
     })
 }
 
+/// A step's narration for a prompt; `None` when nothing was said.
+fn narration(step: &Step) -> Option<String> {
+    let text = step.narration.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 /// Input to the guide-level pass from the guide's current step texts.
 pub fn guide_input(guide: &Guide) -> GuideInput {
     let steps: Vec<GuideStepText> = guide
@@ -440,6 +447,7 @@ pub fn guide_input(guide: &Guide) -> GuideInput {
             title: step.title.clone(),
             description: step.description.clone(),
             app: step.element.as_ref().and_then(|e| e.app.clone()),
+            narration: narration(step),
             editable: step.ai_state.status != AiStatus::Edited,
         })
         .collect();
@@ -805,6 +813,7 @@ mod tests {
                 show: ImageShow::Crop,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState {
                 status,
                 ..AiState::default()
@@ -1280,6 +1289,28 @@ mod tests {
         assert_eq!(
             open.element.as_ref().unwrap().app.as_deref(),
             Some("Finder")
+        );
+    }
+
+    #[test]
+    fn inputs_carry_the_narration_of_narrated_steps() {
+        let mut g = guide(vec![
+            step("Click A", AiStatus::Template),
+            step("Click B", AiStatus::Template),
+        ]);
+        if let Some(Item::Step(step)) = g.items.get_mut(1) {
+            step.narration = "  and this one saves it ".into();
+        }
+        assert_eq!(step_input_text(&g, 0).unwrap().narration, None);
+        assert_eq!(
+            step_input_text(&g, 1).unwrap().narration.as_deref(),
+            Some("and this one saves it")
+        );
+        let input = guide_input(&g);
+        assert_eq!(input.steps[0].narration, None);
+        assert_eq!(
+            input.steps[1].narration.as_deref(),
+            Some("and this one saves it")
         );
     }
 

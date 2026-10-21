@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
-import { Camera, Check, LoaderCircle, Pause, Play, Plus, Square, TriangleAlert } from "lucide-react";
+import { Camera, Check, LoaderCircle, Mic, MicOff, Pause, Play, Plus, Square, TriangleAlert } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import { elapsedMs, formatElapsed, type RecordingStore } from "@/recording/store";
 import { feedVisible, type FeedStore } from "@/toolbar/feed";
 import { FeedPanel } from "@/toolbar/FeedPanel";
+import { micView, type MicStore } from "@/toolbar/narration";
 import { toolbarView, type ManualStepStore } from "@/toolbar/toolbar";
 
 /** Recorded time, ticking while recording and frozen while paused. */
@@ -29,19 +30,22 @@ function Elapsed({ recording }: { recording: RecordingStore }) {
 const HUD_BUTTON = "size-8 rounded-lg text-white/85 hover:bg-white/10 hover:text-white disabled:opacity-40";
 
 /**
- * The floating toolbar: state, clock, step count, and Pause/Resume, Manual
- * step, Stop; the live feed panel under it. The window is sized to fit
+ * The floating toolbar: state, clock, step count, and the microphone (where
+ * narration works), Pause/Resume, Manual step, Stop; the live feed panel
+ * under it. The window is sized to fit
  * (`resize`, with the content's height).
  */
 export function FloatingToolbar({
   recording,
   manual,
   feed,
+  mic,
   resize,
 }: {
   recording: RecordingStore;
   manual: ManualStepStore;
   feed: FeedStore;
+  mic: MicStore;
   resize(height: number): void;
 }) {
   const status = useStore(recording, (s) => s.status);
@@ -51,6 +55,10 @@ export function FloatingToolbar({
   const manualError = useStore(manual, (s) => s.error);
   const feedOpen = useStore(feed, (s) => feedVisible(s, snapshots.length));
   const view = toolbarView({ status, pending, snapshots }, phase === "adding");
+  const narration = useStore(mic, (s) => s.narration);
+  const micBusy = useStore(mic, (s) => s.busy);
+  const micError = useStore(mic, (s) => s.error);
+  const micButton = micView({ narration, busy: micBusy, error: micError }, view.paused);
   const { pause, resume, stop } = recording.getState();
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -100,6 +108,20 @@ export function FloatingToolbar({
           <Camera aria-hidden className="size-3.5" />
           <span aria-label="Screenshots">{view.steps}</span>
         </button>
+        {micButton.show && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`${HUD_BUTTON} ${micButton.on ? "bg-white/15 text-white" : ""}`}
+            aria-label={micButton.label}
+            aria-pressed={micButton.on}
+            title={micButton.title}
+            disabled={micButton.disabled}
+            onClick={() => void mic.getState().toggle()}
+          >
+            {micButton.on ? <Mic /> : <MicOff className={micButton.warning ? "text-[#ffb547]" : undefined} />}
+          </Button>
+        )}
         {view.paused ? (
           <Button
             variant="ghost"

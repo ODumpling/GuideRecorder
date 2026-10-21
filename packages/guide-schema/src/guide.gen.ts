@@ -222,6 +222,13 @@ image: StepImage
 keystrokes?: (string | null)
 kind: StepKind
 /**
+ * What the author said during the step while narrating a recording,
+ * transcribed on the device (see [`crate::narration`]). Plain text,
+ * kept as spoken: it fills an empty description and is context for
+ * the AI step and guide passes. Left out while empty.
+ */
+narration?: string
+/**
  * Interaction point in full-screenshot pixels.
  */
 point?: (Point | null)
@@ -1335,6 +1342,10 @@ export const guideJsonSchema = {
         },
         "kind": {
           "$ref": "#/$defs/StepKind"
+        },
+        "narration": {
+          "description": "What the author said during the step while narrating a recording,\ntranscribed on the device (see [`crate::narration`]). Plain text,\nkept as spoken: it fills an empty description and is context for\nthe AI step and guide passes. Left out while empty.",
+          "type": "string"
         },
         "point": {
           "description": "Interaction point in full-screenshot pixels.",

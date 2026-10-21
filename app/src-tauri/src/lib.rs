@@ -13,6 +13,7 @@ mod editor;
 mod export;
 mod feed;
 mod hotkeys;
+mod narration;
 mod navigation;
 mod pdf;
 mod picker;
@@ -233,6 +234,7 @@ pub fn run() {
             settings_commands::recording_readiness,
             settings_commands::mcp_setup,
             settings_commands::restart_app,
+            settings_commands::narration_permissions,
             recording::start_recording,
             recording::pause_recording,
             recording::resume_recording,
@@ -241,6 +243,8 @@ pub fn run() {
             recording::recording_status,
             recording::recording_snapshot,
             recording::add_manual_step,
+            narration::narration_state,
+            narration::set_narration,
             feed::delete_capture,
             feed::rename_capture,
             toolbar::resize_toolbar,

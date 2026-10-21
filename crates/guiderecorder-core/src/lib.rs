@@ -14,6 +14,7 @@ pub mod library;
 pub mod markdown;
 pub mod migrate;
 pub mod model;
+pub mod narration;
 pub mod pages;
 pub mod redact;
 pub mod steps;
