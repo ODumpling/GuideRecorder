@@ -581,6 +581,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: Some(crop),
@@ -611,6 +612,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: None,
@@ -638,6 +640,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: None,

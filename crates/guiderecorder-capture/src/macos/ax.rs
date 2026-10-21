@@ -35,16 +35,42 @@
 //! backend shares (see [`crate::element`], re-exported here): the first
 //! actionable ancestor of a pass-through hit is reported, and may borrow a
 //! label from below ([`choose_target`], [`may_inherit_label`]).
+//!
+//! # Field values
+//!
+//! Text field contents are user data. They are read only by
+//! [`field_value`], for typed text (input methods, dead keys), and never
+//! from a secure field ([`may_read_value`]); labels never come from them.
+//!
+//! # Web addresses
+//!
+//! [`browser_page`] reads the focused window of the frontmost app when it
+//! is a browser ([`guiderecorder_core::web::browser`]): the `AXURL` of its
+//! web area (Safari, and Chromium and Firefox when their web content is
+//! exposed), else the `AXValue` of the first text field in its toolbar
+//! (the address bar, which Chromium shows without `https://`; without a
+//! toolbar, the first text field showing an address). The search reads
+//! at most [`MAX_PAGE_NODES`] elements and never goes into the web area.
+//! A window is private by its title or a toolbar element named for it
+//! ("Incognito", "InPrivate", "Private Browsing"). The address is read
+//! again only when the window or its title changes ([`PageCache`], one per
+//! thread), and not from an address bar that has the focus (being typed
+//! in).
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use guiderecorder_core::events::{AppRef, RawElement};
 use guiderecorder_core::model::{Point, Rect};
+use guiderecorder_core::web;
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFRetained, CFString, CFType, CGPoint, CGSize};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFRetained, CFString, CFType, CGPoint, CGSize, CFURL,
+};
 
 use crate::element::role_in;
 pub use crate::element::*;
@@ -135,6 +161,15 @@ pub fn element_at(point: Point) -> Result<Option<RawElement>> {
 /// pass the whole result to [`must_mask_keys`]. Background threads only
 /// (see `# Threading`).
 pub fn focused_element() -> Result<Option<RawElement>> {
+    let Some(el) = focused()? else {
+        return Ok(None);
+    };
+    let role = role_attr(&el, "AXRole")?;
+    read_element(&el, role).map(Some)
+}
+
+/// The system-wide focused element itself.
+fn focused() -> Result<Option<CFRetained<AXUIElement>>> {
     debug_assert!(
         MainThreadMarker::new().is_none(),
         "AX lookup on main thread"
@@ -152,11 +187,223 @@ pub fn focused_element() -> Result<Option<RawElement>> {
     else {
         return Ok(None);
     };
-    let Ok(el) = value.downcast::<AXUIElement>() else {
+    Ok(value.downcast::<AXUIElement>().ok())
+}
+
+/// The text (`AXValue`) of the focused element, when it is a text field or
+/// area that is not secure ([`may_read_value`], fail closed) and holds at
+/// most `max_chars` characters; `None` otherwise. See `# Field values`.
+/// Background threads only (see `# Threading`).
+pub fn field_value(max_chars: usize) -> Result<Option<String>> {
+    let Some(el) = focused()? else {
         return Ok(None);
     };
     let role = role_attr(&el, "AXRole")?;
-    read_element(&el, role).map(Some)
+    let subrole = role_attr(&el, "AXSubrole")?;
+    let secure = secure_verdict(&role, &subrole);
+    if !may_read_value(role.value(), subrole.value(), secure) {
+        return Ok(None);
+    }
+    Ok(raw_string_attr(&el, "AXValue")?.and_then(|value| field_text(&value, max_chars)))
+}
+
+/// The frame of the scrolled area under `point` (see
+/// [`guiderecorder_core::steps`], `# Scrolling`): the nearest scroll area
+/// or web area at or around the element there, else its window.
+/// Background threads only (see `# Threading`).
+pub fn scroll_region_at(point: Point) -> Result<Option<Rect>> {
+    debug_assert!(
+        MainThreadMarker::new().is_none(),
+        "AX lookup on main thread"
+    );
+    let system = system_wide();
+    let mut out: *const AXUIElement = std::ptr::null();
+    // SAFETY: `out` is a valid out-pointer; on success it holds a +1 element.
+    let err = unsafe {
+        system.copy_element_at_position(point.x as f32, point.y as f32, NonNull::from(&mut out))
+    };
+    let Some(hit) = lookup_result(err, out, "AXUIElementCopyElementAtPosition")? else {
+        return Ok(None);
+    };
+    let mut el = hit.clone();
+    for _ in 0..=MAX_SCROLL_DEPTH {
+        let role = role_attr(&el, "AXRole")?;
+        if role_in(role.value(), SCROLLED_ROLES) {
+            if let Some(frame) = frame(&el)? {
+                return Ok(Some(frame));
+            }
+        }
+        if role.value() == Some("AXWindow") {
+            return frame(&el);
+        }
+        if role_in(role.value(), WALK_STOP_ROLES) {
+            break;
+        }
+        match element_attr(&el, "AXParent")? {
+            Some(parent) => el = parent,
+            None => break,
+        }
+    }
+    match element_attr(&hit, "AXWindow")? {
+        Some(window) => frame(&window),
+        None => Ok(None),
+    }
+}
+
+thread_local! {
+    static PAGES: RefCell<PageCache> = RefCell::new(PageCache::default());
+}
+
+/// The frontmost app's focused window's page, if the app is a browser
+/// ([`web::browser`]); see `# Web addresses`. Background threads only (see
+/// `# Threading`).
+pub fn browser_page() -> Result<Option<BrowserPage>> {
+    debug_assert!(
+        MainThreadMarker::new().is_none(),
+        "AX lookup on main thread"
+    );
+    let system = system_wide();
+    let Some(app_el) = element_attr(&system, "AXFocusedApplication")? else {
+        return Ok(None);
+    };
+    let app = app_ref(&app_el);
+    if app.bundle_id.as_deref().and_then(web::browser).is_none() {
+        return Ok(None);
+    }
+    let Some(window) = element_attr(&app_el, "AXFocusedWindow")? else {
+        return Ok(Some(BrowserPage {
+            app,
+            ..BrowserPage::default()
+        }));
+    };
+    let title = string_attr(&window, "AXTitle")?;
+    if title.as_deref().is_some_and(web::is_private_window) {
+        return Ok(Some(BrowserPage::private(app)));
+    }
+    let pid = app.pid;
+    if let Some(page) = PAGES.with(|pages| pages.borrow().get(pid, title.as_deref())) {
+        return Ok(Some(page));
+    }
+    let page = match search_page(&window)? {
+        Search::Private => BrowserPage::private(app),
+        Search::Typing => return Ok(Some(BrowserPage::typing(app))),
+        Search::Url(url) => BrowserPage {
+            app,
+            url,
+            ..BrowserPage::default()
+        },
+    };
+    PAGES.with(|pages| pages.borrow_mut().put(pid, title, page.clone()));
+    Ok(Some(page))
+}
+
+/// What a browser window's search found.
+enum Search {
+    Private,
+    /// The address bar has the focus: what it shows is being typed.
+    Typing,
+    Url(Option<String>),
+}
+
+/// Searches `window` breadth first, outside web content, for its address
+/// (see `# Web addresses`).
+fn search_page(window: &AXUIElement) -> Result<Search> {
+    let mut queue: VecDeque<(CFRetained<AXUIElement>, bool)> = VecDeque::new();
+    queue.extend(children(window)?.into_iter().map(|child| (child, false)));
+    // The address bar is the first text field in a toolbar; without a
+    // toolbar, the first text field showing an address.
+    let mut address_bar: Option<Option<String>> = None;
+    let mut fallback = None;
+    let mut read = 0;
+    while let Some((el, in_toolbar)) = queue.pop_front() {
+        read += 1;
+        if read > MAX_PAGE_NODES {
+            break;
+        }
+        let role = role_attr(&el, "AXRole")?;
+        match role.value() {
+            Some("AXWebArea") => {
+                if let Some(url) = url_attr(&el, "AXURL")?.as_deref().and_then(web::page_url) {
+                    return Ok(Search::Url(Some(url)));
+                }
+                // Web content is never searched.
+                continue;
+            }
+            Some("AXTextField" | "AXComboBox") if address_bar.is_none() => {
+                // Being typed in, it shows what is typed, not the address.
+                if bool_attr(&el, "AXFocused")? {
+                    return Ok(Search::Typing);
+                }
+                let url = raw_string_attr(&el, "AXValue")?
+                    .as_deref()
+                    .and_then(web::page_url);
+                if in_toolbar {
+                    address_bar = Some(url);
+                } else if fallback.is_none() {
+                    fallback = url;
+                }
+            }
+            Some(_) if in_toolbar => {
+                let named_private = [
+                    string_attr(&el, "AXTitle")?,
+                    string_attr(&el, "AXDescription")?,
+                ]
+                .iter()
+                .flatten()
+                .any(|name| web::is_private_window(name));
+                if named_private {
+                    return Ok(Search::Private);
+                }
+            }
+            _ => {}
+        }
+        let in_toolbar = in_toolbar || role.value() == Some("AXToolbar");
+        queue.extend(children(&el)?.into_iter().map(|child| (child, in_toolbar)));
+    }
+    Ok(Search::Url(address_bar.unwrap_or(fallback)))
+}
+
+/// `AXChildren`, the elements only.
+fn children(el: &AXUIElement) -> Result<Vec<CFRetained<AXUIElement>>> {
+    let Some(array) = attr(el, "AXChildren")?
+        .ok()
+        .and_then(|v| v.downcast::<CFArray>().ok())
+    else {
+        return Ok(Vec::new());
+    };
+    // SAFETY: `AXChildren` is an array of CF objects.
+    let array = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) };
+    Ok(array
+        .iter()
+        .filter_map(|child| child.downcast::<AXUIElement>().ok())
+        .collect())
+}
+
+/// A string attribute as it is (trimmed only, not cut like a label).
+fn raw_string_attr(el: &AXUIElement, name: &'static str) -> Result<Option<String>> {
+    Ok(attr(el, name)?
+        .ok()
+        .and_then(|v| v.downcast::<CFString>().ok())
+        .map(|s| s.to_string().trim().to_owned()))
+}
+
+/// A URL attribute (a `CFURL`, or a string in some apps) as text.
+fn url_attr(el: &AXUIElement, name: &'static str) -> Result<Option<String>> {
+    let Some(value) = attr(el, name)?.ok() else {
+        return Ok(None);
+    };
+    Ok(match value.downcast::<CFURL>() {
+        Ok(url) => Some(url.string().to_string()),
+        Err(value) => value.downcast::<CFString>().ok().map(|s| s.to_string()),
+    })
+}
+
+/// A boolean attribute; `false` when absent.
+fn bool_attr(el: &AXUIElement, name: &'static str) -> Result<bool> {
+    Ok(attr(el, name)?
+        .ok()
+        .and_then(|v| v.downcast::<CFBoolean>().ok())
+        .is_some_and(|b| b.as_bool()))
 }
 
 /// Outcome of reading `AXRole` / `AXSubrole`, kept distinct so a failed

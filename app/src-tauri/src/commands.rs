@@ -665,6 +665,28 @@ pub async fn reveal_export(chosen: State<'_, Arc<ChosenPaths>>, path: PathBuf) -
     .await
 }
 
+/// Opens a step's web page ([`Step::url`]) in the default browser. Only an
+/// http or https address, as recorded.
+#[tauri::command]
+pub async fn open_step_url(url: String) -> Result<()> {
+    if !is_web_address(&url) {
+        return Err(AppError::new(ErrorKind::Invalid, "not a web address"));
+    }
+    blocking(move || {
+        tauri_plugin_opener::open_url(&url, None::<&str>)
+            .map_err(|e| AppError::new(ErrorKind::Io, format!("can't open the browser: {e}")))
+    })
+    .await
+}
+
+/// An http or https URL that [`guiderecorder_core::web::page_url`] keeps
+/// as it is.
+fn is_web_address(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && guiderecorder_core::web::page_url(url).is_some_and(|page| page.eq_ignore_ascii_case(url))
+}
+
 /// Whether a step's `cropRect` places its crop exactly (see
 /// [`export::verify_crop`]); the annotation layer shows the crop view only
 /// then.
@@ -902,6 +924,22 @@ mod tests {
     use crate::terminate::TerminateReply;
     use serde_json::json;
     use std::sync::Mutex;
+
+    #[test]
+    fn only_web_addresses_open() {
+        assert!(is_web_address("https://example.com/settings?tab=2"));
+        assert!(is_web_address("http://localhost:3000/"));
+        for url in [
+            "example.com",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://bob:secret@example.com/",
+            "https://exa mple.com",
+            "smb://server/share",
+        ] {
+            assert!(!is_web_address(url), "{url}");
+        }
+    }
 
     /// Records what the gate does; `emit_ok` decides whether the event
     /// reaches the frontend.

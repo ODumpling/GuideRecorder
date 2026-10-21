@@ -1055,6 +1055,7 @@ fn step(title: &str) -> Item {
         end_point: None,
         element: None,
         keystrokes: None,
+        url: None,
         image: StepImage {
             full: format!("steps/{id}.webp"),
             crop: None,

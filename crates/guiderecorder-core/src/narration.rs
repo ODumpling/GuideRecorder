@@ -237,6 +237,7 @@ mod tests {
             element: None,
             app: None,
             keystrokes: None,
+            url: None,
             title: "Click **Save**".into(),
         }
         .into_step(

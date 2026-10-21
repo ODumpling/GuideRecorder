@@ -347,6 +347,8 @@ fn translate(kind: CGEventType, event: Option<&CGEvent>) -> Option<CaptureEvent>
                 event,
                 CGEventField::ScrollWheelEventPointDeltaAxis1,
             ),
+            // Looked up by the recording session.
+            region: None,
         },
         CGEventType::KeyDown => {
             let code = CGEvent::integer_value_field(event, CGEventField::KeyboardEventKeycode);

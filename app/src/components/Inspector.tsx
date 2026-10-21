@@ -13,6 +13,8 @@ import { IMAGE_SHOW_HINTS, setImageShow } from "@/editor/commands";
 import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
 import { describeIssues, elementIssues, setElementLabel } from "@/editor/element";
 import { inspectorStore, tabCounts, useInspector, type InspectorTab } from "@/editor/inspector";
+import { displayUrl, isWebAddress } from "@/editor/web";
+import { openStepUrl } from "@/lib/ipc";
 
 export const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",
@@ -237,7 +239,25 @@ function ElementCheck({ step, readOnly }: { step: Step; readOnly: boolean }) {
   );
 }
 
-/** The Step tab: close-up or full screenshot, the action, its element and the text's status. */
+/** The web page a step was recorded on, opened in the default browser. */
+function PageLink({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      title={url}
+      className="text-primary underline-offset-2 hover:underline"
+      onClick={(e) => {
+        // Never in the app's own window.
+        e.preventDefault();
+        void openStepUrl(url).catch(() => {});
+      }}
+    >
+      {displayUrl(url)}
+    </a>
+  );
+}
+
+/** The Step tab: close-up or full screenshot, the action, its element, its web page and the text's status. */
 function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }) {
   const { element, image } = item;
   const show = (value: ImageShow) =>
@@ -274,6 +294,11 @@ function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }
           {item.keystrokes && (
             <Field label="Keystrokes">
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{item.keystrokes}</code>
+            </Field>
+          )}
+          {item.url && isWebAddress(item.url) && (
+            <Field label="Web page">
+              <PageLink url={item.url} />
             </Field>
           )}
           {item.point && (

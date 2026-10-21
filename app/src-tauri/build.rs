@@ -52,6 +52,7 @@ const COMMANDS: &[&str] = &[
     "preview_export",
     "logo_preview",
     "reveal_export",
+    "open_step_url",
     "verify_crop",
     "get_settings",
     "update_settings",

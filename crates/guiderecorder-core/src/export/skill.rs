@@ -173,6 +173,9 @@ pub struct SkillStep {
     /// The keystrokes parsed ([`parse_keys`]), if they could be.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<Keys>,
+    /// The web page the step was on, when recorded in a browser.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub confidence: Confidence,
 }
 
@@ -446,6 +449,7 @@ pub fn steps(guide: &RenderGuide, image_names: &[String]) -> SkillSteps {
                         .keystrokes
                         .as_deref()
                         .and_then(|k| parse_keys(stored.kind, k)),
+                    url: stored.url.clone(),
                     confidence: Confidence::of(step),
                 });
             }
@@ -783,6 +787,9 @@ fn step_facts(step: &SkillStep) -> String {
     if let Some(keys) = keys.filter(|k| !k.ends_with("press ")) {
         lines.push(format!("- Keys: {keys}"));
     }
+    if let Some(url) = &step.url {
+        lines.push(format!("- Web page: {}", escape_line(url)));
+    }
     if !step.narration.is_empty() {
         lines.push(format!(
             "- Narration (the author, while recording): {}",
@@ -1034,6 +1041,7 @@ mod tests {
             end_point: None,
             element,
             keystrokes: keys.map(Into::into),
+            url: None,
             image: StepImage {
                 full: "steps/x.webp".into(),
                 crop: None,
@@ -1093,6 +1101,21 @@ mod tests {
 
     fn names(guide: &RenderGuide) -> Vec<String> {
         image_names(guide)
+    }
+
+    #[test]
+    fn web_steps_name_their_page() {
+        let mut guide = sample();
+        if let Item::Step(step) = &mut guide.items[3] {
+            step.url = Some("https://example.com/notes".into());
+        }
+        let rendered = render(&guide);
+        let data = steps(&rendered, &names(&rendered));
+        let json = serde_json::to_value(&data).unwrap();
+        assert_eq!(json["steps"][1]["url"], "https://example.com/notes");
+        assert!(json["steps"][0].get("url").is_none());
+        let md = skill_md(&rendered, &names(&rendered), false);
+        assert!(md.contains("- Web page: https://example.com/notes"), "{md}");
     }
 
     #[test]

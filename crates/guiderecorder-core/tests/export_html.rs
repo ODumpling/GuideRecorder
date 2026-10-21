@@ -463,6 +463,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: if i == 0 {
                     full.clone()

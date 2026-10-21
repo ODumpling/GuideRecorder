@@ -217,6 +217,7 @@ pub fn run() {
             commands::preview_export,
             commands::logo_preview,
             commands::reveal_export,
+            commands::open_step_url,
             commands::verify_crop,
             settings_commands::get_settings,
             settings_commands::update_settings,

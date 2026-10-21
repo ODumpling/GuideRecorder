@@ -20,6 +20,7 @@ pub mod pages;
 pub mod redact;
 pub mod steps;
 pub mod sync;
+pub mod web;
 
 pub use ulid::Ulid;
 

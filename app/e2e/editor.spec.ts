@@ -280,3 +280,26 @@ test.describe("a guide from a newer GuideRecorder", () => {
     expect(backend.saves).toHaveLength(0);
   });
 });
+
+test("shows a step's web page as a link that opens in the browser", async ({ page, backend }) => {
+  const url = "https://calendar.example.com/events/42?view=week";
+  backend.editStep(CALENDAR, "01M4WT7MM000000000000002G4", (s) => {
+    s.url = url;
+  });
+  await openGuide(page, "Share a calendar event");
+  const link = page.getByRole("link", { name: "calendar.example.com/events/42?view=week" });
+  await expect(link).toHaveAttribute("href", url);
+  await link.click();
+  await expect.poll(() => backend.openedUrls).toEqual([url]);
+  // In the browser, not in the app's own window.
+  await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue("Share a calendar event");
+});
+
+test("never links to a step's page that is not a web address", async ({ page, backend }) => {
+  backend.editStep(CALENDAR, "01M4WT7MM000000000000002G4", (s) => {
+    s.url = "javascript:alert(1)";
+  });
+  await openGuide(page, "Share a calendar event");
+  await expect(page.getByRole("textbox", { name: "Step title" })).toHaveText("Click Calendar in the Dock");
+  await expect(page.getByText("Web page")).toHaveCount(0);
+});
