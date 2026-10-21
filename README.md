@@ -44,6 +44,11 @@ LM Studio, in which case nothing leaves your Mac.
    title and description (written for you from what you clicked, e.g. "Click
    **Save**"), and you can:
    - reword, reorder, merge, split or delete steps, and add sections and notes;
+   - add a **Decision** where the procedure depends on the situation ("Do
+     you see the sign-in dialog?"): each option leads to a step, a section
+     or another guide. Sections can be tagged with who they are for (for
+     example Admin or User), and an export can be made for one audience,
+     leaving out the sections meant only for others;
    - **Re-capture** a step when the app has changed (in the step's ⋯ menu or
      its right-click menu): a short recording starts on the same screen,
      window or region the guide was recorded on, and your next click,
@@ -75,7 +80,11 @@ LM Studio, in which case nothing leaves your Mac.
 4. **Export.** Save the guide as **PDF**, **Word (DOCX)**, **Markdown** or
    **HTML**, with your logo if you like. PDF and Word come on A4 or Letter
    paper (the default follows your region). Blurs are applied to the actual pixels
-   on export, so hidden information is really gone.
+   on export, so hidden information is really gone. Decisions show their
+   options with where each leads ("No: Go to Step 5", a link in PDF, Word and
+   HTML), and the interactive HTML walkthrough follows the option you pick.
+   When sections are tagged with audiences, choose an audience in the Export
+   dialog to leave out the others' sections.
 
    For a chat, a ticket, a README or a training session, export a **video
    (MP4)** or an **animated GIF** instead: each step is shown for a few
@@ -104,8 +113,10 @@ LM Studio, in which case nothing leaves your Mac.
 
    For a learning management system (LMS), export a **SCORM course**: a
    SCORM 1.2 `.zip` with an `imsmanifest.xml` and the interactive
-   walkthrough, which tells the LMS where the learner is (and resumes there)
-   and marks the course completed once they reach the last step. Add a
+   walkthrough, which tells the LMS where the learner is (and resumes there,
+   with the way they took through any decisions) and marks the course
+   completed once they reach an end: the last step, or the end a decision
+   option leads to. Choose an audience to package only its sections. Add a
    short quiz for the end if you like, one line per question followed by
    its choices (`- [x]` for the right one, `- [ ]` for the others); its score
    is reported to the LMS, and with the "Quiz passed" rule the course is
@@ -244,7 +255,8 @@ macOS; `skill` is an agent skill folder; `scorm` is a SCORM 1.2 `.zip`),
 `--seconds-per-step`, `--size wide|square|vertical`, `--no-zoom` and
 `--no-captions` (MP4 and GIF), `--replay` (a skill's `replay.js`),
 `--course-title`, `--course-id`, `--completion last-step|quiz-passed`,
-`--mastery-score` (default 80) and `--quiz <file>` (SCORM), `--logo`, `--accent`,
+`--mastery-score` (default 80) and `--quiz <file>` (SCORM), `--audience <name>`
+(leave out the sections tagged only for other audiences), `--logo`, `--accent`,
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.

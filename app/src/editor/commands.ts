@@ -1,4 +1,18 @@
-import type { Annotation, CoverOptions, Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type {
+  Annotation,
+  BranchTarget,
+  CoverOptions,
+  Decision,
+  DecisionOption,
+  Guide,
+  GuideField as GuideTextField,
+  ImageShow,
+  Item,
+  NoteKind,
+  Section,
+  Step,
+  StepImage,
+} from "@guiderecorder/guide-schema";
 import type { ReviewFields } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@guiderecorder/ui/markdown";
@@ -182,18 +196,19 @@ export function renameGuide(guide: Guide, title: string): Command {
 }
 
 /** The Markdown text fields of items. */
-export type TextField = "title" | "description" | "body";
+export type TextField = "title" | "description" | "body" | "question";
 
 const TEXT_LABELS: Record<Item["type"], Partial<Record<TextField, string>>> = {
   step: { title: "Edit step title", description: "Edit step description" },
   section: { title: "Edit section title" },
   note: { body: "Edit note" },
+  decision: { question: "Edit decision question" },
 };
 
 /**
  * Sets a text field (Markdown): a step's title or description, a section's
- * title or a note's body. Editing a step's text marks it `edited`, so AI
- * passes no longer overwrite it.
+ * title, a note's body or a decision's question. Editing a step's text
+ * marks it `edited`, so AI passes no longer overwrite it.
  */
 export function setItemText(guide: Guide, id: string, field: TextField, value: string): Command {
   const item = findItem(guide, id);
@@ -341,7 +356,7 @@ export function coalesce(prev: Command, next: Command): Command | null {
 // ---------------------------------------------------------------------------
 // Item operations (#351)
 
-const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note" };
+const ITEM_NAMES: Record<Item["type"], string> = { step: "step", section: "section", note: "note", decision: "decision" };
 
 /** Inserts `item` after the item `afterId`, or at the end when it is null. */
 export function insertItemAfter(guide: Guide, item: Item, afterId: string | null): Command {
@@ -391,6 +406,124 @@ export function newSection(id: string): Item {
 
 export function newNote(id: string, kind: NoteKind): Item {
   return { type: "note", id, kind, body: "" };
+}
+
+/** A new decision with a Yes and a No option, both going on to the next item. */
+export function newDecision(id: string, optionIds: [string, string]): Item {
+  return {
+    type: "decision",
+    id,
+    question: "",
+    options: [
+      { id: optionIds[0], label: "Yes", target: { kind: "next" } },
+      { id: optionIds[1], label: "No", target: { kind: "next" } },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Decisions and audiences (#22)
+
+function findDecision(guide: Guide, id: string): Decision {
+  const item = findItem(guide, id);
+  if (item.type !== "decision") throw new PatchError(`item ${id} is not a decision`);
+  return item;
+}
+
+function findSection(guide: Guide, id: string): Section {
+  const item = findItem(guide, id);
+  if (item.type !== "section") throw new PatchError(`item ${id} is not a section`);
+  return item;
+}
+
+/** Replaces a decision's options. */
+function setOptions(decision: Decision, options: DecisionOption[], label: string, coalesceKey?: string): Command {
+  return {
+    label,
+    forward: [{ op: "setItem", id: decision.id, key: "options", value: options }],
+    inverse: [{ op: "setItem", id: decision.id, key: "options", value: decision.options }],
+    coalesceKey,
+  };
+}
+
+/** Adds an option (going on to the next item) to the decision `id`. */
+export function addDecisionOption(guide: Guide, id: string, optionId: string, label = ""): Command {
+  const decision = findDecision(guide, id);
+  return setOptions(decision, [...decision.options, { id: optionId, label, target: { kind: "next" } }], "Add option");
+}
+
+function checkOption(decision: Decision, optionId: string) {
+  if (!decision.options.some((o) => o.id === optionId)) {
+    throw new PatchError(`decision ${decision.id} has no option ${optionId}`);
+  }
+}
+
+export function removeDecisionOption(guide: Guide, id: string, optionId: string): Command {
+  const decision = findDecision(guide, id);
+  checkOption(decision, optionId);
+  return setOptions(decision, decision.options.filter((o) => o.id !== optionId), "Remove option");
+}
+
+function changeOption(
+  guide: Guide,
+  id: string,
+  optionId: string,
+  change: Partial<DecisionOption>,
+  label: string,
+  coalesceKey?: string,
+): Command {
+  const decision = findDecision(guide, id);
+  checkOption(decision, optionId);
+  const options = decision.options.map((o) => (o.id === optionId ? { ...o, ...change } : o));
+  return setOptions(decision, options, label, coalesceKey);
+}
+
+/** Renames an option (plain text); typing into one option is one undo step. */
+export function setOptionLabel(guide: Guide, id: string, optionId: string, label: string): Command {
+  return changeOption(guide, id, optionId, { label }, "Rename option", `option.${optionId}.label`);
+}
+
+/** Sets where an option leads: the next item, a step, a section or another guide. */
+export function setOptionTarget(guide: Guide, id: string, optionId: string, target: BranchTarget): Command {
+  return changeOption(guide, id, optionId, { target }, "Change where an option goes");
+}
+
+/**
+ * Sets who a section is for. Blank and repeated (ignoring case) names are
+ * dropped; none left unsets the field, so the section is for everyone.
+ */
+export function setSectionAudiences(guide: Guide, id: string, audiences: string[]): Command {
+  const section = findSection(guide, id);
+  const seen = new Set<string>();
+  const kept = audiences
+    .map((a) => a.trim())
+    .filter((a) => a && !seen.has(a.toLowerCase()) && seen.add(a.toLowerCase()));
+  return {
+    label: "Change section audience",
+    forward: [{ op: "setItem", id, key: "audiences", value: kept.length ? kept : undefined }],
+    inverse: [{ op: "setItem", id, key: "audiences", value: section.audiences }],
+    coalesceKey: `item.${id}.audiences`,
+  };
+}
+
+/**
+ * The distinct audiences the guide's sections name, in order of first use
+ * (core `branch::audiences`).
+ */
+export function guideAudiences(guide: Guide): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of guide.items) {
+    if (item.type !== "section") continue;
+    for (const raw of item.audiences ?? []) {
+      const audience = raw.trim();
+      if (audience && !seen.has(audience.toLowerCase())) {
+        seen.add(audience.toLowerCase());
+        out.push(audience);
+      }
+    }
+  }
+  return out;
 }
 
 /** Deletes an item; the next one (or else the previous one) is selected. */

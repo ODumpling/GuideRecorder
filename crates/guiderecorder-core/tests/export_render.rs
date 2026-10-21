@@ -1080,6 +1080,12 @@ fn fixture_render_model_and_ast() {
                     out.push_str(&format!("note {:?}\n", note.kind));
                     dump_blocks(&note.body, 2, &mut out);
                 }
+                RenderItem::Decision(decision) => {
+                    out.push_str(&format!("decision: {}\n", dump_inlines(&decision.question)));
+                    for option in &decision.options {
+                        out.push_str(&format!("  {:?} -> {:?}\n", option.label, option.target));
+                    }
+                }
             }
         }
         out.push('\n');

@@ -31,6 +31,10 @@
 //!   most the text width, and at most [`MAX_IMAGE_HEIGHT_RATIO`] of the text
 //!   height, keeping the aspect ratio. A missing or broken image becomes the
 //!   renderer's placeholder and a warning in the [`ExportReport`].
+//! - Decisions are boxes with an accent rule: the question, then an option
+//!   per bullet whose "Go to Step N" links to that step (found by metadata
+//!   the step carries only in guides with decisions, `anchors`). A section
+//!   tagged with audiences has "For: Admin" under its heading.
 //! - Notes are tinted boxes with a coloured left rule and a label from
 //!   [`Labels`] ([`PdfOptions::labels`], or [`Labels::for_language`]).
 //! - The Markdown subset maps to bold, italic, code (monospace on a grey
@@ -97,7 +101,7 @@ use super::docx::Paper;
 use super::md::Labels;
 pub use super::md::{Branding, CheckedBranding};
 use super::raster::{render_step_image, ImageOptions};
-use super::render::{RenderGuide, RenderItem};
+use super::render::{RenderGuide, RenderItem, RenderTarget};
 use super::report::ExportReport;
 use crate::library::GuideHandle;
 use crate::model::NoteKind;
@@ -435,6 +439,23 @@ fn guide_data(
             RenderItem::Section(section) => json!({
                 "kind": "section",
                 "title": clean(&section.title),
+                "audiences": labels.audiences(&section.audiences).map(|a| clean(&a)),
+            }),
+            RenderItem::Decision(decision) => json!({
+                "kind": "decision",
+                "question": cx.inlines(&decision.question),
+                "options": decision
+                    .options
+                    .iter()
+                    .map(|option| json!({
+                        "label": clean(&option.label),
+                        "text": clean(&labels.go_to(&option.target, guide.kind)),
+                        "step": match option.target {
+                            RenderTarget::Step { number, .. } => number,
+                            RenderTarget::Guide { .. } => None,
+                        },
+                    }))
+                    .collect::<Vec<_>>(),
             }),
             RenderItem::Note(note) => json!({
                 "kind": "note",
@@ -541,9 +562,11 @@ fn guide_data(
         "labels": {
             "prerequisites": clean(&labels.prerequisites),
             "step": clean(labels.step_kind(guide.kind)),
+            "decision": clean(&labels.decision),
         },
         "intro": intro,
         "prerequisites": prerequisites,
+        "anchors": guide.decisions().next().is_some(),
         "items": items,
     })
 }

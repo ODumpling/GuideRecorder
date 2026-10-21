@@ -29,6 +29,12 @@ Password input is masked while recording.
 
 The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
 
+> **Decision:** Is the key used in **production**?
+>
+> - **Yes:** Go to Step 4
+> - **No:** Go to Step 5
+> - **Unsure:** Go to the guide “Find where an API key is used”
+
 ## 4. Drag the new key to **Production**
 
 ![Drag the new key to Production](images/04-drag-the-new-key-to-production.png)

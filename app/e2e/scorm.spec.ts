@@ -56,8 +56,8 @@ test("reports progress, the quiz score and passing to the LMS", async ({ page })
   );
 
   // The last step alone doesn't complete a course passed by its quiz.
-  await sco.locator('.wt-list a[data-slide="5"]').click();
-  await expect.poll(async () => (await data(page))["cmi.core.lesson_location"]).toBe("wt-slide-5");
+  await sco.locator('.wt-list a[data-slide="6"]').click();
+  await expect.poll(async () => (await data(page))["cmi.core.lesson_location"]).toBe("wt-slide-6");
   expect((await data(page))["cmi.core.lesson_status"]).toBe("incomplete");
 
   await sco.locator(".wt-controls [data-next]").click();
@@ -103,11 +103,11 @@ test("reports progress, the quiz score and passing to the LMS", async ({ page })
 
 test("completes on the last step and resumes at the bookmark", async ({ page }) => {
   await serve(page, "last-step");
-  const seed = JSON.stringify({ "cmi.core.lesson_status": "incomplete", "cmi.core.lesson_location": "wt-slide-4" });
+  const seed = JSON.stringify({ "cmi.core.lesson_status": "incomplete", "cmi.core.lesson_location": "wt-slide-5" });
   await page.goto(`${ORIGIN}/lms.html?seed=${encodeURIComponent(seed)}`);
   const sco = page.frameLocator("#sco");
   // Back where the learner left off.
-  await expect(sco.locator("#wt-slide-4")).toBeVisible();
+  await expect(sco.locator("#wt-slide-5")).toBeVisible();
   await expect(sco.locator("#wt-slide-0")).toBeHidden();
   expect((await data(page))["cmi.core.lesson_status"]).toBe("incomplete");
 
@@ -115,15 +115,37 @@ test("completes on the last step and resumes at the bookmark", async ({ page }) 
   await expect.poll(async () => (await data(page))["cmi.core.lesson_status"]).toBe("completed");
   // Going back keeps it completed.
   await sco.locator(".wt-controls [data-back]").click();
-  await expect.poll(async () => (await data(page))["cmi.core.lesson_location"]).toBe("wt-slide-4");
+  await expect.poll(async () => (await data(page))["cmi.core.lesson_location"]).toBe("wt-slide-5");
   expect((await data(page))["cmi.core.lesson_status"]).toBe("completed");
+});
+
+test("follows a decision to an end, and Back retraces it after a resume", async ({ page }) => {
+  await serve(page, "last-step");
+  await page.goto(`${ORIGIN}/lms.html`);
+  let sco = page.frameLocator("#sco");
+  // To the decision (slide 4), then "No": straight to the last step.
+  await sco.locator('.wt-list a[data-slide="4"]').click();
+  await expect(sco.locator("#wt-slide-4")).toBeVisible();
+  await sco.locator("#wt-slide-4 [data-branch]", { hasText: "No" }).click();
+  await expect(sco.locator("#wt-slide-6")).toBeVisible();
+  await expect.poll(async () => (await data(page))["cmi.core.lesson_status"]).toBe("completed");
+  expect((await data(page))["cmi.suspend_data"]).toBe("0 4");
+
+  // A new session resumes there, and Back goes to the decision, not step 4.
+  const seed = JSON.stringify(await data(page));
+  await page.goto(`${ORIGIN}/lms.html?seed=${encodeURIComponent(seed)}`);
+  sco = page.frameLocator("#sco");
+  await expect(sco.locator("#wt-slide-6")).toBeVisible();
+  await sco.locator(".wt-controls [data-back]").click();
+  await expect(sco.locator("#wt-slide-4")).toBeVisible();
+  await expect.poll(async () => (await data(page))["cmi.suspend_data"]).toBe("0");
 });
 
 test("works on its own, without an LMS", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await serve(page);
-  await page.goto(`${ORIGIN}/course/guide.html#wt-slide-6`);
+  await page.goto(`${ORIGIN}/course/guide.html#wt-slide-7`);
   const quiz = page.locator("#scorm-quiz");
   await quiz.getByLabel("The first step").check();
   await quiz.getByLabel("Yes, with Back or ←").check();

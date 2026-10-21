@@ -324,6 +324,7 @@ export function ExportPreview({
   motion,
   skill,
   scorm,
+  audience,
   api,
   flush,
 }: {
@@ -338,6 +339,8 @@ export function ExportPreview({
   skill?: SkillOptions;
   /** The SCORM options; the page shows the quiz. */
   scorm?: ScormOptions;
+  /** Only the sections for this audience; null or absent: everyone. */
+  audience?: string | null;
   api: ExportApi;
   /** Saves the editor's changes, so the preview shows them. */
   flush(): Promise<boolean>;
@@ -352,7 +355,7 @@ export function ExportPreview({
     const s = new PreviewScheduler(
       async (r) => {
         await deps.current.flush();
-        return deps.current.api.previewExport(r.guideId, r.format, r.branding, r.paper, r.reviewDetails, r.motion, r.skill, r.scorm);
+        return deps.current.api.previewExport(r.guideId, r.format, r.branding, r.paper, r.reviewDetails, r.motion, r.skill, r.scorm, r.audience);
       },
       setState,
       errorMessage,
@@ -361,7 +364,7 @@ export function ExportPreview({
     return () => s.dispose();
   }, []);
 
-  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion, skill, scorm });
+  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion, skill, scorm, audience });
   const key = request && JSON.stringify(request);
   useEffect(() => {
     scheduler.current?.request(request);

@@ -34,6 +34,7 @@ describe("previewRequest", () => {
       motion: { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
       skill: { replay: false },
       scorm: DEFAULT_SCORM,
+      audience: null,
     });
     // HTML has no paper; Markdown no accent.
     expect(previewRequest({ ...choices, format: "html" })?.paper).toBe("a4");
@@ -46,6 +47,12 @@ describe("previewRequest", () => {
     expect(gif.reviewDetails).toBe(false);
     expect(gif.motion).toEqual({ secondsPerStep: 3, aspect: "square", zoom: false, captions: false });
     expect(previewRequest({ ...choices, format: "pptx", accent: "red" })).not.toBeNull();
+  });
+
+  it("sends the audience for every format", () => {
+    expect(previewRequest({ ...choices, audience: "Admin" })?.audience).toBe("Admin");
+    expect(previewRequest({ ...choices, format: "mp4", audience: "Admin" })?.audience).toBe("Admin");
+    expect(previewRequest({ ...choices, audience: "" })?.audience).toBeNull();
   });
 
   it("sends the replay choice only for skills, without branding", () => {

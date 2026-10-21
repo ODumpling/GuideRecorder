@@ -18,6 +18,7 @@ import { CustomRewrite } from "@/ai/CustomRewrite";
 import { useAiBlocked } from "@/ai/WriteWithAi";
 import { KIND_LABELS } from "@/components/Inspector";
 import { GuideDetails } from "@/components/GuideDetails";
+import { DecisionOptions, SectionAudiences } from "@/components/DecisionEditor";
 import type { MarkdownEditorHandle } from "@guiderecorder/ui/markdown-editor";
 import { Button } from "@guiderecorder/ui/button";
 import { useStepImage } from "@/components/useStepImage";
@@ -229,6 +230,8 @@ function ItemHeader({ item }: { item: Item }) {
           </>
         ) : item.type === "section" ? (
           "Section"
+        ) : item.type === "decision" ? (
+          "Decision"
         ) : (
           item.kind
         )}
@@ -309,6 +312,8 @@ export function StepView() {
           </p>
         )}
         {item.type === "step" && !doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
+        {item.type === "decision" && <DecisionOptions decision={item} readOnly={doc.readOnly} />}
+        {item.type === "section" && <SectionAudiences key={item.id} section={item} readOnly={doc.readOnly} />}
       </ItemView>
       {!doc.readOnly && (
         <div className="mt-2 flex justify-end border-t border-border pt-2">

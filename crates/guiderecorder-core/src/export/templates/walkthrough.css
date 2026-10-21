@@ -37,6 +37,11 @@
 .wt-slide .note-tip { border-left-color: var(--tip); }
 .wt-slide .note-warning { border-left-color: var(--warning); }
 .wt-section { margin: 0 0 .35rem; color: var(--muted); font-size: .85rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-decision > h2 .decision-label { color: var(--accent); }
+.wt-options { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .5rem; }
+.wt-option { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; text-decoration: none; overflow-wrap: anywhere; }
+.wt-option:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wt-option-text, .wt-option-static { color: var(--muted); }
 .wt-figure .hotspot-frame { display: block; width: fit-content; }
 .wt-target {
   position: absolute;

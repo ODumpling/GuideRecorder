@@ -1,6 +1,6 @@
 // Building and reading guide.json on the phone. Pure: no network, no files.
 
-import { SCHEMA_VERSION, type Guide, type Item, type Note, type Step } from "@guiderecorder/guide-schema";
+import { SCHEMA_VERSION, type Decision, type Guide, type Item, type Note, type Step } from "@guiderecorder/guide-schema";
 
 /** An empty walkthrough, as `Guide::new` makes it. The title is the user's. */
 export function newGuide(id: string, title: string, language: string, now: Date = new Date()): Guide {
@@ -57,17 +57,51 @@ export function shownImage(step: Step): string {
 
 export type ViewItem =
   | { type: "step"; step: Step; number: number }
-  | { type: "section"; id: string; title: string }
-  | { type: "note"; note: Note };
+  | { type: "section"; id: string; title: string; audiences: string[] }
+  | { type: "note"; note: Note }
+  | { type: "decision"; decision: Decision; options: { id: string; label: string; to: string }[] };
 
-/** The guide's items as the viewer shows them: steps numbered 1, 2, 3, … */
+/**
+ * The guide's items as the viewer shows them: steps numbered 1, 2, 3, …,
+ * and each decision option with where it leads (`to`), as the exports say it.
+ */
 export function viewItems(guide: Guide): ViewItem[] {
   let number = 0;
-  return guide.items.map((item): ViewItem => {
+  return guide.items.map((item, index): ViewItem => {
     if (item.type === "step") return { type: "step", step: item, number: ++number };
-    if (item.type === "section") return { type: "section", id: item.id, title: item.title };
+    if (item.type === "section") return { type: "section", id: item.id, title: item.title, audiences: (item.audiences ?? []).map((a) => a.trim()).filter(Boolean) };
+    if (item.type === "decision") {
+      const options = item.options.map((option) => ({ id: option.id, label: option.label.trim(), to: goTo(guide, index, option.target) }));
+      return { type: "decision", decision: item, options };
+    }
     return { type: "note", note: item };
   });
+}
+
+/**
+ * Where an option of the decision at `from` leads, in words: the first step
+ * at or after the item it names (after the decision for `next`; a gone
+ * step or section reads as `next`), like core `Labels::go_to`.
+ */
+export function goTo(guide: Guide, from: number, target: Decision["options"][number]["target"]): string {
+  if (target.kind === "guide") return target.title.trim() ? `Go to the guide “${target.title.trim()}”` : "Go to the guide";
+  const named = target.kind === "next" ? -1 : guide.items.findIndex((item) => item.id === target.id);
+  const at = named >= 0 ? named : from;
+  const chosen = named >= 0 ? guide.items[named] : undefined;
+  const section = target.kind === "section" && chosen?.type === "section" ? chosen.title.trim() : "";
+  let number = 0;
+  let step: number | null = null;
+  for (const [i, item] of guide.items.entries()) {
+    if (item.type !== "step") continue;
+    number += 1;
+    if (i >= at) {
+      step = number;
+      break;
+    }
+  }
+  if (section && step !== null) return `Go to “${section}” (Step ${step})`;
+  if (section) return `Go to “${section}”`;
+  return step !== null ? `Go to Step ${step}` : "Go to the end";
 }
 
 export function stepCount(guide: Guide): number {

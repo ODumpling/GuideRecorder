@@ -5,7 +5,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; img-src data:; style-src &#x27;unsafe-inline&#x27;; script-src &#x27;sha256-lkJefMmXPFf8vylDs1iPMD3MfHff730es08FaHj3SLY=&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'sha256-3nxb9fU69R5/VmVm3hGLSj7tX6xMNRBs02awY6/qs1o='; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="GuideRecorder">
@@ -195,6 +195,21 @@ code {
 .note-tip .note-label { color: var(--tip); }
 .note-warning .note-label { color: var(--warning); }
 .note-note .note-label { color: var(--note); }
+.audience { margin: -.25rem 0 1rem; color: var(--muted); font-size: .9rem; font-style: italic; }
+.decision {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  background: var(--card);
+  border-radius: 0 8px 8px 0;
+  padding: .75rem 1rem;
+  margin: 0 0 1.25rem;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.decision-question { margin: 0 0 .5rem; }
+.decision-label { font-weight: 600; color: var(--accent); }
+.decision-options { margin: 0; padding-left: 1.25rem; }
+.decision-options li { margin: .2rem 0; overflow-wrap: anywhere; }
 @media print {
   :root { --bg: #fff; --card: #fff; --text: #000; --muted: #444; --border: #bbb; --code-bg: #f0f0f0; }
   body { font-size: 11pt; }
@@ -245,6 +260,11 @@ code {
 .wt-slide .note-tip { border-left-color: var(--tip); }
 .wt-slide .note-warning { border-left-color: var(--warning); }
 .wt-section { margin: 0 0 .35rem; color: var(--muted); font-size: .85rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.wt-decision > h2 .decision-label { color: var(--accent); }
+.wt-options { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .5rem; }
+.wt-option { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; text-decoration: none; overflow-wrap: anywhere; }
+.wt-option:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wt-option-text, .wt-option-static { color: var(--muted); }
 .wt-figure .hotspot-frame { display: block; width: fit-content; }
 .wt-target {
   position: absolute;
@@ -332,7 +352,7 @@ code {
 <p>The lifts open onto the corridor in the middle.</p>
 </div>
 </section>
-<section class="wt-slide wt-step" id="wt-slide-2" aria-labelledby="wt-slide-2-title" data-status="Page 2 of 2: Fire exits">
+<section class="wt-slide wt-step" id="wt-slide-2" aria-labelledby="wt-slide-2-title" data-status="Page 2 of 2: Fire exits" data-end>
 <h2 class="step-title wt-heading" id="wt-slide-2-title" tabindex="-1"><span class="step-number" aria-label="Page 2">2</span><span class="step-text">Fire exits</span></h2>
 <aside class="note note-tip" role="note">
 <p class="note-label">Tip</p>
@@ -350,7 +370,7 @@ code {
 <li id="hotspot-2-2"><span class="hotspot-number">2</span><span class="hotspot-entry"><strong>Stairwell A</strong><span class="hotspot-text">Leads to the assembly point in the car park.</span></span></li>
 </ol>
 </section>
-<section class="wt-slide wt-done" id="wt-slide-3" aria-labelledby="wt-slide-3-title" data-status="Done">
+<section class="wt-slide wt-done" id="wt-slide-3" aria-labelledby="wt-slide-3-title" data-status="Done" data-end>
 <h2 class="wt-heading" id="wt-slide-3-title" tabindex="-1">Done</h2>
 <p>You have reached the end of this guide.</p>
 <p class="wt-actions"><button type="button" class="wt-button wt-primary" data-restart>Restart</button></p>
@@ -378,6 +398,14 @@ code {
   var nexts = root.querySelectorAll(".wt-controls [data-next]");
   var current = 0;
   if (!slides.length) return;
+  // The slides moved on from, so Back retraces a branch taken. Kept in
+  // the root's data-trail too, where a SCORM runtime saves and restores it.
+  var trail = (root.getAttribute("data-trail") || "")
+    .split(" ")
+    .filter(function (n) {
+      return /^\d+$/.test(n) && Number(n) < slides.length;
+    })
+    .map(Number);
   document.documentElement.classList.add("wt-js");
 
   function setDisabled(buttons, disabled) {
@@ -418,16 +446,46 @@ code {
     }
   }
 
+  function setTrail(next) {
+    trail = next;
+    root.setAttribute("data-trail", trail.join(" "));
+  }
+
+  // Moves on to slide `index`, remembering this one for Back.
+  function go(index, focus) {
+    if (index === current) return;
+    setTrail(trail.concat(current));
+    show(index, focus);
+  }
+
+  // Follows a decision option to the slide its link names.
+  function branch(href) {
+    var index = slides.findIndex(function (slide) {
+      return "#" + slide.id === href;
+    });
+    if (index >= 0) go(index, "content");
+  }
+
+  // Back along the way taken, else to the slide before.
+  function back() {
+    var to = trail.length ? trail[trail.length - 1] : current - 1;
+    setTrail(trail.slice(0, -1));
+    show(to, "keep");
+  }
+
   root.addEventListener("click", function (event) {
-    var el = event.target.closest("[data-next], [data-back], [data-restart], a[data-slide]");
+    var el = event.target.closest("[data-next], [data-back], [data-restart], [data-branch], a[data-slide]");
     if (!el || !root.contains(el)) return;
     event.preventDefault();
     if (el.getAttribute("aria-disabled") === "true") return;
-    if (el.hasAttribute("data-slide")) show(Number(el.getAttribute("data-slide")), "content");
-    else if (el.hasAttribute("data-restart")) show(0, "content");
-    else if (el.hasAttribute("data-back")) show(current - 1, "keep");
+    if (el.hasAttribute("data-branch")) branch(el.getAttribute("href"));
+    else if (el.hasAttribute("data-slide")) go(Number(el.getAttribute("data-slide")), "content");
+    else if (el.hasAttribute("data-restart")) {
+      setTrail([]);
+      show(0, "content");
+    } else if (el.hasAttribute("data-back")) back();
     // Back and Next keep focus, so they can be pressed again; a target goes.
-    else show(current + 1, "keep");
+    else go(current + 1, "keep");
   });
 
   document.addEventListener("keydown", function (event) {
@@ -437,10 +495,10 @@ code {
     var control = target.closest && target.closest("a, button, input, select, textarea, [role=button], [contenteditable]");
     if (event.key === "ArrowRight" || (event.key === "Enter" && !control)) {
       event.preventDefault();
-      if (current < slides.length - 1) show(current + 1, "keep");
+      if (current < slides.length - 1) go(current + 1, "keep");
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
-      if (current > 0) show(current - 1, "keep");
+      if (current > 0) back();
     }
   });
 

@@ -1,6 +1,7 @@
 // A synced guide, read-only: the mobile counterpart of the web viewer
 // (web/src/components/guides/GuideViewer.tsx): title, intro,
-// prerequisites, then numbered steps with their images, sections and notes.
+// prerequisites, then numbered steps with their images, sections, notes
+// and decisions (their options say which step they lead to).
 
 import type { Guide, NoteKind } from "@guiderecorder/guide-schema";
 import type { ReviewState } from "@guiderecorder/sync";
@@ -55,9 +56,45 @@ export function GuideView({ guide, image, review }: { guide: Guide; image: (path
       {viewItems(guide).map((item) => {
         if (item.type === "section") {
           return (
-            <Text key={item.id} variant="heading" style={{ fontSize: 20, marginTop: 8 }}>
-              {item.title}
-            </Text>
+            <View key={item.id} style={{ gap: 2, marginTop: 8 }}>
+              <Text variant="heading" style={{ fontSize: 20 }}>
+                {item.title}
+              </Text>
+              {item.audiences.length ? (
+                <Text variant="small" muted>
+                  For: {item.audiences.join(", ")}
+                </Text>
+              ) : null}
+            </View>
+          );
+        }
+        if (item.type === "decision") {
+          return (
+            <View
+              key={item.decision.id}
+              accessibilityRole="summary"
+              style={{
+                backgroundColor: theme.card,
+                borderRadius: radius.xl,
+                borderWidth: 1,
+                borderColor: theme.border,
+                borderLeftWidth: 4,
+                borderLeftColor: theme.info,
+                padding: 16,
+                gap: 4,
+              }}
+            >
+              <Text variant="caption" muted>
+                Decision
+              </Text>
+              <Markdown text={item.decision.question} small />
+              {item.options.map((option) => (
+                <Text key={option.id} variant="small">
+                  {option.label ? `${option.label}: ` : ""}
+                  {option.to}
+                </Text>
+              ))}
+            </View>
           );
         }
         if (item.type === "note") {

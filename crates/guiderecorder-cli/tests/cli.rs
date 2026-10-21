@@ -564,7 +564,7 @@ fn validate_fixtures_ok() {
     let text = stdout(&out);
     assert!(text.contains(": ok"), "{text}");
     assert!(
-        text.contains("Rotate an API key: schema 2, writable"),
+        text.contains("Rotate an API key: schema 3, writable"),
         "{text}"
     );
 }
@@ -845,7 +845,7 @@ fn export_each_format() {
     let document = fs::read_to_string(fx.out("html").join("guide.html")).unwrap();
     assert!(!document.contains("<script>"));
     let walkthrough = fs::read_to_string(fx.out("walkthrough").join("guide.html")).unwrap();
-    assert!(walkthrough.contains("<script>") && walkthrough.contains("script-src &#x27;sha256-"));
+    assert!(walkthrough.contains("<script>") && walkthrough.contains("script-src 'sha256-"));
     let pdf = fs::read(fx.out("drucker.pdf")).unwrap();
     assert!(pdf.starts_with(b"%PDF-"));
     let docx = fs::read(fx.out("drucker.docx")).unwrap();
@@ -1154,6 +1154,47 @@ fn export_scorm_with_quiz_and_course_options() {
     for name in ["none.zip", "bad.zip", "over.zip"] {
         assert!(!fx.out(name).exists(), "{name}");
     }
+}
+
+#[test]
+fn export_for_an_audience() {
+    let fx = Fixture::new();
+    edit_guide_json(&fx.bundle(CALENDAR), |v| {
+        assert_eq!(v["items"][4]["title"], "Invite people");
+        v["items"][4]["audiences"] = serde_json::json!(["Organizer"]);
+    });
+    let everyone = fx.out("everyone");
+    fx.export_json(CALENDAR, "md", &everyone, &[]);
+    let md = fs::read_to_string(everyone.join("guide.md")).unwrap();
+    assert!(
+        md.contains("## Invite people\n\n*For: Organizer*\n"),
+        "{md}"
+    );
+    assert!(md.contains("### 5. Press"), "{md}");
+
+    // Guests don't see the organizer's section; organizers do.
+    let guest = fx.out("guest");
+    fx.export_json(CALENDAR, "md", &guest, &["--audience", "Guest"]);
+    let md = fs::read_to_string(guest.join("guide.md")).unwrap();
+    assert!(!md.contains("Invite people"), "{md}");
+    assert!(md.contains("### 2. Double-click"), "{md}");
+    assert!(!md.contains("### 3."), "{md}");
+    let organizer = fx.out("organizer");
+    fx.export_json(CALENDAR, "md", &organizer, &["--audience", "organizer"]);
+    let md = fs::read_to_string(organizer.join("guide.md")).unwrap();
+    assert!(md.contains("### 5. Press"), "{md}");
+    // A SCORM course too.
+    let course = fx.out("guest.zip");
+    fx.export_json(CALENDAR, "scorm", &course, &["--audience", "Guest"]);
+    let page = zip_entry(&course, "guide.html");
+    assert!(!page.contains("Invite people"));
+    assert!(page.contains("Step 2 of 2"));
+
+    // A decision lists its options with the steps they lead to.
+    let rotate = fx.out("rotate");
+    fx.export_json(ROTATE, "md", &rotate, &[]);
+    let md = fs::read_to_string(rotate.join("guide.md")).unwrap();
+    assert!(md.contains("> - **No:** Go to Step 5\n"), "{md}");
 }
 
 #[test]

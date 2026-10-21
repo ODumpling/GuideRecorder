@@ -4,7 +4,7 @@ import { Button } from "@guiderecorder/ui/button";
 import { Card } from "@guiderecorder/ui/card";
 import { Markdown } from "./Markdown";
 import { StepFigure, type ImageUrl } from "./StepFigure";
-import { plainText, slides, viewerItems, type ViewerItem, type ViewerNote, type ViewerStep } from "./viewer";
+import { plainText, slides, viewerItems, type SlideNote, type ViewerDecision, type ViewerItem, type ViewerNote, type ViewerStep, type ViewerTarget } from "./viewer";
 
 // A guide for reading on the web: the React counterpart of the HTML export
 // (core `export/html.rs`) and its interactive walkthrough
@@ -54,6 +54,12 @@ function words(language: string, annotated: boolean) {
         doneText: "Sie haben das Ende dieser Anleitung erreicht.",
         target: "Hier klicken, um fortzufahren",
         hint: "Klicken Sie auf die markierte Stelle oder drücken Sie → oder die Eingabetaste, um fortzufahren; ← geht zurück.",
+        decision: "Entscheidung",
+        audience: "Für",
+        goTo: "Weiter mit",
+        goToEnd: "Weiter zum Ende",
+        goToGuide: "Weiter mit der Anleitung",
+        quotes: ["„", "“"],
       }
     : {
         step: annotated ? "Page" : "Step",
@@ -72,6 +78,12 @@ function words(language: string, annotated: boolean) {
         doneText: "You have reached the end of this guide.",
         target: "Click here to continue",
         hint: "Click the highlighted spot, or press → or Enter, to continue; ← goes back.",
+        decision: "Decision",
+        audience: "For",
+        goTo: "Go to",
+        goToEnd: "Go to the end",
+        goToGuide: "Go to the guide",
+        quotes: ["“", "”"],
       };
 }
 
@@ -144,6 +156,60 @@ function NoteCard({ note, w }: { note: ViewerNote; w: Words }) {
   );
 }
 
+/** Where an option leads, in words, as core `Labels::go_to` says it. */
+function goTo(target: ViewerTarget, w: Words): string {
+  const quoted = (title: string) => `${w.quotes[0]}${title}${w.quotes[1]}`;
+  if (target.kind === "guide") return target.title ? `${w.goToGuide} ${quoted(target.title)}` : w.goToGuide;
+  const step = target.number === null ? null : `${w.step} ${target.number}`;
+  if (target.section && step) return `${w.goTo} ${quoted(target.section)} (${step})`;
+  if (target.section) return `${w.goTo} ${quoted(target.section)}`;
+  return step ? `${w.goTo} ${step}` : w.goToEnd;
+}
+
+/**
+ * A decision's question and its options. In the document an option links
+ * to its step; in the walkthrough `onGo` follows it (a step number, or null
+ * for the end). Another guide is named, not linked.
+ */
+function DecisionCard({ decision, w, onGo }: { decision: ViewerDecision; w: Words; onGo?: (step: number | null) => void }) {
+  return (
+    <aside role="group" aria-label={w.decision} className="rounded-xl border border-l-4 border-border border-l-brand bg-card p-4 text-sm">
+      <p className="mb-2">
+        <span className="font-semibold">{w.decision}:</span> <Markdown text={decision.question} inline />
+      </p>
+      <ul className="grid gap-1">
+        {decision.options.map((option) => {
+          const text = goTo(option.target, w);
+          const target = option.target;
+          return (
+            <li key={option.id}>
+              {option.label ? <strong>{option.label}: </strong> : null}
+              {target.kind === "guide" ? (
+                text
+              ) : onGo ? (
+                <button type="button" className="text-brand underline" onClick={() => onGo(target.number)}>
+                  {text}
+                </button>
+              ) : target.number !== null ? (
+                <a href={`#step-${target.number}`} className="text-brand underline">
+                  {text}
+                </a>
+              ) : (
+                text
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
+  );
+}
+
+/** A note, or a decision whose options `onGo` follows. */
+function SlideNoteCard({ note, w, onGo }: { note: SlideNote; w: Words; onGo: (step: number | null) => void }) {
+  return note.type === "decision" ? <DecisionCard decision={note} w={w} onGo={onGo} /> : <NoteCard note={note} w={w} />;
+}
+
 function StepTitle({ step, w, as: As = "h3", ref }: { step: ViewerStep; w: Words; as?: "h2" | "h3"; ref?: Ref<HTMLHeadingElement> }) {
   return (
     <As ref={ref} tabIndex={ref ? -1 : undefined} className={`flex items-baseline gap-3 outline-none ${As === "h2" ? "text-xl font-semibold" : "text-lg font-medium"}`}>
@@ -168,12 +234,18 @@ function DocumentView({ guide, items, steps, imageUrl, w }: { guide: Guide; item
         {items.map((item) => {
           if (item.type === "section") {
             return (
-              <h2 key={item.id} className="mt-2 text-xl font-semibold">
-                {item.title}
-              </h2>
+              <div key={item.id} className="mt-2 grid gap-1">
+                <h2 className="text-xl font-semibold">{item.title}</h2>
+                {item.audiences.length ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    {w.audience}: {item.audiences.join(", ")}
+                  </p>
+                ) : null}
+              </div>
             );
           }
           if (item.type === "note") return <NoteCard key={item.id} note={item} w={w} />;
+          if (item.type === "decision") return <DecisionCard key={item.id} decision={item} w={w} />;
           return (
             <Card key={item.id} id={`step-${item.number}`} className="p-6 grid scroll-mt-6 gap-4">
               <StepTitle step={item} w={w} />
@@ -214,6 +286,12 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
     if (clamped === index) return;
     moved.current = focusHeading;
     setIndex(clamped);
+  };
+
+  // A decision option: the step's slide, or the end.
+  const follow = (step: number | null) => {
+    const at = step === null ? -1 : all.findIndex((s) => s.kind === "step" && s.step.number === step);
+    go(at < 0 ? last : at);
   };
 
   useEffect(() => {
@@ -284,7 +362,7 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
               </h2>
               <p className="text-sm">{w.doneText}</p>
               {slide.notes.map((n) => (
-                <NoteCard key={n.id} note={n} w={w} />
+                <SlideNoteCard key={n.id} note={n} w={w} onGo={follow} />
               ))}
               <p>
                 <Button variant="brand" size="lg" onClick={() => go(0)}>{w.restart}</Button>
@@ -295,7 +373,7 @@ function Walkthrough({ guide, items, total, imageUrl, w }: { guide: Guide; items
               {slide.step.section ? <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{slide.step.section}</p> : null}
               <StepTitle step={slide.step} w={w} as="h2" ref={heading} />
               {slide.notes.map((n) => (
-                <NoteCard key={n.id} note={n} w={w} />
+                <SlideNoteCard key={n.id} note={n} w={w} onGo={follow} />
               ))}
               <StepFigure
                 key={slide.step.id}

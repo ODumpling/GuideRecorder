@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "id": "01M4WZCE2000000000000002R0",
   "title": "Rotate an API key",
   "summary": "Replace a leaked or expiring API key without downtime.",
@@ -184,6 +184,37 @@
         "model": "claude-sonnet-5-5",
         "promptVersion": "step.v1"
       }
+    },
+    {
+      "type": "decision",
+      "id": "01M4WZCE2000000000000002RC",
+      "question": "Is the key used in **production**?",
+      "options": [
+        {
+          "id": "01M4WZCE2000000000000002RD",
+          "label": "Yes",
+          "target": {
+            "kind": "next"
+          }
+        },
+        {
+          "id": "01M4WZCE2000000000000002RE",
+          "label": "No",
+          "target": {
+            "kind": "step",
+            "id": "01M4WZCE2000000000000002RB"
+          }
+        },
+        {
+          "id": "01M4WZCE2000000000000002RF",
+          "label": "Unsure",
+          "target": {
+            "kind": "guide",
+            "id": "01M4XRC0000000000000000380",
+            "title": "Find where an API key is used"
+          }
+        }
+      ]
     },
     {
       "type": "step",

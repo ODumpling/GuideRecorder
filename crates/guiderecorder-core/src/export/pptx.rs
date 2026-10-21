@@ -10,8 +10,10 @@
 //!   description. A step's hotspots follow its description as a numbered
 //!   list matching the markers on the image. The speaker notes repeat the
 //!   description and hotspots, for the presenter.
-//! - A slide per section, with just its title, and per note, with its
-//!   label ("Tip", "Warning", "Note") as the title and its text as the body.
+//! - A slide per section, with just its title (and "For: Admin" when it
+//!   names audiences), per note, with its label ("Tip", "Warning", "Note")
+//!   as the title and its text as the body, and per decision, with "Decision:
+//!   question" as the title and an option per bullet naming its step.
 //!
 //! Slides are 16:9. Every slide uses one "Title Only" layout, so the title
 //! is a real title placeholder (PowerPoint's outline and screen readers
@@ -49,8 +51,9 @@ use super::ast::{plain_text, Block, Inline};
 use super::md::Labels;
 use super::persist;
 use super::raster::ImageOptions;
-use super::render::{RenderGuide, RenderItem, RenderStep};
+use super::render::{RenderDecision, RenderGuide, RenderItem, RenderStep};
 use super::report::ExportReport;
+use crate::model::GuideKind;
 
 /// Slide size in EMU (13.333 × 7.5 in, 16:9).
 const SLIDE_W: i64 = 12_192_000;
@@ -189,7 +192,18 @@ impl<'a> Deck<'a> {
         for item in &guide.items {
             match item {
                 RenderItem::Step(step) => deck.step_slide(step, report),
-                RenderItem::Section(section) => deck.text_slide(&section.title, &[]),
+                RenderItem::Section(section) => {
+                    let audiences: Vec<Block> = labels
+                        .audiences(&section.audiences)
+                        .map(|text| Block::Paragraph(vec![Inline::Text(text)]))
+                        .into_iter()
+                        .collect();
+                    deck.text_slide(&section.title, &audiences)
+                }
+                RenderItem::Decision(decision) => {
+                    let (title, body) = decision_slide(decision, labels, guide.kind);
+                    deck.text_slide(&title, &body)
+                }
                 RenderItem::Note(note) => {
                     let label = labels.note_kind(note.kind).to_owned();
                     deck.text_slide(&label, &note.body)
@@ -528,6 +542,43 @@ struct Style {
 
 /// Paragraph properties of a list item at `level` (1 for a top-level
 /// list): a bullet, or a number when `numbered` holds a start.
+/// A decision's slide: "Decision: question" as the title, and a bullet per
+/// option, "**Label:** Go to Step 5", as the body. Slides don't link to
+/// each other; the step is named.
+fn decision_slide(
+    decision: &RenderDecision,
+    labels: &Labels,
+    kind: GuideKind,
+) -> (String, Vec<Block>) {
+    let question = plain_text(&decision.question).replace('\n', " ");
+    let title = match question.trim() {
+        "" => labels.decision.clone(),
+        question => format!("{}: {question}", labels.decision),
+    };
+    let items: Vec<Vec<Block>> = decision
+        .options
+        .iter()
+        .map(|option| {
+            let mut inlines = Vec::new();
+            if !option.label.is_empty() {
+                inlines.push(Inline::Strong(vec![Inline::Text(format!(
+                    "{}:",
+                    option.label
+                ))]));
+                inlines.push(Inline::Text(" ".into()));
+            }
+            inlines.push(Inline::Text(labels.go_to(&option.target, kind)));
+            vec![Block::Paragraph(inlines)]
+        })
+        .collect();
+    let body = if items.is_empty() {
+        Vec::new()
+    } else {
+        vec![Block::List { start: None, items }]
+    };
+    (title, body)
+}
+
 fn list_ppr(level: u32, numbered: Option<Option<u64>>) -> String {
     let indent = 285_750;
     let mar = i64::from(level) * indent;

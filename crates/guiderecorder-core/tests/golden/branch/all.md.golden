@@ -1,0 +1,34 @@
+# Reset a password
+
+### 1. Open the **console**
+
+![Open the console](images/01-open-the-console.png)
+
+> **Decision:** Are you an *administrator*?
+>
+> - **Yes:** Go to “Admins” (Step 2)
+> - **No:** Go to “Everyone else” (Step 3)
+> - **Already reset:** Go to Step 4
+> - Go to the guide “Unlock an account”
+
+## Admins
+
+*For: Admin*
+
+### 2. Open **Users** and choose *Reset*
+
+![Open Users and choose Reset](images/02-open-users-and-choose-reset.png)
+
+## Everyone else
+
+*For: User, Guest*
+
+### 3. Ask an administrator
+
+![Ask an administrator](images/03-ask-an-administrator.png)
+
+## Finish
+
+### 4. Sign out
+
+![Sign out](images/04-sign-out.png)

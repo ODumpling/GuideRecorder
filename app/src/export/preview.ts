@@ -20,6 +20,8 @@ export interface PreviewRequest {
   motion: MotionOptions;
   skill: SkillOptions;
   scorm: ScormOptions;
+  /** Only the sections for this audience; null: everyone. */
+  audience: string | null;
 }
 
 /**
@@ -38,6 +40,7 @@ export function previewRequest(choices: {
   motion: MotionOptions;
   skill?: SkillOptions;
   scorm?: ScormOptions;
+  audience?: string | null;
 }): PreviewRequest | null {
   const { guideId, format } = choices;
   const document = isDocumentFormat(format);
@@ -63,6 +66,7 @@ export function previewRequest(choices: {
       format === "scorm" && choices.scorm
         ? { ...DEFAULT_SCORM, completion: choices.scorm.completion, masteryScore: choices.scorm.masteryScore, quiz: choices.scorm.quiz }
         : DEFAULT_SCORM,
+    audience: choices.audience || null,
   };
 }
 

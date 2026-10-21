@@ -8,6 +8,7 @@ import {
   insertItemBefore,
   insertItemsAfter,
   mergeWithNext,
+  newDecision,
   newNote,
   newSection,
   nextStep,
@@ -38,6 +39,12 @@ export function insertSection(store: EditorStore, id = ulid()): boolean {
 export function insertNote(store: EditorStore, kind: NoteKind, id = ulid()): boolean {
   const state = current(store);
   return !!state && state.dispatch(insertItemAfter(state.guide, newNote(id, kind), state.selected?.id ?? null));
+}
+
+/** A decision below the selected item (or at the end), with Yes and No options. */
+export function insertDecision(store: EditorStore, id = ulid(), optionIds: [string, string] = [ulid(), ulid()]): boolean {
+  const state = current(store);
+  return !!state && state.dispatch(insertItemAfter(state.guide, newDecision(id, optionIds), state.selected?.id ?? null));
 }
 
 export function deleteSelected(store: EditorStore): boolean {

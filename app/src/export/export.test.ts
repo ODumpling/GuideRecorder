@@ -200,7 +200,7 @@ describe("skill options", () => {
   it("are sent with a skill export", async () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/SKILL.md"], warnings: [], notes: [] }));
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "skill", skill: { replay: true } });
-    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true }, DEFAULT_SCORM);
+    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true }, DEFAULT_SCORM, null);
   });
 });
 
@@ -243,7 +243,17 @@ describe("SCORM options", () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Course.zip"], warnings: [], notes: [] }));
     const scorm = { ...DEFAULT_SCORM, title: "Course" };
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "scorm", out: "/out/Course.zip", scorm });
-    expect(exportGuide).toHaveBeenCalledWith("G", "scorm", "/out/Course.zip", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, scorm);
+    expect(exportGuide).toHaveBeenCalledWith("G", "scorm", "/out/Course.zip", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, scorm, null);
+  });
+});
+
+describe("audience", () => {
+  it("is sent when chosen, and null (everyone) otherwise", async () => {
+    const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/guide.md"], warnings: [], notes: [] }));
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "Admin" });
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, "Admin");
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "" });
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
   });
 });
 
@@ -265,7 +275,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM);
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

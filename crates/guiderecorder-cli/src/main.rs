@@ -24,6 +24,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::builder::RangedU64ValueParser;
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use guiderecorder_core::branch;
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
     docx, html, md, motion, pdf, pptx, render_step_image, scorm, skill, ExportReport, ImageOptions,
@@ -198,6 +199,11 @@ struct ExportArgs {
     /// question, then a line per choice, `- [x] right` or `- [ ] wrong`.
     #[arg(long, value_name = "FILE")]
     quiz: Option<PathBuf>,
+    /// Export for one audience: leave out the sections tagged only for
+    /// others, and the decision options that lead there. Untagged
+    /// sections are for everyone.
+    #[arg(long, value_name = "NAME")]
+    audience: Option<String>,
     /// Exit with 1 when the export has warnings or notes (the export is
     /// still written).
     #[arg(long)]
@@ -230,7 +236,8 @@ enum Format {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Completion {
-    /// Completed once the last step is shown.
+    /// Completed once an end of the walkthrough is shown: the last step,
+    /// or the end a decision option leads to.
     LastStep,
     /// Passed or failed by the quiz score (needs `--quiz`).
     QuizPassed,
@@ -832,6 +839,7 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     check_out_path(&args.out, &loaded.handle.path, library_root.as_deref())?;
 
     let LoadedGuide { handle, guide, .. } = loaded;
+    let guide = branch::narrow(guide, args.audience.as_deref());
     let render = RenderGuide::new(&guide, &handle);
     let out = &args.out;
     let overwrite = args.overwrite;

@@ -43,6 +43,9 @@
     return api;
   }
 
+  // The most cmi.suspend_data a SCORM 1.2 LMS must keep.
+  var MAX_SUSPEND_DATA = 4096;
+
   // `ms` as a SCORM 1.2 CMITimespan, HHHH:MM:SS.SS (hours from 2 digits).
   function sessionTime(ms) {
     var cs = Math.max(0, Math.round(ms / 10));
@@ -57,7 +60,8 @@
   }
 
   // The learner's progress, reported through `api` (null: no LMS).
-  // `completion` is "last-step" (completed when the last step is reached)
+  // `completion` is "last-step" (completed when an end of the walkthrough is
+  // reached: the last step, or the end slide a decision may lead to)
   // or "quiz-passed" (passed or failed by the quiz score against `mastery`).
   function Tracker(api, completion, mastery) {
     this.api = null;
@@ -121,10 +125,26 @@
     return this.status === "completed" || this.status === "passed";
   };
 
-  // A slide was shown: `bookmark` is its id; `end` whether it is the last
-  // step or after it.
-  Tracker.prototype.visit = function (bookmark, end) {
+  // The way taken to the bookmarked slide (the walkthrough's data-trail,
+  // slide indices), saved by `visit`; "" if none or not valid.
+  Tracker.prototype.trail = function () {
+    var trail = this.get("cmi.suspend_data");
+    return /^\d+( \d+)*$/.test(trail) ? trail : "";
+  };
+
+  // A slide was shown: `bookmark` is its id; `end` whether it ends the
+  // walkthrough (data-end). `trail`, the way taken (data-trail), is kept
+  // in cmi.suspend_data, its latest part within SCORM 1.2's 4096
+  // characters, so Back retraces it after a resume.
+  Tracker.prototype.visit = function (bookmark, end, trail) {
     this.set("cmi.core.lesson_location", bookmark);
+    if (typeof trail === "string") {
+      if (trail.length > MAX_SUSPEND_DATA) {
+        var cut = trail.indexOf(" ", trail.length - MAX_SUSPEND_DATA - 1);
+        trail = cut < 0 ? "" : trail.slice(cut + 1);
+      }
+      this.set("cmi.suspend_data", trail);
+    }
     if (end && this.completion === "last-step" && !this.done()) this.setStatus("completed");
   };
 
@@ -174,14 +194,13 @@
       Number(sco.getAttribute("data-mastery") || "100")
     );
     var slides = Array.prototype.slice.call(root.querySelectorAll(".wt-slide"));
-    var steps = root.querySelectorAll(".wt-slide.wt-step");
-    var last = steps.length ? slides.indexOf(steps[steps.length - 1]) : slides.length - 1;
 
     // Back where the learner left off, before the walkthrough reads the hash.
     var bookmark = tracker.begin();
     if (/^wt-slide-\d+$/.test(bookmark) && !win.location.hash && doc.getElementById(bookmark)) {
       try {
         win.history.replaceState(null, "", "#" + bookmark);
+        root.setAttribute("data-trail", tracker.trail());
       } catch (e) {
         // Not allowed here; the walkthrough starts at the beginning.
       }
@@ -193,8 +212,7 @@
         return !slide.hidden;
       });
       if (visible.length !== 1) return;
-      var index = slides.indexOf(visible[0]);
-      tracker.visit(visible[0].id, index >= last);
+      tracker.visit(visible[0].id, visible[0].hasAttribute("data-end"), root.getAttribute("data-trail") || "");
     }
     if (typeof win.MutationObserver === "function") {
       new win.MutationObserver(shown).observe(root, { subtree: true, attributes: true, attributeFilter: ["hidden"] });

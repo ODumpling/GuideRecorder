@@ -15,7 +15,8 @@ interface Api {
 interface Tracker {
   status: string;
   begin(): string;
-  visit(bookmark: string, end: boolean): void;
+  visit(bookmark: string, end: boolean, trail?: string): void;
+  trail(): string;
   answer(right: number, total: number): { score: number; passed: boolean };
   finish(ms: number): void;
 }
@@ -119,6 +120,28 @@ describe("Tracker", () => {
     const next = new scorm.Tracker(lms(data).api, "last-step", 80);
     expect(next.begin()).toBe("wt-slide-2");
     expect(next.status).toBe("completed");
+  });
+
+  it("keeps the way taken through decisions for the next session", () => {
+    const { api, data } = lms();
+    const tracker = new scorm.Tracker(api, "last-step", 80);
+    tracker.begin();
+    // A decision on slide 4 led straight to the end slide.
+    tracker.visit("wt-slide-7", true, "0 1 2 3 4");
+    expect(data["cmi.suspend_data"]).toBe("0 1 2 3 4");
+    expect(data["cmi.core.lesson_status"]).toBe("completed");
+    const next = new scorm.Tracker(lms(data).api, "last-step", 80);
+    expect(next.begin()).toBe("wt-slide-7");
+    expect(next.trail()).toBe("0 1 2 3 4");
+    // Anything else stored there is ignored.
+    expect(new scorm.Tracker(lms({ "cmi.suspend_data": "x" }).api, "last-step", 80).trail()).toBe("");
+    // A long way keeps its latest part, within SCORM 1.2's 4096 characters.
+    const long = Array.from({ length: 2000 }, (_, i) => String(i % 10)).join(" ") + " 12345";
+    tracker.visit("wt-slide-1", false, long);
+    const kept = data["cmi.suspend_data"]!;
+    expect(kept.length).toBeLessThanOrEqual(4096);
+    expect(long.endsWith(kept) && kept.endsWith(" 12345")).toBe(true);
+    expect(kept).toMatch(/^\d+( \d+)*$/);
   });
 
   it("suspends an unfinished lesson on leaving", () => {

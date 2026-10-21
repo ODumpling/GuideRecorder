@@ -170,6 +170,7 @@ export function selectionAnnouncement(items: Item[], selectedId: string | null, 
     const title = markdownToPlainText(item.title).trim();
     return `Section ${title ? `"${title}" ` : ""}selected`;
   }
+  if (item.type === "decision") return "Decision selected";
   return `${item.kind[0].toUpperCase()}${item.kind.slice(1)} selected`;
 }
 

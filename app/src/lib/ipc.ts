@@ -193,6 +193,8 @@ export interface ExportApi {
     skill: SkillOptions,
     /** Used by SCORM packages. */
     scorm: ScormOptions,
+    /** Leave out the sections for other audiences; null: everyone. */
+    audience: string | null,
   ): Promise<ExportResult>;
   /** A preview of exporting from the saved bundle with these options; writes nothing. */
   previewExport(
@@ -204,6 +206,7 @@ export interface ExportApi {
     motion: MotionOptions,
     skill: SkillOptions,
     scorm: ScormOptions,
+    audience: string | null,
   ): Promise<ExportPreviewData>;
   /** A logo `chooseLogo` returned (PNG or JPEG, up to 2 MB) as a PNG data URI. */
   logoPreview(path: string): Promise<string>;
@@ -216,10 +219,10 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm }),
-  previewExport: (guideId, format, branding, paper, reviewDetails, motion, skill, scorm) =>
-    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill, scorm }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm, audience) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill, scorm, audience }),
+  previewExport: (guideId, format, branding, paper, reviewDetails, motion, skill, scorm, audience) =>
+    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill, scorm, audience }),
   logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
 };

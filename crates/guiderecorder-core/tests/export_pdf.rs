@@ -206,6 +206,7 @@ fn hostile_text_is_printed_literally_and_never_runs() {
         Item::Section(Section {
             id: Ulid::new(),
             title: hostile[2].into(),
+            audiences: Vec::new(),
         }),
         step(&format!("Click **{}** and *{}*", md[3], md[4])),
         Item::Note(Note {
@@ -254,6 +255,7 @@ fn markdown_inlines_and_lists_are_rendered() {
         Item::Section(Section {
             id: Ulid::new(),
             title: "Part".into(),
+            audiences: Vec::new(),
         }),
         step("Press `⌘S`"),
         Item::Note(Note {

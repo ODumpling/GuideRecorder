@@ -12,7 +12,7 @@ type AiGenerateArgs = { stepIds?: string[]; guidePass?: boolean; force?: boolean
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
 /** Core's `SCHEMA_VERSION`: a guide saved with a newer one opens read-only. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface AppError {
   kind: string;
@@ -103,9 +103,11 @@ export class Backend {
     motion?: unknown;
     skill?: unknown;
     scorm?: unknown;
+    /** Only when one was chosen. */
+    audience?: string;
   }[] = [];
-  /** Every `preview_export` call. */
-  readonly previews: { format: string; branding: ExportBranding; scorm?: unknown }[] = [];
+  /** Every `preview_export` call; `audience` only when one was chosen. */
+  readonly previews: { format: string; branding: ExportBranding; scorm?: unknown; audience?: string }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
@@ -938,7 +940,14 @@ export class Backend {
         const overwrite = args.overwrite === true;
         if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
         this.exported.add(out);
-        const record = { guideId, format, out, overwrite, branding: args.branding as ExportBranding };
+        const record = {
+          guideId,
+          format,
+          out,
+          overwrite,
+          branding: args.branding as ExportBranding,
+          ...(typeof args.audience === "string" && { audience: args.audience }),
+        };
         this.exports.push(
           format === "mp4" || format === "gif"
             ? { ...record, motion: args.motion }
@@ -964,6 +973,7 @@ export class Backend {
           format: String(args.format),
           branding: args.branding as ExportBranding,
           ...(args.format === "scorm" ? { scorm: args.scorm } : {}),
+          ...(typeof args.audience === "string" && { audience: args.audience }),
         });
         const page = (n: number) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="14"><text y="10">${n}</text></svg>`)}`;
         switch (String(args.format)) {
