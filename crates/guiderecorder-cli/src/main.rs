@@ -222,7 +222,7 @@ enum Format {
     Pdf,
     /// Slides, one per step, with speaker notes.
     Pptx,
-    /// A video zooming in on each click (macOS only).
+    /// A video zooming in on each click (macOS and Windows).
     Mp4,
     /// An animated GIF zooming in on each click.
     Gif,
