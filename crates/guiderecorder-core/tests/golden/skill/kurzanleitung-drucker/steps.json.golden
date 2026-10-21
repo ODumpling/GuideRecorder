@@ -1,0 +1,25 @@
+{
+  "format": "guiderecorder.skill-steps",
+  "version": 1,
+  "guide": {
+    "id": "01M4TZVZ000000000000000300",
+    "name": "kurzanleitung-drucker",
+    "title": "Kurzanleitung Drucker",
+    "summary": "",
+    "language": "de"
+  },
+  "steps": [
+    {
+      "number": 1,
+      "id": "01M4TZVZ000000000000000301",
+      "kind": "manual",
+      "title": "Papierfach 2 öffnen",
+      "description": "Fach ganz herausziehen.  \nDann Papier einlegen.\n\n* A4\n* A5\n\n# Hinweis\n\nNicht __überfüllen__.",
+      "image": "images/01-papierfach-2-oeffnen.png",
+      "confidence": {
+        "level": "notNeeded",
+        "issues": []
+      }
+    }
+  ]
+}

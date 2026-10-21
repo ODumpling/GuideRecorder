@@ -5,7 +5,7 @@
 
 import MarkdownIt from "markdown-it";
 import { isAccent, isDocumentFormat, isMotionFormat } from "@/export/export";
-import type { ExportBranding, ExportFormat, ExportPreviewData, MotionOptions, PaperSize } from "@/lib/types";
+import type { ExportBranding, ExportFormat, ExportPreviewData, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
 
 /** How long the options must stay unchanged before a new preview is made, in ms. */
 export const PREVIEW_DELAY_MS = 300;
@@ -18,6 +18,7 @@ export interface PreviewRequest {
   paper: PaperSize;
   reviewDetails: boolean;
   motion: MotionOptions;
+  skill: SkillOptions;
 }
 
 /**
@@ -33,6 +34,7 @@ export function previewRequest(choices: {
   paper: PaperSize;
   reviewDetails: boolean;
   motion: MotionOptions;
+  skill?: SkillOptions;
 }): PreviewRequest | null {
   const { guideId, format } = choices;
   const document = isDocumentFormat(format);
@@ -49,6 +51,8 @@ export function previewRequest(choices: {
     motion: isMotionFormat(format)
       ? { ...choices.motion, secondsPerStep: 3 }
       : { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
+    // The replay script only adds a line to SKILL.md.
+    skill: { replay: format === "skill" && !!choices.skill?.replay },
   };
 }
 
@@ -129,13 +133,26 @@ const markdown = new MarkdownIt("commonmark", { html: false });
  */
 export function markdownPreviewHtml(source: string, images: { link: string; src: string }[]): string {
   const sources = new Map(images.map((image) => [image.link, image.src]));
-  const tokens = markdown.parse(source, {});
+  const tokens = markdown.parse(frontMatterAsCode(source), {});
   for (const token of tokens) {
     for (const child of token.children ?? []) {
       if (child.type === "image") child.attrSet("src", sources.get(String(child.attrGet("src") ?? "")) ?? "");
     }
   }
   return markdown.renderer.render(tokens, markdown.options, {});
+}
+
+/**
+ * A skill's YAML front matter (`---` lines around `name:` and
+ * `description:` at the very start) as a fenced code block, so the preview
+ * shows it as written rather than as a rule and a heading.
+ */
+export function frontMatterAsCode(source: string): string {
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(source);
+  if (!match) return source;
+  // Longer than any backtick run in the YAML, which is one line per key.
+  const fence = "`".repeat(Math.max(3, ...[...match[1].matchAll(/`+/g)].map((m) => m[0].length + 1)));
+  return `${fence}yaml\n---\n${match[1]}\n---\n${fence}\n${source.slice(match[0].length)}`;
 }
 
 /** The page a Markdown preview shows in its frame: `body` with a GitHub-like look and no script. */

@@ -15,6 +15,7 @@ import { ExportPreview } from "@/components/ExportPreview";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { editorStore, useEditor } from "@/editor/editor";
+import { unclearSteps, unclearStepsText } from "@/editor/element";
 import { inspectorStore } from "@/editor/inspector";
 import {
   ASPECTS,
@@ -24,6 +25,7 @@ import {
   initialMotion,
   initialPaper,
   initialReviewDetails,
+  initialSkill,
   isAccent,
   isDocumentFormat,
   isFolderFormat,
@@ -37,6 +39,7 @@ import {
   rememberMotion,
   rememberPaper,
   rememberReviewDetails,
+  rememberSkill,
   runExport,
   unreviewedBlurs,
   unreviewedBlursText,
@@ -46,7 +49,7 @@ import {
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
 import { fileManager } from "@/lib/platform";
-import type { ExportFormat, MotionOptions, PaperSize } from "@/lib/types";
+import type { ExportFormat, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
 
@@ -114,6 +117,7 @@ const FORMAT_BADGES: Record<ExportFormat, string> = {
   pptx: "PPTX",
   mp4: "MP4",
   gif: "GIF",
+  skill: "SKILL",
 };
 const FORMAT_COLORS: Record<ExportFormat, string> = {
   md: "#4a4740",
@@ -124,6 +128,7 @@ const FORMAT_COLORS: Record<ExportFormat, string> = {
   pptx: "#d35230",
   mp4: "#1d1c1a",
   gif: "#c2398f",
+  skill: "#b8740f",
 };
 
 /** Whether the export dialog is open, and the format it opens on (null: the remembered one). */
@@ -165,6 +170,7 @@ export function ExportDialog({
   const [paper, setPaper] = useState<PaperSize>(() => initialChoices().paper);
   const [reviewDetails, setReviewDetails] = useState(() => initialReviewDetails());
   const [motion, setMotion] = useState<MotionOptions>(() => initialMotion());
+  const [skill, setSkill] = useState<SkillOptions>(() => initialSkill());
   // The seconds field as typed, so it can be cleared while editing.
   const [seconds, setSeconds] = useState(() => String(motion.secondsPerStep));
   const [busy, setBusy] = useState(false);
@@ -207,6 +213,7 @@ export function ExportDialog({
       const startMotion = initialMotion();
       setMotion(startMotion);
       setSeconds(String(startMotion.secondsPerStep));
+      setSkill(initialSkill());
       setOutcome(null);
       setRevealError(null);
       setSkipReview(false);
@@ -226,6 +233,9 @@ export function ExportDialog({
   const secondsOk = !isMotionFormat(format) || isSecondsPerStep(Number(seconds));
   const unreviewed = unreviewedBlurs(doc?.guide.items ?? []);
   const reviewText = unreviewedBlursText(unreviewed);
+  // Only skills find elements again; the other formats show screenshots.
+  const unclear = format === "skill" ? unclearSteps(doc?.guide.items ?? []) : { stepIds: [], steps: [] };
+  const unclearText = unclearStepsText(unclear.steps);
   const canExport = !!guideId && !!out && accentOk && secondsOk && !busy && (!reviewText || skipReview);
 
   /** Closes the dialog on the privacy review of the first step with suggestions left. */
@@ -234,6 +244,20 @@ export function ExportDialog({
     if (first) {
       editorStore.getState().select(first);
       inspectorStore.getState().setTab("privacy");
+    }
+    onOpenChange(false);
+  };
+
+  /**
+   * Closes the dialog on the Step tab of the first step whose element is
+   * unclear; it opens on the skill again afterwards.
+   */
+  const reviewElements = () => {
+    remembered.format = format;
+    const first = unclear.stepIds[0];
+    if (first) {
+      editorStore.getState().select(first);
+      inspectorStore.getState().setTab("step");
     }
     onOpenChange(false);
   };
@@ -265,6 +289,7 @@ export function ExportDialog({
     rememberReviewDetails(reviewDetails);
     const motionChoice = { ...motion, secondsPerStep: Number(seconds) };
     if (isMotionFormat(format)) rememberMotion(motionChoice);
+    if (format === "skill") rememberSkill(skill);
     setBusy(true);
     setOutcome(null);
     setRevealError(null);
@@ -279,6 +304,7 @@ export function ExportDialog({
         paper,
         reviewDetails: isDocument && reviewDetails,
         motion: motionChoice,
+        skill,
       },
     );
     setBusy(false);
@@ -329,7 +355,8 @@ export function ExportDialog({
                 </p>
                 {done.files.length > 1 && (
                   <p className="text-xs text-muted-foreground">
-                    {done.files.length - 1} more file{done.files.length > 2 ? "s" : ""} (images) next to it.
+                    {done.files.length - 1} more file{done.files.length > 2 ? "s" : ""} (
+                    {format === "skill" ? "steps.json and images" : "images"}) next to it.
                   </p>
                 )}
                 {(done.warnings.length > 0 || done.notes.length > 0) && (
@@ -490,6 +517,24 @@ export function ExportDialog({
                   </>
                 )}
 
+                {format === "skill" && (
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={skill.replay}
+                      disabled={busy}
+                      onChange={(e) => setSkill({ replay: e.target.checked })}
+                    />
+                    <span>
+                      Include a replay script
+                      <span className="block text-xs text-muted-foreground">
+                        replay.js repeats the steps on a Mac through the accessibility API. Run it with --dry-run first.
+                      </span>
+                    </span>
+                  </label>
+                )}
+
                 {isPaperFormat(format) && (
                   <Field label="Paper size">
                     <div role="radiogroup" aria-label="Paper size" className="grid grid-cols-2 gap-2">
@@ -624,6 +669,27 @@ export function ExportDialog({
                   </div>
                 )}
 
+                {unclearText && (
+                  <div
+                    role="status"
+                    aria-label="Unclear elements"
+                    className="flex flex-col gap-2 rounded-md border border-[var(--status-warning)] bg-muted p-3 text-xs"
+                  >
+                    <p className="flex items-start gap-2">
+                      <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--status-warning)]" />
+                      <span>
+                        <span className="font-medium">Unclear elements. </span>
+                        {unclearText}
+                      </span>
+                    </p>
+                    <div className="flex justify-end">
+                      <Button variant="outline" size="sm" disabled={busy} onClick={reviewElements}>
+                        Show step
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {outcome && !outcome.ok && (
                   <p role="alert" className="flex items-start gap-2 text-sm text-[var(--status-danger)]">
                     <CircleAlert className="mt-0.5 size-4 shrink-0" />
@@ -661,6 +727,7 @@ export function ExportDialog({
                 accent={accent}
                 reviewDetails={reviewDetails}
                 motion={motion}
+                skill={skill}
                 api={api}
                 flush={() => editorStore.getState().flush()}
               />

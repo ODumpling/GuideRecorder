@@ -26,8 +26,8 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, motion, pdf, pptx, render_step_image, ExportReport, ImageOptions, OutPathError,
-    RenderGuide, RenderWarning,
+    docx, html, md, motion, pdf, pptx, render_step_image, skill, ExportReport, ImageOptions,
+    OutPathError, RenderGuide, RenderWarning,
 };
 use guiderecorder_core::index::{
     list_library, list_with_fallback, search_library, search_with_fallback, Index, IndexError,
@@ -119,13 +119,16 @@ enum Command {
         output: Output,
     },
     /// Export a guide as Markdown, HTML, an interactive HTML walkthrough,
-    /// DOCX, PDF, PPTX slides, an MP4 video or an animated GIF.
+    /// DOCX, PDF, PPTX slides, an MP4 video, an animated GIF or an agent
+    /// skill.
     ///
-    /// Reads the guide without changing the library. Markdown and HTML
-    /// write into the `--out` folder (`guide.md` plus `images/`, or
-    /// `guide.html`; a walkthrough is also one `guide.html`); the other
-    /// formats write the `--out` file. Image problems
-    /// become placeholders and warnings, not errors. MP4 needs macOS or Windows.
+    /// Reads the guide without changing the library. Markdown, HTML and
+    /// skills write into the `--out` folder (`guide.md` plus `images/`,
+    /// `guide.html`, or `SKILL.md`, `steps.json` and `images/`; a
+    /// walkthrough is also one `guide.html`); the other formats write the
+    /// `--out` file. Image problems become placeholders and warnings, not
+    /// errors; a skill's unclear elements are notes. MP4 needs macOS or
+    /// Windows.
     Export(ExportArgs),
 }
 
@@ -136,7 +139,8 @@ struct ExportArgs {
     guide: String,
     #[arg(long, value_enum)]
     format: Format,
-    /// Output folder (md, html, walkthrough) or file (the other formats).
+    /// Output folder (md, html, walkthrough, skill) or file (the other
+    /// formats).
     #[arg(long, value_name = "PATH")]
     out: PathBuf,
     /// Replace an earlier export at `--out`.
@@ -167,6 +171,10 @@ struct ExportArgs {
     /// under the summary, or on the PDF cover.
     #[arg(long)]
     review_details: bool,
+    /// Also write `replay.js` into a skill: a macOS script that repeats
+    /// the steps through the accessibility API (try it with `--dry-run`).
+    #[arg(long)]
+    replay: bool,
     /// Exit with 1 when the export has warnings or notes (the export is
     /// still written).
     #[arg(long)]
@@ -189,6 +197,9 @@ enum Format {
     Mp4,
     /// An animated GIF zooming in on each click.
     Gif,
+    /// An agent skill: SKILL.md, steps.json with element locators, and
+    /// the step images.
+    Skill,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -237,6 +248,7 @@ impl Format {
             Self::Pptx => "pptx",
             Self::Mp4 => "mp4",
             Self::Gif => "gif",
+            Self::Skill => "skill",
         }
     }
 }
@@ -779,7 +791,10 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     let paper = args.paper.into();
     let review_details = args.review_details;
     // The md and html writers create their folder; match that for files.
-    if !matches!(args.format, Format::Md | Format::Html | Format::Walkthrough) {
+    if !matches!(
+        args.format,
+        Format::Md | Format::Html | Format::Walkthrough | Format::Skill
+    ) {
         if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -874,6 +889,14 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             } else {
                 motion::gif::export(&render, out, &opts)?
             }
+        }
+        Format::Skill => {
+            let opts = skill::SkillOptions {
+                overwrite,
+                image: unreviewed(&skill::SkillOptions::default().image),
+                replay: args.replay,
+            };
+            skill::export(&render, &handle, out, &opts)?
         }
     };
     Ok(Export {

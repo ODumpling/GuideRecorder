@@ -1046,7 +1046,7 @@ export function ExportSection({ exportApi = tauriExportApi }: { exportApi?: Expo
           onChange={(format) => setExport({ format })}
         />
       </Row>
-      <Row label="Export folder" note="Markdown and HTML exports go into a new folder here; Word and PDF start here.">
+      <Row label="Export folder" note="Markdown, HTML and skill exports go into a new folder here; Word and PDF start here.">
         <PathText path={e.folder} empty="Not set" />
         <Button
           variant="outline"

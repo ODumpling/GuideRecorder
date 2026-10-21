@@ -696,7 +696,7 @@ pub fn slug(text: &str) -> String {
 // ---------------------------------------------------------------------------
 // Output folder
 
-fn io_err(path: &Path) -> impl FnOnce(io::Error) -> ExportError + '_ {
+pub(super) fn io_err(path: &Path) -> impl FnOnce(io::Error) -> ExportError + '_ {
     move |source| ExportError::Io {
         path: path.to_path_buf(),
         source,
@@ -720,7 +720,7 @@ pub(super) fn prepare_out_dir(out_dir: &Path, overwrite: bool) -> Result<()> {
 }
 
 /// Removes `NN-*.png` files in `images_dir` that are not in `keep`.
-fn remove_stale_images(images_dir: &Path, keep: &[String]) -> Result<()> {
+pub(super) fn remove_stale_images(images_dir: &Path, keep: &[String]) -> Result<()> {
     let keep: BTreeSet<&str> = keep.iter().map(String::as_str).collect();
     for entry in fs::read_dir(images_dir).map_err(io_err(images_dir))? {
         let entry = entry.map_err(io_err(images_dir))?;
@@ -762,12 +762,12 @@ fn push_block(out: &mut Vec<String>, block: &str) {
 }
 
 /// Collapses line breaks and runs of whitespace into single spaces.
-fn single_line(text: &str) -> String {
+pub(super) fn single_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Blocks as Markdown, without a trailing newline.
-fn blocks(blocks: &[Block]) -> String {
+pub(super) fn blocks(blocks: &[Block]) -> String {
     blocks_indented(blocks, "")
 }
 
@@ -828,7 +828,7 @@ fn paragraph(inlines: &[Inline], indent: &str) -> String {
 }
 
 /// Inlines on one line (hard breaks become spaces), for headings.
-fn inlines_single_line(inlines: &[Inline]) -> String {
+pub(super) fn inlines_single_line(inlines: &[Inline]) -> String {
     let mut lines = vec![String::new()];
     push_inlines(inlines, &mut lines, true);
     escape_line_start(lines[0].trim())
@@ -921,7 +921,7 @@ fn ends_with_unescaped(line: &str, c: char) -> bool {
 }
 
 /// A whole line of plain text: inline escapes plus line-start escapes.
-fn escape_line(text: &str) -> String {
+pub(super) fn escape_line(text: &str) -> String {
     escape_line_start(escape_inline(text).trim())
 }
 
@@ -940,7 +940,7 @@ fn escape_line_start(line: &str) -> String {
 }
 
 /// Escapes a trailing `#` run, which would otherwise close an ATX heading.
-fn heading_text(text: &str) -> String {
+pub(super) fn heading_text(text: &str) -> String {
     let trimmed = text.trim_end_matches('#');
     if trimmed.len() == text.len() || trimmed.ends_with('\\') {
         return text.to_owned();
@@ -954,7 +954,7 @@ fn heading_text(text: &str) -> String {
 
 /// A code span fenced with one more backtick than the longest run inside,
 /// padded when the code starts or ends with a backtick or space.
-fn code_span(code: &str) -> String {
+pub(super) fn code_span(code: &str) -> String {
     let code = code.replace(['\n', '\r'], " ");
     if code.is_empty() {
         return String::new();
@@ -1001,7 +1001,7 @@ fn link_title(title: &str) -> String {
 }
 
 /// Prefixes every line with `> ` (`>` for blank lines).
-fn quote(text: &str) -> String {
+pub(super) fn quote(text: &str) -> String {
     text.lines()
         .map(|line| {
             if line.is_empty() {

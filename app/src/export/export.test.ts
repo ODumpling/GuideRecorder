@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   baseName,
   DEFAULT_MOTION,
+  DEFAULT_SKILL,
   exportName,
   initialMotion,
   isDocumentFormat,
@@ -11,6 +12,7 @@ import {
   rememberMotion,
   initialPaper,
   initialReviewDetails,
+  initialSkill,
   isAccent,
   isPlainName,
   localePaper,
@@ -18,6 +20,7 @@ import {
   outPath,
   rememberPaper,
   rememberReviewDetails,
+  rememberSkill,
   runExport,
   unreviewedBlurs,
   unreviewedBlursText,
@@ -77,6 +80,8 @@ describe("export names and paths", () => {
     expect(outPath("html", { ...destination, folder: null })).toBeNull();
     expect(isFolderFormat("walkthrough")).toBe(true);
     expect(outPath("walkthrough", destination)).toBe("/Users/me/Desktop/Guide");
+    expect(isFolderFormat("skill")).toBe(true);
+    expect(outPath("skill", destination)).toBe("/Users/me/Desktop/Guide");
     expect(outPath("md", { ...destination, name: "a/b" })).toBeNull();
     expect(outPath("pdf", destination)).toBe("/Users/me/Guide.pdf");
     // The file chosen for another format doesn't count.
@@ -150,7 +155,7 @@ describe("video, GIF and slides", () => {
     expect(isPaperFormat("pdf") && isPaperFormat("docx")).toBe(true);
     expect(isPaperFormat("pptx") || isPaperFormat("gif")).toBe(false);
     expect(isDocumentFormat("md") && isDocumentFormat("pdf")).toBe(true);
-    expect(isDocumentFormat("pptx") || isDocumentFormat("mp4")).toBe(false);
+    expect(isDocumentFormat("pptx") || isDocumentFormat("mp4") || isDocumentFormat("skill")).toBe(false);
     expect(isFolderFormat("gif")).toBe(false);
     expect(outPath("mp4", { folder: null, name: "x", file: "/out/Guide.mp4" })).toBe("/out/Guide.mp4");
     expect(outPath("gif", { folder: null, name: "x", file: "/out/Guide.mp4" })).toBeNull();
@@ -175,6 +180,24 @@ describe("video, GIF and slides", () => {
   });
 });
 
+describe("skill options", () => {
+  it("remember whether to add the replay script, off at first", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    expect(initialSkill(storage)).toEqual({ replay: false });
+    rememberSkill({ replay: true }, storage);
+    expect(initialSkill(storage)).toEqual({ replay: true });
+    const broken = { getItem: () => { throw new Error("no storage"); } };
+    expect(initialSkill(broken)).toEqual(DEFAULT_SKILL);
+  });
+
+  it("are sent with a skill export", async () => {
+    const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/SKILL.md"], warnings: [], notes: [] }));
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "skill", skill: { replay: true } });
+    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true });
+  });
+});
+
 describe("runExport", () => {
   it("saves first, then exports with a trimmed accent", async () => {
     const order: string[] = [];
@@ -193,7 +216,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION);
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

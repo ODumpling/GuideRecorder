@@ -24,7 +24,7 @@ use crate::editor::{
 };
 use crate::export::{
     self, with_extension, BrandingRequest, ChosenPaths, ExportPreview, ExportResult, Format,
-    MotionRequest,
+    MotionRequest, SkillRequest,
 };
 use crate::settings::SettingsStore;
 
@@ -521,7 +521,10 @@ pub async fn choose_export_file<R: Runtime>(
     directory: Option<PathBuf>,
 ) -> Result<Option<PathBuf>> {
     let extension = format.extension().ok_or_else(|| {
-        AppError::new(ErrorKind::Invalid, "Markdown and HTML export into a folder")
+        AppError::new(
+            ErrorKind::Invalid,
+            "Markdown, HTML and skills export into a folder",
+        )
     })?;
     let chosen = Arc::clone(&chosen);
     blocking(move || {
@@ -582,9 +585,11 @@ pub async fn export_guide(
     paper: Paper,
     review_details: bool,
     motion: Option<MotionRequest>,
+    skill: Option<SkillRequest>,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
+    let skill = skill.unwrap_or_default();
     with_session(cell, move |s| {
         export::export_guide(
             s,
@@ -597,6 +602,7 @@ pub async fn export_guide(
             paper,
             review_details,
             &motion,
+            &skill,
         )
     })
     .await
@@ -615,9 +621,11 @@ pub async fn preview_export(
     paper: Paper,
     review_details: bool,
     motion: Option<MotionRequest>,
+    skill: Option<SkillRequest>,
 ) -> Result<ExportPreview> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
+    let skill = skill.unwrap_or_default();
     with_session(cell, move |s| {
         export::preview_guide(
             s,
@@ -628,6 +636,7 @@ pub async fn preview_export(
             paper,
             review_details,
             &motion,
+            &skill,
         )
     })
     .await

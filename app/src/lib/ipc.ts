@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -184,6 +184,8 @@ export interface ExportApi {
     reviewDetails: boolean,
     /** Used by MP4 and GIF. */
     motion: MotionOptions,
+    /** Used by agent skills. */
+    skill: SkillOptions,
   ): Promise<ExportResult>;
   /** A preview of exporting from the saved bundle with these options; writes nothing. */
   previewExport(
@@ -193,6 +195,7 @@ export interface ExportApi {
     paper: PaperSize,
     reviewDetails: boolean,
     motion: MotionOptions,
+    skill: SkillOptions,
   ): Promise<ExportPreviewData>;
   /** A logo `chooseLogo` returned (PNG or JPEG, up to 2 MB) as a PNG data URI. */
   logoPreview(path: string): Promise<string>;
@@ -205,10 +208,10 @@ export const tauriExportApi: ExportApi = {
   chooseFile: (format, fileName, directory) =>
     invoke("choose_export_file", { format, fileName, directory: directory ?? null }),
   chooseLogo: () => invoke("choose_logo"),
-  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion) =>
-    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion }),
-  previewExport: (guideId, format, branding, paper, reviewDetails, motion) =>
-    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion }),
+  exportGuide: (guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill) =>
+    invoke("export_guide", { guideId, format, out, overwrite, branding, paper, reviewDetails, motion, skill }),
+  previewExport: (guideId, format, branding, paper, reviewDetails, motion, skill) =>
+    invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill }),
   logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
 };

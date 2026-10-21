@@ -1,0 +1,36 @@
+{
+  "format": "guiderecorder.skill-steps",
+  "version": 1,
+  "guide": {
+    "id": "01M4Z96G000000000000000380",
+    "name": "office-floor-plan",
+    "title": "Office floor plan",
+    "summary": "Find your way around the third floor.",
+    "language": "en"
+  },
+  "steps": [
+    {
+      "number": 1,
+      "id": "01M4Z96G000000000000000385",
+      "kind": "manual",
+      "title": "Third floor",
+      "description": "The lifts open onto the corridor in the middle.",
+      "image": "images/01-third-floor.png",
+      "confidence": {
+        "level": "notNeeded",
+        "issues": []
+      }
+    },
+    {
+      "number": 2,
+      "id": "01M4Z96G000000000000000389",
+      "kind": "manual",
+      "title": "Fire exits",
+      "image": "images/02-fire-exits.png",
+      "confidence": {
+        "level": "notNeeded",
+        "issues": []
+      }
+    }
+  ]
+}

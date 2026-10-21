@@ -74,7 +74,13 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif" | "skill";
+
+/** Agent skill options (core `export::skill::SkillOptions`). */
+export interface SkillOptions {
+  /** Also write `replay.js`, a macOS script that repeats the steps. */
+  replay: boolean;
+}
 
 /** Frame shape of an MP4 or GIF export (core `export::motion::Aspect`). */
 export type MotionAspect = "wide" | "square" | "vertical";

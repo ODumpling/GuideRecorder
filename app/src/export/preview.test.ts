@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  frontMatterAsCode,
   markdownPreviewDocument,
   markdownPreviewHtml,
   pageLabel,
@@ -30,6 +31,7 @@ describe("previewRequest", () => {
       paper: "letter",
       reviewDetails: true,
       motion: { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
+      skill: { replay: false },
     });
     // HTML has no paper; Markdown no accent.
     expect(previewRequest({ ...choices, format: "html" })?.paper).toBe("a4");
@@ -42,6 +44,14 @@ describe("previewRequest", () => {
     expect(gif.reviewDetails).toBe(false);
     expect(gif.motion).toEqual({ secondsPerStep: 3, aspect: "square", zoom: false, captions: false });
     expect(previewRequest({ ...choices, format: "pptx", accent: "red" })).not.toBeNull();
+  });
+
+  it("sends the replay choice only for skills, without branding", () => {
+    const skill = previewRequest({ ...choices, format: "skill", skill: { replay: true } })!;
+    expect(skill.skill).toEqual({ replay: true });
+    expect(skill.branding).toEqual({ logo: null, accent: null });
+    expect(skill.reviewDetails).toBe(false);
+    expect(previewRequest({ ...choices, skill: { replay: true } })?.skill).toEqual({ replay: false });
   });
 
   it("waits for a valid accent", () => {
@@ -125,6 +135,16 @@ describe("PreviewScheduler", () => {
 });
 
 describe("markdown preview", () => {
+  it("shows a skill's front matter as code, not as a rule and a heading", () => {
+    const source = '---\nname: save-a-note\ndescription: "Save a note."\n---\n\n# Save a note\n';
+    expect(frontMatterAsCode(source)).toBe('```yaml\n---\nname: save-a-note\ndescription: "Save a note."\n---\n```\n\n# Save a note\n');
+    expect(frontMatterAsCode("# Guide\n\n---\n")).toBe("# Guide\n\n---\n");
+    const html = markdownPreviewHtml(source, []);
+    expect(html).toContain('<pre><code class="language-yaml">---\nname: save-a-note');
+    expect(html).not.toContain("<hr>");
+    expect(html).toContain("<h1>Save a note</h1>");
+  });
+
   it("renders the exported Markdown with the preview images", () => {
     const html = markdownPreviewHtml("# Guide\n\n![Click it](images/01-click.png)\n\n![](images/02-gone.png)\n", [
       { link: "images/01-click.png", src: "data:image/png;base64,AAAA" },

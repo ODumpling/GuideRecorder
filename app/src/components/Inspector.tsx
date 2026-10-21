@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, TriangleAlert } from "lucide-react";
 import type { AiState, ImageShow, Step, StepKind } from "@guiderecorder/guide-schema";
 import { Button } from "@guiderecorder/ui/button";
+import { Input } from "@guiderecorder/ui/input";
 import { hotspots } from "@guiderecorder/ui/geometry";
 import { cn } from "@guiderecorder/ui/utils";
 import { moveHotspot } from "@/annotations/commands";
@@ -10,6 +11,7 @@ import { annotationSelection, useSelectedAnnotation } from "@/components/annotat
 import { PrivacyPanel } from "@/components/PrivacyPanel";
 import { IMAGE_SHOW_HINTS, setImageShow } from "@/editor/commands";
 import { editorStore, stepNoun, useAnnotated, useEditor, useSelectedItem } from "@/editor/editor";
+import { describeIssues, elementIssues, setElementLabel } from "@/editor/element";
 import { inspectorStore, tabCounts, useInspector, type InspectorTab } from "@/editor/inspector";
 
 export const KIND_LABELS: Record<StepKind, string> = {
@@ -193,6 +195,48 @@ export function Inspector({ onPrivacySettings }: { onPrivacySettings?: () => voi
   );
 }
 
+/**
+ * A warning when the step's element is unclear (#15), so an agent skill or
+ * the replay script may not find it, with a field to name it. The field
+ * stays while the author types, even once the name makes the element clear.
+ */
+function ElementCheck({ step, readOnly }: { step: Step; readOnly: boolean }) {
+  const issues = elementIssues(step);
+  const [naming, setNaming] = useState<string | null>(null);
+  const open = naming === step.id;
+  if (issues.length === 0 && !open) return null;
+  const canName = !readOnly && (open || issues.includes("noLabel") || issues.includes("noElement"));
+  const rename = (label: string) => {
+    setNaming(step.id);
+    const doc = editorStore.getState().doc;
+    if (doc) editorStore.getState().dispatch(setElementLabel(doc.guide, step.id, label));
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      {issues.length > 0 && (
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-md border border-[var(--status-warning)] bg-muted p-2.5 text-xs"
+        >
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-[var(--status-warning)]" />
+          <span>
+            <span className="font-medium">Unclear element: </span>
+            {describeIssues(issues)}. Agent skills and the replay script may not find it.
+          </span>
+        </p>
+      )}
+      {canName && (
+        <Input
+          aria-label="Element name"
+          placeholder="Name it as it reads on screen, e.g. Save"
+          value={step.element?.label ?? ""}
+          onChange={(e) => rename(e.target.value)}
+        />
+      )}
+    </div>
+  );
+}
+
 /** The Step tab: close-up or full screenshot, the action, its element and the text's status. */
 function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }) {
   const { element, image } = item;
@@ -243,19 +287,22 @@ function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }
           </Field>
         </dl>
       </section>
-      {element && (
+      {(element || elementIssues(item).length > 0) && (
         <section className="flex flex-col gap-2">
           <h2 className={HEADING}>Element</h2>
-          <dl className={FIELDS}>
-            {element.label && <Field label="Label">{element.label}</Field>}
-            {element.role && <Field label="Role">{element.role}</Field>}
-            {element.app && <Field label="App">{element.app}</Field>}
-            {element.window && <Field label="Window">{element.window}</Field>}
-            {element.bundleId && (
-              // Recorded on Windows, the id is the executable, e.g. 1password.exe.
-              <Field label={/\.exe$/i.test(element.bundleId) ? "Executable" : "Bundle ID"}>{element.bundleId}</Field>
-            )}
-          </dl>
+          <ElementCheck step={item} readOnly={readOnly} />
+          {element && (
+            <dl className={FIELDS}>
+              {element.label && <Field label="Label">{element.label}</Field>}
+              {element.role && <Field label="Role">{element.role}</Field>}
+              {element.app && <Field label="App">{element.app}</Field>}
+              {element.window && <Field label="Window">{element.window}</Field>}
+              {element.bundleId && (
+                // Recorded on Windows, the id is the executable, e.g. 1password.exe.
+                <Field label={/\.exe$/i.test(element.bundleId) ? "Executable" : "Bundle ID"}>{element.bundleId}</Field>
+              )}
+            </dl>
+          )}
         </section>
       )}
     </div>
