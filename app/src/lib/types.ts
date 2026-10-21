@@ -94,7 +94,7 @@ export interface ScormOptions {
 
 /** Agent skill options (core `export::skill::SkillOptions`). */
 export interface SkillOptions {
-  /** Also write `replay.js`, a macOS script that repeats the steps. */
+  /** Also write the replay script: `replay.js` for macOS, or `replay.ps1` (PowerShell) for a guide recorded on Windows. */
   replay: boolean;
 }
 
@@ -432,7 +432,7 @@ export interface RecordingSaved {
 
 /** The toolbar's microphone (`narration_state`, `recording://narration`). */
 export interface NarrationState {
-  /** Narration works on this computer (macOS). */
+  /** Narration works on this computer (macOS and Windows). */
   supported: boolean;
   /** On: what is said is transcribed while recording. Outside a recording, the same as `enabled`. */
   on: boolean;

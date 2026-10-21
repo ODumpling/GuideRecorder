@@ -354,11 +354,16 @@
 //!   `IsPassword`. Apps are identified by their executable's file name
 //!   (`1password.exe`), which stands in for a bundle id everywhere above.
 //! - Frames come from Windows.Graphics.Capture, which has no content
-//!   filter: an excluded app's window behind the frontmost one, or a
-//!   floating panel of one that is not frontmost, can show in a frame.
-//!   Nothing is captured while one is frontmost, as on macOS. This
-//!   process's windows are kept out of the frames by display affinity
-//!   (`WDA_EXCLUDEFROMCAPTURE`).
+//!   filter. Instead, each display or region frame has the visible parts
+//!   of the excluded apps' windows (behind the frontmost one, floating
+//!   panels, menus) painted over in grey before it is kept, from the
+//!   windows listed when it is copied; so an app that launches later needs
+//!   no refresh, and the refresh thread has nothing to do. What is under
+//!   the grey is lost, where macOS shows the windows behind, and a window
+//!   moving at that moment can show at its edges (see the Windows frames
+//!   module's `# Excluded windows`). Nothing is captured while an excluded
+//!   app is frontmost, as on macOS. This process's windows are kept out of
+//!   the frames by display affinity (`WDA_EXCLUDEFROMCAPTURE`).
 //! - App activations are seen through `EVENT_SYSTEM_FOREGROUND`, on the
 //!   observer's own thread, so no main run loop is needed.
 

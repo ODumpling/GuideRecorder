@@ -173,8 +173,10 @@ pub struct GetStepArgs {
 pub struct GetSkillArgs {
     /// Guide id.
     pub guide_id: String,
-    /// Also return replay.js, a macOS script that repeats the steps
-    /// through the accessibility API (default false).
+    /// Also return the replay script (default false): replay.js, a macOS
+    /// script that repeats the steps through the accessibility API, or for
+    /// a guide recorded on Windows replay.ps1, a PowerShell script that
+    /// does it through UI Automation.
     #[serde(default)]
     pub replay: bool,
     /// Write the skill for this audience (e.g. "Admin"), leaving out the
@@ -402,8 +404,9 @@ impl GuideRecorderMcp {
                        window, role and label, click point, parsed keys, and a confidence \
                        level with issues such as noLabel or genericRole for elements that \
                        were not identified clearly). Image links name the files an export \
-                       writes; use get_step for a step's screenshot. Set replay for replay.js, \
-                       a macOS script that repeats the steps (run it with --dry-run first)."
+                       writes; use get_step for a step's screenshot. Set replay for a script \
+                       that repeats the steps: replay.js on macOS (run it with --dry-run \
+                       first), or replay.ps1 for a guide recorded on Windows (-DryRun first)."
     )]
     async fn get_skill(
         &self,
@@ -836,10 +839,10 @@ fn get_skill(config: &Config, args: &GetSkillArgs) -> ToolResult<CallToolResult>
         ContentBlock::text(format!("File: {}\n\n{skill_md}", skill::SKILL_FILE)),
         ContentBlock::text(format!("File: {}\n\n{steps_json}", skill::STEPS_FILE)),
     ];
-    if let Some(script) = replay {
+    if let Some(replay) = replay {
         content.push(ContentBlock::text(format!(
-            "File: {}\n\n{script}",
-            skill::REPLAY_FILE
+            "File: {}\n\n{}",
+            replay.file, replay.script
         )));
     }
     Ok(CallToolResult::success(content))

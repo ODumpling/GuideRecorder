@@ -172,8 +172,10 @@ struct ExportArgs {
     /// under the summary, or on the PDF cover.
     #[arg(long)]
     review_details: bool,
-    /// Also write `replay.js` into a skill: a macOS script that repeats
-    /// the steps through the accessibility API (try it with `--dry-run`).
+    /// Also write a replay script into a skill: `replay.js`, a macOS script
+    /// that repeats the steps through the accessibility API (try it with
+    /// `--dry-run`), or for a guide recorded on Windows `replay.ps1`, a
+    /// PowerShell script that does it through UI Automation (`-DryRun`).
     #[arg(long)]
     replay: bool,
     /// Course title of a SCORM package (default: the guide title).
@@ -222,7 +224,7 @@ enum Format {
     Pdf,
     /// Slides, one per step, with speaker notes.
     Pptx,
-    /// A video zooming in on each click (macOS only).
+    /// A video zooming in on each click (macOS and Windows).
     Mp4,
     /// An animated GIF zooming in on each click.
     Gif,

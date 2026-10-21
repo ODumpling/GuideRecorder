@@ -6,7 +6,8 @@
 //! ```text
 //! SKILL.md              the steps as instructions (Agent Skills format)
 //! steps.json            the steps as data, with element locators and keys
-//! replay.js             optional: a macOS replay script (JXA)
+//! replay.js             optional: a macOS replay script (JXA), or
+//! replay.ps1            for a guide recorded on Windows, a PowerShell one
 //! images/NN-slug.png    each step's image, as the Markdown export writes it
 //! ```
 //!
@@ -44,6 +45,23 @@
 //! can't do safely: an unclear or missing element, more than one match, a
 //! masked password, a manual step, a double click or a drag. macOS only.
 //!
+//! # replay.ps1
+//!
+//! The Windows counterpart ([`replay_script`] for a guide [recorded
+//! on](recorded_on) Windows), a Windows PowerShell 5.1 script (PowerShell 7
+//! runs it too) run with `powershell -ExecutionPolicy Bypass -File
+//! replay.ps1 -DryRun`. It finds each element through UI Automation (the
+//! app's processes by executable name, then the window by title, then a
+//! descendant whose control type is one the recorder reports as the
+//! recorded AX role and whose name, help text, label or value is the
+//! label), invokes, toggles, selects or expands it, and types and presses
+//! keys with `SendInput`. It has the same options (`-DryRun`, `-From`,
+//! `-To`, `-Delay`) and stops at the same steps, and also at a window it
+//! can't bring to the front. The steps are embedded in a single-quoted
+//! here-string as one line of ASCII JSON (every other character and `'`
+//! escaped), so no title can end it; the file is written with a UTF-8 byte
+//! order mark, which Windows PowerShell needs to read a script as UTF-8.
+//!
 //! Images have blur and pixelate burned in like every export. Output is
 //! deterministic: the same guide and images give the same bytes.
 
@@ -67,14 +85,19 @@ use crate::steps::SECURE_MASK;
 pub const SKILL_FILE: &str = "SKILL.md";
 /// File name of the structured steps.
 pub const STEPS_FILE: &str = "steps.json";
-/// File name of the replay script.
+/// File name of the macOS replay script, for every guide not recorded on
+/// Windows.
 pub const REPLAY_FILE: &str = "replay.js";
+/// File name of the Windows replay script, for guides recorded there.
+pub const REPLAY_WINDOWS_FILE: &str = "replay.ps1";
 /// Folder (inside the output folder) the step images are written to.
 pub const IMAGES_DIR: &str = super::md::IMAGES_DIR;
 /// `steps.json`'s `format`.
 pub const STEPS_FORMAT: &str = "guiderecorder.skill-steps";
 /// `steps.json`'s `version`; bumped when a field changes meaning.
 pub const STEPS_VERSION: u32 = 1;
+/// What `replay.ps1` starts with.
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// Longest skill name the Agent Skills format allows.
 pub const MAX_NAME_CHARS: usize = 64;
@@ -84,6 +107,8 @@ pub const MAX_DESCRIPTION_CHARS: usize = 1024;
 /// The replay script around its data: `__GUIDERECORDER_STEPS__` is
 /// replaced by `steps.json` as one line.
 const REPLAY_TEMPLATE: &str = include_str!("templates/replay.js");
+/// The Windows replay script, with the same placeholder.
+const REPLAY_WINDOWS_TEMPLATE: &str = include_str!("templates/replay.ps1");
 const REPLAY_PLACEHOLDER: &str = "__GUIDERECORDER_STEPS__";
 
 /// Options for [`export`].
@@ -94,7 +119,7 @@ pub struct SkillOptions {
     /// Write into a non-empty `out_dir`, replacing the files and images of
     /// an earlier export.
     pub overwrite: bool,
-    /// Also write `replay.js`.
+    /// Also write the replay script ([`replay_file`]).
     pub replay: bool,
 }
 
@@ -477,22 +502,67 @@ pub fn steps_json(steps: &SkillSteps) -> String {
     json
 }
 
+/// The replay script's file name for steps recorded on `platform`:
+/// [`REPLAY_WINDOWS_FILE`] for Windows, else [`REPLAY_FILE`].
+pub fn replay_file(platform: Option<Platform>) -> &'static str {
+    match platform {
+        Some(Platform::Windows) => REPLAY_WINDOWS_FILE,
+        Some(Platform::Macos) | None => REPLAY_FILE,
+    }
+}
+
+/// A replay script and the file name it goes by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayScript {
+    /// [`REPLAY_FILE`] or [`REPLAY_WINDOWS_FILE`].
+    pub file: &'static str,
+    /// The script, without the byte order mark [`export`] writes before
+    /// `replay.ps1`.
+    pub script: String,
+}
+
 /// The replay script for `steps` (see the module docs and the script's
-/// own header). The steps are embedded as one line of JSON, with U+2028
-/// and U+2029 escaped so no engine reads them as line ends.
-pub fn replay_script(steps: &SkillSteps) -> String {
-    let json = serde_json::to_string(steps)
-        .expect("steps serialize")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029");
-    REPLAY_TEMPLATE.replacen(REPLAY_PLACEHOLDER, &json, 1)
+/// own header): `replay.ps1` for steps recorded on Windows, else
+/// `replay.js`. The steps are embedded as one line of JSON; for
+/// JavaScript with U+2028 and U+2029 escaped so no engine reads them as
+/// line ends, for PowerShell as ASCII (see [`ascii_json`]).
+pub fn replay_script(steps: &SkillSteps) -> ReplayScript {
+    let json = serde_json::to_string(steps).expect("steps serialize");
+    let file = replay_file(steps.guide.recorded_on);
+    let script = if file == REPLAY_WINDOWS_FILE {
+        REPLAY_WINDOWS_TEMPLATE.replacen(REPLAY_PLACEHOLDER, &ascii_json(&json), 1)
+    } else {
+        let json = json
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029");
+        REPLAY_TEMPLATE.replacen(REPLAY_PLACEHOLDER, &json, 1)
+    };
+    ReplayScript { file, script }
+}
+
+/// One line of JSON with every non-ASCII character and `'` written as a
+/// `\uXXXX` escape (both only occur in strings), so it is safe inside a
+/// PowerShell single-quoted here-string, which only a line starting with
+/// `'@` ends, whatever encoding the script is read in.
+fn ascii_json(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_ascii() && c != '\'' && c != '\n' && c != '\r' {
+            out.push(c);
+        } else {
+            for unit in c.encode_utf16(&mut [0; 2]) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
 // SKILL.md
 
 /// `SKILL.md` for `guide`, with image `i` at `images/<names[i]>`; `replay`:
-/// whether `replay.js` is next to it.
+/// whether the replay script ([`replay_file`]) is next to it.
 pub fn skill_md(guide: &RenderGuide, image_names: &[String], replay: bool) -> String {
     let data = steps(guide, image_names);
     let labels = Labels::for_language("en");
@@ -676,11 +746,20 @@ pub fn skill_md(guide: &RenderGuide, image_names: &[String], replay: bool) -> St
         format!("- `{IMAGES_DIR}/`: an image of each step, with sensitive areas blurred."),
     ];
     if replay {
+        let script = match replay_file(data.guide.recorded_on) {
+            REPLAY_WINDOWS_FILE => format!(
+                "- `{REPLAY_WINDOWS_FILE}`: a Windows PowerShell script that repeats the steps \
+                 through UI Automation. Run `powershell -ExecutionPolicy Bypass -File \
+                 {REPLAY_WINDOWS_FILE} -DryRun` first:"
+            ),
+            _ => format!(
+                "- `{REPLAY_FILE}`: a macOS script that repeats the steps through the \
+                 accessibility API. Run `osascript -l JavaScript {REPLAY_FILE} --dry-run` first:"
+            ),
+        };
         files.push(format!(
-            "- `{REPLAY_FILE}`: a macOS script that repeats the steps through the accessibility \
-             API. Run `osascript -l JavaScript {REPLAY_FILE} --dry-run` first: it only reports \
-             what it would do and whether each element is there. The script stops at a step it \
-             can't do safely."
+            "{script} it only reports what it would do and whether each element is there. The \
+             script stops at a step it can't do safely."
         ));
     }
     out.push(files.join("\n"));
@@ -885,14 +964,15 @@ fn capitalize(text: &str) -> String {
 // Export
 
 /// Writes `<out_dir>/SKILL.md`, `steps.json`, `images/NN-<slug>.png` and,
-/// with `opts.replay`, `replay.js`, with step images read from the bundle
-/// at `handle`. Steps whose element is unclear are listed in the report's
+/// with `opts.replay`, the replay script (`replay.js`, or `replay.ps1` with
+/// a UTF-8 byte order mark for a guide recorded on Windows), with step
+/// images read from the bundle at `handle`. Steps whose element is unclear are listed in the report's
 /// notes.
 ///
 /// Refuses a non-empty `out_dir` unless `opts.overwrite`; with it, earlier
 /// `NN-*.png` images this export did not write are removed, and so is an
-/// earlier `replay.js` when this export has none (it would replay old
-/// steps). A broken step image becomes a placeholder plus a warning.
+/// earlier `replay.js` or `replay.ps1` this export did not write (it would
+/// replay old steps). A broken step image becomes a placeholder plus a warning.
 pub fn export(
     guide: &RenderGuide,
     handle: &GuideHandle,
@@ -930,17 +1010,27 @@ pub fn export(
         Durability::RenameOnly,
     )?;
     report.files.push(steps_path);
-    let replay = out_dir.join(REPLAY_FILE);
-    if opts.replay {
-        write_atomic(
-            &replay,
-            replay_script(&data).as_bytes(),
-            Durability::RenameOnly,
-        )?;
-        make_executable(&replay)?;
-        report.files.push(replay);
-    } else if opts.overwrite && replay.is_file() {
-        fs::remove_file(&replay).map_err(io_err(&replay))?;
+    let script = opts.replay.then(|| replay_script(&data));
+    if let Some(script) = &script {
+        let path = out_dir.join(script.file);
+        let mut bytes = Vec::with_capacity(script.script.len() + 3);
+        if script.file == REPLAY_WINDOWS_FILE {
+            // Windows PowerShell reads a script without one as ANSI.
+            bytes.extend_from_slice(UTF8_BOM);
+        }
+        bytes.extend_from_slice(script.script.as_bytes());
+        write_atomic(&path, &bytes, Durability::RenameOnly)?;
+        make_executable(&path)?;
+        report.files.push(path);
+    }
+    if opts.overwrite {
+        // An earlier script would replay old steps.
+        for file in [REPLAY_FILE, REPLAY_WINDOWS_FILE] {
+            let stale = out_dir.join(file);
+            if script.as_ref().is_none_or(|s| s.file != file) && stale.is_file() {
+                fs::remove_file(&stale).map_err(io_err(&stale))?;
+            }
+        }
     }
     report.files.extend(images);
     report.notes.extend(unclear_notes(&data));
@@ -983,8 +1073,8 @@ pub struct SkillPreview {
     /// `SKILL.md` as [`export`] writes it.
     pub skill_md: String,
     pub steps_json: String,
-    /// `replay.js`, when asked for.
-    pub replay: Option<String>,
+    /// The replay script, when asked for.
+    pub replay: Option<ReplayScript>,
     /// The PNG images `SKILL.md` links, by their link (`images/<name>`).
     pub images: Vec<(String, Vec<u8>)>,
     /// The step image warnings and unclear-element notes; no files.
@@ -1016,7 +1106,7 @@ pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &SkillOptions) -
 /// [`skill_md`], `steps.json` and (with `replay`) the replay script for
 /// `guide`, without images: what an agent reads over MCP. The image links
 /// are the export's (`images/NN-slug.png`).
-pub fn render_text(guide: &RenderGuide, replay: bool) -> (String, String, Option<String>) {
+pub fn render_text(guide: &RenderGuide, replay: bool) -> (String, String, Option<ReplayScript>) {
     let names = image_names(guide);
     let data = steps(guide, &names);
     (
@@ -1374,7 +1464,8 @@ mod tests {
     fn replay_script_embeds_the_steps_once() {
         let guide = render(&sample());
         let data = steps(&guide, &names(&guide));
-        let script = replay_script(&data);
+        let ReplayScript { file, script } = replay_script(&data);
+        assert_eq!(file, REPLAY_FILE);
         assert!(script.starts_with("#!/usr/bin/osascript -l JavaScript\n"));
         assert!(!script.contains(REPLAY_PLACEHOLDER));
         let line = script
@@ -1400,8 +1491,225 @@ mod tests {
         if let Item::Step(step) = &mut odd.items[1] {
             step.description = "a\u{2028}b".into();
         }
-        let script = replay_script(&steps(&render(&odd), &[]));
+        let script = replay_script(&steps(&render(&odd), &[])).script;
         assert!(!script.contains('\u{2028}') && script.contains("a\\u2028b"));
+    }
+
+    /// A title no embedding may trip over: quotes, a here-string end,
+    /// PowerShell's `$` and backtick, non-ASCII and line separators.
+    const NASTY: &str = "Say \"hi\" '@\n'@ $env:USERNAME `n — café 😀 \u{2028}\u{2029}\u{85} end";
+
+    /// [`sample`] as recorded on Windows, against an app that is not
+    /// running, with [`NASTY`] text in it.
+    fn windows_sample() -> Guide {
+        let mut guide = sample();
+        guide.title = NASTY.into();
+        for item in &mut guide.items {
+            if let Item::Step(step) = item {
+                if let Some(el) = &mut step.element {
+                    el.app = Some("Not Running".into());
+                    el.bundle_id = Some("guiderecorder-not-running.exe".into());
+                    el.window = Some(NASTY.into());
+                    el.role = Some("AXTextField".into());
+                }
+                if step.kind == StepKind::Shortcut {
+                    step.keystrokes = Some("Ctrl+S".into());
+                }
+                if step.kind == StepKind::Type {
+                    step.keystrokes = Some(format!("{NASTY}⏎"));
+                }
+            }
+        }
+        guide
+    }
+
+    /// The JSON embedded in `replay.ps1`.
+    fn powershell_json(script: &str) -> serde_json::Value {
+        let (_, rest) = script.split_once("$Guide = @'\n").expect("here-string");
+        let (json, _) = rest.split_once("\n'@ | ConvertFrom-Json").expect("end");
+        assert!(!json.contains('\n'), "one line");
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn windows_guides_get_the_powershell_script() {
+        assert_eq!(replay_file(Some(Platform::Windows)), REPLAY_WINDOWS_FILE);
+        assert_eq!(replay_file(Some(Platform::Macos)), REPLAY_FILE);
+        assert_eq!(replay_file(None), REPLAY_FILE);
+        assert_eq!(
+            REPLAY_WINDOWS_TEMPLATE.matches(REPLAY_PLACEHOLDER).count(),
+            1
+        );
+
+        let guide = render(&windows_sample());
+        let data = steps(&guide, &names(&guide));
+        assert_eq!(data.guide.recorded_on, Some(Platform::Windows));
+        let ReplayScript { file, script } = replay_script(&data);
+        assert_eq!(file, REPLAY_WINDOWS_FILE);
+        assert!(script.starts_with("# Replays a GuideRecorder guide on Windows"));
+        assert!(!script.contains(REPLAY_PLACEHOLDER));
+        // ASCII only, so no `'@` and nothing a code page could misread.
+        assert!(script.is_ascii());
+        assert_eq!(
+            script.matches("\n'@").count(),
+            2,
+            "the two here-strings end"
+        );
+        assert_eq!(
+            powershell_json(&script),
+            serde_json::to_value(&data).unwrap()
+        );
+        for part in ["-DryRun", "UIAutomationClient", "SendInput", "-From $("] {
+            assert!(script.contains(part), "{part}");
+        }
+    }
+
+    #[test]
+    fn skill_md_names_the_script_for_the_platform() {
+        let guide = render(&windows_sample());
+        let md = skill_md(&guide, &names(&guide), true);
+        assert!(
+            md.contains(
+                "- `replay.ps1`: a Windows PowerShell script that repeats the steps through UI \
+                 Automation. Run `powershell -ExecutionPolicy Bypass -File replay.ps1 -DryRun` \
+                 first: it only reports what it would do and whether each element is there. The \
+                 script stops at a step it can't do safely."
+            ),
+            "{md}"
+        );
+        assert!(!md.contains("replay.js"));
+        assert!(!skill_md(&guide, &names(&guide), false).contains("replay.ps1"));
+        let mac = render(&sample());
+        assert!(!skill_md(&mac, &names(&mac), true).contains("replay.ps1"));
+    }
+
+    #[test]
+    fn export_writes_the_platforms_script_and_removes_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("skill");
+        let mac = sample();
+        let windows = windows_sample();
+        let handle = GuideHandle {
+            id: mac.id,
+            path: dir.path().join("missing.guiderecorder"),
+        };
+        let opts = SkillOptions {
+            replay: true,
+            overwrite: true,
+            ..SkillOptions::default()
+        };
+        let render_mac = RenderGuide::new(&mac, &handle);
+        let render_windows = RenderGuide::new(&windows, &handle);
+
+        export(&render_mac, &handle, &out, &opts).unwrap();
+        assert!(out.join(REPLAY_FILE).is_file());
+        let report = export(&render_windows, &handle, &out, &opts).unwrap();
+        assert!(report.files.contains(&out.join(REPLAY_WINDOWS_FILE)));
+        assert!(!out.join(REPLAY_FILE).exists(), "the old script is gone");
+        let bytes = fs::read(out.join(REPLAY_WINDOWS_FILE)).unwrap();
+        let script = replay_script(&steps(&render_windows, &image_names(&render_windows)));
+        assert_eq!(bytes[..3], *UTF8_BOM);
+        assert_eq!(bytes[3..], *script.script.as_bytes());
+
+        export(&render_mac, &handle, &out, &opts).unwrap();
+        assert!(out.join(REPLAY_FILE).is_file());
+        assert!(!out.join(REPLAY_WINDOWS_FILE).exists());
+        assert!(!fs::read(out.join(REPLAY_FILE))
+            .unwrap()
+            .starts_with(UTF8_BOM));
+
+        export(&render_windows, &handle, &out, &opts).unwrap();
+        let without = SkillOptions {
+            replay: false,
+            ..opts.clone()
+        };
+        export(&render_windows, &handle, &out, &without).unwrap();
+        assert!(!out.join(REPLAY_FILE).exists() && !out.join(REPLAY_WINDOWS_FILE).exists());
+
+        let preview = preview(&render_windows, &handle, &opts);
+        assert_eq!(preview.replay.unwrap().file, REPLAY_WINDOWS_FILE);
+        let (_, _, text) = render_text(&render_windows, true);
+        assert_eq!(text.unwrap(), script);
+    }
+
+    /// Runs the exported `replay.ps1` in Windows PowerShell: it parses
+    /// without errors, reads the embedded steps back as written, and stops
+    /// as it should when the app is not running.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_parses_and_dry_runs_the_script() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("skill");
+        let guide = windows_sample();
+        let handle = GuideHandle {
+            id: guide.id,
+            path: dir.path().join("missing.guiderecorder"),
+        };
+        let opts = SkillOptions {
+            replay: true,
+            ..SkillOptions::default()
+        };
+        export(&RenderGuide::new(&guide, &handle), &handle, &out, &opts).unwrap();
+        let script = out.join(REPLAY_WINDOWS_FILE);
+        let quoted = script.to_string_lossy().replace('\'', "''");
+        let powershell = |command: String| {
+            let output = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"])
+                .arg("-Command")
+                .arg(format!(
+                    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; {command}; exit $LASTEXITCODE"
+                ))
+                .output()
+                .expect("powershell runs");
+            let text = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+                + &String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+            (output.status.code(), text)
+        };
+
+        let (code, text) = powershell(format!(
+            "$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('{quoted}', \
+             [ref]$null, [ref]$errors) | Out-Null; Write-Output \"errors: $($errors.Count)\""
+        ));
+        assert_eq!((code, text.trim()), (Some(0), "errors: 0"));
+
+        let (code, text) = powershell(format!("& '{quoted}' -Help"));
+        assert_eq!(code, Some(0), "{text}");
+        assert!(text.starts_with("Usage: powershell"), "{text}");
+
+        let (code, text) = powershell(format!("& '{quoted}' -DryRun"));
+        assert_eq!(code, Some(0), "{text}");
+        let title = single_line(NASTY);
+        assert!(
+            text.starts_with(&format!(
+                "Dry run of \"{}\": 4 of 4 steps.\n",
+                title.replace('"', "\\\"")
+            )),
+            "{text}"
+        );
+        for part in [
+            "Step 1: Type the text\n  would type \"",
+            "not found now: Not Running is not running",
+            "Step 2: Press ⌘S\n  would press Ctrl+S\n  ok",
+            "would stop: its element is unclear (noLabel)",
+            "Step 4: Check the file\n  would do it by hand\n  would stop: it is a manual step",
+            "3 step(s) need attention.",
+        ] {
+            assert!(text.contains(part), "missing {part:?} in\n{text}");
+        }
+
+        // A real run stops at the first step it can't do, with a non-zero
+        // exit code.
+        let (code, text) = powershell(format!("& '{quoted}' -Delay 0"));
+        assert_eq!(code, Some(1), "{text}");
+        assert!(
+            text.contains(
+                "Step 1: Type the text\n  stopped: Not Running is not running. Do it by hand, \
+                 then run again with -From 2."
+            ),
+            "{text}"
+        );
     }
 
     #[test]

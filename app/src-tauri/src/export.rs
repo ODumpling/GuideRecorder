@@ -99,7 +99,8 @@ impl Default for MotionRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SkillRequest {
-    /// Also write `replay.js`.
+    /// Also write the replay script (`replay.js`, or `replay.ps1` for a
+    /// guide recorded on Windows).
     pub replay: bool,
 }
 

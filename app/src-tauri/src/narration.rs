@@ -15,8 +15,11 @@
 //! (`narration.m4a`); otherwise none is written.
 //!
 //! Turning the microphone on never prompts: without the Microphone and
-//! Speech Recognition permissions it stays off and says why. Onboarding
-//! and Settings → Permissions ask for them.
+//! Speech Recognition permissions it stays off and says why. On macOS
+//! onboarding and Settings → Permissions ask for them; Windows has no
+//! prompt for a desktop app, so Settings → Recording shows them and opens
+//! Windows' Settings, where the microphone is allowed and a speech
+//! language added.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -43,7 +46,7 @@ pub const NARRATION_EVENT: &str = "recording://narration";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NarrationState {
-    /// Narration works on this platform (macOS).
+    /// Narration works on this platform (macOS and Windows).
     pub supported: bool,
     /// The microphone is on: what is said is transcribed while recording
     /// (not while paused). Outside a recording, the same as `enabled`.
@@ -136,6 +139,9 @@ impl NarrationSlot {
 /// What the toolbar says when the microphone can't be turned on.
 fn message(e: &NarrationError) -> String {
     match e {
+        NarrationError::NotAllowed(Permission::Microphone) if cfg!(windows) => {
+            "Let desktop apps use the microphone in Windows Settings → Privacy & security → Microphone.".into()
+        }
         NarrationError::NotAllowed(Permission::Microphone) => {
             "Allow GuideRecorder to use the microphone in Settings → Permissions.".into()
         }
@@ -392,7 +398,7 @@ mod tests {
         assert!(slot.take().is_none());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
     fn where_narration_is_unsupported_the_microphone_stays_off_and_says_why() {
         let slot = NarrationSlot::default();
@@ -428,6 +434,21 @@ mod tests {
             message(&NarrationError::NoMicrophone),
             "No microphone was found."
         );
+        let microphone = message(&NarrationError::NotAllowed(Permission::Microphone));
+        if cfg!(windows) {
+            assert!(
+                microphone.contains("Privacy & security → Microphone"),
+                "{microphone}"
+            );
+            let language = message(&NarrationError::NotOnDevice("de-DE".into()));
+            assert!(language.starts_with("Speech recognition"), "{language}");
+            assert!(language.ends_with("Speech."), "{language}");
+        } else {
+            assert_eq!(
+                microphone,
+                "Allow GuideRecorder to use the microphone in Settings → Permissions."
+            );
+        }
     }
 
     fn library() -> (Library, std::path::PathBuf) {

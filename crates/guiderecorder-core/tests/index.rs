@@ -1020,6 +1020,10 @@ fn default_path_is_in_application_support() {
         assert!(
             path.ends_with("Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite")
         );
+    } else if cfg!(windows) && std::env::var_os("LOCALAPPDATA").is_some_and(|d| !d.is_empty()) {
+        let path = path.unwrap();
+        assert!(path.starts_with(std::env::var_os("LOCALAPPDATA").unwrap()));
+        assert!(path.ends_with(r"dev.dufflebear.guiderecorder\index.sqlite"));
     } else {
         assert_eq!(path, None);
     }
