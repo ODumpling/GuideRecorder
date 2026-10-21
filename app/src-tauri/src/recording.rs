@@ -636,7 +636,6 @@ fn session_config(settings: &Settings, target: Option<CaptureTarget>) -> (Sessio
 /// [`crate::recapture`]; refused unless that guide is open and writable).
 /// Returns the new status, which is also sent as [`STATUS_EVENT`].
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn start_recording<R: Runtime>(
     app: AppHandle<R>,
     recorder: State<'_, Arc<Recorder>>,
