@@ -1,0 +1,133 @@
+{
+  "format": "guiderecorder.skill-steps",
+  "version": 1,
+  "guide": {
+    "id": "01M4WT7MM000000000000002G0",
+    "name": "share-a-calendar-event",
+    "title": "Share a calendar event",
+    "summary": "Invite a colleague to an existing Calendar event.",
+    "language": "en",
+    "recordedOn": "macos"
+  },
+  "steps": [
+    {
+      "number": 1,
+      "id": "01M4WT7MM000000000000002G4",
+      "kind": "click",
+      "title": "Click Calendar in the Dock",
+      "section": "Open the event",
+      "image": "images/01-click-calendar-in-the-dock.png",
+      "element": {
+        "role": "AXDockItem",
+        "label": "Calendar",
+        "app": "Dock",
+        "bundleId": "com.apple.dock"
+      },
+      "point": {
+        "x": 30.0,
+        "y": 36.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 2,
+      "id": "01M4WT7MM000000000000002G7",
+      "kind": "doubleClick",
+      "title": "Double-click the Team sync event",
+      "description": "The event opens in its own window.",
+      "section": "Open the event",
+      "image": "images/02-double-click-the-team-sync-event.png",
+      "element": {
+        "role": "AXStaticText",
+        "label": "Team sync",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Calendar"
+      },
+      "point": {
+        "x": 22.0,
+        "y": 14.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 3,
+      "id": "01M4WT7MM000000000000002GA",
+      "kind": "type",
+      "title": "Type the guest's email in Add Invitees",
+      "description": "Separate several guests with commas.\n\n- Guests get an email invite\n- You can remove them later",
+      "section": "Invite people",
+      "image": "images/03-type-the-guest-s-email-in-add-invitees.png",
+      "element": {
+        "role": "AXTextField",
+        "label": "Add Invitees",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Team sync"
+      },
+      "point": {
+        "x": 40.0,
+        "y": 20.0
+      },
+      "keystrokes": "alex@example.com⏎",
+      "keys": {
+        "type": "text",
+        "text": "alex@example.com",
+        "submit": true
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 4,
+      "id": "01M4WT7MM000000000000002GC",
+      "kind": "rightClick",
+      "title": "Right-click the guest and choose Send Email",
+      "section": "Invite people",
+      "image": "images/04-right-click-the-guest-and-choose-send-email.png",
+      "element": {
+        "role": "AXStaticText",
+        "label": "alex@example.com",
+        "app": "Calendar",
+        "bundleId": "com.apple.iCal",
+        "window": "Team sync"
+      },
+      "point": {
+        "x": 40.0,
+        "y": 24.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 5,
+      "id": "01M4WT7MM000000000000002GD",
+      "kind": "shortcut",
+      "title": "Press ⌘S to save",
+      "section": "Invite people",
+      "image": "images/05-press-s-to-save.png",
+      "keystrokes": "⌘S",
+      "keys": {
+        "type": "shortcut",
+        "modifiers": [
+          "command"
+        ],
+        "key": "s"
+      },
+      "confidence": {
+        "level": "notNeeded",
+        "issues": []
+      }
+    }
+  ]
+}

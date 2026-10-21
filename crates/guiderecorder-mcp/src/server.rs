@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use guiderecorder_core::edit::{self, EditError, Edited, GuideFields, Position};
-use guiderecorder_core::export::{render_step_image, ImageOptions, RenderGuide, RenderStep};
+use guiderecorder_core::export::{render_step_image, skill, ImageOptions, RenderGuide, RenderStep};
 use guiderecorder_core::index::{self, ListFilter};
 use guiderecorder_core::library::{Library, LibraryError, LoadedGuide};
 use guiderecorder_core::model::{
@@ -68,13 +68,14 @@ pub const MAX_SEARCH_LIMIT: usize = 100;
 
 const INSTRUCTIONS: &str = "GuideRecorder step-by-step guides recorded on this Mac (read-only). \
 Use list_guides or search_steps to find a guide, get_guide for its full Markdown (steps carry \
-{#step-<id>} anchors), and get_step for one step with its screenshot. Screenshots are rendered \
+{#step-<id>} anchors), get_step for one step with its screenshot, and get_skill to follow a guide \
+as an agent skill (instructions plus steps with element locators). Screenshots are rendered \
 with the author's annotations and redactions.";
 
 const WRITABLE_INSTRUCTIONS: &str = "GuideRecorder step-by-step guides recorded on this Mac. \
 Use list_guides or search_steps to find a guide, get_guide for its full Markdown (items carry \
-{#step-<id>}, {#section-<id>} and {#note-<id>} anchors), and get_step for one step with its \
-screenshot. Screenshots are rendered with the author's annotations and redactions. \
+{#step-<id>}, {#section-<id>} and {#note-<id>} anchors), get_step for one step with its \
+screenshot, and get_skill to follow a guide as an agent skill. Screenshots are rendered with the author's annotations and redactions. \
 Editing is allowed: update_guide_fields, update_step, add_note, reorder_items, add_tags, \
 remove_tags and set_cover change a guide, and create_guide_from_images makes an annotation guide from image \
 files. Text you change counts as written by the user, so GuideRecorder's AI passes will not \
@@ -161,6 +162,16 @@ pub struct GetStepArgs {
     /// "crop" (default), "full" or "none".
     #[serde(default)]
     pub image: ImageChoice,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct GetSkillArgs {
+    /// Guide id.
+    pub guide_id: String,
+    /// Also return replay.js, a macOS script that repeats the steps
+    /// through the accessibility API (default false).
+    #[serde(default)]
+    pub replay: bool,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -373,6 +384,23 @@ impl GuideRecorderMcp {
         Parameters(args): Parameters<GetStepArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.blocking(move |config| get_step(config, &args)).await
+    }
+
+    #[tool(
+        description = "Get a guide as an agent skill: SKILL.md (front matter with name and \
+                       description, then the purpose, prerequisites, steps and expected \
+                       result) and steps.json (each step's kind, element locator with app, \
+                       window, role and label, click point, parsed keys, and a confidence \
+                       level with issues such as noLabel or genericRole for elements that \
+                       were not identified clearly). Image links name the files an export \
+                       writes; use get_step for a step's screenshot. Set replay for replay.js, \
+                       a macOS script that repeats the steps (run it with --dry-run first)."
+    )]
+    async fn get_skill(
+        &self,
+        Parameters(args): Parameters<GetSkillArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        self.blocking(move |config| get_skill(config, &args)).await
     }
 
     #[tool(
@@ -781,6 +809,26 @@ fn get_step(config: &Config, args: &GetStepArgs) -> ToolResult<CallToolResult> {
         ContentBlock::text(text),
         png_block(&image.png),
     ]))
+}
+
+/// The skill export's text files, one content block each, headed by the
+/// file name. No images: they would repeat get_step's.
+fn get_skill(config: &Config, args: &GetSkillArgs) -> ToolResult<CallToolResult> {
+    let guide_id = parse_id(&args.guide_id, "guide")?;
+    let loaded = read_guide(config, guide_id)?;
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    let (skill_md, steps_json, replay) = skill::render_text(&render, args.replay);
+    let mut content = vec![
+        ContentBlock::text(format!("File: {}\n\n{skill_md}", skill::SKILL_FILE)),
+        ContentBlock::text(format!("File: {}\n\n{steps_json}", skill::STEPS_FILE)),
+    ];
+    if let Some(script) = replay {
+        content.push(ContentBlock::text(format!(
+            "File: {}\n\n{script}",
+            skill::REPLAY_FILE
+        )));
+    }
+    Ok(CallToolResult::success(content))
 }
 
 fn search_steps(config: &Config, args: &SearchStepsArgs) -> ToolResult<CallToolResult> {

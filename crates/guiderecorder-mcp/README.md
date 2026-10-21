@@ -60,6 +60,7 @@ Without `--writable` the server never writes to the library or the index:
 | `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set, and the cover step when one was chosen), and optionally step screenshots (at most about 5 MB of images). |
 | `get_step` | `guide_id`, `step_id`, `image?` (`"crop"`, `"full"` or `"none"`; default `"crop"`) | The step's text, element, keys and screenshot. |
 | `search_steps` | `query`, `limit?` (20, max 100) | Hits with `guide_id`, `guide_title`, `kind`, `item_id`, `step_number`, `title` and `snippet` (matches in `**bold**`). |
+| `get_skill` | `guide_id`, `replay?` (false) | The guide as an agent skill, as the app's skill export writes it: `SKILL.md` (front matter with `name` and `description`, then purpose, prerequisites, steps and expected result) and `steps.json` (per step its kind, element locator with app, window, role and label, click point, parsed keys and a `confidence` with issues such as `noLabel` or `genericRole`), one text block each. With `replay`, also `replay.js`, a macOS script that repeats the steps (try `--dry-run` first). No images: use `get_step`. |
 
 `read_only` is true when the GuideRecorder app won't edit the guide as it is. That
 happens when it was saved by a newer GuideRecorder, or when it uses an older format

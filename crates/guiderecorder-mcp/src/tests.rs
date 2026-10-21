@@ -337,7 +337,7 @@ fn step_of(
 // Tests
 
 #[tokio::test]
-async fn lists_the_four_tools_with_schemas() {
+async fn lists_the_five_tools_with_schemas() {
     let fx = Fixture::new().with_index();
     let mut client = Client::start(fx.config()).await;
     let tools = client.request("tools/list", json!({})).await.unwrap();
@@ -350,7 +350,13 @@ async fn lists_the_four_tools_with_schemas() {
     names.sort();
     assert_eq!(
         names,
-        ["get_guide", "get_step", "list_guides", "search_steps"]
+        [
+            "get_guide",
+            "get_skill",
+            "get_step",
+            "list_guides",
+            "search_steps"
+        ]
     );
     let get_step = tools["tools"]
         .as_array()
@@ -711,6 +717,44 @@ async fn get_step_returns_text_and_the_rendered_crop() {
         .await;
     assert!(images(&none).is_empty());
     assert_eq!(none["content"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn get_skill_returns_the_skill_files_as_text() {
+    let fx = Fixture::new().with_index();
+    let mut client = Client::start(fx.config()).await;
+    let result = client
+        .ok("get_skill", json!({ "guide_id": CALENDAR }))
+        .await;
+    let content = result["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "no replay.js unless asked");
+    assert!(images(&result).is_empty());
+    let skill = text(&result, 0);
+    assert!(
+        skill.starts_with("File: SKILL.md\n\n---\nname: share-a-calendar-event\n"),
+        "{skill}"
+    );
+    assert!(skill.contains("## Expected result"));
+    let steps = text(&result, 1)
+        .strip_prefix("File: steps.json\n\n")
+        .unwrap();
+    let steps: Value = serde_json::from_str(steps).unwrap();
+    assert_eq!(steps["guide"]["id"], CALENDAR);
+    assert_eq!(
+        steps["steps"][0]["element"]["role"], "AXDockItem",
+        "{steps:#}"
+    );
+    assert_eq!(steps["steps"][0]["confidence"]["level"], "high");
+
+    let with_replay = client
+        .ok("get_skill", json!({ "guide_id": CALENDAR, "replay": true }))
+        .await;
+    assert!(text(&with_replay, 2).starts_with("File: replay.js\n\n#!/usr/bin/osascript"));
+
+    let message = client
+        .tool_error("get_skill", json!({ "guide_id": Ulid::nil().to_string() }))
+        .await;
+    assert!(message.contains("no guide"), "{message}");
 }
 
 /// The raw screenshot must never leave the server: the blurred region of the
@@ -1158,6 +1202,9 @@ async fn no_call_writes_to_the_library_or_index() {
     client
         .ok("search_steps", json!({ "query": "calendar" }))
         .await;
+    client
+        .ok("get_skill", json!({ "guide_id": ROTATE, "replay": true }))
+        .await;
     client.request("resources/list", json!({})).await.unwrap();
     client
         .request(
@@ -1225,7 +1272,7 @@ async fn write_tools_only_with_writable() {
     for tool in WRITE_TOOLS {
         assert!(names.iter().any(|n| n == tool), "{tool} missing: {names:?}");
     }
-    assert_eq!(names.len(), 4 + WRITE_TOOLS.len());
+    assert_eq!(names.len(), 5 + WRITE_TOOLS.len());
     assert!(text_of(&client.init["instructions"]).contains("Editing is allowed"));
 }
 

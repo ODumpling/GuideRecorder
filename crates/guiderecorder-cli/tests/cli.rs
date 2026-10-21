@@ -815,6 +815,7 @@ fn export_each_format() {
         ("pdf", "drucker.pdf", ""),
         ("pptx", "drucker.pptx", ""),
         ("gif", "drucker.gif", ""),
+        ("skill", "skill", "SKILL.md"),
     ];
     for (format, out_name, main) in cases {
         let out = fx.out(out_name);
@@ -836,8 +837,8 @@ fn export_each_format() {
         for file in &files {
             assert!(file.is_file(), "{format}: {} missing", file.display());
         }
-        if format == "md" {
-            assert!(files.len() > 1, "md writes step images");
+        if format == "md" || format == "skill" {
+            assert!(files.len() > 1, "{format} writes step images");
         }
     }
     let document = fs::read_to_string(fx.out("html").join("guide.html")).unwrap();
@@ -927,6 +928,7 @@ fn export_refuses_to_overwrite_unless_asked() {
         ("pdf", "a.pdf"),
         ("pptx", "a.pptx"),
         ("gif", "a.gif"),
+        ("skill", "skill"),
     ] {
         let out = fx.out(name);
         fx.export_json(DRUCKER, format, &out, &[]);
@@ -1043,6 +1045,36 @@ fn export_branding_flags() {
     }
     let docx = fs::read(fx.out("branded.docx")).unwrap();
     assert!(docx.windows(6).any(|w| w == b"AA1122"), "accent in DOCX");
+}
+
+#[test]
+fn export_skill_with_replay_script() {
+    let fx = Fixture::new();
+    let out = fx.out("calendar-skill");
+    let report = fx.export_json(CALENDAR, "skill", &out, &["--replay"]);
+    let names: Vec<String> = files(&report)
+        .iter()
+        .map(|f| {
+            f.strip_prefix(&out)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(names[..3], ["SKILL.md", "steps.json", "replay.js"]);
+    assert!(names[3..].iter().all(|n| n.starts_with("images/")));
+    let skill = fs::read_to_string(out.join("SKILL.md")).unwrap();
+    assert!(skill.starts_with("---\nname: share-a-calendar-event\ndescription: \""));
+    let steps: Value =
+        serde_json::from_str(&fs::read_to_string(out.join("steps.json")).unwrap()).unwrap();
+    assert_eq!(steps["steps"].as_array().unwrap().len(), 5);
+    assert_eq!(steps["steps"][2]["keys"]["text"], "alex@example.com");
+    let script = fs::read_to_string(out.join("replay.js")).unwrap();
+    assert!(script.contains("--dry-run"));
+
+    // Without --replay, replacing the export drops the old script.
+    fx.export_json(CALENDAR, "skill", &out, &["--overwrite"]);
+    assert!(!out.join("replay.js").exists());
 }
 
 #[test]

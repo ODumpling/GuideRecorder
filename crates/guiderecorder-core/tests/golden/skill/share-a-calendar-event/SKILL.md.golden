@@ -1,0 +1,84 @@
+---
+name: share-a-calendar-event
+description: "Invite a colleague to an existing Calendar event. Use when asked to do “Share a calendar event”: 5 recorded steps in Dock, Calendar."
+---
+
+# Share a calendar event
+
+## Purpose
+
+Invite a colleague to an existing Calendar event.
+
+This guide shows how to invite someone to an event you **already** created.
+
+## Prerequisites
+
+- A Mac signed in to iCloud
+- An existing event
+
+The steps use: Dock, Calendar.
+
+## Steps
+
+Do the steps in order. Each names the element to act on (its role, label, window and app) and the keys to press; check the screen against the step's image before you act.
+
+### Open the event
+
+#### 1. Click **Calendar** in the Dock
+
+- Action: click
+- Element: dock item (AXDockItem) “Calendar” of Dock (com.apple.dock)
+
+![Step 1](images/01-click-calendar-in-the-dock.png)
+
+#### 2. Double-click the *Team sync* event
+
+- Action: double-click
+- Element: static text (AXStaticText) “Team sync” in window “Calendar” of Calendar (com.apple.iCal)
+
+The event opens in its own window.
+
+![Step 2](images/02-double-click-the-team-sync-event.png)
+
+> **Tip:** You can also select the event and press `⌘O` to open it.
+
+### Invite people
+
+#### 3. Type the guest's email in **Add Invitees**
+
+- Action: type into a field
+- Element: text field (AXTextField) “Add Invitees” in window “Team sync” of Calendar (com.apple.iCal)
+- Keys: type `alex@example.com`, then press Return
+
+Separate several guests with commas.
+
+- Guests get an email invite
+- You can remove them later
+
+![Step 3](images/03-type-the-guest-s-email-in-add-invitees.png)
+
+#### 4. Right-click the guest and choose **Send Email**
+
+- Action: right-click
+- Element: static text (AXStaticText) “alex@example.com” in window “Team sync” of Calendar (com.apple.iCal)
+
+![Step 4](images/04-right-click-the-guest-and-choose-send-email.png)
+
+#### 5. Press `⌘S` to save
+
+- Action: press keys
+- Keys: press `⌘S`
+
+![Step 5](images/05-press-s-to-save.png)
+
+> **Note:** Guests see changes after they [refresh their calendar](https://support.apple.com/guide/calendar/welcome/mac).
+
+## Expected result
+
+When every step is done, “Share a calendar event” is complete. The last step was “Press ⌘S to save”; its image, `images/05-press-s-to-save.png`, shows the screen then.
+
+## Files
+
+- `steps.json`: the steps as data, with element locators (app, window, role, label), click points in screenshot pixels, keys and the confidence of each element.
+- `images/`: an image of each step, with sensitive areas blurred.
+- `replay.js`: a macOS script that repeats the steps through the accessibility API. Run `osascript -l JavaScript replay.js --dry-run` first: it only reports what it would do and whether each element is there. The script stops at a step it can't do safely.

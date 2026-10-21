@@ -1,0 +1,42 @@
+---
+name: kurzanleitung-drucker
+description: "Für den Drucker im 2. Stock. Use when asked to do “Kurzanleitung Drucker”: 1 recorded step."
+---
+
+# Kurzanleitung Drucker
+
+## Purpose
+
+Für den Drucker im **2. Stock**.
+
+## Steps
+
+Do the steps in order. Each names the element to act on (its role, label, window and app) and the keys to press; check the screen against the step's image before you act.
+
+### 1. Papierfach **2** öffnen
+
+- Action: by hand (no recorded action)
+
+Fach ganz herausziehen.\
+Dann Papier einlegen.
+
+- A4
+- A5
+
+Hinweis
+
+Nicht **überfüllen**.
+
+![Step 1](images/01-papierfach-2-oeffnen.png)
+
+> **Note:** Mehr dazu im [Handbuch](handbuch.pdf) und unter [https://example.com/drucker](https://example.com/drucker).
+
+## Expected result
+
+When every step is done, “Kurzanleitung Drucker” is complete. The last step was “Papierfach 2 öffnen”; its image, `images/01-papierfach-2-oeffnen.png`, shows the screen then.
+
+## Files
+
+- `steps.json`: the steps as data, with element locators (app, window, role, label), click points in screenshot pixels, keys and the confidence of each element.
+- `images/`: an image of each step, with sensitive areas blurred.
+- `replay.js`: a macOS script that repeats the steps through the accessibility API. Run `osascript -l JavaScript replay.js --dry-run` first: it only reports what it would do and whether each element is there. The script stops at a step it can't do safely.

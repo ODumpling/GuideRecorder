@@ -101,6 +101,7 @@ export class Backend {
     overwrite: boolean;
     branding: ExportBranding;
     motion?: unknown;
+    skill?: unknown;
   }[] = [];
   /** Every `preview_export` call. */
   readonly previews: { format: string; branding: ExportBranding }[] = [];
@@ -921,7 +922,7 @@ export class Backend {
       case "choose_export_file": {
         const ext = String(args.format);
         if (!["docx", "pdf", "pptx", "mp4", "gif"].includes(ext)) {
-          fail("invalid", "Markdown and HTML export into a folder");
+          fail("invalid", "Markdown, HTML and skills export into a folder");
         }
         const file = this.dialog.file;
         return file && !file.toLowerCase().endsWith(`.${ext}`) ? `${file}.${ext}` : file;
@@ -935,8 +936,21 @@ export class Backend {
         if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
         this.exported.add(out);
         const record = { guideId, format, out, overwrite, branding: args.branding as ExportBranding };
-        this.exports.push(format === "mp4" || format === "gif" ? { ...record, motion: args.motion } : record);
-        const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
+        this.exports.push(
+          format === "mp4" || format === "gif"
+            ? { ...record, motion: args.motion }
+            : format === "skill"
+              ? { ...record, skill: args.skill }
+              : record,
+        );
+        const main =
+          format === "md"
+            ? `${out}/guide.md`
+            : format === "html"
+              ? `${out}/guide.html`
+              : format === "skill"
+                ? `${out}/SKILL.md`
+                : out;
         return { files: [main], warnings: [], notes: [] } satisfies ExportResult;
       }
       case "preview_export": {
@@ -946,6 +960,12 @@ export class Backend {
         switch (String(args.format)) {
           case "md":
             return { kind: "markdown", markdown: "# Guide\n\n## 1. Step\n", images: [] };
+          case "skill":
+            return {
+              kind: "markdown",
+              markdown: '---\nname: guide\ndescription: "A guide."\n---\n\n# Guide\n\n### 1. Step\n',
+              images: [],
+            };
           case "html":
           case "walkthrough":
             return { kind: "html", html: "<!doctype html><title>Guide</title><h1>Guide</h1>" };

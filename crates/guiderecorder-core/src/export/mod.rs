@@ -19,6 +19,7 @@ pub mod pptx;
 pub mod raster;
 pub mod render;
 pub mod report;
+pub mod skill;
 pub mod walkthrough;
 
 pub use md::{Branding, CheckedBranding};

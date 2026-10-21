@@ -138,3 +138,55 @@ test("previews the export's pages with the chosen logo", async ({ page, backend 
   await preview.getByRole("radio", { name: "Source" }).click();
   await expect(preview.getByText("## 1. Step")).toBeVisible();
 });
+
+test("exports an agent skill with the replay script, after naming an unclear element", async ({ page, backend }) => {
+  // Step 3's element was recorded as an unlabelled group.
+  backend.editStep(API_KEY, "01M4WZCE2000000000000002R8", (step) => {
+    step.element = { ...step.element, role: "AXGroup", label: null };
+  });
+  await openGuide(page, "Rotate an API key");
+  await page.getByRole("button", { name: "Export…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Export guide" });
+  await dialog.getByRole("radio", { name: /Agent skill/ }).click();
+  // Skills carry no branding; the preview shows SKILL.md.
+  await expect(dialog.getByText("Branding (optional)")).toHaveCount(0);
+  const preview = dialog.getByLabel("Export preview");
+  await expect.poll(() => backend.previews.at(-1)?.format).toBe("skill");
+  await preview.getByRole("radio", { name: "Source" }).click();
+  await expect(preview.getByText("name: guide")).toBeVisible();
+
+  const unclear = dialog.getByRole("status", { name: "Unclear elements" });
+  await expect(unclear).toContainText("The element of step 3 was not identified clearly");
+  await unclear.getByRole("button", { name: "Show step" }).click();
+  await expect(dialog).toBeHidden();
+
+  // The inspector says why and lets the author name it.
+  await expect(page.getByRole("status").filter({ hasText: "Unclear element:" })).toContainText("no label and a generic role");
+  await page.getByRole("textbox", { name: "Element name" }).fill("Create key");
+  await expect(page.getByRole("status").filter({ hasText: "Unclear element:" })).toContainText("a generic role");
+
+  await page.getByRole("button", { name: "Export…" }).click();
+  await expect(dialog.getByRole("radio", { name: /Agent skill/ })).toHaveAttribute("aria-checked", "true");
+  await dialog.getByLabel(/Include a replay script/).check();
+  backend.dialog.folder = "/Users/me/Skills";
+  await dialog.getByRole("button", { name: "Choose…" }).click();
+  await dialog.getByRole("button", { name: "Export", exact: true }).click();
+
+  await expect(dialog.getByText(/Exported to/)).toContainText("SKILL.md");
+  expect(backend.exports.at(-1)).toEqual({
+    guideId: API_KEY,
+    format: "skill",
+    out: "/Users/me/Skills/Rotate an API key",
+    overwrite: false,
+    branding: { logo: null, accent: null },
+    skill: { replay: true },
+  });
+  // The name was saved with the guide before the export.
+  const step = backend.lastSave(API_KEY).items.find((i) => i.id === "01M4WZCE2000000000000002R8");
+  expect(step?.type === "step" && step.element?.label).toBe("Create key");
+
+  // The replay choice is remembered.
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Export…" }).click();
+  await expect(dialog.getByLabel(/Include a replay script/)).toBeChecked();
+});

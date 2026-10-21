@@ -1,7 +1,7 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
 import type { Item, Step } from "@guiderecorder/guide-schema";
-import type { AppError, ExportBranding, ExportFormat, ExportResult, MotionAspect, MotionOptions, PaperSize } from "@/lib/types";
+import type { AppError, ExportBranding, ExportFormat, ExportResult, MotionAspect, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -16,6 +16,7 @@ export const FORMATS: { format: ExportFormat; label: string; detail: string }[] 
   { format: "pptx", label: "Slides", detail: "A PowerPoint deck, one slide per step" },
   { format: "mp4", label: "Video", detail: "An .mp4 zooming in on each click" },
   { format: "gif", label: "GIF", detail: "An animated .gif to paste anywhere" },
+  { format: "skill", label: "Agent skill", detail: "SKILL.md and steps.json for AI agents" },
 ];
 
 export const ASPECTS: { aspect: MotionAspect; label: string; detail: string }[] = [
@@ -143,6 +144,29 @@ export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setIt
   }
 }
 
+/** Whether the Export dialog last added the replay script to a skill (on this Mac). */
+const REPLAY_KEY = "guiderecorder.exportReplay";
+
+export const DEFAULT_SKILL: SkillOptions = { replay: false };
+
+/** The skill options chosen last time; no replay script at first. */
+export function initialSkill(storage: Pick<Storage, "getItem"> = localStorage): SkillOptions {
+  try {
+    return { replay: storage.getItem(REPLAY_KEY) === "true" };
+  } catch {
+    return { ...DEFAULT_SKILL };
+  }
+}
+
+/** Remembers the skill options, also after a restart. */
+export function rememberSkill(skill: SkillOptions, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(REPLAY_KEY, String(skill.replay));
+  } catch {
+    // Not remembered; off next time.
+  }
+}
+
 /** MP4 and GIF: a step after the other, zooming in on each click. */
 export function isMotionFormat(format: ExportFormat): boolean {
   return format === "mp4" || format === "gif";
@@ -153,14 +177,14 @@ export function isPaperFormat(format: ExportFormat): boolean {
   return format === "docx" || format === "pdf";
 }
 
-/** The document formats, which show branding and the review details; slides, video and GIF do not. */
+/** The document formats, which show branding and the review details; slides, video, GIF and skills do not. */
 export function isDocumentFormat(format: ExportFormat): boolean {
-  return format !== "pptx" && !isMotionFormat(format);
+  return format !== "pptx" && format !== "skill" && !isMotionFormat(format);
 }
 
-/** Markdown and HTML (either kind) export into a folder; the other formats into one file. */
+/** Markdown, HTML (either kind) and skills export into a folder; the other formats into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
-  return format === "md" || format === "html" || format === "walkthrough";
+  return format === "md" || format === "html" || format === "walkthrough" || format === "skill";
 }
 
 /**
@@ -237,6 +261,7 @@ export async function runExport(
     paper: PaperSize;
     reviewDetails: boolean;
     motion: MotionOptions;
+    skill?: SkillOptions;
   },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
@@ -258,6 +283,7 @@ export async function runExport(
       paper,
       reviewDetails,
       motion,
+      request.skill ?? DEFAULT_SKILL,
     );
     return { ok: true, result };
   } catch (error) {

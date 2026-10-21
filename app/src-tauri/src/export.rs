@@ -15,8 +15,8 @@ use std::sync::Mutex;
 
 use guiderecorder_core::export::md::{Branding, CheckedBranding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, motion, pdf, pptx, verify_crop_rect, ExportReport, ImageOptions, OutPathError,
-    RenderGuide,
+    docx, html, md, motion, pdf, pptx, skill, verify_crop_rect, ExportReport, ImageOptions,
+    OutPathError, RenderGuide,
 };
 use guiderecorder_core::model::StepImage;
 use serde::{Deserialize, Serialize};
@@ -40,19 +40,25 @@ pub enum Format {
     Mp4,
     /// An animated GIF zooming in on each click.
     Gif,
+    /// An agent skill: `SKILL.md`, `steps.json`, images and optionally a
+    /// replay script.
+    Skill,
 }
 
 impl Format {
-    /// Markdown and HTML (either mode) write into a folder; the other
-    /// formats write one file.
+    /// Markdown, HTML (either mode) and skills write into a folder; the
+    /// other formats write one file.
     pub fn is_folder(self) -> bool {
-        matches!(self, Self::Md | Self::Html | Self::Walkthrough)
+        matches!(
+            self,
+            Self::Md | Self::Html | Self::Walkthrough | Self::Skill
+        )
     }
 
     /// The file extension of a one-file export.
     pub fn extension(self) -> Option<&'static str> {
         match self {
-            Self::Md | Self::Html | Self::Walkthrough => None,
+            Self::Md | Self::Html | Self::Walkthrough | Self::Skill => None,
             Self::Docx => Some("docx"),
             Self::Pdf => Some("pdf"),
             Self::Pptx => Some("pptx"),
@@ -83,6 +89,14 @@ impl Default for MotionRequest {
             captions: d.captions,
         }
     }
+}
+
+/// Skill options as the UI sends them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SkillRequest {
+    /// Also write `replay.js`.
+    pub replay: bool,
 }
 
 /// Branding as the UI sends it: a logo path the user chose with
@@ -296,6 +310,7 @@ pub fn export_guide(
     paper: docx::Paper,
     review_details: bool,
     motion_request: &MotionRequest,
+    skill_request: &SkillRequest,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
     if !(motion::MIN_SECONDS_PER_STEP..=motion::MAX_SECONDS_PER_STEP)
@@ -416,6 +431,14 @@ pub fn export_guide(
                 e => AppError::new(ErrorKind::Io, e.to_string()),
             })?
         }
+        Format::Skill => {
+            let opts = skill::SkillOptions {
+                overwrite,
+                replay: skill_request.replay,
+                ..skill::SkillOptions::default()
+            };
+            skill::export(&render, &handle, out, &opts).map_err(md_error)?
+        }
     };
     let result = ExportResult::from(report);
     if let Some(main) = result.files.first() {
@@ -513,6 +536,7 @@ pub fn preview_guide(
     paper: docx::Paper,
     review_details: bool,
     motion_request: &MotionRequest,
+    skill_request: &SkillRequest,
 ) -> Result<ExportPreview> {
     let id = parse_id(guide_id)?;
     let branding = check_branding(chosen, branding)?;
@@ -545,6 +569,26 @@ pub fn preview_guide(
             let preview = md::preview(&render, &handle, &opts);
             ExportPreview::Markdown {
                 markdown: preview.markdown,
+                images: preview
+                    .images
+                    .into_iter()
+                    .map(|(link, png)| PreviewImage {
+                        link,
+                        src: png_uri(&png),
+                    })
+                    .collect(),
+            }
+        }
+        // SKILL.md and its images; steps.json and the script are data.
+        Format::Skill => {
+            let opts = skill::SkillOptions {
+                image,
+                replay: skill_request.replay,
+                ..skill::SkillOptions::default()
+            };
+            let preview = skill::preview(&render, &handle, &opts);
+            ExportPreview::Markdown {
+                markdown: preview.skill_md,
                 images: preview
                     .images
                     .into_iter()
@@ -910,6 +954,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -929,6 +974,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
@@ -943,12 +989,32 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap();
         assert_eq!(
             walkthrough.files,
             [dir.join("walkthrough").join(html::GUIDE_FILE)]
         );
+        let skill = export_guide(
+            &session,
+            &chosen,
+            &id,
+            Format::Skill,
+            &dir.join("skill"),
+            false,
+            &none,
+            docx::Paper::A4,
+            false,
+            &MotionRequest::default(),
+            &SkillRequest { replay: true },
+        )
+        .unwrap();
+        assert_eq!(skill.files[0], dir.join("skill").join(skill::SKILL_FILE));
+        assert!(skill
+            .files
+            .contains(&dir.join("skill").join(skill::REPLAY_FILE)));
+        assert!(skill.files.iter().all(|f| f.is_file()));
         let page = std::fs::read_to_string(&walkthrough.files[0]).unwrap();
         assert!(page.contains("<script>"));
         assert!(!std::fs::read_to_string(&html.files[0])
@@ -969,6 +1035,7 @@ mod tests {
                 docx::Paper::A4,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .is_err());
             chosen.add_file(out.clone());
@@ -983,6 +1050,7 @@ mod tests {
                 docx::Paper::A4,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
@@ -999,6 +1067,7 @@ mod tests {
                 docx::Paper::A4,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
@@ -1013,6 +1082,7 @@ mod tests {
                 docx::Paper::A4,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .unwrap();
         }
@@ -1028,6 +1098,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -1042,6 +1113,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap();
     }
@@ -1067,6 +1139,7 @@ mod tests {
                 paper,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .unwrap();
             let pdf = fs::read(&out).unwrap();
@@ -1089,6 +1162,7 @@ mod tests {
                 paper,
                 false,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
             .unwrap();
             fs::read(&out).unwrap()
@@ -1112,6 +1186,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -1139,6 +1214,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -1158,6 +1234,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -1177,6 +1254,7 @@ mod tests {
             docx::Paper::A4,
             false,
             &MotionRequest::default(),
+            &SkillRequest::default(),
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);
@@ -1206,6 +1284,7 @@ mod tests {
                 docx::Paper::A4,
                 true,
                 &MotionRequest::default(),
+                &SkillRequest::default(),
             )
         };
         let is_png = |src: &str| src.starts_with("data:image/png;base64,");
@@ -1226,6 +1305,16 @@ mod tests {
                 for image in &images {
                     assert!(markdown.contains(&format!("]({})", image.link)));
                     assert!(is_png(&image.src));
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+        match preview(Format::Skill, &none).unwrap() {
+            ExportPreview::Markdown { markdown, images } => {
+                assert!(markdown.starts_with("---\nname: "), "{markdown}");
+                assert_eq!(images.len(), steps);
+                for image in &images {
+                    assert!(markdown.contains(&format!("]({})", image.link)));
                 }
             }
             other => panic!("{other:?}"),

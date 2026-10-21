@@ -80,6 +80,22 @@ LM Studio, in which case nothing leaves your Mac.
    (PPTX)** give one slide per step with its image, title and description,
    and the description in the speaker notes.
 
+   To hand the task to an AI agent, export an **agent skill**: a folder with
+   `SKILL.md` (the steps as instructions, with the purpose, prerequisites and
+   expected result, in the [Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview)
+   format), `steps.json` (each step's element locator: app, window, role and
+   label, plus the click point and the keys) and the step images, blurs
+   burned in. Optionally it includes `replay.js`, a macOS script that repeats
+   the steps by finding each element through the accessibility API:
+   `osascript -l JavaScript replay.js --dry-run` reports what it would do and
+   whether each element is there, without touching anything. The script stops
+   at any step it can't do safely (an element it can't find or tell apart, a
+   password, a double-click, a drag or a manual step); do that one by hand and
+   continue with `--from`. Steps whose element wasn't identified clearly (no
+   label, a generic role such as a group, no app or window) are flagged in the
+   export dialog, in the step inspector, where you can name the element, and in
+   `steps.json` and `SKILL.md`.
+
 ## Annotation guides
 
 Not everything is a sequence of clicks. To explain a floor plan, a form, a
@@ -199,11 +215,12 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <p
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
 
-`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif`
+`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif|skill`
 (`walkthrough` is an interactive click-through `guide.html`; `mp4` needs
-macOS), `--out`, and optionally `--paper a4|letter` (DOCX and PDF; default
-A4), `--seconds-per-step`, `--size wide|square|vertical`, `--no-zoom` and
-`--no-captions` (MP4 and GIF), `--logo`, `--accent`,
+macOS; `skill` is an agent skill folder), `--out`, and optionally
+`--paper a4|letter` (DOCX and PDF; default A4), `--seconds-per-step`,
+`--size wide|square|vertical`, `--no-zoom` and `--no-captions` (MP4 and
+GIF), `--replay` (a skill's `replay.js`), `--logo`, `--accent`,
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.

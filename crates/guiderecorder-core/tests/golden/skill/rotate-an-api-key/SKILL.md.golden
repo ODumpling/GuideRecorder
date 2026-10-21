@@ -1,0 +1,82 @@
+---
+name: rotate-an-api-key
+description: "Replace a leaked or expiring API key without downtime. Use when asked to do “Rotate an API key”: 5 recorded steps in Safari."
+---
+
+# Rotate an API key
+
+## Purpose
+
+Replace a leaked or expiring API key without downtime.
+
+Rotate keys every *90 days*, or right away if one leaks.
+
+## Prerequisites
+
+Admin access to the console.
+
+The steps use: Safari.
+
+## Steps
+
+Do the steps in order. Each names the element to act on (its role, label, window and app) and the keys to press; check the screen against the step's image before you act.
+
+> **Warning:** Creating a new key **revokes** the old one immediately. Update these first:
+>
+> 1. The CI secret
+> 2. Local `.env` files
+
+### 1. Open **Settings → API keys**
+
+- Action: click
+- Element: link (AXLink) “API keys” in window “Settings – Example Console” of Safari (com.apple.Safari)
+
+![Step 1](images/01-open-settings-api-keys.png)
+
+### 2. Enter your password to confirm
+
+- Action: type into a field
+- Element: secure text field (AXSecureTextField) “Password” in window “Settings – Example Console” of Safari (com.apple.Safari)
+- Keys: type the password (masked when recorded: ask the user for it), then press Return
+
+Password input is masked while recording.
+
+![Step 2](images/02-enter-your-password-to-confirm.png)
+
+### 3. Click **Create key** and copy the new key
+
+- Action: click
+- Element: button (AXButton) “Create key” in window “Settings – Example Console” of Safari (com.apple.Safari)
+
+The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
+
+![Step 3](images/03-click-create-key-and-copy-the-new-key.png)
+
+### 4. Drag the new key to **Production**
+
+- Action: drag
+- Element: row (AXRow) “New key” in window “Settings – Example Console” of Safari (com.apple.Safari)
+
+![Step 4](images/04-drag-the-new-key-to-production.png)
+
+### 5. Check that the key works
+
+- Action: by hand (no recorded action)
+
+Run this in Terminal:
+
+`curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`
+
+It should print *pong*.
+
+![Step 5](images/05-check-that-the-key-works.png)
+
+## Expected result
+
+When every step is done, “Rotate an API key” is complete. The last step was “Check that the key works”; its image, `images/05-check-that-the-key-works.png`, shows the screen then.
+
+## Files
+
+- `steps.json`: the steps as data, with element locators (app, window, role, label), click points in screenshot pixels, keys and the confidence of each element.
+- `images/`: an image of each step, with sensitive areas blurred.
+- `replay.js`: a macOS script that repeats the steps through the accessibility API. Run `osascript -l JavaScript replay.js --dry-run` first: it only reports what it would do and whether each element is there. The script stops at a step it can't do safely.

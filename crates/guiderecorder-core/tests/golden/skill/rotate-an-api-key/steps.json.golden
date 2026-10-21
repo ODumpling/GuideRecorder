@@ -1,0 +1,125 @@
+{
+  "format": "guiderecorder.skill-steps",
+  "version": 1,
+  "guide": {
+    "id": "01M4WZCE2000000000000002R0",
+    "name": "rotate-an-api-key",
+    "title": "Rotate an API key",
+    "summary": "Replace a leaked or expiring API key without downtime.",
+    "language": "en",
+    "recordedOn": "macos"
+  },
+  "steps": [
+    {
+      "number": 1,
+      "id": "01M4WZCE2000000000000002R2",
+      "kind": "click",
+      "title": "Open Settings → API keys",
+      "image": "images/01-open-settings-api-keys.png",
+      "element": {
+        "role": "AXLink",
+        "label": "API keys",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "point": {
+        "x": 10.0,
+        "y": 8.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 2,
+      "id": "01M4WZCE2000000000000002R4",
+      "kind": "type",
+      "title": "Enter your password to confirm",
+      "description": "Password input is masked while recording.",
+      "image": "images/02-enter-your-password-to-confirm.png",
+      "element": {
+        "role": "AXSecureTextField",
+        "label": "Password",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "point": {
+        "x": 16.0,
+        "y": 10.0
+      },
+      "keystrokes": "••••••••⏎",
+      "keys": {
+        "type": "secret",
+        "submit": true
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 3,
+      "id": "01M4WZCE2000000000000002R8",
+      "kind": "click",
+      "title": "Click Create key and copy the new key",
+      "description": "The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).",
+      "image": "images/03-click-create-key-and-copy-the-new-key.png",
+      "element": {
+        "role": "AXButton",
+        "label": "Create key",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "point": {
+        "x": 50.0,
+        "y": 32.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 4,
+      "id": "01M4WZCE2000000000000002RA",
+      "kind": "drag",
+      "title": "Drag the new key to Production",
+      "image": "images/04-drag-the-new-key-to-production.png",
+      "element": {
+        "role": "AXRow",
+        "label": "New key",
+        "app": "Safari",
+        "bundleId": "com.apple.Safari",
+        "window": "Settings – Example Console"
+      },
+      "point": {
+        "x": 10.0,
+        "y": 10.0
+      },
+      "endPoint": {
+        "x": 50.0,
+        "y": 30.0
+      },
+      "confidence": {
+        "level": "high",
+        "issues": []
+      }
+    },
+    {
+      "number": 5,
+      "id": "01M4WZCE2000000000000002RB",
+      "kind": "manual",
+      "title": "Check that the key works",
+      "description": "Run this in Terminal:\n\n`curl -H \"x-api-key: $KEY\" https://api.example.com/v1/ping`\n\nIt should print *pong*.",
+      "image": "images/05-check-that-the-key-works.png",
+      "confidence": {
+        "level": "notNeeded",
+        "issues": []
+      }
+    }
+  ]
+}
