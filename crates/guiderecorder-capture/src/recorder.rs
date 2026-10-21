@@ -50,8 +50,10 @@
 //! No AX call runs on the main or tap thread (see `ax`'s `# Threading`).
 //! [`RecordingSession::stop`] stops the tap, drains and joins all threads,
 //! stops the frames, merges the events by timestamp and runs
-//! [`detect_steps`]. [`Recording::save_guide`] writes the bundle;
-//! dropping the [`Recording`] removes the session folder.
+//! [`detect_steps`]. [`Recording::save_guide`] writes the bundle, or
+//! [`Recording::save_steps`] the steps' images into an existing one (a
+//! re-capture, steps recorded into a guide); dropping the [`Recording`]
+//! removes the session folder.
 //!
 //! # Pause
 //!
@@ -338,7 +340,7 @@ use guiderecorder_core::library::{
     self, GuideHandle, Library, LibraryError, PixelBuffer, PixelFormat, StepImageVariant,
 };
 use guiderecorder_core::model::{
-    self, AppInfo, Guide, ImageShow, Item, Point, RecordingInfo, Rect, StepImage,
+    self, AppInfo, Guide, ImageShow, Item, Point, RecordingInfo, Rect, Step, StepImage,
 };
 use guiderecorder_core::steps::{detect_steps, DraftStep, LiveAction, StepConfig};
 use guiderecorder_core::Ulid;
@@ -1077,6 +1079,7 @@ impl RecordingSession {
             pauses: std::mem::take(&mut self.pauses),
             loss_cutoffs,
             edits: CaptureEdits::default(),
+            capture_area: None,
             session_dir,
         })
     }
@@ -1394,6 +1397,11 @@ pub struct Recording {
     /// Changes made to the live feed, applied by [`Recording::save_guide`];
     /// none after [`RecordingSession::stop`].
     pub edits: CaptureEdits,
+    /// What was captured, as the host describes it (a window by its app
+    /// and title, which outlive its id), kept in the guide's
+    /// [`RecordingInfo::capture_area`] by [`Recording::save_guide`]; none
+    /// after [`RecordingSession::stop`].
+    pub capture_area: Option<model::RecordedArea>,
     session_dir: PathBuf,
 }
 
@@ -1415,6 +1423,19 @@ pub struct SavedGuide {
     pub step_times: Vec<(Ulid, Timestamp)>,
 }
 
+/// The result of [`Recording::save_steps`].
+#[derive(Debug, Clone)]
+pub struct SavedSteps {
+    /// In recorded order; their images are in the bundle, but no guide
+    /// holds them yet.
+    pub steps: Vec<Step>,
+    /// Draft steps left out because no snapshot was close enough.
+    pub skipped: usize,
+    /// Each step's id and the time of its action, in order, as
+    /// [`SavedGuide::step_times`].
+    pub step_times: Vec<(Ulid, Timestamp)>,
+}
+
 impl Recording {
     /// The hidden folder holding the encoded snapshots.
     pub fn session_dir(&self) -> &Path {
@@ -1431,15 +1452,13 @@ impl Recording {
         let mut guide = Guide::new(title, "en");
         guide.recording = Some(self.recording_info());
         let handle = library.create(&guide)?;
-        let mut step_times = Vec::new();
-        let filled = self
-            .fill_steps(&handle, &mut guide, &mut step_times)
-            .and_then(|skipped| {
-                library.save_to(&handle, &guide)?;
-                Ok(skipped)
-            });
+        let filled = self.fill_steps(&handle, None).and_then(|filled| {
+            guide.items.extend(filled.steps.into_iter().map(Item::Step));
+            library.save_to(&handle, &guide)?;
+            Ok((filled.skipped, filled.step_times))
+        });
         match filled {
-            Ok(skipped) => Ok(SavedGuide {
+            Ok((skipped, step_times)) => Ok(SavedGuide {
                 handle,
                 guide,
                 skipped,
@@ -1452,18 +1471,63 @@ impl Recording {
         }
     }
 
+    /// Writes the steps' images into an existing bundle, as
+    /// [`Recording::save_guide`] does, and returns the steps without
+    /// changing its `guide.json`: the host adds them to the guide (the
+    /// editor, as an undoable edit, which then saves). At most `limit`
+    /// steps, the first ones, when given (a re-capture keeps one). If a
+    /// write fails, the images written so far are removed.
+    pub fn save_steps(
+        &self,
+        handle: &GuideHandle,
+        limit: Option<usize>,
+    ) -> Result<SavedSteps, SessionError> {
+        // `resolve` refuses a symlinked `steps/`; a guide without one (made
+        // by hand, never given an image) gets a real folder.
+        let dir = handle.resolve(library::STEPS_DIR)?;
+        match fs::create_dir(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_err(&dir)(e)),
+        }
+        self.fill_steps(handle, limit)
+    }
+
+    /// The steps, each with its images written into `handle`, their times
+    /// and how many were skipped; stops after `limit` steps when given. On
+    /// error the images written so far are removed.
     fn fill_steps(
         &self,
         handle: &GuideHandle,
-        guide: &mut Guide,
-        step_times: &mut Vec<(Ulid, Timestamp)>,
-    ) -> Result<usize, SessionError> {
+        limit: Option<usize>,
+    ) -> Result<SavedSteps, SessionError> {
+        let mut written = Vec::new();
+        let filled = self.fill_steps_into(handle, limit, &mut written);
+        if filled.is_err() {
+            for path in written {
+                let _ = fs::remove_file(path);
+            }
+        }
+        filled
+    }
+
+    fn fill_steps_into(
+        &self,
+        handle: &GuideHandle,
+        limit: Option<usize>,
+        written: &mut Vec<PathBuf>,
+    ) -> Result<SavedSteps, SessionError> {
         let max_gap_ns = self.fallback_ms.saturating_mul(1_000_000);
+        let mut steps = Vec::new();
+        let mut step_times = Vec::new();
         let mut skipped = 0;
         // The last decoded frame (RGBA), for crops.
         let mut decoded: Option<(FrameKey, u32, Vec<u8>)> = None;
         let mut titled = HashSet::new();
         for (i, draft) in self.drafts.iter().enumerate() {
+            if limit.is_some_and(|limit| steps.len() >= limit) {
+                break;
+            }
             // Never a frame of a stream from before it was lost, for a step
             // after: it may show a window that has closed since.
             let usable = |ts: Timestamp, snap: &SnapshotRef| {
@@ -1486,12 +1550,14 @@ impl Recording {
             let full = library::step_image_path(id, StepImageVariant::Full);
             let dest = handle.resolve(&full)?;
             fs::copy(&snap.path, &dest).map_err(io_err(&dest))?;
+            written.push(dest);
             let next_at = self.drafts.get(i + 1).map(|d| d.at);
             let after = match step_after(&self.afters, draft.at, snap, next_at) {
                 Some(after) => {
                     let rel = library::step_image_path(id, StepImageVariant::After);
                     let dest = handle.resolve(&rel)?;
                     fs::copy(&after.path, &dest).map_err(io_err(&dest))?;
+                    written.push(dest);
                     Some(rel)
                 }
                 None => None,
@@ -1511,6 +1577,7 @@ impl Recording {
                         StepImageVariant::Crop,
                         &crop_view(rgba, *width, rect),
                     )?;
+                    written.push(handle.resolve(&path)?);
                     (Some(path), Some(rect.to_rect()))
                 }
                 None => (None, None),
@@ -1533,9 +1600,13 @@ impl Recording {
                 step.title = title;
             }
             step_times.push((id, draft.at));
-            guide.items.push(Item::Step(step));
+            steps.push(step);
         }
-        Ok(skipped)
+        Ok(SavedSteps {
+            steps,
+            skipped,
+            step_times,
+        })
     }
 
     /// Copies each distinct snapshot frame to
@@ -1594,6 +1665,7 @@ impl Recording {
             os_version: None,
             apps,
             displays,
+            capture_area: self.capture_area.clone(),
         }
     }
 }
@@ -4699,6 +4771,7 @@ mod tests {
             pauses: Vec::new(),
             loss_cutoffs: Vec::new(),
             edits: CaptureEdits::default(),
+            capture_area: None,
             session_dir,
         }
     }
@@ -4854,6 +4927,82 @@ mod tests {
         assert_eq!(saved.skipped, 0);
         let titles: Vec<_> = saved.guide.steps().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, ["Click **Save**", "Save the \\*draft\\*"]);
+    }
+
+    #[test]
+    fn save_guide_keeps_the_capture_area() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let mut rec = recording(&scratch, click(10, 4.0, 2.5).to_vec(), &[(10, &f1)]);
+        let area = model::RecordedArea::Window {
+            app: "Safari".into(),
+            bundle_id: Some("com.apple.Safari".into()),
+            title: Some("Start Page".into()),
+        };
+        rec.capture_area = Some(area.clone());
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let saved = rec.save_guide(&lib, "Area").unwrap();
+        let loaded = lib.load(&saved.handle.path).unwrap();
+        assert_eq!(loaded.guide.recording.unwrap().capture_area, Some(area));
+    }
+
+    #[test]
+    fn save_steps_writes_images_into_an_existing_guide_only() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 160, 100, geometry(80.0, 50.0, 160, 100));
+        let f2 = frame(1_005 * MS, 160, 100, geometry(80.0, 50.0, 160, 100));
+        let mut events = click(10, 40.0, 25.0).to_vec();
+        events.extend(click(1_010, 20.0, 10.0));
+        let rec = recording(&scratch, events, &[(10, &f1), (1_010, &f2)]);
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        // A guide made by hand: no steps folder yet.
+        let guide = Guide::new("By hand", "en");
+        let handle = lib.create(&guide).unwrap();
+        let _ = fs::remove_dir(handle.steps_dir());
+
+        let saved = rec.save_steps(&handle, None).unwrap();
+        assert_eq!(saved.skipped, 0);
+        assert_eq!(saved.steps.len(), 2);
+        let first = &saved.steps[0];
+        assert_eq!(first.point, Some(Point { x: 80.0, y: 50.0 }));
+        assert_eq!(first.image.show, ImageShow::Crop);
+        for step in &saved.steps {
+            let full = handle.read_image(&step.image.full).unwrap();
+            assert_eq!(full.dimensions(), (160, 100));
+            assert!(handle
+                .resolve(step.image.crop.as_deref().unwrap())
+                .unwrap()
+                .exists());
+        }
+        // `guide.json` is the host's to change.
+        let loaded = lib.load(&handle.path).unwrap();
+        assert_eq!(loaded.guide.items.len(), 0);
+
+        // A re-capture keeps the first step only, and writes no other files.
+        let one = rec.save_steps(&handle, Some(1)).unwrap();
+        assert_eq!(one.steps.len(), 1);
+        assert_eq!(one.steps[0].point, first.point);
+        let files = fs::read_dir(handle.steps_dir()).unwrap().count();
+        assert_eq!(files, 2 * 2 + 2);
+    }
+
+    #[test]
+    fn failed_save_steps_removes_what_it_wrote() {
+        let scratch = ScratchDir::new();
+        let f1 = frame(5 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let f2 = frame(1_005 * MS, 16, 10, geometry(8.0, 5.0, 16, 10));
+        let mut events = click(10, 4.0, 2.5).to_vec();
+        events.extend(click(1_010, 4.0, 2.5));
+        let rec = recording(&scratch, events, &[(10, &f1), (1_010, &f2)]);
+        // The second snapshot is gone, so its copy fails after the first
+        // step's images were written.
+        fs::remove_file(&rec.snapshots.values().nth(1).unwrap().path).unwrap();
+        let lib = Library::open(scratch.0.join("lib")).unwrap();
+        let handle = lib.create(&Guide::new("Broken", "en")).unwrap();
+        assert!(rec.save_steps(&handle, None).is_err());
+        assert_eq!(fs::read_dir(handle.steps_dir()).unwrap().count(), 0);
+        // The guide itself is untouched.
+        assert!(lib.load(&handle.path).is_ok());
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useStore } from "zustand";
 import { aiStore } from "@/ai/ai";
 import { autoRun } from "@/ai/controller";
 import { editorStore } from "@/editor/editor";
+import { applyRecorded, createRecaptureStore } from "@/editor/recapture";
 import { tauriPickerApi, tauriRecordingApi, tauriSettingsApi } from "@/lib/ipc";
 import type { RecordingSaved } from "@/lib/types";
 import { createStartFlow } from "@/recording/startFlow";
@@ -40,6 +41,14 @@ export function savedNotice({
 async function openSaved(saved: RecordingSaved) {
   const { guideId } = saved;
   const editor = editorStore.getState();
+  if (saved.recorded) {
+    // Recorded into the open guide: its steps go in as an edit.
+    if (applyRecorded(editorStore, recaptureStore, saved.recorded)) {
+      const notice = savedNotice(saved);
+      if (notice) editor.notify(notice);
+    }
+    return;
+  }
   void editor.loadGuides();
   // Not opened if the open guide's changes could not be saved (the leave
   // dialog shows) or the editor is busy; the new guide is in the library.
@@ -50,6 +59,9 @@ async function openSaved(saved: RecordingSaved) {
   // Write it with AI when the settings say so and a key is set.
   await autoRun(aiStore, guideId, settingsStore.getState().settings, tauriSettingsApi.apiKeyStored);
 }
+
+/** A re-captured step waiting for the annotations choice (see RecaptureDialog). */
+export const recaptureStore = createRecaptureStore();
 
 /** The app's recording store. */
 export const recordingStore = createRecordingStore({

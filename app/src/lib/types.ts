@@ -353,7 +353,30 @@ export type RecordingStatus =
  * carries the `seq` it was stored with, which grows with each change, so one
  * that arrives after a newer one can be dropped.
  */
-export type StampedStatus = RecordingStatus & { seq: number };
+export type StampedStatus = RecordingStatus & {
+  seq: number;
+  /** The guide the recording goes into (a re-capture, steps inserted); absent for a new guide. */
+  into?: RecordInto;
+};
+
+/**
+ * Where a recording goes instead of a new guide (#12): `replace`
+ * re-captures the step `stepId` (the first step recorded replaces its
+ * images, point, element and keystrokes); `insert` adds every step
+ * recorded after the item `afterId` (null: at the end). The guide must
+ * be open in the editor.
+ */
+export type RecordInto =
+  | { mode: "replace"; guideId: Ulid; stepId: Ulid }
+  | { mode: "insert"; guideId: Ulid; afterId: Ulid | null };
+
+/** The steps a recording into a guide made, for the editor to add. Bare steps, without the item `type` tag. */
+export interface RecordedSteps {
+  /** New for each stop: the command result and the saved event both carry it. */
+  id: string;
+  into: RecordInto;
+  steps: Omit<Step, "type">[];
+}
 
 /** The fields `recording` and `paused` share. */
 export interface RecordingRun {
@@ -365,7 +388,10 @@ export interface RecordingRun {
   captureLost: string | null;
 }
 
-/** A recording saved as a new guide. `skipped`: steps left out for lack of a screenshot. */
+/**
+ * A recording saved as a new guide, or recorded into one (`recorded`).
+ * `skipped`: steps left out for lack of a screenshot.
+ */
 export interface RecordingSaved {
   guideId: Ulid;
   steps: number;
@@ -378,6 +404,8 @@ export interface RecordingSaved {
   unscannedSteps: number;
   /** Steps that got some of what was said while narrating. */
   narratedSteps: number;
+  /** Recorded into a guide: the steps, for the editor to add. Absent for a new guide. */
+  recorded?: RecordedSteps;
 }
 
 /** The toolbar's microphone (`narration_state`, `recording://narration`). */

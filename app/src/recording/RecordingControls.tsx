@@ -135,13 +135,14 @@ function Controls() {
   );
 }
 
-/** Below the toolbar: a failed recording command, and the capture area notice. */
+/** Below the toolbar: a failed recording command, the capture area notice, and what a recording into a guide does. */
 export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
   const error = useRecording((s) => s.error);
   const fallback = useRecording(
     (s) => (s.status.state === "recording" || s.status.state === "paused") && s.status.captureAreaFallback,
   );
   const lost = useRecording((s) => captureLostMessage(s.status));
+  const into = useRecording((s) => (s.status.state === "recording" || s.status.state === "paused" ? s.into : null));
   // A refused resume says the same as the "Capture stopped" notice: one banner is enough.
   const shownError = error && error.message !== lost ? error : null;
   return (
@@ -177,6 +178,16 @@ export function RecordingBanner({ onPermissions }: { onPermissions(): void }) {
         <div className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
           <Info className="size-4 shrink-0 text-[var(--status-info)]" />
           <span>Recording all displays: no window or region was chosen for this recording.</span>
+        </div>
+      )}
+      {into && (
+        <div role="status" className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
+          <Info className="size-4 shrink-0 text-[var(--status-info)]" />
+          <span>
+            {into.mode === "replace"
+              ? "Re-capturing a step: the next click, shortcut or manual step replaces its screenshot."
+              : "Recording steps into this guide: stop to insert them."}
+          </span>
         </div>
       )}
     </>

@@ -9,6 +9,7 @@ import { ExportDialog, exportDialogStore, openExport } from "@/components/Export
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Inspector } from "@/components/Inspector";
 import { LeaveDialog } from "@/components/LeaveDialog";
+import { RecaptureDialog } from "@/components/RecaptureDialog";
 import { Onboarding } from "@/components/Onboarding";
 import { LibraryHome, LibrarySearch } from "@/components/library/LibraryHome";
 import { LibraryNav } from "@/components/library/LibraryNav";
@@ -272,6 +273,7 @@ export default function App() {
         </div>
       </div>
       <LeaveDialog />
+      <RecaptureDialog />
       <ConflictDialog />
       <ShareDialog />
       <SignInDialog />

@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordInto, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -209,6 +209,11 @@ export class Backend {
   recordingSkipped = 0;
   /** Guides made by `stop_recording`, in order. */
   readonly recordings: RecordingSaved[] = [];
+  /** The guide the running recording goes into (`start_recording`'s `into`), if any. */
+  recordingInto: RecordInto | null = null;
+  /** How many steps a recording that inserts steps into a guide makes (a re-capture makes one). */
+  recordedSteps = 2;
+  private recorded = 0;
   /**
    * How many pages the next images-or-PDF dialog (`new_annotated_guide`,
    * `add_annotated_pages`) picks; null: the user cancels it.
@@ -539,7 +544,10 @@ export class Backend {
   private setRecording(status: RecordingStatus) {
     this.recording = status;
     this.recordingSeq += 1;
-    if (status.state === "idle") this.snapshots.clear();
+    if (status.state === "idle") {
+      this.snapshots.clear();
+      this.recordingInto = null;
+    }
     this.events.push({ event: "recording://status", payload: this.stamped() });
   }
 
@@ -576,7 +584,8 @@ export class Backend {
 
   /** The recorder's status with its `seq`, as commands return and events carry it. */
   stamped(): StampedStatus {
-    return { ...structuredClone(this.recording), seq: this.recordingSeq };
+    const into = this.recordingInto ? { into: structuredClone(this.recordingInto) } : {};
+    return { ...structuredClone(this.recording), seq: this.recordingSeq, ...into };
   }
 
   /**
@@ -654,6 +663,51 @@ export class Backend {
       appliedBlurs: 0,
       unscannedSteps: 0,
       narratedSteps: this.narrationOn ? 1 : 0,
+    };
+    this.recordings.push(saved);
+    return saved;
+  }
+
+  /**
+   * Steps recorded into the guide `into` names, as Rust's `save_into`
+   * returns them: their images (the first fixture step's) in the guide's
+   * files, `guide.json` unchanged. A re-capture makes one step, a click at
+   * (60, 50); inserting makes `recordedSteps`.
+   */
+  private saveInto(into: RecordInto): RecordingSaved {
+    const bundle = this.bundle(into.guideId);
+    if (!this.openGuides.has(into.guideId)) fail("notOpen", `guide ${into.guideId} is not open`);
+    const image = [...this.bundles.values()]
+      .flatMap((b) => [...b.files.entries()])
+      .find(([path]) => /^steps\/[^.]+\.webp$/.test(path));
+    if (!image) return fail("notFound", "the fixtures have no step image");
+    const count = into.mode === "replace" ? 1 : this.recordedSteps;
+    const steps = Array.from({ length: count }, (_, i) => {
+      const n = ++this.recorded;
+      const id = `01M4X${"0".repeat(16)}RS${String(n).padStart(3, "0")}`;
+      const full = `steps/${id}.webp`;
+      bundle.files.set(full, image[1]);
+      return {
+        id,
+        title: `Click **Recorded ${n}**`,
+        description: "",
+        kind: "click",
+        point: { x: 60 + 10 * i, y: 50 },
+        element: { role: "AXButton", label: `Recorded ${n}` },
+        image: { full, show: "full" },
+        annotations: [],
+        aiState: { status: "template" },
+      } as unknown as Omit<Step, "type">;
+    });
+    const saved: RecordingSaved = {
+      guideId: into.guideId,
+      steps: steps.length,
+      skipped: 0,
+      suggestedBlurs: 0,
+      appliedBlurs: 0,
+      unscannedSteps: 0,
+      narratedSteps: 0,
+      recorded: { id: `rec-${this.recorded}`, into: structuredClone(into), steps },
     };
     this.recordings.push(saved);
     return saved;
@@ -1005,8 +1059,12 @@ export class Backend {
         if (target?.kind === "region" && (target.rect.width < 40 || target.rect.height < 40)) {
           fail("invalid", "the region must be at least 40 × 40 points");
         }
+        // Like Rust: only into a guide open in the editor.
+        const into = (args.into as RecordInto | undefined) ?? null;
+        if (into && !this.openGuides.has(into.guideId)) fail("notOpen", `guide ${into.guideId} is not open`);
         this.recordingTargets.push(target === undefined ? undefined : structuredClone(target));
         const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
+        this.recordingInto = into && structuredClone(into);
         this.setRecording({
           state: "recording",
           startedAt: new Date().toISOString(),
@@ -1039,8 +1097,9 @@ export class Backend {
       }
       case "stop_recording": {
         const { startedAt, title } = this.active();
+        const into = this.recordingInto;
         this.setRecording({ state: "saving", startedAt, title });
-        const saved = this.saveRecording(title);
+        const saved = into ? this.saveInto(into) : this.saveRecording(title);
         this.endNarration();
         this.setRecording({ state: "idle" });
         this.events.push({ event: "recording://saved", payload: saved });

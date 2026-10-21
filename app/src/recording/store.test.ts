@@ -173,6 +173,33 @@ describe("recording store", () => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
+  it("hands over each recording into a guide once, though they name the same guide", async () => {
+    const { onSaved, store } = setup();
+    const into = { mode: "insert", guideId: "G1", afterId: null } as const;
+    const first = { ...SAVED, recorded: { id: "R1", into, steps: [] } };
+    const second = { ...SAVED, recorded: { id: "R2", into, steps: [] } };
+    store.getState().saved(first);
+    store.getState().saved(first);
+    store.getState().saved(second);
+    expect(onSaved.mock.calls).toEqual([[first], [second]]);
+  });
+
+  it("follows which guide the recording goes into", async () => {
+    const into = { mode: "replace", guideId: "G1", stepId: "S1" } as const;
+    const { api, store } = setup({ start: vi.fn(async () => ({ ...stamp(recording, 1), into })) });
+    expect(await store.getState().start(undefined, into)).toBe(true);
+    expect(api.start).toHaveBeenCalledWith(null, undefined, into);
+    expect(store.getState().into).toEqual(into);
+    // An unstamped status keeps it; a stamped one without it, or idle, clears it.
+    store.getState().setStatus(paused);
+    expect(store.getState().into).toEqual(into);
+    store.getState().setStatus(stamp(recording, 2));
+    expect(store.getState().into).toBeNull();
+    store.getState().setStatus({ ...stamp(recording, 3), into });
+    store.getState().setStatus({ state: "idle" });
+    expect(store.getState().into).toBeNull();
+  });
+
   it("stops without opening when asked (quitting)", async () => {
     const { onSaved, store } = setup({
       stop: vi.fn(async () => {

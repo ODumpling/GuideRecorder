@@ -1,4 +1,4 @@
-import type { CoverOptions, Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
+import type { Annotation, CoverOptions, Guide, GuideField as GuideTextField, ImageShow, Item, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import type { ReviewFields } from "@/lib/types";
 import { ulid } from "@/lib/ulid";
 import { normalizeMarkdown } from "@guiderecorder/ui/markdown";
@@ -556,4 +556,90 @@ export function splitStep(
     );
   }
   return { label: "Split step", forward, inverse, select: { forward: newId, inverse: id } };
+}
+
+// ---------------------------------------------------------------------------
+// Re-capture (#12)
+
+/** What a re-capture does with the step's annotations. */
+export type AnnotationChoice = "keep" | "move" | "clear";
+
+/**
+ * How far the click moved from the step's point to the re-captured one, in
+ * screenshot pixels; null unless both have a point and it moved.
+ */
+export function clickOffset(step: Step, captured: Pick<Step, "point">): { dx: number; dy: number } | null {
+  if (!step.point || !captured.point) return null;
+  const dx = captured.point.x - step.point.x;
+  const dy = captured.point.y - step.point.y;
+  return dx === 0 && dy === 0 ? null : { dx, dy };
+}
+
+/** `annotation` moved by (`dx`, `dy`) screenshot pixels, whatever its shape. */
+export function moveAnnotation(annotation: Annotation, dx: number, dy: number): Annotation {
+  const point = <P extends { x: number; y: number }>(p: P): P => ({ ...p, x: p.x + dx, y: p.y + dy });
+  switch (annotation.type) {
+    case "arrow":
+      return { ...annotation, geometry: { from: point(annotation.geometry.from), to: point(annotation.geometry.to) } };
+    case "callout": {
+      const { anchor } = annotation.geometry;
+      return { ...annotation, geometry: { ...point(annotation.geometry), ...(anchor ? { anchor: point(anchor) } : {}) } };
+    }
+    case "hotspot":
+      return { ...annotation, geometry: point(annotation.geometry) };
+    default:
+      return { ...annotation, geometry: point(annotation.geometry) };
+  }
+}
+
+/** The step fields a re-capture replaces; the rest (text, provenance, annotations) are the user's. */
+const RECAPTURED = ["kind", "image", "point", "endPoint", "element", "keystrokes"] as const;
+
+/**
+ * Re-captures step `id` with `captured`, a step just recorded for it
+ * (`RecordingSaved.recorded`): its kind, screenshots (and close-up, after
+ * frame), click point, element and keystrokes replace the step's. The
+ * title, description, narration and AI provenance stay; so does the choice of
+ * close-up or full screenshot, while there is a close-up. Blur suggestions
+ * were for the old screenshot, so the new one's replace them.
+ *
+ * The annotations are kept as they are, moved by the click offset
+ * (`clickOffset`; kept where there is none) or cleared, as `annotations`
+ * says. Annotations the recording added (blurs of sensitive text found on
+ * the new screenshot) are added after them. One undo step.
+ */
+export function recaptureStep(
+  guide: Guide,
+  id: string,
+  captured: Omit<Step, "type">,
+  annotations: AnnotationChoice = "keep",
+): Command {
+  const step = findStep(guide, id);
+  const next: Partial<Step> = {};
+  for (const key of RECAPTURED) (next as Record<string, unknown>)[key] = captured[key] ?? undefined;
+  next.image = { ...captured.image, show: captured.image.crop ? step.image.show : "full" };
+  const offset = clickOffset(step, captured);
+  const kept =
+    annotations === "clear"
+      ? []
+      : annotations === "move" && offset
+        ? step.annotations.map((a) => moveAnnotation(a, offset.dx, offset.dy))
+        : step.annotations;
+  next.annotations = [...kept, ...captured.annotations];
+  const { redactionSuggestions: _old, scanned: _scanned, ...provenance } = step.aiState;
+  const { redactionSuggestions, scanned } = captured.aiState;
+  next.aiState = {
+    ...provenance,
+    ...(redactionSuggestions?.length ? { redactionSuggestions } : {}),
+    ...(scanned ? { scanned } : {}),
+  };
+  const forward: Patch[] = [];
+  const inverse: Patch[] = [];
+  for (const [key, value] of Object.entries(next)) {
+    const before = (step as unknown as Record<string, unknown>)[key];
+    if (JSON.stringify(value) === JSON.stringify(before)) continue;
+    forward.push({ op: "setItem", id, key, value });
+    inverse.unshift({ op: "setItem", id, key, value: before });
+  }
+  return { label: "Re-capture step", forward, inverse, select: { forward: id, inverse: id } };
 }

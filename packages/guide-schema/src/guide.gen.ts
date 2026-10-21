@@ -61,6 +61,23 @@ export type NoteKind = ("tip" | "warning" | "note")
  */
 export type GuideKind = ("walkthrough" | "annotated")
 /**
+ * The capture area of a recording ([`RecordingInfo::capture_area`]).
+ * Tagged by `kind`.
+ */
+export type RecordedArea = ({
+displayId?: (number | null)
+kind: "display"
+} | {
+app: string
+bundleId?: (string | null)
+kind: "window"
+title?: (string | null)
+} | {
+displayId?: (number | null)
+kind: "region"
+rect: Rect
+})
+/**
  * Where a guide stands in its review cycle.
  */
 export type GuideStatus = (("draft" | "inReview" | "published") | "needsUpdate")
@@ -360,6 +377,12 @@ appVersion: string
  * Applications seen during the recording.
  */
 apps: AppInfo[]
+/**
+ * What the recording captured, so a re-capture of a step (or steps
+ * recorded into the guide later) can capture the same. Absent in
+ * guides recorded before it was kept.
+ */
+captureArea?: (RecordedArea | null)
 displays: DisplayInfo[]
 osVersion?: (string | null)
 }
@@ -1169,6 +1192,86 @@ export const guideJsonSchema = {
         "y"
       ]
     },
+    "RecordedArea": {
+      "description": "The capture area of a recording ([`RecordingInfo::capture_area`]).\nTagged by `kind`.",
+      "oneOf": [
+        {
+          "description": "One display, or every display when `displayId` is absent.",
+          "type": "object",
+          "properties": {
+            "displayId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "display"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "One window. Window ids do not outlive the window, so it is found\nagain by its app and title.",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string"
+            },
+            "bundleId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "window"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "app"
+          ]
+        },
+        {
+          "description": "A region of a display, in global display points.",
+          "type": "object",
+          "properties": {
+            "displayId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "region"
+            },
+            "rect": {
+              "$ref": "#/$defs/Rect"
+            }
+          },
+          "required": [
+            "kind",
+            "rect"
+          ]
+        }
+      ]
+    },
     "RecordingInfo": {
       "description": "Environment the guide was recorded in.",
       "type": "object",
@@ -1184,6 +1287,17 @@ export const guideJsonSchema = {
           "items": {
             "$ref": "#/$defs/AppInfo"
           }
+        },
+        "captureArea": {
+          "description": "What the recording captured, so a re-capture of a step (or steps\nrecorded into the guide later) can capture the same. Absent in\nguides recorded before it was kept.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecordedArea"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "displays": {
           "type": "array",

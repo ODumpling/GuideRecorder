@@ -10,7 +10,7 @@
 
 use guiderecorder_capture::ocr;
 use guiderecorder_core::library::{GuideHandle, Library};
-use guiderecorder_core::model::Guide;
+use guiderecorder_core::model::{Guide, Item, Step};
 use guiderecorder_core::redact::{self, Detector, Recognizer, RedactionMode};
 use image::RgbaImage;
 
@@ -48,6 +48,61 @@ pub fn redact_recording(
             .map_err(|e| e.to_string())
     };
     redact_with(library, handle, guide, settings, &recognize)
+}
+
+/// [`redact_recording`] for steps recorded into an existing guide (see
+/// [`crate::recapture`]): what is found goes into `steps`, which the
+/// editor adds to the guide and saves, so nothing is written here.
+pub fn redact_steps(handle: &GuideHandle, steps: &mut Vec<Step>, settings: &Redaction) -> Redacted {
+    if settings.mode == RedactionMode::Off {
+        return Redacted::default();
+    }
+    if !ocr::is_supported() {
+        return Redacted {
+            unscanned: steps.len(),
+            ..Redacted::default()
+        };
+    }
+    let recognize = |image: &RgbaImage| {
+        ocr::recognize_text(image.as_raw(), image.width(), image.height())
+            .map_err(|e| e.to_string())
+    };
+    redact_steps_with(handle, steps, settings, &recognize)
+}
+
+/// [`redact_steps`] with `recognize` for the text recognition.
+fn redact_steps_with(
+    handle: &GuideHandle,
+    steps: &mut Vec<Step>,
+    settings: &Redaction,
+    recognize: &Recognizer<'_>,
+) -> Redacted {
+    // Core scans guides: a scratch one holding the steps.
+    let mut scanned = Guide::new("", "en");
+    scanned.items = steps.drain(..).map(Item::Step).collect();
+    let summary = redact::redact_guide(
+        handle,
+        &mut scanned,
+        &detector(settings),
+        settings.mode,
+        recognize,
+    );
+    for (step, error) in &summary.failures {
+        eprintln!("guiderecorder: redaction: step {step}: {error}");
+    }
+    steps.extend(scanned.items.into_iter().filter_map(|item| match item {
+        Item::Step(step) => Some(step),
+        _ => None,
+    }));
+    let (suggested, blurred) = match settings.mode {
+        RedactionMode::Apply => (0, summary.found),
+        _ => (summary.found, 0),
+    };
+    Redacted {
+        suggested,
+        blurred,
+        unscanned: summary.failures.len(),
+    }
 }
 
 /// [`redact_recording`] with `recognize` for the text recognition.
@@ -233,6 +288,32 @@ mod tests {
             }
         );
         assert_eq!(guide, before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recorded_steps_are_scanned_without_saving_the_guide() {
+        let (dir, library, handle, guide) = recorded("steps", &[false, true]);
+        let mut steps: Vec<Step> = guide.steps().cloned().collect();
+        let settings = Redaction {
+            mode: RedactionMode::Apply,
+            ..Redaction::default()
+        };
+        assert_eq!(
+            redact_steps_with(&handle, &mut steps, &settings, &email),
+            Redacted {
+                blurred: 1,
+                unscanned: 1,
+                ..Redacted::default()
+            }
+        );
+        // In order, the first blurred and scanned; the guide is as saved.
+        let ids: Vec<_> = steps.iter().map(|s| s.id).collect();
+        assert_eq!(ids, guide.steps().map(|s| s.id).collect::<Vec<_>>());
+        assert!(steps[0].ai_state.scanned);
+        assert_eq!(steps[0].annotations.len(), 1);
+        assert!(!steps[1].ai_state.scanned);
+        assert_eq!(library.read(&handle.path).unwrap().guide, guide);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

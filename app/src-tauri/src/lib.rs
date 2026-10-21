@@ -18,6 +18,7 @@ mod navigation;
 mod pdf;
 mod picker;
 mod points;
+mod recapture;
 mod recording;
 mod redaction;
 mod settings;

@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use guiderecorder_capture::backend::frames::{
     self, CaptureTarget, DisplayInfo, FrameError, WindowInfo,
 };
-use guiderecorder_core::model::{Point, Rect};
+use guiderecorder_core::model::{Point, RecordedArea, Rect};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -200,6 +200,39 @@ pub fn resolve_target(arg: CaptureTargetArg, excluded: &[String]) -> Result<Capt
         },
         |p| DisplayInfo::containing(p).map(|d| d.id),
     )
+}
+
+/// How a guide remembers `target` ([`RecordingInfo::capture_area`]), so a
+/// re-capture can capture the same: a window by its app and title from
+/// `windows` (window ids do not outlive the window), `None` for a window
+/// not listed there.
+///
+/// [`RecordingInfo::capture_area`]: guiderecorder_core::model::RecordingInfo::capture_area
+pub fn recorded_area(target: CaptureTarget, windows: &[WindowInfo]) -> Option<RecordedArea> {
+    match target {
+        CaptureTarget::Display { display_id } => Some(RecordedArea::Display { display_id }),
+        CaptureTarget::Window { window_id } => windows
+            .iter()
+            .find(|w| w.window_id == window_id)
+            .map(|w| RecordedArea::Window {
+                app: w.app_name.clone(),
+                bundle_id: w.bundle_id.clone(),
+                title: w.title.clone().filter(|t| !t.is_empty()),
+            }),
+        CaptureTarget::Region { display_id, rect } => {
+            Some(RecordedArea::Region { display_id, rect })
+        }
+    }
+}
+
+/// [`recorded_area`] against the system's windows (blocking); `None`
+/// when a window target cannot be listed.
+pub fn area_of(target: CaptureTarget) -> Option<RecordedArea> {
+    let windows = match target {
+        CaptureTarget::Window { .. } => frames::list_windows().unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    recorded_area(target, &windows)
 }
 
 /// The error for a failed window listing: missing Screen Recording
@@ -626,6 +659,53 @@ mod tests {
 
     fn arg(value: serde_json::Value) -> CaptureTargetArg {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_target_is_remembered_by_what_outlives_it() {
+        let safari = WindowInfo {
+            window_id: 7,
+            pid: 20,
+            app_name: "Safari".into(),
+            bundle_id: Some("com.apple.Safari".into()),
+            title: Some(String::new()),
+            frame: rect(0.0, 0.0, 800.0, 600.0),
+            layer: 0,
+            on_screen: true,
+        };
+        assert_eq!(
+            recorded_area(CaptureTarget::Display { display_id: None }, &[]),
+            Some(RecordedArea::Display { display_id: None })
+        );
+        assert_eq!(
+            recorded_area(
+                CaptureTarget::Region {
+                    display_id: Some(2),
+                    rect: rect(1.0, 2.0, 300.0, 200.0)
+                },
+                &[]
+            ),
+            Some(RecordedArea::Region {
+                display_id: Some(2),
+                rect: rect(1.0, 2.0, 300.0, 200.0)
+            })
+        );
+        // A window by its app and title (an empty title is none).
+        assert_eq!(
+            recorded_area(
+                CaptureTarget::Window { window_id: 7 },
+                std::slice::from_ref(&safari)
+            ),
+            Some(RecordedArea::Window {
+                app: "Safari".into(),
+                bundle_id: Some("com.apple.Safari".into()),
+                title: None,
+            })
+        );
+        assert_eq!(
+            recorded_area(CaptureTarget::Window { window_id: 8 }, &[safari]),
+            None
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -281,12 +281,14 @@ export const tauriSettingsApi: SettingsApi = {
 export interface RecordingApi {
   /**
    * Checks the permissions live, then starts. `title` null: named after the
-   * date. Without `target`, the capture area comes from the settings.
+   * date. Without `target`, the capture area comes from the settings. With
+   * `into`, the recording goes into that guide (open in the editor) instead
+   * of a new one.
    */
-  start(title: string | null, target?: CaptureTargetArg): Promise<StampedStatus>;
+  start(title: string | null, target?: CaptureTargetArg, into?: RecordInto): Promise<StampedStatus>;
   pause(): Promise<StampedStatus>;
   resume(): Promise<StampedStatus>;
-  /** Saves the recording as a new guide in the open library. */
+  /** Saves the recording as a new guide in the open library, or the steps into the guide it went into. */
   stop(): Promise<RecordingSaved>;
   /** Discards the recording. */
   cancel(): Promise<void>;
@@ -296,7 +298,8 @@ export interface RecordingApi {
 }
 
 export const tauriRecordingApi: RecordingApi = {
-  start: (title, target) => invoke("start_recording", target ? { title, target } : { title }),
+  start: (title, target, into) =>
+    invoke("start_recording", { title, ...(target ? { target } : {}), ...(into ? { into } : {}) }),
   pause: () => invoke("pause_recording"),
   resume: () => invoke("resume_recording"),
   stop: () => invoke("stop_recording"),
