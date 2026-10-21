@@ -57,7 +57,7 @@ function updateText(status: UpdateStatus): string | null {
     case "downloading":
       return `Downloading ${status.version}… ${progressText(status.downloaded, status.total)}`;
     case "ready":
-      return `Version ${status.version} is installed; restart to use it.`;
+      return `Version ${status.version} is ready; restart to use it.`;
     case "failed":
       return status.message;
     default:

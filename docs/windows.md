@@ -32,8 +32,12 @@ Anything not listed here works as the README describes.
 - The installer is a per-user NSIS installer (no administrator rights),
   into `%LOCALAPPDATA%\GuideRecorder`. It is **not code-signed yet**, so
   SmartScreen asks before the first run ("More info" → "Run anyway").
-- Updates are found and installed the same way as on macOS. **Check for
-  Updates…** is in the tray icon's menu, since Windows apps have no app menu.
+- Updates are found the same way as on macOS. **Check for Updates…** is in
+  the tray icon's menu, since Windows apps have no app menu. **Install
+  update** downloads the update; it is installed when the app closes, after
+  the guide is saved and a recording is stopped. **Restart now** closes it
+  and starts the new version; quitting instead installs it for next time
+  (the installer shows its progress for a moment).
 
 ## Where things are kept
 

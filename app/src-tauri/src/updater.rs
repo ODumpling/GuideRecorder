@@ -8,6 +8,12 @@
 //! installed when the user asks, and it takes effect after a restart that
 //! goes through the `QuitGate` (`QuitGate::restart`), so the editor saves
 //! first.
+//!
+//! On Windows the updater's `install` starts the installer and exits the
+//! process on the spot, past the `QuitGate`. So there an update is only
+//! downloaded when the user asks, and installed as the app exits
+//! ([`install_on_exit`]), once the editor has saved and a recording has
+//! been stopped.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,7 +60,8 @@ pub enum UpdateStatus {
         downloaded: u64,
         total: Option<u64>,
     },
-    /// Installed; restart to use it.
+    /// Installed (on Windows: downloaded, and installed as the app exits);
+    /// restart to use it.
     #[serde(rename_all = "camelCase")]
     Ready {
         version: String,
@@ -80,12 +87,17 @@ impl UpdateStatus {
 /// The updater's state (managed).
 pub struct Updates {
     state: Mutex<(UpdateStatus, Option<Update>)>,
+    /// A downloaded update, installed as the app exits.
+    #[cfg(windows)]
+    pending: Mutex<Option<(Update, Vec<u8>)>>,
 }
 
 impl Default for Updates {
     fn default() -> Self {
         Self {
             state: Mutex::new((UpdateStatus::Idle, None)),
+            #[cfg(windows)]
+            pending: Mutex::new(None),
         }
     }
 }
@@ -271,6 +283,13 @@ pub fn install_update<R: Runtime>(
             )
             .await;
         let installed = match downloaded {
+            #[cfg(windows)]
+            Ok(bytes) => {
+                // Installed as the app exits; see `install_on_exit`.
+                *updates.pending.lock().unwrap() = Some((update.clone(), bytes));
+                Ok(())
+            }
+            #[cfg(not(windows))]
             Ok(bytes) => {
                 let update = update.clone();
                 tauri::async_runtime::spawn_blocking(move || update.install(bytes))
@@ -313,6 +332,26 @@ pub fn restart_to_update<R: Runtime>(
     }
     app.state::<Arc<crate::commands::QuitGate>>().restart(&app);
     Ok(())
+}
+
+/// On Windows, starts the installer for a downloaded update as the app
+/// exits (`RunEvent::Exit`, so after the `QuitGate`). It replaces the app
+/// and, if `restart`, starts it again; this doesn't return once the
+/// installer has started. Elsewhere it does nothing: the update was
+/// installed when it was downloaded.
+pub fn install_on_exit<R: Runtime>(app: &AppHandle<R>, restart: bool) {
+    #[cfg(windows)]
+    {
+        let pending = app.state::<Arc<Updates>>().pending.lock().unwrap().take();
+        if let Some((update, bytes)) = pending {
+            // Verifies the signature, starts the installer and exits.
+            if let Err(e) = update.restart_after_install(restart).install(bytes) {
+                eprintln!("guiderecorder: cannot install the update: {e}");
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, restart);
 }
 
 #[cfg(test)]
