@@ -253,6 +253,12 @@ point?: (Point | null)
  * Markdown.
  */
 title: string
+/**
+ * Web address of the page the step was on, when it was recorded in a
+ * browser (see [`crate::web`]): an http or https URL. Absent for other
+ * apps, private windows and guides recorded before it was kept.
+ */
+url?: (string | null)
 }
 /**
  * Visual style; unset fields use the app's defaults.
@@ -1475,6 +1481,13 @@ export const guideJsonSchema = {
         "title": {
           "description": "Markdown.",
           "type": "string"
+        },
+        "url": {
+          "description": "Web address of the page the step was on, when it was recorded in a\nbrowser (see [`crate::web`]): an http or https URL. Absent for other\napps, private windows and guides recorded before it was kept.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

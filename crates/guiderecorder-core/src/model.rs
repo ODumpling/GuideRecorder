@@ -425,6 +425,11 @@ pub struct Step {
     /// Keystrokes with secure-field input already masked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keystrokes: Option<String>,
+    /// Web address of the page the step was on, when it was recorded in a
+    /// browser (see [`crate::web`]): an http or https URL. Absent for other
+    /// apps, private windows and guides recorded before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub image: StepImage,
     #[serde(default)]
     pub annotations: Vec<Annotation>,

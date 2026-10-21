@@ -400,6 +400,7 @@ mod tests {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: "steps/x.webp".into(),
                 crop: None,

@@ -168,6 +168,7 @@ mod tests {
             end_point: None,
             element,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: "steps/a.webp".into(),
                 crop: None,

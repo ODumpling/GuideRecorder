@@ -128,6 +128,7 @@ impl Bundle {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: self.write(id, StepImageVariant::Full, full),
                 crop: crop.map(|crop| self.write(id, StepImageVariant::Crop, crop)),

@@ -125,6 +125,11 @@ export function toArrayBuffer(response: ArrayBuffer | ArrayBufferView | number[]
   return view.slice().buffer;
 }
 
+/** Opens a step's web page (`Step.url`, http or https only) in the default browser. */
+export function openStepUrl(url: string): Promise<void> {
+  return invoke("open_step_url", { url });
+}
+
 /**
  * Stores a PNG as a new manual step's screenshot. The step is returned,
  * not inserted: the editor inserts it as an undoable command.

@@ -13,6 +13,7 @@ use crate::library::GuideHandle;
 use crate::model::{
     CoverOptions, Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo, Shape, Step,
 };
+use crate::web;
 
 /// A guide ready for export.
 #[derive(Debug, Clone)]
@@ -106,20 +107,48 @@ impl RenderStep {
     }
 }
 
+/// A paragraph linking to the web page a step is on, shown as
+/// [`web::display_url`] says it. Through the guide Markdown, so an address
+/// that is not http or https stays plain text.
+fn page_link(url: &str) -> Block {
+    let markdown = format!(
+        "[{}](<{}>)",
+        crate::steps::escape(&web::display_url(url)),
+        url.replace(['<', '>'], "")
+    );
+    parse_blocks(&markdown)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Block::Paragraph(Vec::new()))
+}
+
 impl RenderGuide {
     /// Resolves `guide`, whose images live in the bundle at `handle`.
+    ///
+    /// A step on a web page ([`Step::url`]) links to it at the end of its
+    /// description when the page differs from the previous step's and its
+    /// title does not link to it already (a "Go to" step).
     pub fn new(guide: &Guide, handle: &GuideHandle) -> Self {
         let mut number = 0;
+        let mut page: Option<&str> = None;
         let items = guide
             .items
             .iter()
             .map(|item| match item {
                 Item::Step(step) => {
                     number += 1;
+                    let mut description = parse_blocks(&step.description);
+                    let url = step.url.as_deref();
+                    if let Some(url) = url.filter(|url| page != Some(*url)) {
+                        if !step.title.contains(url) {
+                            description.push(page_link(url));
+                        }
+                    }
+                    page = url.or(page);
                     RenderItem::Step(RenderStep {
                         number,
                         title: parse_inlines(&step.title),
-                        description: parse_blocks(&step.description),
+                        description,
                         step: step.clone(),
                     })
                 }
@@ -184,6 +213,7 @@ mod tests {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: "steps/x.webp".into(),
                 crop: None,
@@ -242,5 +272,61 @@ mod tests {
         );
         assert_eq!(render.intro.len(), 1);
         assert!(render.prerequisites.is_empty());
+    }
+
+    #[test]
+    fn steps_link_to_their_web_page_when_it_changes() {
+        let on = |title: &str, url: Option<&str>| {
+            let mut item = step(title);
+            if let Item::Step(step) = &mut item {
+                step.url = url.map(Into::into);
+            }
+            item
+        };
+        let mut guide = Guide::new("T", "en");
+        guide.items = vec![
+            on("Click **Sign in**", Some("https://www.example.com/")),
+            on("Click **Settings**", Some("https://www.example.com/")),
+            on(
+                "Go to [example.com/keys](https://example.com/keys)",
+                Some("https://example.com/keys"),
+            ),
+            on("Click **Rotate**", Some("https://example.com/keys")),
+            on("Click **Save** in Finder", None),
+            on("Click **Done**", Some("https://example.com/keys?done=1")),
+            on("Click **Bad**", Some("javascript:alert(1)")),
+        ];
+        let handle = GuideHandle {
+            id: guide.id,
+            path: PathBuf::from("/nonexistent.guiderecorder"),
+        };
+        let render = RenderGuide::new(&guide, &handle);
+        let links: Vec<Option<Block>> = render
+            .steps()
+            .map(|s| s.description.get(1).cloned())
+            .collect();
+        let link = |text: &str, url: &str| {
+            Some(Block::Paragraph(vec![Inline::Link {
+                url: url.into(),
+                title: String::new(),
+                children: vec![Inline::Text(text.into())],
+            }]))
+        };
+        assert_eq!(
+            links,
+            [
+                link("example.com", "https://www.example.com/"),
+                // The same page; a "Go to" step links in its title.
+                None,
+                None,
+                None,
+                None,
+                link("example.com/keys?done=1", "https://example.com/keys?done=1"),
+                // Never a link to anything but http or https.
+                Some(Block::Paragraph(vec![Inline::Text(
+                    "javascript:alert(1)".into()
+                )])),
+            ]
+        );
     }
 }

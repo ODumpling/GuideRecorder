@@ -800,6 +800,7 @@ mod tests {
                 ..ElementInfo::default()
             }),
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: format!("steps/{id}.webp"),
                 crop: Some(format!("steps/{id}.crop.webp")),

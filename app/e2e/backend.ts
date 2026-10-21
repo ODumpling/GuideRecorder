@@ -110,6 +110,8 @@ export class Backend {
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
+  /** Web pages `open_step_url` was asked to open. */
+  readonly openedUrls: string[] = [];
   /** The web app: who's signed in, the stored sync state, what was pushed. */
   sync = {
     server: null as string | null,
@@ -991,6 +993,10 @@ export class Backend {
         return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       case "reveal_export":
         this.revealed.push(String(args.path));
+        return null;
+      case "open_step_url":
+        if (!/^https?:\/\//i.test(String(args.url))) fail("invalid", "not a web address");
+        this.openedUrls.push(String(args.url));
         return null;
       case "get_settings":
         return { settings: structuredClone(this.settings), readOnly: false, loadError: null };

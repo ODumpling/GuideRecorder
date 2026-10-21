@@ -21,29 +21,47 @@
 //! An element is secure when its `IsPassword` property is set, or when that
 //! property cannot be read. Keys are masked unless the focused-element
 //! lookup returned a definite non-secure element ([`must_mask_keys`]).
+//! [`field_value`] never reads a secure element's value.
+//!
+//! # Web addresses
+//!
+//! [`browser_page`] reads the foreground browser window's address bar: the
+//! first edit in Chrome's, Edge's, Brave's and Arc's window, Firefox's
+//! `urlbar-input`, through the value pattern. Chromium shows the address
+//! without `https://`, which [`guiderecorder_core::web::page_url`] adds
+//! back (an http page reads as https). A window is private by its title,
+//! or an "Incognito" or "InPrivate" button next to the address bar. The
+//! address bar is found again only when the window or its title changes
+//! ([`PageCache`]), and not read while it has the keyboard focus (being
+//! typed in).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 use guiderecorder_core::events::{AppRef, RawElement};
 use guiderecorder_core::model::{Point, Rect};
+use guiderecorder_core::web::{self, Browser};
 use windows::core::{Interface, BSTR};
-use windows::Win32::Foundation::{HWND, POINT, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{HWND, POINT, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Ole::{
     SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
 };
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationTreeWalker, TreeScope_Element, UIA_BoundingRectanglePropertyId,
-    UIA_ButtonControlTypeId, UIA_CalendarControlTypeId, UIA_CheckBoxControlTypeId,
-    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_CustomControlTypeId,
-    UIA_DataGridControlTypeId, UIA_DataItemControlTypeId, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HeaderControlTypeId,
-    UIA_HeaderItemControlTypeId, UIA_HelpTextPropertyId, UIA_HyperlinkControlTypeId,
-    UIA_ImageControlTypeId, UIA_IsPasswordPropertyId, UIA_LabeledByPropertyId,
+    IUIAutomationTreeWalker, IUIAutomationValuePattern, PropertyConditionFlags,
+    PropertyConditionFlags_IgnoreCase, PropertyConditionFlags_MatchSubstring,
+    TreeScope_Descendants, TreeScope_Element, UIA_AutomationIdPropertyId,
+    UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId, UIA_CalendarControlTypeId,
+    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+    UIA_CustomControlTypeId, UIA_DataGridControlTypeId, UIA_DataItemControlTypeId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_GroupControlTypeId,
+    UIA_HasKeyboardFocusPropertyId, UIA_HeaderControlTypeId, UIA_HeaderItemControlTypeId,
+    UIA_HelpTextPropertyId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+    UIA_IsPasswordPropertyId, UIA_IsScrollPatternAvailablePropertyId, UIA_LabeledByPropertyId,
     UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId,
     UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PaneControlTypeId,
     UIA_ProcessIdPropertyId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
@@ -51,11 +69,12 @@ use windows::Win32::UI::Accessibility::{
     UIA_SpinnerControlTypeId, UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId,
     UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId,
     UIA_ThumbControlTypeId, UIA_TitleBarControlTypeId, UIA_ToolBarControlTypeId,
-    UIA_ToolTipControlTypeId, UIA_TreeControlTypeId, UIA_TreeItemControlTypeId,
+    UIA_ToolTipControlTypeId, UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
     UIA_WindowControlTypeId, UIA_CONTROLTYPE_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetForegroundWindow, GetWindowTextW, WindowFromPoint, GA_ROOT,
+    GetAncestor, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    WindowFromPoint, GA_ROOT,
 };
 
 use crate::element::role_in;
@@ -97,6 +116,10 @@ struct Client {
     walker: IUIAutomationTreeWalker,
     /// Apps by pid, looked up once per thread.
     apps: HashMap<i32, AppRef>,
+    /// The last browser page read, by window and title.
+    pages: PageCache,
+    /// The address bar found in that window.
+    address_bar: Option<(isize, IUIAutomationElement)>,
 }
 
 thread_local! {
@@ -137,6 +160,8 @@ impl Client {
                 UIA_ProcessIdPropertyId,
                 UIA_HelpTextPropertyId,
                 UIA_LabeledByPropertyId,
+                UIA_IsScrollPatternAvailablePropertyId,
+                UIA_HasKeyboardFocusPropertyId,
             ] {
                 cache.AddProperty(property).map_err(unavailable)?;
             }
@@ -148,6 +173,8 @@ impl Client {
             cache,
             walker,
             apps: HashMap::new(),
+            pages: PageCache::default(),
+            address_bar: None,
         })
     }
 
@@ -295,6 +322,243 @@ pub fn focused_ref() -> Option<FocusRef> {
     .flatten()
 }
 
+/// The frame of the scrolled area under `point` (see
+/// [`guiderecorder_core::steps`], `# Scrolling`): the nearest element there,
+/// or around it, that scrolls (has the scroll pattern) or is a document (a
+/// web page), else the top-level window.
+pub fn scroll_region_at(point: Point) -> Result<Option<Rect>> {
+    let at = POINT {
+        x: point.x.round() as i32,
+        y: point.y.round() as i32,
+    };
+    with_client(|client| {
+        // SAFETY: a live client and cache request.
+        let hit = unsafe {
+            client
+                .automation
+                .ElementFromPointBuildCache(at, &client.cache)
+        };
+        let mut next = absent_or(hit, "ElementFromPoint")?;
+        for _ in 0..=MAX_SCROLL_DEPTH {
+            let Some(el) = next.take() else {
+                break;
+            };
+            // SAFETY: a live element with the property cached.
+            let scrolls = unsafe {
+                el.GetCachedPropertyValue(UIA_IsScrollPatternAvailablePropertyId)
+                    .ok()
+                    .and_then(|v| bool::try_from(&v).ok())
+                    .unwrap_or(false)
+            };
+            let role = role(&el);
+            if scrolls || role_in(role, SCROLLED_ROLES) {
+                if let Some(frame) = cached_rect(&el) {
+                    return Ok(Some(frame));
+                }
+            }
+            if role_in(role, WALK_STOP_ROLES) {
+                break;
+            }
+            // SAFETY: a live element, walker and cache request.
+            let parent = unsafe { client.walker.GetParentElementBuildCache(&el, &client.cache) };
+            next = absent_or(parent, "GetParentElement")?;
+        }
+        Ok(window_rect(root_window_at(at)))
+    })
+}
+
+/// The text of the focused element, when it is a text field that is not a
+/// password field ([`may_read_value`]) and holds at most `max_chars`
+/// characters; `None` otherwise.
+pub fn field_value(max_chars: usize) -> Result<Option<String>> {
+    with_client(|client| {
+        // SAFETY: a live client and cache request.
+        let focused = unsafe { client.automation.GetFocusedElementBuildCache(&client.cache) };
+        let Some(el) = absent_or(focused, "GetFocusedElement")? else {
+            return Ok(None);
+        };
+        // SAFETY: a live element with the property cached. Unreadable is
+        // secure (fail closed).
+        let is_secure = unsafe { el.CachedIsPassword() }.map_or(true, |b| b.as_bool());
+        if !may_read_value(role(&el), None, is_secure) {
+            return Ok(None);
+        }
+        Ok(value_of(&el).and_then(|value| field_text(&value, max_chars)))
+    })
+}
+
+/// The foreground window's page, if it belongs to a browser
+/// ([`web::browser`]); see `# Web addresses`.
+pub fn browser_page() -> Result<Option<BrowserPage>> {
+    // SAFETY: no arguments.
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_invalid() {
+        return Ok(None);
+    }
+    let mut pid = 0u32;
+    // SAFETY: a window handle and a valid out-pointer.
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    let pid = i32::try_from(pid).unwrap_or(0);
+    with_client(|client| {
+        let app = client.app(pid);
+        let Some(browser) = app.bundle_id.as_deref().and_then(web::browser) else {
+            return Ok(None);
+        };
+        let title = window_title(window);
+        if title.as_deref().is_some_and(web::is_private_window) {
+            return Ok(Some(BrowserPage::private(app)));
+        }
+        if let Some(page) = client.pages.get(pid, title.as_deref()) {
+            return Ok(Some(page));
+        }
+        let Some(bar) = address_bar(client, window, browser)? else {
+            let page = BrowserPage {
+                app,
+                ..BrowserPage::default()
+            };
+            client.pages.put(pid, title, page.clone());
+            return Ok(Some(page));
+        };
+        // SAFETY: a live element with the property cached.
+        let typing = unsafe {
+            bar.GetCachedPropertyValue(UIA_HasKeyboardFocusPropertyId)
+                .ok()
+                .and_then(|v| bool::try_from(&v).ok())
+                .unwrap_or(true)
+        };
+        if typing {
+            // Its text is what is being typed, not the address: read it
+            // again later.
+            return Ok(Some(BrowserPage::typing(app)));
+        }
+        let page = if private_toolbar(client, &bar)? {
+            BrowserPage::private(app)
+        } else {
+            BrowserPage {
+                app,
+                url: value_of(&bar).as_deref().and_then(web::page_url),
+                ..BrowserPage::default()
+            }
+        };
+        client.pages.put(pid, title, page.clone());
+        Ok(Some(page))
+    })
+}
+
+/// The address bar of `browser`'s `window`, found again only for another
+/// window.
+fn address_bar(
+    client: &mut Client,
+    window: HWND,
+    browser: Browser,
+) -> Result<Option<IUIAutomationElement>> {
+    let key = window.0 as isize;
+    if let Some((cached, bar)) = &client.address_bar {
+        if *cached == key {
+            // Fresh properties (the focus) for the same element.
+            // SAFETY: a live element and cache request.
+            let bar = unsafe { bar.BuildUpdatedCache(&client.cache) };
+            if let Some(bar) = absent_or(bar, "BuildUpdatedCache")? {
+                return Ok(Some(bar));
+            }
+        }
+    }
+    client.address_bar = None;
+    // SAFETY: a live client; the window handle may be stale, which UI
+    // Automation reports as an error.
+    let root = unsafe {
+        client
+            .automation
+            .ElementFromHandleBuildCache(window, &client.cache)
+    };
+    let Some(root) = absent_or(root, "ElementFromHandle")? else {
+        return Ok(None);
+    };
+    // Firefox names its address bar; in Chromium it is the first edit.
+    let (property, value) = match browser {
+        Browser::Firefox => (
+            UIA_AutomationIdPropertyId,
+            VARIANT::from(BSTR::from("urlbar-input")),
+        ),
+        _ => (
+            UIA_ControlTypePropertyId,
+            VARIANT::from(UIA_EditControlTypeId.0),
+        ),
+    };
+    // SAFETY: a live client, element and cache request.
+    let bar = unsafe {
+        let condition = client
+            .automation
+            .CreatePropertyCondition(property, &value)
+            .map_err(uia_error("CreatePropertyCondition"))?;
+        root.FindFirstBuildCache(TreeScope_Descendants, &condition, &client.cache)
+    };
+    let bar = absent_or(bar, "FindFirst")?;
+    if let Some(bar) = &bar {
+        client.address_bar = Some((key, bar.clone()));
+    }
+    Ok(bar)
+}
+
+/// Whether the toolbar around the address bar `bar` shows Chromium's
+/// "Incognito" or Edge's "InPrivate" button.
+fn private_toolbar(client: &Client, bar: &IUIAutomationElement) -> Result<bool> {
+    let mut toolbar = bar.clone();
+    for _ in 0..3 {
+        // SAFETY: a live element, walker and cache request.
+        let parent = unsafe {
+            client
+                .walker
+                .GetParentElementBuildCache(&toolbar, &client.cache)
+        };
+        let Some(parent) = absent_or(parent, "GetParentElement")? else {
+            break;
+        };
+        let found_toolbar = role(&parent) == Some("AXToolbar");
+        toolbar = parent;
+        if found_toolbar {
+            break;
+        }
+    }
+    let flags = PropertyConditionFlags(
+        PropertyConditionFlags_MatchSubstring.0 | PropertyConditionFlags_IgnoreCase.0,
+    );
+    // SAFETY: a live client and element.
+    let found = unsafe {
+        let incognito = client
+            .automation
+            .CreatePropertyConditionEx(
+                UIA_NamePropertyId,
+                &VARIANT::from(BSTR::from("Incognito")),
+                flags,
+            )
+            .map_err(uia_error("CreatePropertyCondition"))?;
+        let in_private = client
+            .automation
+            .CreatePropertyConditionEx(
+                UIA_NamePropertyId,
+                &VARIANT::from(BSTR::from("InPrivate")),
+                flags,
+            )
+            .map_err(uia_error("CreatePropertyCondition"))?;
+        let either = client
+            .automation
+            .CreateOrCondition(&incognito, &in_private)
+            .map_err(uia_error("CreateOrCondition"))?;
+        toolbar.FindFirst(TreeScope_Descendants, &either)
+    };
+    Ok(absent_or(found, "FindFirst")?.is_some())
+}
+
+/// The element's current value (the value pattern), if it has one.
+fn value_of(el: &IUIAutomationElement) -> Option<String> {
+    // SAFETY: a live element; the pattern is released on drop.
+    unsafe {
+        let pattern: IUIAutomationValuePattern = el.GetCurrentPatternAs(UIA_ValuePatternId).ok()?;
+        pattern.CurrentValue().ok().map(|value| value.to_string())
+    }
+}
+
 /// The `i32`s of a one-dimensional `SAFEARRAY` of `VT_I4`.
 ///
 /// # Safety
@@ -418,14 +682,7 @@ fn read_element(
     };
     // Unreadable is secure (fail closed).
     let is_secure = is_password.unwrap_or(true);
-    let frame = rect
-        .filter(|r| r.right > r.left && r.bottom > r.top)
-        .map(|r| Rect {
-            x: f64::from(r.left),
-            y: f64::from(r.top),
-            width: f64::from(r.right - r.left),
-            height: f64::from(r.bottom - r.top),
-        });
+    let frame = rect.and_then(to_rect);
     Ok(RawElement {
         role: role.map(str::to_owned),
         subrole: is_secure.then(|| SECURE_TEXT_FIELD.to_owned()),
@@ -437,6 +694,35 @@ fn read_element(
         frame,
         is_secure,
     })
+}
+
+/// A non-empty screen rectangle as a frame.
+fn to_rect(r: RECT) -> Option<Rect> {
+    (r.right > r.left && r.bottom > r.top).then(|| Rect {
+        x: f64::from(r.left),
+        y: f64::from(r.top),
+        width: f64::from(r.right - r.left),
+        height: f64::from(r.bottom - r.top),
+    })
+}
+
+/// The element's cached frame.
+fn cached_rect(el: &IUIAutomationElement) -> Option<Rect> {
+    // SAFETY: a live element with the property cached.
+    unsafe { el.CachedBoundingRectangle() }
+        .ok()
+        .and_then(to_rect)
+}
+
+/// A window's frame.
+fn window_rect(window: HWND) -> Option<Rect> {
+    if window.is_invalid() {
+        return None;
+    }
+    let mut r = RECT::default();
+    // SAFETY: a window handle and a valid out-pointer.
+    unsafe { GetWindowRect(window, &mut r) }.ok()?;
+    to_rect(r)
 }
 
 /// The top-level window under `p`.
@@ -497,5 +783,8 @@ mod tests {
         element_at(Point { x: 1.0, y: 1.0 }).expect("element_at");
         focused_element().expect("focused_element");
         let _ = focused_ref();
+        scroll_region_at(Point { x: 1.0, y: 1.0 }).expect("scroll_region_at");
+        field_value(100).expect("field_value");
+        browser_page().expect("browser_page");
     }
 }

@@ -23,7 +23,13 @@ LM Studio, in which case nothing leaves your Mac.
 
 1. **Record.** Press Record (or the record shortcut, ⌃⌥R by default) and do the task as you normally would.
    GuideRecorder notes each click, typed text and shortcut, and takes a
-   screenshot of each one. A small floating toolbar shows the elapsed time and
+   screenshot of each one. Typed text is read from the field when it can be,
+   so text from an input method (Japanese, Chinese, Korean) or with accents
+   comes out as you see it. Scrolling to something before clicking it
+   becomes a "Scroll to …" step. In Safari, Chrome, Edge, Firefox, Arc and
+   Brave, each step keeps the web address it was on (shown as a link in the
+   editor and exports), and going to an address becomes a "Go to …" step.
+   A small floating toolbar shows the elapsed time and
    the number of screenshots, with Pause, Stop and a button to add a manual
    step. You can record your whole screen, a single window or a region you
    draw.
@@ -150,7 +156,10 @@ GuideRecorder is built to be safe to leave running:
   so they work with any backup or sync tool. Nothing is uploaded unless you
   sign in to sync (below), and then only the guides you choose.
 - **Password fields are never recorded.** Keystrokes in secure fields are
-  masked before they are stored.
+  masked before they are stored, and their text is never read.
+- **No web addresses from private windows.** Incognito and private browser
+  windows, and excluded apps, record no address. Addresses keep their query
+  (e.g. `?q=…`) but never a user name or password.
 - **Excluded apps.** While an app on your exclusion list is in front, nothing
   from it is captured: no screenshots, keys or clicks. Its windows are also
   kept out of every screenshot, even behind other apps. By default this covers
