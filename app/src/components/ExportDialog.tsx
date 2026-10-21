@@ -581,7 +581,7 @@ export function ExportDialog({
                     <span>
                       Include a replay script
                       <span className="block text-xs text-muted-foreground">
-                        replay.js repeats the steps on a Mac through the accessibility API. Run it with --dry-run first.
+                        It repeats the steps through the accessibility API: replay.js on a Mac (run it with --dry-run first), or replay.ps1 in PowerShell for a guide recorded on Windows (-DryRun first).
                       </span>
                     </span>
                   </label>

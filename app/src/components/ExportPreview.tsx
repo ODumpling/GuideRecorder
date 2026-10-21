@@ -335,7 +335,7 @@ export function ExportPreview({
   accent: string;
   reviewDetails: boolean;
   motion: MotionOptions;
-  /** The agent skill options; the replay script adds a line to SKILL.md. */
+  /** The agent skill options; the replay script (replay.js, or replay.ps1 for a Windows guide) adds a line to SKILL.md. */
   skill?: SkillOptions;
   /** The SCORM options; the page shows the quiz. */
   scorm?: ScormOptions;

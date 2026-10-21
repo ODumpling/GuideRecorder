@@ -156,7 +156,7 @@ export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setIt
   }
 }
 
-/** Whether the Export dialog last added the replay script to a skill (on this Mac). */
+/** Whether the Export dialog last added the replay script to a skill (on this computer). */
 const REPLAY_KEY = "guiderecorder.exportReplay";
 
 export const DEFAULT_SKILL: SkillOptions = { replay: false };

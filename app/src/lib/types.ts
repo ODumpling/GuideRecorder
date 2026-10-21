@@ -94,7 +94,7 @@ export interface ScormOptions {
 
 /** Agent skill options (core `export::skill::SkillOptions`). */
 export interface SkillOptions {
-  /** Also write `replay.js`, a macOS script that repeats the steps. */
+  /** Also write the replay script: `replay.js` for macOS, or `replay.ps1` (PowerShell) for a guide recorded on Windows. */
   replay: boolean;
 }
 
