@@ -192,6 +192,7 @@ mod tests {
                 show: ImageShow::Full,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: Default::default(),
         })
     }

@@ -1410,6 +1410,9 @@ pub struct SavedGuide {
     pub guide: Guide,
     /// Draft steps left out because no snapshot was close enough.
     pub skipped: usize,
+    /// Each saved step's id and the time of its action, in order: where
+    /// narration is split (`guiderecorder_core::narration`).
+    pub step_times: Vec<(Ulid, Timestamp)>,
 }
 
 impl Recording {
@@ -1428,15 +1431,19 @@ impl Recording {
         let mut guide = Guide::new(title, "en");
         guide.recording = Some(self.recording_info());
         let handle = library.create(&guide)?;
-        let filled = self.fill_steps(&handle, &mut guide).and_then(|skipped| {
-            library.save_to(&handle, &guide)?;
-            Ok(skipped)
-        });
+        let mut step_times = Vec::new();
+        let filled = self
+            .fill_steps(&handle, &mut guide, &mut step_times)
+            .and_then(|skipped| {
+                library.save_to(&handle, &guide)?;
+                Ok(skipped)
+            });
         match filled {
             Ok(skipped) => Ok(SavedGuide {
                 handle,
                 guide,
                 skipped,
+                step_times,
             }),
             Err(e) => {
                 let _ = library.delete(&handle);
@@ -1445,7 +1452,12 @@ impl Recording {
         }
     }
 
-    fn fill_steps(&self, handle: &GuideHandle, guide: &mut Guide) -> Result<usize, SessionError> {
+    fn fill_steps(
+        &self,
+        handle: &GuideHandle,
+        guide: &mut Guide,
+        step_times: &mut Vec<(Ulid, Timestamp)>,
+    ) -> Result<usize, SessionError> {
         let max_gap_ns = self.fallback_ms.saturating_mul(1_000_000);
         let mut skipped = 0;
         // The last decoded frame (RGBA), for crops.
@@ -1520,6 +1532,7 @@ impl Recording {
             if let Some(title) = title {
                 step.title = title;
             }
+            step_times.push((id, draft.at));
             guide.items.push(Item::Step(step));
         }
         Ok(skipped)

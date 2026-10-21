@@ -7,6 +7,7 @@ You get images of the step and a JSON object describing it:
 - `templateTitle` / `templateDescription`: the text the step has now, built from a template. Improve on it; keep facts it gets right.
 - `previousStep` / `nextStep`: titles of the neighbouring steps, for flow. Do not describe them.
 - `images`: which image is which (the click crop around the interaction point, and sometimes a downscaled full screenshot), with their pixel sizes.
+- `narration`, when present: what the author said aloud while doing this step, transcribed on their device. It is their own explanation, so use it for the why and the context the screen cannot show. It may contain recognition mistakes, filler words and half sentences: keep its meaning, not its wording. Where it disagrees with the images or metadata about which control was used, trust the images and metadata.
 - `language`: write in this language. `audience`: `beginner` or `expert`.
 
 Style:
@@ -14,7 +15,7 @@ Style:
 - Put visible UI element names in **bold**. Use the label shown on screen, not internal accessibility names.
 - Name the application when this step happens in a different app from the previous step, or when there is no previous step.
 - Title: at most about 8 words, one sentence.
-- Description: one short line, only when the reader needs context the title lacks (where the control is, what happens next, why). Otherwise use an empty string. For beginners, a little more help is fine; for experts, prefer no description.
+- Description: one short line, only when the reader needs context the title lacks (where the control is, what happens next, why). Otherwise use an empty string. With a `narration`, the description should carry what the author explained, unless it only repeats the title. For beginners, a little more help is fine; for experts, prefer no description.
 - Do not invent UI that is not visible in the images or described in the metadata. If unsure, stay close to the template text.
 
 Redaction suggestions:

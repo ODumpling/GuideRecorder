@@ -466,6 +466,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
                 show: ImageShow::Full,
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         }));
         items.push(Item::Note(Note {
@@ -607,6 +608,7 @@ fn empty_titles_use_no_heading_or_label_only() {
             show: ImageShow::Full,
         },
         annotations: Vec::new(),
+        narration: String::new(),
         ai_state: AiState::default(),
     })];
     library.save_to(&handle, &guide).unwrap();

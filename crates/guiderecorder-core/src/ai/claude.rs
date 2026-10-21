@@ -440,7 +440,7 @@ pub(crate) fn step_context(input: &StepInput) -> Value {
             })
         })
         .collect();
-    json!({
+    let mut context = json!({
         "kind": to_json(&input.kind),
         "templateTitle": input.template_title,
         "templateDescription": input.template_description,
@@ -452,7 +452,17 @@ pub(crate) fn step_context(input: &StepInput) -> Value {
         "images": image_info,
         "language": input.language,
         "audience": to_json(&input.audience),
-    })
+    });
+    with_narration(&mut context, input.narration.as_deref());
+    context
+}
+
+/// Adds `narration` to a context object when the author said something;
+/// left out otherwise, so steps recorded without narration read as before.
+fn with_narration(context: &mut Value, narration: Option<&str>) {
+    if let Some(text) = narration {
+        context["narration"] = json!(text);
+    }
 }
 
 pub fn step_request(config: &ClaudeConfig, input: &StepInput) -> Value {
@@ -472,14 +482,16 @@ pub(crate) fn guide_context(input: &GuideInput) -> Value {
         .iter()
         .enumerate()
         .map(|(i, step)| {
-            json!({
+            let mut context = json!({
                 "n": i + 1,
                 "kind": to_json(&step.kind),
                 "title": step.title,
                 "description": step.description,
                 "app": step.app,
                 "editable": step.editable,
-            })
+            });
+            with_narration(&mut context, step.narration.as_deref());
+            context
         })
         .collect();
     json!({
@@ -797,6 +809,7 @@ mod tests {
             previous_title: Some("Open **TextEdit**".into()),
             next_title: None,
             guide_title: None,
+            narration: None,
             language: "en".into(),
             audience: Audience::Beginner,
         }
@@ -920,6 +933,23 @@ mod tests {
     }
 
     #[test]
+    fn narration_is_context_only_when_spoken() {
+        let mut input = step_input();
+        assert!(step_context(&input).get("narration").is_none());
+        input.narration = Some("this saves the draft".into());
+        assert_eq!(step_context(&input)["narration"], "this saves the draft");
+
+        let mut guide = guide_input();
+        guide.steps[1].narration = Some("then save it".into());
+        let context = guide_context(&guide);
+        assert!(context["steps"][0].get("narration").is_none());
+        assert_eq!(context["steps"][1]["narration"], "then save it");
+        // The prompts say what it is.
+        assert!(prompts::STEP.text.contains("`narration`"));
+        assert!(prompts::GUIDE.text.contains("`narration`"));
+    }
+
+    #[test]
     fn step_request_without_images_or_effort() {
         let mut config = ClaudeConfig::default();
         config.step.effort = None;
@@ -944,6 +974,7 @@ mod tests {
                     title: "Click **File**".into(),
                     description: String::new(),
                     app: Some("TextEdit".into()),
+                    narration: None,
                     editable: true,
                 },
                 GuideStepText {
@@ -952,6 +983,7 @@ mod tests {
                     title: "Press **⌘S**".into(),
                     description: "Saves the file.".into(),
                     app: None,
+                    narration: None,
                     editable: false,
                 },
             ],
@@ -1081,7 +1113,7 @@ mod tests {
         let out = parse_step_output(&step_input(), parsed).unwrap();
         assert_eq!(out.title, "Click **Save** in the toolbar.");
         assert_eq!(out.description, None);
-        assert_eq!(out.meta.prompt_version, "step.v1");
+        assert_eq!(out.meta.prompt_version, "step.v2");
         assert_eq!(
             out.redaction_suggestions,
             [
@@ -1243,7 +1275,7 @@ mod tests {
                 description: None,
             }]
         );
-        assert_eq!(out.meta.prompt_version, "guide.v1");
+        assert_eq!(out.meta.prompt_version, "guide.v2");
     }
 
     #[test]

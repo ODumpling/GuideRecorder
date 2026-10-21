@@ -16,7 +16,7 @@ export function savedNotice({
   suggestedBlurs,
   appliedBlurs,
   unscannedSteps,
-}: Omit<RecordingSaved, "guideId" | "steps">): string | null {
+}: Omit<RecordingSaved, "guideId" | "steps" | "narratedSteps">): string | null {
   const parts: string[] = [];
   if (skipped) {
     parts.push(`${plural(skipped, "step", "steps")} had no screenshot and ${skipped === 1 ? "was" : "were"} left out.`);

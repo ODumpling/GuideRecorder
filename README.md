@@ -27,6 +27,13 @@ LM Studio, in which case nothing leaves your Mac.
    the number of screenshots, with Pause, Stop and a button to add a manual
    step. You can record your whole screen, a single window or a region you
    draw.
+
+   On a Mac you can also **narrate**: turn on the toolbar's microphone and
+   say what you're doing and why. Your speech is transcribed on the Mac and
+   split across the steps by when you said it (speech just before a click
+   goes with that click), so each step's description starts as your own
+   words. With AI on, the narration is extra context for the step and guide
+   text. Settings → Recording can also keep the audio in the guide's folder.
 2. **Edit.** When you stop, the guide opens in the editor. Each step has a
    title and description (written for you from what you clicked, e.g. "Click
    **Save**"), and you can:
@@ -120,6 +127,14 @@ GuideRecorder is built to be safe to leave running:
   finding to blur or keep, and which steps were scanned. Export asks you to
   review suggestions left; the MCP server and the command line, which ask no
   one, blur them.
+- **Narration is heard and transcribed on your Mac.** The microphone is off unless you turn it
+  on in the toolbar, and only heard while a recording runs (not while
+  paused). Speech is recognised on the device (Apple's Speech framework,
+  on-device only): if your language can't be recognised offline, narration
+  says so rather than use Apple's servers. The audio is kept only if you ask
+  (`narration.m4a` in the guide's folder), and sync never uploads it. The
+  transcript is kept with each step, like its text (so it syncs with the
+  guide), and with AI on it is sent with that step.
 - **AI only when you say so.** Nothing is sent anywhere unless AI is turned
   on and you have added your own key, which is kept in the macOS Keychain.
   Screenshots are sent with their blurs, and the sensitive text found on your
@@ -132,6 +147,8 @@ GuideRecorder is built to be safe to leave running:
 - Permissions, granted on first launch: **Screen Recording** (screenshots),
   **Accessibility** (which button you clicked) and **Input Monitoring**
   (clicks and keys).
+- Optional, to narrate: **Microphone** and **Speech Recognition**, with your
+  language's dictation available on the device.
 - Optional, for AI writing: an [Anthropic API key](https://console.anthropic.com/),
   an OpenAI-compatible API, or [Ollama](https://ollama.com/) or
   [LM Studio](https://lmstudio.ai/) with a model that supports tool calls.

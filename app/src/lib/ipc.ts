@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RegionPick, RewriteStyleArg, HotkeyErrors, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -244,6 +244,8 @@ export interface SettingsApi {
   setApiKey(key: string, provider?: AiProviderKind): Promise<void>;
   deleteApiKey(provider?: AiProviderKind): Promise<void>;
   permissions(): Promise<PermissionRow[]>;
+  /** Microphone and Speech Recognition, for narration; none where narration is not supported. */
+  narrationPermissions(): Promise<PermissionRow[]>;
   openPermissionSettings(permission: Permission): Promise<void>;
   /** Asks macOS for the permission (may prompt); only from a click. */
   requestPermission(permission: Permission): Promise<PermissionStatus>;
@@ -267,6 +269,7 @@ export const tauriSettingsApi: SettingsApi = {
   setApiKey: (key, provider) => invoke("set_api_key", { key, provider }),
   deleteApiKey: (provider) => invoke("delete_api_key", { provider }),
   permissions: () => invoke("permission_status"),
+  narrationPermissions: () => invoke("narration_permissions"),
   openPermissionSettings: (permission) => invoke("open_permission_settings", { permission }),
   requestPermission: (permission) => invoke("request_permission", { permission }),
   recordingReadiness: () => invoke("recording_readiness"),
@@ -380,6 +383,21 @@ export const RECORDING_PICK_AREA_EVENT = "recording://pick-area";
 export function addManualStep(): Promise<void> {
   return invoke("add_manual_step");
 }
+
+/** The toolbar's microphone (see app/src-tauri/src/narration.rs). */
+export interface NarrationApi {
+  state(): Promise<NarrationState>;
+  /** Turns it on or off, for this recording and the next; never prompts for a permission. */
+  set(enabled: boolean): Promise<NarrationState>;
+}
+
+export const tauriNarrationApi: NarrationApi = {
+  state: () => invoke("narration_state"),
+  set: (enabled) => invoke("set_narration", { enabled }),
+};
+
+/** Emitted with a {@link NarrationState} whenever the microphone changes. */
+export const NARRATION_EVENT = "recording://narration";
 
 /** The floating recording toolbar's window (app/toolbar.html), made by the Rust side while recording. */
 export const TOOLBAR_WINDOW_LABEL = "toolbar";

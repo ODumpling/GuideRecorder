@@ -46,8 +46,10 @@ pub mod session {
     use std::convert::Infallible;
     use std::path::Path;
 
+    use guiderecorder_core::events::Timestamp;
     use guiderecorder_core::library::{GuideHandle, Library, LibraryError};
     use guiderecorder_core::model::Guide;
+    use guiderecorder_core::Ulid;
 
     pub use crate::session::*;
 
@@ -145,6 +147,9 @@ pub mod session {
         pub guide: Guide,
         /// Draft steps left out because no snapshot was close enough.
         pub skipped: usize,
+        /// Each saved step's id and the time of its action, in order: where
+        /// narration is split (`guiderecorder_core::narration`).
+        pub step_times: Vec<(Ulid, Timestamp)>,
     }
 
     impl Recording {

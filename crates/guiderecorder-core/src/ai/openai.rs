@@ -400,6 +400,7 @@ mod tests {
             previous_title: None,
             next_title: None,
             guide_title: None,
+            narration: None,
             language: "en".into(),
             audience: Audience::Beginner,
         }
@@ -425,6 +426,7 @@ mod tests {
                 title: "Click **File**".into(),
                 description: String::new(),
                 app: Some("TextEdit".into()),
+                narration: None,
                 editable: true,
             }],
             apps: vec!["TextEdit".into()],
@@ -626,7 +628,7 @@ mod tests {
         );
         let out = parse_step_output(&step_input(), parsed).unwrap();
         assert_eq!(out.title, "Click **Save**");
-        assert_eq!(out.meta.prompt_version, "step.v1");
+        assert_eq!(out.meta.prompt_version, "step.v2");
         assert_eq!(
             out.redaction_suggestions,
             [RedactionSuggestion {
@@ -856,7 +858,7 @@ mod tests {
         assert_eq!(out.title, "Save a document");
         assert_eq!(out.tags, ["textedit"]);
         assert_eq!(out.meta.model, "big");
-        assert_eq!(out.meta.prompt_version, "guide.v1");
+        assert_eq!(out.meta.prompt_version, "guide.v2");
 
         let received = received.lock().unwrap();
         assert_eq!(received.len(), 2);

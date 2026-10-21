@@ -140,6 +140,7 @@ impl Bundle {
                 },
             },
             annotations,
+            narration: String::new(),
             ai_state: AiState::default(),
         }
     }

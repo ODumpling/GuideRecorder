@@ -895,6 +895,7 @@ mod tests {
                 show: Default::default(),
             },
             annotations: Vec::new(),
+            narration: String::new(),
             ai_state: AiState::default(),
         }
     }
@@ -1027,7 +1028,7 @@ mod tests {
                     "aiState": {
                         "status": "ai",
                         "model": "mock",
-                        "promptVersion": "step.v1",
+                        "promptVersion": "step.v2",
                         "redactionSuggestions": [{
                             "rect": { "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0 },
                             "reason": "email address",
@@ -1054,7 +1055,7 @@ mod tests {
                     "tags": [],
                 },
                 "written": ["title", "intro", "prerequisites", "summary", "tags"],
-                "aiState": { "status": "ai", "model": "mock", "promptVersion": "guide.v1" },
+                "aiState": { "status": "ai", "model": "mock", "promptVersion": "guide.v2" },
                 "error": null,
             })
         );

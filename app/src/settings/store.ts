@@ -19,6 +19,11 @@ export interface SettingsState {
   change(update: (settings: Settings) => Settings): Promise<boolean>;
   /** Takes settings the Rust side changed itself (library switch, login item). */
   replace(settings: Settings): void;
+  /**
+   * Takes `recording.narration.enabled` as the toolbar's microphone stored it
+   * (`recording://narration`), keeping any change still being saved.
+   */
+  narrationChanged(enabled: boolean): void;
   clearError(): void;
 }
 
@@ -73,6 +78,16 @@ export function createSettingsStore(api: SettingsApi): SettingsStore {
     replace(settings) {
       stored = settings;
       set({ settings });
+    },
+
+    narrationChanged(enabled) {
+      const patch = (s: Settings | null): Settings | null =>
+        s && s.recording.narration.enabled !== enabled
+          ? { ...s, recording: { ...s.recording, narration: { ...s.recording.narration, enabled } } }
+          : s;
+      stored = patch(stored);
+      const settings = patch(get().settings);
+      if (settings !== get().settings) set({ settings });
     },
 
     clearError() {

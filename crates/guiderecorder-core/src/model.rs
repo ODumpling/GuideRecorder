@@ -393,6 +393,12 @@ pub struct Step {
     pub image: StepImage,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
+    /// What the author said during the step while narrating a recording,
+    /// transcribed on the device (see [`crate::narration`]). Plain text,
+    /// kept as spoken: it fills an empty description and is context for
+    /// the AI step and guide passes. Left out while empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub narration: String,
     #[serde(default)]
     pub ai_state: AiState,
 }
@@ -942,6 +948,33 @@ mod tests {
         let partial: Guide = serde_json::from_value(json).unwrap();
         assert_eq!(partial.cover_options.image, ImageShow::Full);
         assert!(partial.cover_options.annotations);
+    }
+
+    #[test]
+    fn narration_round_trips_and_is_left_out_while_empty() {
+        let old: Guide = serde_json::from_value(sample()).unwrap();
+        assert!(old.steps().all(|s| s.narration.is_empty()));
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("narration").is_none()));
+
+        let mut guide = old;
+        if let Some(Item::Step(step)) = guide.items.iter_mut().find(|i| matches!(i, Item::Step(_)))
+        {
+            step.narration = "now save it".into();
+        }
+        let json = serde_json::to_value(&guide).unwrap();
+        let narrated: Vec<&Value> = json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.get("narration"))
+            .collect();
+        assert_eq!(narrated, [&json!("now save it")]);
+        assert_eq!(serde_json::from_value::<Guide>(json).unwrap(), guide);
     }
 
     #[test]

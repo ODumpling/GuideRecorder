@@ -11,14 +11,14 @@ pub struct Prompt {
 
 /// Per-step pass.
 pub const STEP: Prompt = Prompt {
-    version: "step.v1",
-    text: include_str!("prompts/step.v1.md"),
+    version: "step.v2",
+    text: include_str!("prompts/step.v2.md"),
 };
 
 /// Guide-level pass.
 pub const GUIDE: Prompt = Prompt {
-    version: "guide.v1",
-    text: include_str!("prompts/guide.v1.md"),
+    version: "guide.v2",
+    text: include_str!("prompts/guide.v2.md"),
 };
 
 /// Step rewrite.

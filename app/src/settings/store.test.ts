@@ -14,6 +14,7 @@ const DEFAULTS: Settings = {
     excludedApps: [],
     typingIdleMs: 1500,
     clickRing: false,
+    narration: { enabled: false, keepAudio: false },
   },
   ai: {
     enabled: true,
@@ -48,6 +49,7 @@ function api(overrides: Partial<SettingsApi> = {}): SettingsApi {
     setApiKey: fail,
     deleteApiKey: fail,
     permissions: fail,
+    narrationPermissions: fail,
     openPermissionSettings: fail,
     requestPermission: fail,
     recordingReadiness: fail,
@@ -107,5 +109,24 @@ describe("settings store", () => {
     expect(store.getState().settings).toBeNull();
     expect(store.getState().loadError).toBe("no settings");
     expect(await store.getState().change((s) => s)).toBe(false);
+  });
+
+  it("takes the toolbar's microphone and keeps it through later changes", async () => {
+    const update = vi.fn(async (s: Settings) => structuredClone(s));
+    const store = createSettingsStore(api({ update }));
+    await store.getState().load();
+    const before = store.getState().settings;
+    store.getState().narrationChanged(false);
+    // Unchanged: the same settings.
+    expect(store.getState().settings).toBe(before);
+    store.getState().narrationChanged(true);
+    expect(store.getState().settings?.recording.narration).toEqual({ enabled: true, keepAudio: false });
+    // A later change from Settings does not turn it back off.
+    await store.getState().change((s) => ({ ...s, recording: { ...s.recording, clickRing: true } }));
+    expect(update.mock.calls[0][0].recording.narration.enabled).toBe(true);
+    // And a refused change goes back to it.
+    update.mockRejectedValueOnce({ kind: "invalid", message: "no" });
+    await store.getState().change((s) => ({ ...s, recording: { ...s.recording, typingIdleMs: 5 } }));
+    expect(store.getState().settings?.recording.narration.enabled).toBe(true);
   });
 });

@@ -66,6 +66,9 @@
 //! While saving, the screenshots are scanned on the device for sensitive
 //! text (`redaction`, see [`crate::redaction`]); what was found is counted
 //! in [`RecordingSaved`].
+//!
+//! With the toolbar's microphone on, what the author says is transcribed on
+//! the device and split across the steps at stop (see [`crate::narration`]).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -193,6 +196,8 @@ pub struct RecordingSaved {
     /// Steps that could not be scanned for sensitive text (0 when the
     /// settings turn scanning off).
     pub unscanned_steps: usize,
+    /// Steps that got some narration (see [`crate::narration`]).
+    pub narrated_steps: usize,
 }
 
 /// A screenshot the running session took (sent as [`SNAPSHOT_EVENT`]).
@@ -235,6 +240,8 @@ pub struct Recorder {
     status: Mutex<StampedStatus>,
     /// The running recording's captures and their edits.
     pub feed: crate::feed::LiveFeed,
+    /// The running recording's narrator, and the toolbar's microphone.
+    pub narration: crate::narration::NarrationSlot,
     /// A [`control`] is running; another one meanwhile is ignored (a
     /// double press must not start a second recording or show an error).
     controlling: AtomicBool,
@@ -274,6 +281,12 @@ impl Recorder {
         lock(&self.session)
     }
 
+    /// Runs `f` with the running session, if any, holding the slot (so it
+    /// waits for a start, pause, resume or stop in progress).
+    pub fn with_session<T>(&self, f: impl FnOnce(Option<&RecordingSession>) -> T) -> T {
+        f(self.slot().as_ref())
+    }
+
     /// Drops the session, if any, as `cancel_recording` does (the session
     /// folder is removed) and sets the status to idle without an event.
     /// Never waits: if a start, pause, resume, stop or cancel holds the
@@ -296,6 +309,7 @@ impl Recorder {
         };
         // Dropping the session stops everything and removes its folder.
         drop(session);
+        self.narration.discard();
         self.set_status(RecordingStatus::Idle);
         true
     }
@@ -642,6 +656,7 @@ fn start<R: Runtime>(
     // the session's state now, inside the status lock, so a change the
     // sink reports meanwhile is never overwritten by an older one.
     let status = sync_session(app, recorder, &session).unwrap_or(status);
+    crate::narration::on_start(app, recorder, store, session.session_dir());
     *slot = Some(session);
     Ok(status)
 }
@@ -819,6 +834,7 @@ fn set_paused<R: Runtime>(
         session.resume()
     };
     let now_paused = session.is_paused();
+    recorder.narration.set_paused(now_paused);
     // The session's state is read inside the status lock, as in
     // `sync_session`.
     let (status, changed) =
@@ -888,8 +904,10 @@ fn stop<R: Runtime>(
         .unwrap_or_default();
     let edits = recorder.feed.edits();
     recorder.feed.reset();
+    let heard = recorder.narration.take();
     let saved = save(
         session,
+        heard,
         cell,
         title.unwrap_or_else(default_title),
         &redaction,
@@ -903,10 +921,21 @@ fn stop<R: Runtime>(
     Ok(saved)
 }
 
-/// Stops `session`, writes its guide into the library, scans its
-/// screenshots for sensitive text as `redaction` says and indexes it.
+/// What a narrator heard, still being recognised (see
+/// [`crate::narration::NarrationSlot::take`]).
+type Heard = std::thread::JoinHandle<
+    std::result::Result<
+        guiderecorder_capture::narration::Narration,
+        guiderecorder_capture::narration::NarrationError,
+    >,
+>;
+
+/// Stops `session`, writes its guide into the library, adds what `heard`
+/// heard to its steps, scans its screenshots for sensitive text as
+/// `redaction` says and indexes it.
 fn save(
     session: RecordingSession,
+    heard: Option<Heard>,
     cell: Arc<SessionCell>,
     title: String,
     redaction: &Redaction,
@@ -919,6 +948,15 @@ fn save(
     let mut saved = recording
         .save_guide(library.library(), &title)
         .map_err(session_error)?;
+    let narrated_steps = heard.map_or(0, |heard| {
+        crate::narration::finish(
+            heard,
+            library.library(),
+            &saved.handle,
+            &mut saved.guide,
+            &saved.step_times,
+        )
+    });
     let redacted = crate::redaction::redact_recording(
         library.library(),
         &saved.handle,
@@ -933,6 +971,7 @@ fn save(
         suggested_blurs: redacted.suggested,
         applied_blurs: redacted.blurred,
         unscanned_steps: redacted.unscanned,
+        narrated_steps,
     })
 }
 
@@ -949,6 +988,7 @@ pub async fn cancel_recording<R: Runtime>(
         let session = slot.take().ok_or_else(not_recording)?;
         // Dropping the session stops everything and removes its folder.
         drop(session);
+        recorder.narration.discard();
         recorder.feed.reset();
         emit_status(&app, &recorder, RecordingStatus::Idle);
         Ok(())
@@ -1494,9 +1534,10 @@ mod tests {
                 suggested_blurs: 2,
                 applied_blurs: 0,
                 unscanned_steps: 1,
+                narrated_steps: 2,
             })
             .unwrap(),
-            json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0, "unscannedSteps": 1})
+            json!({"guideId": "01J", "steps": 3, "skipped": 1, "suggestedBlurs": 2, "appliedBlurs": 0, "unscannedSteps": 1, "narratedSteps": 2})
         );
         assert_eq!(
             serde_json::to_value(RecordingSnapshot {

@@ -1063,6 +1063,7 @@ fn step(title: &str) -> Item {
             show: ImageShow::Full,
         },
         annotations: Vec::new(),
+        narration: String::new(),
         ai_state: Default::default(),
     })
 }

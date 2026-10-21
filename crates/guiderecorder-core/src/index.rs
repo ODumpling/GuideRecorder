@@ -1813,6 +1813,7 @@ mod tests {
                             crop_rect: None,
                         },
                         annotations: Vec::new(),
+                        narration: String::new(),
                         ai_state: AiState::default(),
                     })
                 })

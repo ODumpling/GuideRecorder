@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -151,6 +151,7 @@ export class Backend {
       excludedApps: [...DEFAULT_EXCLUDED_IDS],
       typingIdleMs: 1500,
       clickRing: false,
+      narration: { enabled: false, keepAudio: false },
     },
     ai: {
       enabled: true,
@@ -185,6 +186,14 @@ export class Backend {
     accessibility: "denied",
     input_monitoring: "not_determined",
   };
+  /** Narration's own permissions; never part of what recording needs. */
+  narrationPermissions: Record<string, string> = {
+    microphone: "not_determined",
+    speech_recognition: "not_determined",
+  };
+  /** The toolbar's microphone in the running recording (Rust's `NarrationSlot`); null outside one. */
+  narrationOn: boolean | null = null;
+  narrationError: string | null = null;
   /** The library as `library_info` reports it. */
   library: { path: string; error: string | null } = { path: "/Users/me/Documents/GuideRecorder", error: null };
   /** What `choose_library_folder` returns next (null: cancelled). */
@@ -534,6 +543,31 @@ export class Backend {
     this.events.push({ event: "recording://status", payload: this.stamped() });
   }
 
+  /** `narration_state`, as Rust works it out. */
+  private narrationState(): NarrationState {
+    const enabled = this.settings.recording.narration.enabled;
+    return { supported: true, on: this.narrationOn ?? enabled, enabled, error: this.narrationError };
+  }
+
+  /** Turns the running recording's microphone on or off, as Rust's `NarrationSlot::turn`. */
+  private turnNarration(on: boolean) {
+    this.narrationError = null;
+    const missing = Object.keys(this.narrationPermissions).find((p) => this.narrationPermissions[p] !== "granted");
+    if (on && missing) {
+      on = false;
+      this.narrationError =
+        missing === "microphone"
+          ? "Allow GuideRecorder to use the microphone in Settings → Permissions."
+          : "Allow GuideRecorder to use speech recognition in Settings → Permissions.";
+    }
+    this.narrationOn = on;
+  }
+
+  private endNarration() {
+    this.narrationOn = null;
+    this.narrationError = null;
+  }
+
   /** Stores an updater status and emits it with the reply (`events`) or after it (`after`). */
   private setUpdate(status: UpdateStatus, when: "events" | "after" = "events") {
     this.updateStatus = status;
@@ -616,6 +650,10 @@ export class Backend {
       guideId: id,
       steps: guide.items.filter((item) => item.type === "step").length,
       skipped: this.recordingSkipped,
+      suggestedBlurs: 0,
+      appliedBlurs: 0,
+      unscannedSteps: 0,
+      narratedSteps: this.narrationOn ? 1 : 0,
     };
     this.recordings.push(saved);
     return saved;
@@ -894,9 +932,29 @@ export class Backend {
         this.settings.general.library = (args.path as string | null) ?? null;
         return path;
       }
-      case "request_permission":
-        if (this.requestGrants) this.permissions[String(args.permission)] = "granted";
-        return this.permissions[String(args.permission)];
+      case "request_permission": {
+        const permission = String(args.permission);
+        const map = permission in this.narrationPermissions ? this.narrationPermissions : this.permissions;
+        if (this.requestGrants) map[permission] = "granted";
+        return map[permission];
+      }
+      case "narration_permissions":
+        return Object.entries(this.narrationPermissions).map(([permission, status]) => ({
+          permission,
+          status,
+          restartNeeded: false,
+        }));
+      case "narration_state":
+        return this.narrationState();
+      case "set_narration": {
+        this.settings.recording.narration.enabled = args.enabled === true;
+        if (this.recording.state === "recording" || this.recording.state === "paused") {
+          this.turnNarration(args.enabled === true);
+        }
+        const state = this.narrationState();
+        this.events.push({ event: "recording://narration", payload: state });
+        return state;
+      }
       case "recording_readiness": {
         const missing = Object.keys(this.permissions).filter((p) => this.permissions[p] !== "granted");
         return { ready: missing.length === 0, missing };
@@ -959,6 +1017,8 @@ export class Backend {
           excludedApp: null,
           captureLost: null,
         });
+        this.turnNarration(this.settings.recording.narration.enabled);
+        this.events.push({ event: "recording://narration", payload: this.narrationState() });
         return this.stamped();
       }
       case "pause_recording":
@@ -981,12 +1041,14 @@ export class Backend {
         const { startedAt, title } = this.active();
         this.setRecording({ state: "saving", startedAt, title });
         const saved = this.saveRecording(title);
+        this.endNarration();
         this.setRecording({ state: "idle" });
         this.events.push({ event: "recording://saved", payload: saved });
         return saved;
       }
       case "cancel_recording":
         this.active();
+        this.endNarration();
         this.setRecording({ state: "idle" });
         return null;
       case "recording_status":

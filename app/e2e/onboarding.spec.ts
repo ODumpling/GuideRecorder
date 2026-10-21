@@ -9,6 +9,9 @@ test.describe("on first launch", () => {
 
     // 1. Permissions: recording is off until all are allowed; editing isn't blocked.
     await expect(setup.getByText("Recording is off until every permission is allowed.")).toBeVisible();
+    // Narration's own, optional permissions are asked for apart.
+    await expect(setup.getByText("Narration (optional)")).toBeVisible();
+    await expect(setup.getByText("Microphone", { exact: true })).toBeVisible();
     await setup.getByRole("button", { name: "Turn on…" }).first().click();
     await setup.getByRole("button", { name: "Turn on…" }).first().click();
     await expect(setup.getByText("All set: recording is available.")).toBeVisible();
