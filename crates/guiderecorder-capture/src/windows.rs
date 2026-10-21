@@ -16,6 +16,7 @@ pub mod apps;
 pub mod ax;
 pub mod event_tap;
 pub mod frames;
+mod mask;
 pub(crate) mod ocr;
 
 /// The recording session: the shared engine.

@@ -32,10 +32,21 @@
 //! ([`FrameStreamConfig::exclude_own_windows`]) by display affinity
 //! (`WDA_EXCLUDEFROMCAPTURE`), set on every top-level window of the
 //! process when the stream starts and on new ones as frames arrive, and
-//! cleared again when it stops. Other apps' windows cannot be left out:
-//! [`FrameStreamConfig::excluded_bundle_ids`] is not applied to frames, and
-//! [`FilterHandle`] has nothing to refresh. The recording session still
-//! captures nothing while an excluded app is in front.
+//! cleared again when it stops. Another app's windows cannot be given an
+//! affinity, so the apps of [`FrameStreamConfig::excluded_bundle_ids`]
+//! are masked instead: in every kept frame of a display or region run,
+//! before it enters the ring, the parts of their windows that show
+//! (behind other windows too, and their menus and popups) are painted
+//! over in opaque grey. The windows are found again for each frame, so an
+//! app that launches later is covered from its first window on and
+//! [`FilterHandle`] has nothing to refresh. See the `mask` module for the
+//! rules, which mask more rather than less when unsure, and for the
+//! differences from the macOS filter: what is under the grey is gone, not
+//! the window left out to show what is behind it, and a window that moves
+//! between the frame and the lookup a few milliseconds later can show at
+//! its edges. A window target's frames show that window only and are not
+//! masked. The recording session still captures nothing while an
+//! excluded app is in front.
 //!
 //! # Lost capture
 //!
@@ -49,6 +60,7 @@
 //! stopping block only briefly.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -95,6 +107,7 @@ pub use crate::frames::*;
 pub use crate::ring::*;
 
 use super::event_tap::window_pid;
+use super::mask::Masker;
 use super::{apps, PerMonitorAware};
 
 /// Marks a stop error that means the window or display is gone.
@@ -300,7 +313,7 @@ fn class_name(window: HWND) -> Option<String> {
 
 /// A cloaked window (on another virtual desktop, or a suspended app's) is
 /// not shown even though it is "visible".
-fn is_cloaked(window: HWND) -> bool {
+pub(super) fn is_cloaked(window: HWND) -> bool {
     let mut cloaked = 0u32;
     // SAFETY: a valid out-pointer of the attribute's size.
     let read = unsafe {
@@ -335,27 +348,61 @@ fn window_bounds(window: HWND) -> Option<Rect> {
     (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
 }
 
-/// Refreshes a [`FrameStream`]'s content filter from any thread. Windows
-/// has no content filter (see `# Excluded windows`): there is never
-/// anything to refresh.
+/// Tells, from any thread, which apps a [`FrameStream`]'s frames leave
+/// out (see `# Excluded windows`). Clones share the stream. The excluded
+/// windows are found again for every frame, so there is never anything to
+/// refresh.
 #[derive(Debug, Clone)]
-pub struct FilterHandle(());
+pub struct FilterHandle(Arc<FilterSlot>);
+
+#[derive(Debug)]
+struct FilterSlot {
+    cfg: FrameStreamConfig,
+    /// A run is capturing.
+    running: AtomicBool,
+}
 
 impl FilterHandle {
-    /// False: no target's frames leave apps out.
+    fn new(cfg: FrameStreamConfig) -> Self {
+        Self(Arc::new(FilterSlot {
+            cfg,
+            running: AtomicBool::new(false),
+        }))
+    }
+
+    fn set_running(&self, running: bool) {
+        self.0.running.store(running, Ordering::Release);
+    }
+
+    /// True for display and region targets, whose frames are masked; a
+    /// window target captures one window.
     pub fn filters_apps(&self) -> bool {
-        false
+        !matches!(self.0.cfg.target, CaptureTarget::Window { .. })
     }
 
-    /// False: no app's windows are left out.
-    pub fn covers(&self, _pid: i32) -> bool {
-        false
+    /// True while the stream runs and masks `pid`'s windows: its
+    /// executable matches [`FrameStreamConfig::excluded_bundle_ids`].
+    pub fn covers(&self, pid: i32) -> bool {
+        self.filters_apps()
+            && self.0.running.load(Ordering::Acquire)
+            && is_excluded_pid(pid, &self.0.cfg.excluded_bundle_ids)
     }
 
-    /// Does nothing.
+    /// Does nothing: every frame is masked by the windows shown then.
     pub fn refresh(&self) -> Result<(), FrameError> {
         Ok(())
     }
+}
+
+/// Whether process `pid`'s executable matches `excluded`.
+fn is_excluded_pid(pid: i32, excluded: &[String]) -> bool {
+    !excluded.is_empty()
+        && u32::try_from(pid)
+            .ok()
+            .filter(|&p| p != 0)
+            .and_then(apps::process_image)
+            .and_then(|path| apps::app_id(&path))
+            .is_some_and(|id| bundle_id_matches(&id, excluded))
 }
 
 /// A running (or paused) Windows.Graphics.Capture capture.
@@ -369,6 +416,7 @@ pub struct FrameStream {
     reader: FrameReader,
     running: Option<Running>,
     stopped: bool,
+    filter: FilterHandle,
 }
 
 impl std::fmt::Debug for FrameStream {
@@ -389,11 +437,14 @@ impl FrameStream {
         let generation = reader.begin_run();
         let running =
             Running::start(&cfg, &reader, generation).inspect_err(|_| reader.end_run())?;
+        let filter = FilterHandle::new(cfg.clone());
+        filter.set_running(true);
         Ok(Self {
             cfg,
             reader,
             running: Some(running),
             stopped: false,
+            filter,
         })
     }
 
@@ -425,9 +476,30 @@ impl FrameStream {
         self.running.is_some() && excludes_own_windows(&self.cfg)
     }
 
-    /// Always empty: no other app's windows are left out.
+    /// Pids of the excluded apps (not this process) with a window shown
+    /// now, whose windows the current run's frames mask. Empty while
+    /// paused and for a window target.
     pub fn excluded_pids(&self) -> Vec<i32> {
-        Vec::new()
+        if self.running.is_none() || !self.filter.filters_apps() {
+            return Vec::new();
+        }
+        let own = i32::try_from(std::process::id()).unwrap_or(-1);
+        let mut seen = std::collections::HashMap::new();
+        let mut pids = Vec::new();
+        for window in top_level_windows() {
+            // SAFETY: a plain query (a stale handle gives false).
+            if !unsafe { IsWindowVisible(window) }.as_bool() {
+                continue;
+            }
+            let pid = window_pid(window);
+            let excluded = *seen
+                .entry(pid)
+                .or_insert_with(|| is_excluded_pid(pid, &self.cfg.excluded_bundle_ids));
+            if excluded && pid != own && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+        pids
     }
 
     /// Covers windows this process opened since the last frame. Returns
@@ -444,7 +516,7 @@ impl FrameStream {
 
     /// See [`FilterHandle`].
     pub fn filter_handle(&self) -> FilterHandle {
-        FilterHandle(())
+        self.filter.clone()
     }
 
     /// Stops the capture. Buffered frames stay readable. No-op if already
@@ -472,6 +544,7 @@ impl FrameStream {
         match Running::start(&self.cfg, &self.reader, generation) {
             Ok(r) => {
                 self.running = Some(r);
+                self.filter.set_running(true);
                 self.reader.clear_error();
                 Ok(())
             }
@@ -491,6 +564,7 @@ impl FrameStream {
     }
 
     fn halt(&mut self) {
+        self.filter.set_running(false);
         self.reader.end_run();
         self.running = None;
     }
@@ -670,6 +744,10 @@ impl Running {
             reader: reader.clone(),
             generation,
             own_windows: Arc::clone(&own_windows),
+            masker: match source {
+                Source::Display { .. } => Masker::new(&cfg.excluded_bundle_ids),
+                Source::Window(_) => None,
+            },
         });
         let arrived = pool
             .FrameArrived(
@@ -808,6 +886,8 @@ struct Copier {
     reader: FrameReader,
     generation: u64,
     own_windows: Arc<OwnWindows>,
+    /// Masks excluded apps' windows (display and region runs).
+    masker: Option<Masker>,
 }
 
 // SAFETY: the Direct3D 11 device is free-threaded; the immediate context
@@ -944,11 +1024,15 @@ impl Copier {
         }
         // SAFETY: mapped above.
         unsafe { context.Unmap(&staging, 0) };
+        let geometry = FrameGeometry::from_rect(rect, width, height);
+        if let Some(masker) = &mut self.masker {
+            masker.mask(&mut pixels, &geometry);
+        }
         Some(Frame {
             ts: Timestamp(ns),
             width,
             height,
-            geometry: FrameGeometry::from_rect(rect, width, height),
+            geometry,
             pixels: Arc::new(pixels),
         })
     }
@@ -1153,11 +1237,290 @@ mod tests {
     }
 
     #[test]
-    fn filter_handle_has_nothing_to_do() {
-        let handle = FilterHandle(());
-        assert!(!handle.filters_apps());
-        assert!(!handle.covers(1));
+    fn filter_handle_covers_excluded_apps_of_display_runs() {
+        let own = i32::try_from(std::process::id()).unwrap();
+        let id = apps::app_for_pid(own).bundle_id.unwrap();
+        let handle = FilterHandle::new(FrameStreamConfig {
+            excluded_bundle_ids: vec![id],
+            ..FrameStreamConfig::default()
+        });
+        assert!(handle.filters_apps());
+        // Only while running.
+        assert!(!handle.covers(own));
+        handle.set_running(true);
+        assert!(handle.covers(own));
+        assert!(!handle.covers(0));
+        assert!(!handle.covers(4));
         assert!(handle.refresh().is_ok());
+        // A window target captures one window: nothing to leave out.
+        let window = FilterHandle::new(FrameStreamConfig {
+            target: CaptureTarget::Window { window_id: 1 },
+            ..handle.0.cfg.clone()
+        });
+        window.set_running(true);
+        assert!(!window.filters_apps());
+        assert!(!window.covers(own));
+    }
+
+    /// BGRA of the pixel at screen point (`x`, `y`) of `frame`.
+    fn pixel_at(frame: &Frame, x: i32, y: i32) -> [u8; 4] {
+        let (px, py) = (
+            (f64::from(x) - frame.geometry.origin.x) as usize,
+            (f64::from(y) - frame.geometry.origin.y) as usize,
+        );
+        let i = (py * frame.width as usize + px) * 4;
+        frame.pixels[i..i + 4].try_into().unwrap()
+    }
+
+    /// Mostly the colour `bgr` (each channel 0 or 255), allowing for
+    /// colour management.
+    fn is_colour(p: [u8; 4], bgr: [u8; 3]) -> bool {
+        p[..3]
+            .iter()
+            .zip(bgr)
+            .all(|(&c, want)| if want == 255 { c > 190 } else { c < 70 })
+    }
+
+    const RED: [u8; 3] = [0, 0, 255];
+    const LIME: [u8; 3] = [0, 255, 0];
+    /// The env var that makes [`mask_helper_window`] show its window.
+    const HELPER_ENV: &str = "GUIDERECORDER_MASK_HELPER";
+
+    /// A borderless, always-on-top window filled with one colour, shown
+    /// without taking focus on a thread of its own until dropped.
+    struct SolidWindow {
+        thread_id: u32,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl SolidWindow {
+        /// At screen pixels `(left, top, right, bottom)`; `rgb` as a
+        /// `COLORREF` (0x00BBGGRR).
+        fn show(rect: (i32, i32, i32, i32), colorref: u32) -> Self {
+            use windows::core::PCWSTR;
+            use windows::Win32::Foundation::{COLORREF, LRESULT, WPARAM};
+            use windows::Win32::Graphics::Gdi::CreateSolidBrush;
+            use windows::Win32::System::Threading::GetCurrentThreadId;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
+                SetWindowPos, HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, WNDCLASSW,
+                WS_POPUP,
+            };
+
+            unsafe extern "system" fn proc(w: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+                // SAFETY: the arguments Windows passed in.
+                unsafe { DefWindowProcW(w, m, wp, lp) }
+            }
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                let _dpi = PerMonitorAware::enter();
+                let class: Vec<u16> = format!("GuideRecorderMaskTest{colorref:06x}\0")
+                    .encode_utf16()
+                    .collect();
+                let (left, top, right, bottom) = rect;
+                // SAFETY: a class and window of this thread, with a NUL
+                // terminated class name that outlives them; the message
+                // loop ends on WM_QUIT, and the window with the thread.
+                unsafe {
+                    let wc = WNDCLASSW {
+                        lpfnWndProc: Some(proc),
+                        lpszClassName: PCWSTR(class.as_ptr()),
+                        hbrBackground: CreateSolidBrush(COLORREF(colorref)),
+                        ..Default::default()
+                    };
+                    RegisterClassW(&wc);
+                    let window = CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                        PCWSTR(class.as_ptr()),
+                        PCWSTR::null(),
+                        WS_POPUP,
+                        left,
+                        top,
+                        right - left,
+                        bottom - top,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .expect("a test window");
+                    let _ = SetWindowPos(
+                        window,
+                        Some(HWND_TOPMOST),
+                        left,
+                        top,
+                        right - left,
+                        bottom - top,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                    let _ = tx.send(GetCurrentThreadId());
+                    let mut msg = MSG::default();
+                    while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                        DispatchMessageW(&msg);
+                    }
+                }
+            });
+            let thread_id = rx.recv().expect("the test window");
+            Self {
+                thread_id,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for SolidWindow {
+        fn drop(&mut self) {
+            use windows::Win32::Foundation::WPARAM;
+            use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            // SAFETY: posting to the window's thread, which has a queue.
+            let _ = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// Run by [`masks_excluded_windows_where_they_show`] in a copy of the
+    /// test executable, so its window is another app's: shows a red window
+    /// at the rect in [`HELPER_ENV`] until killed.
+    #[test]
+    #[ignore = "a helper process for masks_excluded_windows_where_they_show"]
+    fn mask_helper_window() {
+        let Ok(rect) = std::env::var(HELPER_ENV) else {
+            return;
+        };
+        let n: Vec<i32> = rect.split(',').map(|v| v.parse().unwrap()).collect();
+        let _window = SolidWindow::show((n[0], n[1], n[2], n[3]), 0x0000_00FF);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    /// Kills and waits for the helper process, then removes its folder.
+    struct Helper(std::process::Child, std::path::PathBuf);
+
+    impl Drop for Helper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+
+    /// A display capture masks the parts of another app's window that
+    /// show, not what an opaque window in front of it hides, unless that
+    /// window is kept out of captures. Shows two always-on-top windows on
+    /// the primary display for a few seconds: a red one in a helper
+    /// process (excluded), and a lime one of this process over its top.
+    #[test]
+    fn masks_excluded_windows_where_they_show() {
+        let main = DisplayInfo::main().unwrap();
+        let (ox, oy) = (main.bounds.x as i32, main.bounds.y as i32);
+        // The helper's window, and ours over its top band.
+        let red = (ox + 200, oy + 200, ox + 500, oy + 400);
+        let lime = (ox + 100, oy + 100, ox + 600, oy + 250);
+
+        // A copy of this executable under a name of its own.
+        let dir = std::env::temp_dir().join(format!("guiderecorder-mask-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join(format!(
+            "guiderecorder-mask-helper-{}.exe",
+            std::process::id()
+        ));
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let child = std::process::Command::new(&exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "windows::frames::tests::mask_helper_window",
+            ])
+            .env(
+                HELPER_ENV,
+                format!("{},{},{},{}", red.0, red.1, red.2, red.3),
+            )
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let helper_pid = i32::try_from(child.id()).unwrap();
+        let _helper = Helper(child, dir);
+        let shown = Instant::now();
+        while !top_level_windows().into_iter().any(|w| {
+            // SAFETY: a plain query.
+            window_pid(w) == helper_pid && unsafe { IsWindowVisible(w) }.as_bool()
+        }) {
+            assert!(
+                shown.elapsed() < Duration::from_secs(20),
+                "no helper window"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _lime = SolidWindow::show(lime, 0x0000_FF00);
+        std::thread::sleep(Duration::from_millis(500));
+
+        let frame_of = |cfg: FrameStreamConfig| {
+            let t0 = event_tap::now();
+            let stream = FrameStream::start(cfg).expect("capture starts");
+            let frame = stream
+                .reader()
+                .frame_after(t0, 0, Duration::from_secs(5))
+                .expect("a frame");
+            let pids = stream.excluded_pids();
+            let covers = stream.filter_handle().covers(helper_pid);
+            stream.stop().unwrap();
+            (frame, pids, covers)
+        };
+        let id = apps::app_id(&exe).unwrap();
+        // Points: the helper's window alone, ours over it (inside our
+        // inset), ours alone, and our edge band over it.
+        let (red_alone, over, lime_alone, band) = (
+            (350 + ox, 330 + oy),
+            (350 + ox, 225 + oy),
+            (150 + ox, 150 + oy),
+            (350 + ox, 250 - 3 + oy),
+        );
+        let at = |f: &Frame, (x, y): (i32, i32)| pixel_at(f, x, y);
+
+        // Not excluded, the helper's window shows.
+        let (plain, pids, covers) = frame_of(FrameStreamConfig {
+            exclude_own_windows: false,
+            ..FrameStreamConfig::default()
+        });
+        assert!(
+            is_colour(at(&plain, red_alone), RED),
+            "{:?}",
+            at(&plain, red_alone)
+        );
+        assert!(is_colour(at(&plain, over), LIME));
+        assert!(pids.is_empty() && !covers);
+
+        // Excluded, it is masked except where our window hides it.
+        let (masked, pids, covers) = frame_of(FrameStreamConfig {
+            exclude_own_windows: false,
+            excluded_bundle_ids: vec![id.clone()],
+            ..FrameStreamConfig::default()
+        });
+        assert_eq!(at(&masked, red_alone), super::super::mask::MASK_COLOR);
+        assert_eq!(at(&masked, band), super::super::mask::MASK_COLOR);
+        assert!(
+            is_colour(at(&masked, over), LIME),
+            "{:?}",
+            at(&masked, over)
+        );
+        assert!(is_colour(at(&masked, lime_alone), LIME));
+        assert_eq!(pids, vec![helper_pid]);
+        assert!(covers);
+
+        // With our windows kept out of the capture, what ours covered of
+        // the helper's window shows, and is masked too.
+        let (hidden, _, _) = frame_of(FrameStreamConfig {
+            excluded_bundle_ids: vec![id],
+            ..FrameStreamConfig::default()
+        });
+        assert_eq!(at(&hidden, red_alone), super::super::mask::MASK_COLOR);
+        assert_eq!(at(&hidden, over), super::super::mask::MASK_COLOR);
+        assert!(!is_colour(at(&hidden, lime_alone), LIME));
     }
 
     #[test]
