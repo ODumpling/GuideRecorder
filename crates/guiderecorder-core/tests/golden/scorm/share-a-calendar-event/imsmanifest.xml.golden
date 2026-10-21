@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest identifier="guiderecorder-01M4WT7MM000000000000002G0" version="1.0"
+    xmlns="http://www.imsproject.org/xsd/imscp_rootv1p1p2"
+    xmlns:adlcp="http://www.adlnet.org/xsd/adlcp_rootv1p2"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.imsproject.org/xsd/imscp_rootv1p1p2 imscp_rootv1p1p2.xsd http://www.imsglobal.org/xsd/imsmd_rootv1p2p1 imsmd_rootv1p2p1.xsd http://www.adlnet.org/xsd/adlcp_rootv1p2 adlcp_rootv1p2.xsd">
+  <metadata>
+    <schema>ADL SCORM</schema>
+    <schemaversion>1.2</schemaversion>
+  </metadata>
+  <organizations default="guiderecorder-01M4WT7MM000000000000002G0-org">
+    <organization identifier="guiderecorder-01M4WT7MM000000000000002G0-org">
+      <title>Share a calendar event</title>
+      <item identifier="guiderecorder-01M4WT7MM000000000000002G0-item" identifierref="guiderecorder-01M4WT7MM000000000000002G0-sco" isvisible="true">
+        <title>Share a calendar event</title>
+      </item>
+    </organization>
+  </organizations>
+  <resources>
+    <resource identifier="guiderecorder-01M4WT7MM000000000000002G0-sco" type="webcontent" adlcp:scormtype="sco" href="guide.html">
+      <file href="guide.html"/>
+    </resource>
+  </resources>
+</manifest>

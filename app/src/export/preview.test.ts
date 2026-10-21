@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_SCORM } from "@/export/export";
 import {
   frontMatterAsCode,
   markdownPreviewDocument,
@@ -32,6 +33,7 @@ describe("previewRequest", () => {
       reviewDetails: true,
       motion: { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
       skill: { replay: false },
+      scorm: DEFAULT_SCORM,
     });
     // HTML has no paper; Markdown no accent.
     expect(previewRequest({ ...choices, format: "html" })?.paper).toBe("a4");
@@ -52,6 +54,17 @@ describe("previewRequest", () => {
     expect(skill.branding).toEqual({ logo: null, accent: null });
     expect(skill.reviewDetails).toBe(false);
     expect(previewRequest({ ...choices, skill: { replay: true } })?.skill).toEqual({ replay: false });
+  });
+
+  it("sends the SCORM page's options only for SCORM, waiting for complete ones", () => {
+    const scorm = { title: "Course", identifier: "c-1", completion: "quizPassed" as const, masteryScore: 60, quiz: "Q?" };
+    const request = previewRequest({ ...choices, format: "scorm", scorm })!;
+    // The title and identifier are only in the manifest.
+    expect(request.scorm).toEqual({ ...DEFAULT_SCORM, completion: "quizPassed", masteryScore: 60, quiz: "Q?" });
+    expect(request.branding).toEqual({ logo: "/Users/me/logo.png", accent: "#336699" });
+    expect(previewRequest({ ...choices, scorm })?.scorm).toEqual(DEFAULT_SCORM);
+    expect(previewRequest({ ...choices, format: "scorm", scorm: { ...scorm, quiz: "" } })).toBeNull();
+    expect(previewRequest({ ...choices, format: "scorm", scorm: { ...scorm, masteryScore: Number.NaN } })).toBeNull();
   });
 
   it("waits for a valid accent", () => {

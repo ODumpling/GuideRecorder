@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use guiderecorder_core::export::md::{Branding, CheckedBranding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, motion, pdf, pptx, skill, verify_crop_rect, ExportReport, ImageOptions,
+    docx, html, md, motion, pdf, pptx, scorm, skill, verify_crop_rect, ExportReport, ImageOptions,
     OutPathError, RenderGuide,
 };
 use guiderecorder_core::model::StepImage;
@@ -43,6 +43,8 @@ pub enum Format {
     /// An agent skill: `SKILL.md`, `steps.json`, images and optionally a
     /// replay script.
     Skill,
+    /// A SCORM 1.2 zip: the walkthrough, tracked by an LMS.
+    Scorm,
 }
 
 impl Format {
@@ -64,6 +66,7 @@ impl Format {
             Self::Pptx => Some("pptx"),
             Self::Mp4 => Some("mp4"),
             Self::Gif => Some("gif"),
+            Self::Scorm => Some("zip"),
         }
     }
 }
@@ -97,6 +100,48 @@ impl Default for MotionRequest {
 pub struct SkillRequest {
     /// Also write `replay.js`.
     pub replay: bool,
+}
+
+/// SCORM options as the UI sends them; blank title and identifier take
+/// the defaults of [`scorm::ScormOptions`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScormRequest {
+    pub title: String,
+    pub identifier: String,
+    pub completion: scorm::Completion,
+    pub mastery_score: u8,
+    /// The quiz as typed ([`scorm::parse_quiz`]); blank for none.
+    pub quiz: String,
+}
+
+impl Default for ScormRequest {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            identifier: String::new(),
+            completion: scorm::Completion::default(),
+            mastery_score: scorm::DEFAULT_MASTERY_SCORE,
+            quiz: String::new(),
+        }
+    }
+}
+
+impl ScormRequest {
+    /// The course options, with the quiz parsed.
+    fn options(&self) -> Result<scorm::ScormOptions> {
+        let quiz = scorm::parse_quiz(&self.quiz)
+            .map_err(|e| AppError::new(ErrorKind::Invalid, e.to_string()))?;
+        let given = |s: &str| Some(s.trim().to_owned()).filter(|s| !s.is_empty());
+        Ok(scorm::ScormOptions {
+            title: given(&self.title),
+            identifier: given(&self.identifier),
+            completion: self.completion,
+            mastery_score: self.mastery_score,
+            quiz,
+            ..scorm::ScormOptions::default()
+        })
+    }
 }
 
 /// Branding as the UI sends it: a logo path the user chose with
@@ -311,6 +356,7 @@ pub fn export_guide(
     review_details: bool,
     motion_request: &MotionRequest,
     skill_request: &SkillRequest,
+    scorm_request: &ScormRequest,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
     if !(motion::MIN_SECONDS_PER_STEP..=motion::MAX_SECONDS_PER_STEP)
@@ -439,6 +485,15 @@ pub fn export_guide(
             };
             skill::export(&render, &handle, out, &opts).map_err(md_error)?
         }
+        Format::Scorm => {
+            let opts = scorm::ScormOptions {
+                overwrite,
+                branding,
+                review_details,
+                ..scorm_request.options()?
+            };
+            scorm::export(&render, &handle, out, &opts).map_err(scorm_error)?
+        }
     };
     let result = ExportResult::from(report);
     if let Some(main) = result.files.first() {
@@ -537,6 +592,7 @@ pub fn preview_guide(
     review_details: bool,
     motion_request: &MotionRequest,
     skill_request: &SkillRequest,
+    scorm_request: &ScormRequest,
 ) -> Result<ExportPreview> {
     let id = parse_id(guide_id)?;
     let branding = check_branding(chosen, branding)?;
@@ -613,6 +669,17 @@ pub fn preview_guide(
                 ..html::HtmlOptions::default()
             };
             let (html, _) = html::render_string(&render, &handle, &opts).map_err(md_error)?;
+            ExportPreview::Html { html }
+        }
+        // The SCO page: the walkthrough with the quiz.
+        Format::Scorm => {
+            let opts = scorm::ScormOptions {
+                image,
+                branding,
+                review_details,
+                ..scorm_request.options()?
+            };
+            let (html, _) = scorm::render_page(&render, &handle, &opts).map_err(scorm_error)?;
             ExportPreview::Html { html }
         }
         Format::Docx | Format::Pdf => {
@@ -699,6 +766,15 @@ fn exists(path: &Path) -> AppError {
         ErrorKind::Exists,
         format!("{} already exists", path.display()),
     )
+}
+
+fn scorm_error(e: scorm::ScormError) -> AppError {
+    match e {
+        scorm::ScormError::Exists(path) => exists(&path),
+        e @ scorm::ScormError::Invalid(_) => AppError::new(ErrorKind::Invalid, e.to_string()),
+        scorm::ScormError::Render(e) => md_error(e),
+        e => AppError::new(ErrorKind::Io, e.to_string()),
+    }
 }
 
 fn md_error(e: md::ExportError) -> AppError {
@@ -955,6 +1031,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -975,6 +1052,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
@@ -990,6 +1068,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap();
         assert_eq!(
@@ -1008,6 +1087,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest { replay: true },
+            &ScormRequest::default(),
         )
         .unwrap();
         assert_eq!(skill.files[0], dir.join("skill").join(skill::SKILL_FILE));
@@ -1021,7 +1101,7 @@ mod tests {
             .unwrap()
             .contains("<script>"));
 
-        for format in [Format::Docx, Format::Pdf, Format::Pptx] {
+        for format in [Format::Docx, Format::Pdf, Format::Pptx, Format::Scorm] {
             let out = with_extension(dir.join("Guide"), format.extension().unwrap());
             // Not chosen in a save dialog yet.
             assert!(export_guide(
@@ -1036,6 +1116,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .is_err());
             chosen.add_file(out.clone());
@@ -1051,6 +1132,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
@@ -1068,6 +1150,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
@@ -1083,6 +1166,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .unwrap();
         }
@@ -1099,6 +1183,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -1114,6 +1199,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap();
     }
@@ -1140,6 +1226,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .unwrap();
             let pdf = fs::read(&out).unwrap();
@@ -1163,6 +1250,7 @@ mod tests {
                 false,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
             .unwrap();
             fs::read(&out).unwrap()
@@ -1187,6 +1275,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -1215,6 +1304,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap_err();
         assert!(
@@ -1235,6 +1325,7 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -1255,9 +1346,87 @@ mod tests {
             false,
             &MotionRequest::default(),
             &SkillRequest::default(),
+            &ScormRequest::default(),
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);
+    }
+
+    #[test]
+    fn scorm_options_reach_the_package() {
+        let (session, id, chosen, dir) = session();
+        let out = dir.join("Course.zip");
+        chosen.add_file(out.clone());
+        let run = |request: &ScormRequest, preview: bool| {
+            let none = BrandingRequest::default();
+            let (motion, skill) = (MotionRequest::default(), SkillRequest::default());
+            if preview {
+                let page = preview_guide(
+                    &session,
+                    &chosen,
+                    &id,
+                    Format::Scorm,
+                    &none,
+                    docx::Paper::A4,
+                    false,
+                    &motion,
+                    &skill,
+                    request,
+                )?;
+                let ExportPreview::Html { html } = page else {
+                    panic!("{page:?}")
+                };
+                Ok(html)
+            } else {
+                export_guide(
+                    &session,
+                    &chosen,
+                    &id,
+                    Format::Scorm,
+                    &out,
+                    true,
+                    &none,
+                    docx::Paper::A4,
+                    false,
+                    &motion,
+                    &skill,
+                    request,
+                )
+                .map(|r| r.files[0].display().to_string())
+            }
+        };
+        let request = ScormRequest {
+            title: " Course ".into(),
+            identifier: "course-1".into(),
+            completion: scorm::Completion::QuizPassed,
+            mastery_score: 60,
+            quiz: "Ready?\n- [x] Yes\n- [ ] No\n".into(),
+        };
+        let html = run(&request, true).unwrap();
+        assert!(html.contains("data-completion=\"quiz-passed\" data-mastery=\"60\""));
+        assert!(html.contains("<legend>1. Ready?</legend>"));
+        assert_eq!(run(&request, false).unwrap(), out.display().to_string());
+        assert!(fs::read(&out).unwrap().starts_with(b"PK"));
+
+        // A quiz that doesn't parse, or the quiz rule without one, is
+        // refused before anything is written.
+        fs::remove_file(&out).unwrap();
+        for request in [
+            ScormRequest {
+                quiz: "Ready?\n- [ ] Yes\n".into(),
+                ..request.clone()
+            },
+            ScormRequest {
+                quiz: "  ".into(),
+                ..request.clone()
+            },
+        ] {
+            for preview in [true, false] {
+                let err = run(&request, preview).unwrap_err();
+                assert_eq!(err.kind, ErrorKind::Invalid, "{}", err.message);
+            }
+        }
+        assert!(!out.exists());
     }
 
     #[test]
@@ -1285,6 +1454,7 @@ mod tests {
                 true,
                 &MotionRequest::default(),
                 &SkillRequest::default(),
+                &ScormRequest::default(),
             )
         };
         let is_png = |src: &str| src.starts_with("data:image/png;base64,");
@@ -1297,6 +1467,12 @@ mod tests {
         }
         match preview(Format::Walkthrough, &none).unwrap() {
             ExportPreview::Html { html } => assert!(html.contains("<script>")),
+            other => panic!("{other:?}"),
+        }
+        match preview(Format::Scorm, &none).unwrap() {
+            ExportPreview::Html { html } => {
+                assert!(html.contains("id=\"scorm\"") && !html.contains("id=\"scorm-quiz\""));
+            }
             other => panic!("{other:?}"),
         }
         match preview(Format::Md, &none).unwrap() {
@@ -1432,19 +1608,25 @@ mod tests {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let csp = conf["app"]["security"]["csp"].as_str().unwrap();
-        let page = guiderecorder_core::export::walkthrough::csp();
-        let hash = page
-            .split(';')
-            .find_map(|d| d.trim().strip_prefix("script-src "))
-            .unwrap();
-        let script_src = csp
-            .split(';')
-            .find_map(|d| d.trim().strip_prefix("script-src "))
-            .unwrap();
-        assert!(
-            script_src.split(' ').any(|s| s == hash),
-            "tauri.conf.json script-src needs {hash}"
-        );
+        let script_src = |csp: &str| {
+            csp.split(';')
+                .find_map(|d| d.trim().strip_prefix("script-src "))
+                .unwrap()
+                .split(' ')
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let app = script_src(csp);
+        // The walkthrough's script, and the SCORM runtime of its SCORM
+        // preview: srcdoc frames run under the app's CSP.
+        for page in [guiderecorder_core::export::walkthrough::csp(), scorm::csp()] {
+            for hash in script_src(&page) {
+                assert!(
+                    app.contains(&hash),
+                    "tauri.conf.json script-src needs {hash}"
+                );
+            }
+        }
     }
 
     #[test]
