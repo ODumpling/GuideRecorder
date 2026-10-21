@@ -1,5 +1,6 @@
 //! On-device text recognition for redaction (#10): Vision on macOS
-//! (`macos::ocr`), unsupported elsewhere. Never uses the network.
+//! (`macos::ocr`), Windows OCR on Windows (`windows::ocr`), unsupported
+//! elsewhere. Never uses the network.
 //!
 //! The lines it returns are what `guiderecorder_core::redact` matches
 //! against, in image pixels with the origin at the top left.
@@ -16,9 +17,17 @@ pub enum OcrError {
     Failed(String),
 }
 
-/// Whether [`recognize_text`] can work here.
+/// Whether [`recognize_text`] can work here. On Windows, whether an OCR
+/// language is installed (checked once).
 pub fn is_supported() -> bool {
-    cfg!(target_os = "macos")
+    #[cfg(windows)]
+    {
+        crate::windows::ocr::is_available()
+    }
+    #[cfg(not(windows))]
+    {
+        cfg!(target_os = "macos")
+    }
 }
 
 /// The text in a `width` × `height` image of tightly packed RGBA pixels
@@ -35,7 +44,11 @@ pub fn recognize_text(rgba: &[u8], width: u32, height: u32) -> Result<Vec<TextLi
     {
         crate::macos::ocr::recognize(rgba, width, height)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        crate::windows::ocr::recognize(rgba, width, height)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         Err(OcrError::Unsupported)
     }
@@ -68,7 +81,7 @@ mod tests {
 
     /// Renders `text` in black Lato on white, `size` px high, at (20, 40),
     /// with wide gaps between words.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn rendered(text: &str, size: u32) -> (Vec<u8>, u32, u32) {
         use resvg::usvg::{self, fontdb};
         let (w, h) = (1200, 200);
@@ -96,7 +109,7 @@ mod tests {
         (pixmap.take(), w, h)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn recognises_lines_and_boxes_their_words() {
         let (rgba, w, h) = rendered("Contact jane.doe@example.com today", 32);

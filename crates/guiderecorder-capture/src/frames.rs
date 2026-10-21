@@ -93,7 +93,7 @@ impl Default for FrameStreamConfig {
 }
 
 impl FrameStreamConfig {
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn validate(&self) -> Result<(), FrameError> {
         if !(1..=60).contains(&self.fps) {
             return Err(FrameError::InvalidConfig(format!(
@@ -238,9 +238,20 @@ impl DisplayInfo {
 /// bundled with the app, e.g. `com.1password.1password.helper` for
 /// `com.1password.1password`). Case-sensitive, like bundle ids on disk.
 /// Other look-alike ids do not match (`com.1password.1password-launcher`,
-/// `com.bitwarden.desktopx`), nor does an empty entry.
+/// `com.bitwarden.desktopx`), nor does an empty entry. On Windows, where an
+/// id is an executable's file name, case is ignored, as it is for file
+/// names.
 pub fn bundle_id_matches(bundle_id: &str, excluded: &[String]) -> bool {
+    let fold = |s: &str| {
+        if cfg!(windows) {
+            s.to_ascii_lowercase()
+        } else {
+            s.to_owned()
+        }
+    };
+    let bundle_id = fold(bundle_id);
     excluded.iter().any(|e| {
+        let e = fold(e);
         !e.is_empty()
             && bundle_id
                 .strip_prefix(e.as_str())
@@ -404,12 +415,20 @@ mod tests {
             "2BUA8C4S2C.com.1password.browser-helper",
             "com.1password",
             "com.apple.PasswordsX",
-            "com.apple.passwords",
             "com.apple.Safari",
             "",
         ] {
             assert!(!bundle_id_matches(id, &excluded), "{id}");
         }
+        // Case matters for bundle ids, not for Windows file names.
+        assert_eq!(
+            bundle_id_matches("com.apple.passwords", &excluded),
+            cfg!(windows)
+        );
+        assert_eq!(
+            bundle_id_matches("1Password.exe", &ids(&["1password.exe"])),
+            cfg!(windows)
+        );
         // An empty entry excludes nothing.
         assert!(!bundle_id_matches("com.apple.Safari", &ids(&[""])));
         assert!(!bundle_id_matches("", &ids(&[""])));

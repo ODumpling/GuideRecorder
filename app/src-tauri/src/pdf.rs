@@ -1,6 +1,6 @@
 //! PDF pages as images, for the pages of an annotated guide (see
-//! `annotated.rs`). macOS draws them with CoreGraphics; elsewhere a PDF is
-//! refused.
+//! `annotated.rs`). macOS draws them with CoreGraphics, Windows with
+//! `Windows.Data.Pdf`; elsewhere a PDF is refused.
 //!
 //! A page is drawn whole: its crop box, turned by its `/Rotate`, on opaque
 //! white, at [`PDF_SCALE`] pixels per point unless that makes it longer than
@@ -12,7 +12,7 @@ use guiderecorder_core::library::MAX_WEBP_DIMENSION;
 use image::RgbaImage;
 
 /// Pixels per PDF point: 144 dpi, sharp on a Retina screen.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub const PDF_SCALE: f64 = 2.0;
 
 /// Longest side of a rendered page in pixels, as for image pages; larger
@@ -23,26 +23,26 @@ pub use guiderecorder_core::pages::MAX_PAGE_SIDE;
 /// the caller names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PdfError {
-    /// Not macOS.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    /// Neither macOS nor Windows.
+    #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
     Unsupported,
-    /// Not a PDF CoreGraphics can read.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// Not a PDF the system can read.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Unreadable,
     /// Encrypted with a password.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Locked,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     NoPages,
     /// The page (1-based) is missing or has no area.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Page(usize),
 }
 
 impl fmt::Display for PdfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PdfError::Unsupported => write!(f, "PDF import needs macOS for now"),
+            PdfError::Unsupported => write!(f, "PDF import isn't supported on this platform yet"),
             PdfError::Unreadable => write!(f, "not a readable PDF"),
             PdfError::Locked => write!(f, "the PDF is password-protected"),
             PdfError::NoPages => write!(f, "the PDF has no pages"),
@@ -55,7 +55,7 @@ impl fmt::Display for PdfError {
 /// per point, scaled down so the longer side is at most [`MAX_PAGE_SIDE`]
 /// (and [`MAX_WEBP_DIMENSION`]), each side at least 1. `None` for a page
 /// without area.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub fn page_pixels(width: f64, height: f64) -> Option<(u32, u32)> {
     let valid = |side: f64| side.is_finite() && side > 0.0;
     if !valid(width) || !valid(height) {
@@ -181,11 +181,123 @@ mod macos {
     }
 }
 
+#[cfg(windows)]
+pub use windows_pdf::PdfDocument;
+
+#[cfg(windows)]
+mod windows_pdf {
+    use windows::core::{Error, HRESULT};
+    use windows::Data::Pdf::{self, PdfPageRenderOptions};
+    use windows::Storage::Streams::{DataReader, DataWriter, InMemoryRandomAccessStream};
+    use windows::UI::Color;
+
+    use super::*;
+
+    /// `HRESULT_FROM_WIN32(ERROR_WRONG_PASSWORD)`: how loading refuses a
+    /// PDF that needs a password.
+    const WRONG_PASSWORD: HRESULT = HRESULT(0x8007_052B_u32 as i32);
+
+    /// An open PDF. Windows keeps the bytes in a stream of its own; pages
+    /// are drawn one at a time, so a long PDF is never in memory as images
+    /// all at once.
+    ///
+    /// windows-rs joins the thread to the multithreaded apartment the
+    /// first time it needs WinRT, so any thread can open and draw.
+    pub struct PdfDocument {
+        document: Pdf::PdfDocument,
+    }
+
+    impl PdfDocument {
+        /// Opens a PDF from its bytes. Refuses one that is not a PDF, is
+        /// locked with a password or has no pages.
+        pub fn open(bytes: &[u8]) -> Result<Self, PdfError> {
+            let load = || -> windows::core::Result<Pdf::PdfDocument> {
+                let stream = InMemoryRandomAccessStream::new()?;
+                let writer = DataWriter::CreateDataWriter(&stream)?;
+                writer.WriteBytes(bytes)?;
+                writer.StoreAsync()?.join()?;
+                // Leaves the stream to the document.
+                writer.DetachStream()?;
+                stream.Seek(0)?;
+                // Only an owner password (print or copy limits) opens
+                // without asking: Windows tries the empty user password.
+                Pdf::PdfDocument::LoadFromStreamAsync(&stream)?.join()
+            };
+            let document = load().map_err(|e: Error| {
+                if e.code() == WRONG_PASSWORD {
+                    PdfError::Locked
+                } else {
+                    PdfError::Unreadable
+                }
+            })?;
+            if document.PageCount().map_err(|_| PdfError::Unreadable)? == 0 {
+                return Err(PdfError::NoPages);
+            }
+            Ok(Self { document })
+        }
+
+        pub fn page_count(&self) -> usize {
+            self.document.PageCount().map_or(0, |n| n as usize)
+        }
+
+        /// Draws page `number` (1-based); see the module docs.
+        pub fn render(&self, number: usize) -> Result<RgbaImage, PdfError> {
+            let failed = || PdfError::Page(number);
+            if number == 0 || number > self.page_count() {
+                return Err(failed());
+            }
+            let index = u32::try_from(number - 1).map_err(|_| failed())?;
+            let draw = || -> windows::core::Result<Option<RgbaImage>> {
+                let page = self.document.GetPage(index)?;
+                // `Size` is the crop box clipped to the media box, turned by
+                // `/Rotate`, in DIPs (1/96 inch, not points). It is a
+                // US Letter guess for a box without area, so check those.
+                let size = page.Size()?;
+                let dims = page.Dimensions()?;
+                let (crop, media) = (dims.CropBox()?, dims.MediaBox()?);
+                if [crop.Width, crop.Height, media.Width, media.Height].contains(&0.0) {
+                    return Ok(None);
+                }
+                let points = |dips: f32| f64::from(dips) * 72.0 / 96.0;
+                let Some((width, height)) = page_pixels(points(size.Width), points(size.Height))
+                else {
+                    return Ok(None);
+                };
+                let options = PdfPageRenderOptions::new()?;
+                options.SetDestinationWidth(width)?;
+                options.SetDestinationHeight(height)?;
+                // Opaque white under the page, so every pixel is opaque.
+                options.SetBackgroundColor(Color {
+                    A: 255,
+                    R: 255,
+                    G: 255,
+                    B: 255,
+                })?;
+                options.SetIsIgnoringHighContrast(true)?;
+                // PNG is the default encoder.
+                let stream = InMemoryRandomAccessStream::new()?;
+                page.RenderWithOptionsToStreamAsync(&stream, &options)?
+                    .join()?;
+                let length = u32::try_from(stream.Size()?).map_err(|_| Error::empty())?;
+                let reader = DataReader::CreateDataReader(&stream.GetInputStreamAt(0)?)?;
+                reader.LoadAsync(length)?.join()?;
+                let mut png = vec![0u8; length as usize];
+                reader.ReadBytes(&mut png)?;
+                let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+                    .map_err(|_| Error::empty())?
+                    .to_rgba8();
+                Ok((image.dimensions() == (width, height)).then_some(image))
+            };
+            draw().ok().flatten().ok_or_else(failed)
+        }
+    }
+}
+
 /// Elsewhere every PDF is refused with [`PdfError::Unsupported`].
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub struct PdfDocument(());
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl PdfDocument {
     pub fn open(_bytes: &[u8]) -> Result<Self, PdfError> {
         Err(PdfError::Unsupported)
@@ -280,7 +392,7 @@ pub(crate) mod tests {
 
     /// A black square `side` points wide with its top-left corner at the
     /// top-left of a page `height` points high.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn top_left_square(height: u32, side: u32) -> String {
         format!("0 0 0 rg 0 {} {side} {side} re f", height - side)
     }
@@ -302,18 +414,18 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn dark(image: &RgbaImage, x: u32, y: u32) -> bool {
         let p = image.get_pixel(x, y).0;
         p[3] == 255 && p[..3].iter().all(|&c| c < 40)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn white(image: &RgbaImage, x: u32, y: u32) -> bool {
         image.get_pixel(x, y).0 == [255, 255, 255, 255]
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn renders_pages_upright_on_white() {
         let bytes = pdf(&[
@@ -341,7 +453,7 @@ pub(crate) mod tests {
         assert_eq!(document.render(0).unwrap_err(), PdfError::Page(0));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn renders_the_crop_box_turned_by_rotate() {
         let square = top_left_square(100, 50);
@@ -373,7 +485,7 @@ pub(crate) mod tests {
         assert!(white(&image, 105, 5) && white(&image, 195, 45));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn caps_the_longest_side() {
         let image = PdfDocument::open(&pdf(&[TestPage::new(3000, 1000, "")]))
@@ -384,7 +496,7 @@ pub(crate) mod tests {
         assert!(image.pixels().all(|p| p.0 == [255, 255, 255, 255]));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn refuses_what_is_not_a_usable_pdf() {
         for junk in [&b""[..], b"not a pdf", b"%PDF-1.4\n%%EOF\n"] {
@@ -394,7 +506,8 @@ pub(crate) mod tests {
                 "{junk:?}"
             );
         }
-        // CoreGraphics refuses a page tree without pages outright.
+        // CoreGraphics and Windows refuse a page tree without pages
+        // outright.
         let empty = PdfDocument::open(&pdf(&[])).err();
         assert!(
             matches!(empty, Some(PdfError::Unreadable | PdfError::NoPages)),
@@ -405,9 +518,30 @@ pub(crate) mod tests {
         assert_eq!(flat.render(1).unwrap_err(), PdfError::Page(1));
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
-    fn needs_macos() {
+    fn refuses_a_pdf_locked_with_a_password() {
+        // Standard 40-bit encryption whose user password is not empty: the
+        // empty password doesn't match `/U`, so a password is needed.
+        let bytes = String::from_utf8(pdf(&[TestPage::new(10, 10, "")])).unwrap();
+        let key = format!("<{}>", "ab".repeat(32));
+        let locked = bytes.replace(
+            "/Root 1 0 R",
+            &format!(
+                "/Root 1 0 R /Encrypt << /Filter /Standard /V 1 /R 2 /O {key} /U {key} \
+                 /P -4 >> /ID [<{0}> <{0}>]",
+                "01".repeat(16)
+            ),
+        );
+        assert_eq!(
+            PdfDocument::open(locked.as_bytes()).err(),
+            Some(PdfError::Locked)
+        );
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn unsupported_elsewhere() {
         let err = PdfDocument::open(&pdf(&[TestPage::new(10, 10, "")])).err();
         assert_eq!(err, Some(PdfError::Unsupported));
     }

@@ -27,6 +27,7 @@ import { Button } from "@guiderecorder/ui/button";
 import { editorStore, useAnnotated, useEditor } from "@/editor/editor";
 import { createQuitFlow } from "@/editor/store";
 import { shortcutFor } from "@/editor/shortcuts";
+import { shortcutLabel } from "@/lib/platform";
 import { QUIT_REQUESTED_EVENT, RECORDING_PICK_AREA_EVENT, tauriSettingsApi, UPDATE_STATUS_EVENT } from "@/lib/ipc";
 import type { UpdateStatus } from "@/lib/types";
 import { setupAtStartup, setupStore, useSetupStep } from "@/onboarding/onboarding";
@@ -110,14 +111,14 @@ function Toolbar({ onSettings, onSyncSettings }: { onSettings(): void; onSyncSet
         {doc && <SaveIndicator />}
         {doc && (
           <>
-            <Button variant="ghost" size="icon" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+            <Button variant="ghost" size="icon" aria-label="Undo" title={`Undo (${shortcutLabel("⌘Z")})`} disabled={!canUndo} onClick={undo}>
               <Undo2 />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               aria-label="Redo"
-              title="Redo (⇧⌘Z)"
+              title={`Redo (${shortcutLabel("⇧⌘Z")})`}
               disabled={!canRedo}
               onClick={redo}
             >
@@ -152,7 +153,7 @@ function Toolbar({ onSettings, onSyncSettings }: { onSettings(): void; onSyncSet
             />
           </>
         )}
-        <Button variant="ghost" size="icon" aria-label="Settings" title="Settings (⌘,)" onClick={onSettings}>
+        <Button variant="ghost" size="icon" aria-label="Settings" title={`Settings (${shortcutLabel("⌘,")})`} onClick={onSettings}>
           <SettingsIcon />
         </Button>
       </div>

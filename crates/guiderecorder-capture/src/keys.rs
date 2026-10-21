@@ -12,6 +12,18 @@ pub const S: u16 = 1;
 /// The `Z` key.
 #[cfg(target_os = "macos")]
 pub const Z: u16 = 6;
+/// Return.
+#[cfg(target_os = "macos")]
+pub const RETURN: u16 = 36;
+/// The keypad's Enter.
+#[cfg(target_os = "macos")]
+pub const KEYPAD_ENTER: u16 = 76;
+/// Tab.
+#[cfg(target_os = "macos")]
+pub const TAB: u16 = 48;
+/// Escape.
+#[cfg(target_os = "macos")]
+pub const ESCAPE: u16 = 53;
 
 /// The `S` key.
 #[cfg(not(target_os = "macos"))]
@@ -19,6 +31,18 @@ pub const S: u16 = 0x53;
 /// The `Z` key.
 #[cfg(not(target_os = "macos"))]
 pub const Z: u16 = 0x5A;
+/// Return (`VK_RETURN`).
+#[cfg(not(target_os = "macos"))]
+pub const RETURN: u16 = 0x0D;
+/// The keypad's Enter: the same code as Return.
+#[cfg(not(target_os = "macos"))]
+pub const KEYPAD_ENTER: u16 = RETURN;
+/// Tab (`VK_TAB`).
+#[cfg(not(target_os = "macos"))]
+pub const TAB: u16 = 0x09;
+/// Escape (`VK_ESCAPE`).
+#[cfg(not(target_os = "macos"))]
+pub const ESCAPE: u16 = 0x1B;
 
 /// The code of every key a shortcut can use, by the name the settings store
 /// it under: the ANSI letters and digits, `F1` to `F20`, and the named keys.

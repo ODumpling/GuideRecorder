@@ -3,6 +3,7 @@
 // Mac. Pure, so the panel and the export dialog agree.
 
 import type { SuggestionRef } from "@/annotations/commands";
+import { thisComputer } from "@/lib/platform";
 import type { Item, RedactionSuggestion, Step, SuggestionReview } from "@guiderecorder/guide-schema";
 
 /** A blur suggestion with where it is. */
@@ -43,7 +44,7 @@ export function kindKey(suggestion: RedactionSuggestion): string {
 
 /** Who found it. */
 export function sourceLabel(suggestion: RedactionSuggestion): string {
-  return suggestion.source === "onDevice" ? "on this Mac" : "by AI";
+  return suggestion.source === "onDevice" ? `on ${thisComputer()}` : "by AI";
 }
 
 export const REVIEW_LABELS: Record<SuggestionReview | "pending", string> = {
@@ -69,9 +70,9 @@ export function scanStatus(items: Item[]): string | null {
   if (!steps.length) return null;
   const unscanned = steps.flatMap((s, i) => (s.aiState.scanned ? [] : [i + 1]));
   if (unscanned.length === steps.length) {
-    return "Not scanned on this Mac. New recordings are scanned when on-device redaction is on.";
+    return `Not scanned on ${thisComputer()}. New recordings are scanned when on-device redaction is on.`;
   }
-  if (!unscanned.length) return "Scanned on this Mac.";
+  if (!unscanned.length) return `Scanned on ${thisComputer()}.`;
   const one = unscanned.length === 1;
-  return `Scanned on this Mac. ${stepList(unscanned)} ${one ? "wasn't" : "weren't"} scanned.`;
+  return `Scanned on ${thisComputer()}. ${stepList(unscanned)} ${one ? "wasn't" : "weren't"} scanned.`;
 }

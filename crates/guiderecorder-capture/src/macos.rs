@@ -1,9 +1,13 @@
 //! macOS capture backend: ScreenCaptureKit frames, CGEventTap input, AX
-//! lookups, Vision text recognition.
+//! lookups, NSWorkspace app tracking, Vision text recognition.
 
+pub mod apps;
 pub mod ax;
 pub mod event_tap;
 pub mod frames;
 pub mod ocr;
 pub mod permissions;
-pub mod session;
+/// The recording session: the shared engine.
+pub mod session {
+    pub use crate::recorder::*;
+}

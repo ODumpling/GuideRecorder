@@ -73,6 +73,15 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSValue",
 ] }
 
+# MP4 export with Media Foundation (`export/motion/mp4.rs`); tauri uses the
+# same version.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Media_MediaFoundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+] }
+
 [dev-dependencies]
 lopdf = "0.45.0"
 # Checks that PPTX parts are well-formed XML.

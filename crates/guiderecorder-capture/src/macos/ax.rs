@@ -31,17 +31,10 @@
 //!
 //! # Ancestor rule
 //!
-//! The hit-tested element is often a child of the control the user meant: a
-//! static text or image inside a button, or a group inside a cell. Only
-//! when the hit element's role is a [pass-through role](PASS_THROUGH_ROLES)
-//! do we walk `AXParent`, up to [`MAX_PARENT_DEPTH`] levels, stopping at a
-//! window or the application. We report the first ancestor with an
-//! [actionable role](ACTIONABLE_ROLES) instead of the hit element. If that
-//! ancestor has no label of its own, it takes the nearest label found on
-//! the way back down (for example a static text's value). Otherwise the hit
-//! element is reported as is. The choice is the pure function
-//! [`choose_target`]. Secure and text-entry targets never inherit a label
-//! ([`may_inherit_label`]).
+//! [`element_at`] walks `AXParent` from the hit element by the rule every
+//! backend shares (see [`crate::element`], re-exported here): the first
+//! actionable ancestor of a pass-through hit is reported, and may borrow a
+//! label from below ([`choose_target`], [`may_inherit_label`]).
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -53,46 +46,12 @@ use objc2_app_kit::NSRunningApplication;
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFRetained, CFString, CFType, CGPoint, CGSize};
 
+use crate::element::role_in;
+pub use crate::element::*;
+
 /// Per-message AX timeout. Applied to the system-wide element, which sets
 /// the global default for every element.
 pub const MESSAGING_TIMEOUT_SECS: f32 = 0.25;
-
-/// How many `AXParent` hops [`element_at`] may take looking for a better target.
-pub const MAX_PARENT_DEPTH: usize = 3;
-
-/// Longest label/title kept, in characters, after whitespace is collapsed.
-pub const MAX_TEXT_CHARS: usize = 200;
-
-/// Roles that are usually decoration inside a real control.
-pub const PASS_THROUGH_ROLES: &[&str] = &["AXStaticText", "AXImage", "AXGroup", "AXUnknown"];
-
-/// Roles a user clicks on purpose; preferred over a pass-through child.
-pub const ACTIONABLE_ROLES: &[&str] = &[
-    "AXButton",
-    "AXMenuButton",
-    "AXPopUpButton",
-    "AXCheckBox",
-    "AXRadioButton",
-    "AXMenuItem",
-    "AXMenuBarItem",
-    "AXLink",
-    "AXTab",
-    "AXCell",
-    "AXRow",
-    "AXDisclosureTriangle",
-    "AXComboBox",
-    "AXTextField",
-    "AXTextArea",
-    "AXSlider",
-    "AXIncrementor",
-    "AXColorWell",
-    "AXDockItem",
-];
-
-/// Roles at which the parent walk stops.
-const WALK_STOP_ROLES: &[&str] = &["AXWindow", "AXApplication", "AXSheet", "AXDrawer"];
-
-const SECURE_TEXT_FIELD: &str = "AXSecureTextField";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AxError {
@@ -200,18 +159,6 @@ pub fn focused_element() -> Result<Option<RawElement>> {
     read_element(&el, role).map(Some)
 }
 
-/// True unless `focused` is a definite non-secure element. Timeouts, errors
-/// and "nothing focused" all mask (fail closed).
-pub fn must_mask_keys(focused: &Result<Option<RawElement>>) -> bool {
-    !matches!(focused, Ok(Some(el)) if !el.is_secure)
-}
-
-/// True for a secure text field, by subrole (the documented signal) or by
-/// role (some custom controls report it there).
-pub fn is_secure(role: Option<&str>, subrole: Option<&str>) -> bool {
-    subrole == Some(SECURE_TEXT_FIELD) || role == Some(SECURE_TEXT_FIELD)
-}
-
 /// Outcome of reading `AXRole` / `AXSubrole`, kept distinct so a failed
 /// read can fail closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,53 +230,6 @@ pub fn classify_lookup_error(err: AXError, call: &'static str) -> ErrorClass {
             code: other.0,
         }),
     }
-}
-
-/// Trims, collapses runs of whitespace to one space, and caps the length
-/// at [`MAX_TEXT_CHARS`]. Blank input gives `None`.
-pub fn clean_text(s: &str) -> Option<String> {
-    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    match collapsed.char_indices().nth(MAX_TEXT_CHARS) {
-        Some((cut, _)) => Some(format!("{}…", collapsed[..cut].trim_end())),
-        None => Some(collapsed),
-    }
-}
-
-/// Index into `roles` (hit element first, then its ancestors) of the
-/// element to report. See the module docs for the rule.
-pub fn choose_target(roles: &[Option<&str>]) -> usize {
-    let Some(&hit) = roles.first() else {
-        return 0;
-    };
-    if !role_in(hit, PASS_THROUGH_ROLES) {
-        return 0;
-    }
-    for (i, &role) in roles.iter().enumerate().skip(1).take(MAX_PARENT_DEPTH) {
-        if role_in(role, ACTIONABLE_ROLES) {
-            return i;
-        }
-        if role_in(role, WALK_STOP_ROLES) {
-            break;
-        }
-    }
-    0
-}
-
-/// Text-entry roles whose children may hold typed or autofilled content.
-const NO_INHERIT_ROLES: &[&str] = &["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"];
-
-/// Whether a target element may take a label from a descendant. Never for
-/// secure elements or text-entry controls: their child text can be user
-/// content (typed text, autofill), not a label.
-pub fn may_inherit_label(role: Option<&str>, is_secure: bool) -> bool {
-    !is_secure && !role_in(role, NO_INHERIT_ROLES)
-}
-
-fn role_in(role: Option<&str>, set: &[&str]) -> bool {
-    role.is_some_and(|r| set.contains(&r))
 }
 
 fn system_wide() -> CFRetained<AXUIElement> {
@@ -538,36 +438,46 @@ fn read_element(el: &AXUIElement, role: AttrRead) -> Result<RawElement> {
     })
 }
 
+/// A focused-element reference compared with `CFEqual`: the identity the
+/// recording session caches key verdicts by.
+#[derive(Clone)]
+pub struct FocusRef(CFRetained<AXUIElement>);
+
+impl PartialEq for FocusRef {
+    fn eq(&self, other: &Self) -> bool {
+        let a: &CFType = &self.0;
+        let b: &CFType = &other.0;
+        a == b
+    }
+}
+
+/// The system-wide focused element reference (one AX message), or `None`
+/// when there is none or the lookup failed.
+pub fn focused_ref() -> Option<FocusRef> {
+    // SAFETY: no arguments; returns a +1 element wrapped by the binding.
+    let system = unsafe { AXUIElement::new_system_wide() };
+    // SAFETY: valid element. A failure only means the default timeout stays.
+    let _ = unsafe { system.set_messaging_timeout(MESSAGING_TIMEOUT_SECS) };
+    let name = CFString::from_static_str("AXFocusedUIElement");
+    let mut out: *const CFType = std::ptr::null();
+    // SAFETY: valid element and out-pointer; on success `out` is +1.
+    let err = unsafe { system.copy_attribute_value(&name, NonNull::from(&mut out)) };
+    let value = NonNull::new(out.cast_mut())
+        // SAFETY: a non-null `out` holds a +1 reference we now own (also
+        // released this way on failure, which leaves it null in practice).
+        .map(|p| unsafe { CFRetained::from_raw(p) })?;
+    if err != AXError::Success {
+        return None;
+    }
+    value.downcast::<AXUIElement>().ok().map(FocusRef)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn v(s: &str) -> AttrRead {
         AttrRead::Value(s.into())
-    }
-
-    #[test]
-    fn clean_text_collapses_and_caps() {
-        assert_eq!(clean_text("  Save \n  As… "), Some("Save As…".into()));
-        assert_eq!(clean_text(" \t\n"), None);
-        let long = "a".repeat(MAX_TEXT_CHARS + 50);
-        let cleaned = clean_text(&long).unwrap();
-        assert_eq!(cleaned.chars().count(), MAX_TEXT_CHARS + 1);
-        assert!(cleaned.ends_with('…'));
-        // Multi-byte input is cut on a char boundary.
-        let wide = "é".repeat(MAX_TEXT_CHARS + 1);
-        assert_eq!(
-            clean_text(&wide).unwrap().chars().count(),
-            MAX_TEXT_CHARS + 1
-        );
-    }
-
-    #[test]
-    fn secure_detection() {
-        assert!(is_secure(Some("AXTextField"), Some("AXSecureTextField")));
-        assert!(is_secure(Some("AXSecureTextField"), None));
-        assert!(!is_secure(Some("AXTextField"), Some("AXSearchField")));
-        assert!(!is_secure(None, None));
     }
 
     #[test]
@@ -641,49 +551,11 @@ mod tests {
             is_secure: true,
             ..Default::default()
         };
-        assert!(!must_mask_keys(&Ok(Some(plain))));
-        assert!(must_mask_keys(&Ok(Some(secure))));
-        assert!(must_mask_keys(&Ok(None)));
+        assert!(!must_mask_keys::<AxError>(&Ok(Some(plain))));
+        assert!(must_mask_keys::<AxError>(&Ok(Some(secure))));
+        assert!(must_mask_keys::<AxError>(&Ok(None)));
         assert!(must_mask_keys(&Err(AxError::Timeout)));
         assert!(must_mask_keys(&Err(AxError::NotTrusted)));
-    }
-
-    #[test]
-    fn static_text_in_button_targets_button() {
-        let roles = [Some("AXStaticText"), Some("AXButton"), Some("AXWindow")];
-        assert_eq!(choose_target(&roles), 1);
-    }
-
-    #[test]
-    fn label_inheritance_blocked_for_secure_and_text_entry() {
-        assert!(may_inherit_label(Some("AXButton"), false));
-        assert!(may_inherit_label(Some("AXCell"), false));
-        assert!(may_inherit_label(None, false));
-        assert!(!may_inherit_label(Some("AXButton"), true));
-        for role in ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"] {
-            assert!(!may_inherit_label(Some(role), false), "{role}");
-        }
-    }
-
-    #[test]
-    fn actionable_hit_is_kept() {
-        assert_eq!(choose_target(&[Some("AXButton"), Some("AXCell")]), 0);
-        assert_eq!(choose_target(&[None, Some("AXButton")]), 0);
-        assert_eq!(choose_target(&[]), 0);
-    }
-
-    #[test]
-    fn walk_stops_at_window_and_depth() {
-        let window_first = [Some("AXStaticText"), Some("AXWindow"), Some("AXButton")];
-        assert_eq!(choose_target(&window_first), 0);
-
-        let mut deep = vec![Some("AXStaticText")];
-        deep.extend((0..MAX_PARENT_DEPTH).map(|_| Some("AXGroup")));
-        deep.push(Some("AXButton"));
-        assert_eq!(choose_target(&deep), 0);
-
-        let in_cell = [Some("AXStaticText"), Some("AXGroup"), Some("AXCell")];
-        assert_eq!(choose_target(&in_cell), 2);
     }
 
     #[test]

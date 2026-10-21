@@ -16,16 +16,17 @@
 //! Snapshot frames are encoded to WebP while recording, so build with
 //! `--release`: debug encoding is slow and the encoder falls behind.
 //!
-//! ⌃⌥S adds a manual step. Needs Screen Recording, Input Monitoring and
-//! Accessibility for the terminal running it.
+//! ⌃⌥S (Ctrl+Alt+S) adds a manual step. On macOS, needs Screen Recording,
+//! Input Monitoring and Accessibility for the terminal running it; on
+//! Windows, nothing.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn main() {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
     use std::{fs, thread};
 
-    use guiderecorder_capture::macos::session::{RecordingSession, SessionConfig};
+    use guiderecorder_capture::backend::session::{RecordingSession, SessionConfig};
     use guiderecorder_capture::permissions::{self, Permission};
     use guiderecorder_core::library::Library;
 
@@ -208,7 +209,7 @@ fn main() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
-    eprintln!("the record example only runs on macOS");
+    eprintln!("the record example only runs on macOS and Windows");
 }

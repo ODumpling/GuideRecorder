@@ -167,11 +167,11 @@ fn import(files: &[PageFile], mut page: impl FnMut(String, RgbaImage) -> Result<
 mod tests {
     use super::*;
     use crate::editor::tests::{fixture_id, library, FIXTURE};
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     use crate::pdf::tests::top_left_square;
     use crate::pdf::tests::{pdf, TestPage};
     use guiderecorder_core::library::{read_webp, MAX_WEBP_DIMENSION};
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     use guiderecorder_core::model::{GuideKind, ImageShow, StepKind};
     use image::ImageFormat;
     use std::fs;
@@ -205,7 +205,7 @@ mod tests {
         names
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn titles(steps: &[&Step]) -> Vec<String> {
         steps.iter().map(|s| s.title.clone()).collect()
     }
@@ -227,8 +227,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    // PDF pages are drawn on macOS only for now (#14).
-    #[cfg(target_os = "macos")]
+    // PDF pages are drawn on macOS and Windows only.
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn creates_a_guide_from_images_and_pdfs() {
         let root = library();
@@ -312,6 +312,8 @@ mod tests {
         assert_eq!(listed[0].kind, GuideKind::Annotated);
         assert_eq!(listed[0].hotspot_count, 0);
         assert_eq!(bundles(&root).len(), before.len() + 1);
+        // Windows can't remove the index while it is open.
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -343,10 +345,13 @@ mod tests {
         let cases = [
             (broken, "broken.jpg: not a readable PNG, JPEG or WebP image"),
             (notes, "notes.txt is not a PNG, JPEG or WebP image or a PDF"),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             (bad_pdf, "bad.pdf: not a readable PDF"),
-            #[cfg(not(target_os = "macos"))]
-            (bad_pdf, "bad.pdf: PDF import needs macOS for now"),
+            #[cfg(not(any(target_os = "macos", windows)))]
+            (
+                bad_pdf,
+                "bad.pdf: PDF import isn't supported on this platform yet",
+            ),
             (big, "is too large (over 64 MB)"),
             (
                 disguised,
@@ -375,8 +380,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    // PDF pages are drawn on macOS only for now (#14).
-    #[cfg(target_os = "macos")]
+    // PDF pages are drawn on macOS and Windows only.
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn at_most_a_hundred_pages() {
         let root = library();
@@ -423,8 +428,8 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    // PDF pages are drawn on macOS only for now (#14).
-    #[cfg(target_os = "macos")]
+    // PDF pages are drawn on macOS and Windows only.
+    #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn adds_pages_to_an_open_guide_without_changing_it() {
         let root = library();

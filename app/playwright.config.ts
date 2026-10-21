@@ -17,7 +17,14 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // The specs walk the macOS app; Desktop Chrome's user agent is Windows,
+  // which src/lib/platform.ts would take for the Windows app.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"], userAgent: devices["Desktop Safari"].userAgent },
+    },
+  ],
   webServer: {
     command: `pnpm exec vite --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/e2e/index.html`,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { LoaderCircle, Pencil, Pin, PinOff, Trash2, TriangleAlert, Undo2 } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
+import { shortcutLabel } from "@/lib/platform";
 import { elapsedMs, type RecordingStore } from "@/recording/store";
 import { useThumbnail } from "@/recording/useThumbnail";
 import { feedItems, feedVisible, takenLabel, titleRuns, type FeedItem, type FeedStore } from "@/toolbar/feed";
@@ -179,7 +180,7 @@ export function FeedPanel({ recording, feed }: { recording: RecordingStore; feed
           size="icon"
           className={ICON_BUTTON}
           aria-label="Undo the last step"
-          title="Undo the last step (⌘⌥Z)"
+          title={`Undo the last step (${shortcutLabel("⌘⌥Z")})`}
           disabled={items.length === 0}
           onClick={() => void undoLast()}
         >

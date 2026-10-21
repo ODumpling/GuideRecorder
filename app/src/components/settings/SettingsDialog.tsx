@@ -14,13 +14,13 @@ import {
 import { SyncSection } from "@/components/settings/SyncSection";
 import { Button } from "@guiderecorder/ui/button";
 import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
+import { isWindows } from "@/lib/platform";
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
 
 export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp" | "sync";
 
-/** The pages, in the sidebar and the command palette. */
-export const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
+const ALL_PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "general", label: "General", icon: SlidersHorizontal },
   { page: "appearance", label: "Appearance", icon: Palette },
   { page: "recording", label: "Recording", icon: Keyboard },
@@ -31,6 +31,9 @@ export const PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = 
   { page: "mcp", label: "MCP", icon: Plug },
   { page: "sync", label: "Sync", icon: Cloud },
 ];
+
+/** The pages, in the sidebar and the command palette. Windows asks for no permissions, so has no Permissions page. */
+export const PAGES = ALL_PAGES.filter((p) => !(isWindows() && p.page === "permissions"));
 
 /** The Settings window: a sheet over the editor with one page per section. */
 export function SettingsDialog({

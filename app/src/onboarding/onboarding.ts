@@ -1,9 +1,11 @@
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { LibraryInfo, Permission, PermissionStatus, Settings } from "@/lib/types";
+import { isWindows } from "@/lib/platform";
 
 export type SetupStep = "permissions" | "library" | "apiKey";
-export const STEPS: SetupStep[] = ["permissions", "library", "apiKey"];
+/** Windows asks for no permissions to record, so setup starts at the library there. */
+export const STEPS: SetupStep[] = isWindows() ? ["library", "apiKey"] : ["permissions", "library", "apiKey"];
 
 /**
  * Whether first-run setup shows at launch, and at which step: on first
@@ -11,7 +13,7 @@ export const STEPS: SetupStep[] = ["permissions", "library", "apiKey"];
  */
 export function setupAtLaunch(settings: Settings | null, library: LibraryInfo | null): SetupStep | null {
   if (library?.error) return "library";
-  if (settings && !settings.general.onboarded) return "permissions";
+  if (settings && !settings.general.onboarded) return STEPS[0];
   return null;
 }
 
@@ -24,7 +26,7 @@ export function allGranted(rows: { permission: Permission; status: PermissionSta
 export const setupStore = createStore<{ step: SetupStep | null; open(step?: SetupStep): void; close(): void }>()(
   (set) => ({
     step: null,
-    open: (step = "permissions") => set({ step }),
+    open: (step = STEPS[0]) => set({ step }),
     close: () => set({ step: null }),
   }),
 );

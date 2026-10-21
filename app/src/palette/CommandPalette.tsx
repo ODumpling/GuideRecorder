@@ -43,6 +43,7 @@ import { editorStore, stepNoun, stepNumbers, useEditor } from "@/editor/editor";
 import { folderName, folderPaths, libraryTags, localToday } from "@/editor/library";
 import { FORMATS } from "@/export/export";
 import { tauriApi } from "@/lib/ipc";
+import { shortcutLabel } from "@/lib/platform";
 import type { CaptureArea, GuideListItem } from "@/lib/types";
 import { parseQuery, rankEntries, recentFirst, recentGuideIds, rememberOpened, type PaletteEntry } from "@/palette/palette";
 import { startFlow, useRecording } from "@/recording/recording";
@@ -197,8 +198,8 @@ function useEditorEntries(): Entry[] {
       entry("insert-note", "Insert note below", <Info />, () => insertNote(editor, "note")),
     );
   }
-  if (canUndo) entries.push(entry("undo", "Undo", <Undo2 />, () => editor.getState().undo(), { shortcut: "⌘Z" }));
-  if (canRedo) entries.push(entry("redo", "Redo", <Redo2 />, () => editor.getState().redo(), { shortcut: "⇧⌘Z" }));
+  if (canUndo) entries.push(entry("undo", "Undo", <Undo2 />, () => editor.getState().undo(), { shortcut: shortcutLabel("⌘Z") }));
+  if (canRedo) entries.push(entry("redo", "Redo", <Redo2 />, () => editor.getState().redo(), { shortcut: shortcutLabel("⇧⌘Z") }));
   const formats = FORMATS.map(({ format, label, detail }) =>
     entry(`export:${format}`, `Export as ${label}`, <FileOutput />, () => openExport(format), {
       group: "Actions",
@@ -322,7 +323,7 @@ function useEntries(all: GuideListItem[], onSettings: (page?: SettingsPage) => v
       icon: <SettingsIcon />,
       title: "Settings",
       keywords: ["preferences"],
-      shortcut: "⌘,",
+      shortcut: shortcutLabel("⌘,"),
       run: () => onSettings(),
     },
     ...PAGES.map(({ page, label, icon: Icon }): Entry => ({
@@ -488,7 +489,7 @@ function PaletteResults({ onSettings, onClose }: { onSettings(page?: SettingsPag
             <CommandItem value="search-library" onSelect={() => void searchLibrary()}>
               <Search />
               <span className="truncate">Search the library for “{text}”</span>
-              <CommandShortcut>⌘F</CommandShortcut>
+              <CommandShortcut>{shortcutLabel("⌘F")}</CommandShortcut>
             </CommandItem>
           </CommandGroup>
         )}

@@ -251,7 +251,10 @@ function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }
             {element.role && <Field label="Role">{element.role}</Field>}
             {element.app && <Field label="App">{element.app}</Field>}
             {element.window && <Field label="Window">{element.window}</Field>}
-            {element.bundleId && <Field label="Bundle ID">{element.bundleId}</Field>}
+            {element.bundleId && (
+              // Recorded on Windows, the id is the executable, e.g. 1password.exe.
+              <Field label={/\.exe$/i.test(element.bundleId) ? "Executable" : "Bundle ID"}>{element.bundleId}</Field>
+            )}
           </dl>
         </section>
       )}

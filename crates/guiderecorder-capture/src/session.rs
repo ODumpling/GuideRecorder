@@ -178,7 +178,7 @@ impl CaptureLostSink {
         Self(Arc::new(f))
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn report(&self, reason: Option<&str>) {
         (self.0)(reason);
     }
@@ -203,7 +203,7 @@ impl ExclusionSink {
         Self(Arc::new(f))
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn report(&self, excluded: Option<&str>) {
         (self.0)(excluded);
     }
@@ -250,7 +250,7 @@ impl SnapshotSink {
         Self(Arc::new(f))
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn report(&self, snapshot: &LiveSnapshot) {
         (self.0)(snapshot);
     }
@@ -282,7 +282,7 @@ impl PressSink {
         Self(Arc::new(f))
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn report(&self, press: &LivePress) {
         (self.0)(press);
     }
@@ -303,7 +303,7 @@ impl UndoSink {
         Self(Arc::new(f))
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     pub(crate) fn report(&self) {
         (self.0)();
     }

@@ -11,10 +11,11 @@ Everything stays on your machine. AI writing is optional and uses your own
 Anthropic API key, any OpenAI-compatible API, or a local model in Ollama or
 LM Studio, in which case nothing leaves your Mac.
 
-> **Status:** early and in active development. macOS only for now. Windows
-> support is under way ([#14](https://github.com/ODumpling/GuideRecorder/issues/14)):
-> the app, CLI and MCP server build and pass their tests there, but the app
-> can't record or import PDFs yet. Download the latest version from
+> **Status:** early and in active development, on macOS and, newer,
+> Windows ([#14](https://github.com/ODumpling/GuideRecorder/issues/14)).
+> On Windows the installer is not code-signed yet, so SmartScreen asks
+> before the first run, and windows of excluded apps can still show in
+> screenshots taken while another app is in front. Download the latest version from
 > [Releases](https://github.com/ODumpling/GuideRecorder/releases) (it updates
 > itself), or build it from source (see [Build from source](#build-from-source)).
 

@@ -1,6 +1,8 @@
 // Mirrors of the Rust checks in app/src-tauri/src/settings.rs, for
 // feedback while typing. Rust checks again when saving.
 
+import { isWindows } from "@/lib/platform";
+
 export const TYPING_IDLE_MS = { min: 300, max: 10_000 };
 /** Version history retention; 0 is no limit. */
 export const KEEP_VERSIONS = { min: 0, max: 1000 };
@@ -52,9 +54,11 @@ function hasBundleIdChars(value: string): boolean {
 /**
  * A full bundle id such as `com.1password.1password`: at least three
  * non-empty dot-separated parts. Exclusion also matches `<id>.` as a prefix,
- * so `com.apple` would leave out every Apple app.
+ * so `com.apple` would leave out every Apple app. On Windows an app's id is
+ * its executable's file name, such as `1password.exe`, in any case.
  */
 export function isBundleId(value: string): boolean {
+  if (isWindows()) return hasBundleIdChars(value) && value.length > 4 && value.toLowerCase().endsWith(".exe");
   const parts = value.split(".");
   return hasBundleIdChars(value) && parts.length >= 3 && parts.every((p) => p !== "");
 }
@@ -62,6 +66,7 @@ export function isBundleId(value: string): boolean {
 /** Why `value` can't be added as an excluded app, or null if it can (or is empty). */
 export function bundleIdError(value: string): string | null {
   if (value === "" || isBundleId(value)) return null;
+  if (isWindows()) return "Use an app's executable, such as 1password.exe.";
   if (hasBundleIdChars(value) && value.includes(".")) {
     return `${value} is too broad: it would exclude every app whose id starts with it. Use a full bundle id, such as com.1password.1password.`;
   }
@@ -84,7 +89,8 @@ const CODE_KEYS: Record<string, string> = {
 /**
  * The shortcut a key press spells, by physical key (`KeyR` is `R` on any
  * layout), or null while only modifiers are held or no modifier other
- * than Shift is.
+ * than Shift is. On Windows, Ctrl is `CmdOrCtrl` and the Windows key
+ * `Super`.
  */
 export function hotkeyFromEvent(e: {
   code: string;
@@ -98,9 +104,10 @@ export function hotkeyFromEvent(e: {
   const fn = /^(F([1-9]|1[0-9]|20))$/.exec(e.code)?.[1];
   const key = letter ?? digit ?? fn ?? CODE_KEYS[e.code];
   if (!key) return null;
+  const windows = isWindows();
   const mods = [
-    e.metaKey && "CmdOrCtrl",
-    e.ctrlKey && "Ctrl",
+    e.metaKey && (windows ? "Super" : "CmdOrCtrl"),
+    e.ctrlKey && (windows ? "CmdOrCtrl" : "Ctrl"),
     e.altKey && "Alt",
     e.shiftKey && "Shift",
   ].filter((m): m is string => !!m);
@@ -127,11 +134,28 @@ const SYMBOLS: Record<string, string> = {
   Delete: "⌦",
 };
 
-/** A shortcut as macOS menus show it, e.g. `⇧⌘R`. */
+/** On Windows: words joined with `+`, Cmd and Super being the Windows key. */
+const WINDOWS_NAMES: Record<string, string> = {
+  CmdOrCtrl: "Ctrl",
+  CommandOrControl: "Ctrl",
+  Cmd: "Win",
+  Command: "Win",
+  Super: "Win",
+  Control: "Ctrl",
+  Option: "Alt",
+  Escape: "Esc",
+};
+
+/** A shortcut as macOS menus show it, e.g. `⇧⌘R`, or as Windows does, e.g. `Ctrl+Shift+R`. */
 export function formatHotkey(value: string): string {
   if (!value) return "None";
   const parts = value.split("+");
   const key = parts.pop()!;
+  if (isWindows()) {
+    const order = ["Win", "Ctrl", "Alt", "Shift"];
+    const mods = [...new Set(parts.map((m) => WINDOWS_NAMES[m] ?? m))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return [...mods, WINDOWS_NAMES[key] ?? key].join("+");
+  }
   const order = ["⌃", "⌥", "⇧", "⌘"];
   const mods = parts.map((m) => SYMBOLS[m] ?? m).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   return mods.join("") + (SYMBOLS[key] ?? key);

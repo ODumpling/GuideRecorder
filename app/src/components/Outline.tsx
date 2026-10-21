@@ -42,6 +42,7 @@ import {
   withCollapsed,
 } from "@/editor/outline";
 import { navigationFor } from "@/editor/shortcuts";
+import { isWindows, shortcutLabel } from "@/lib/platform";
 import type { Item, Step } from "@guiderecorder/guide-schema";
 import { cn } from "@guiderecorder/ui/utils";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
@@ -451,7 +452,7 @@ export function Outline() {
         <button
           type="button"
           aria-current={selectedId === null || undefined}
-          title="Edit the guide's introduction, prerequisites, summary and tags (⌘D)"
+          title={`Edit the guide's introduction, prerequisites, summary and tags (${shortcutLabel("⌘D")})`}
           data-outline-details
           onClick={() => select(null)}
           onKeyDown={(e) => {
@@ -586,7 +587,7 @@ export function Outline() {
                     variant="ghost"
                     size="icon"
                     aria-label="Move up"
-                    title="Move up (⌥↑)"
+                    title={`Move up (${shortcutLabel("⌥↑")})`}
                     disabled={index === 0}
                     onClick={() => shift(targets(item.id), -1)}
                   >
@@ -596,7 +597,7 @@ export function Outline() {
                     variant="ghost"
                     size="icon"
                     aria-label="Move down"
-                    title="Move down (⌥↓)"
+                    title={`Move down (${shortcutLabel("⌥↓")})`}
                     disabled={index === guide.items.length - 1}
                     onClick={() => shift(targets(item.id), 1)}
                   >
@@ -619,10 +620,10 @@ export function Outline() {
           <span className="flex-1 pl-1 font-medium tabular-nums">{selection.length} items selected</span>
           {!readOnly && (
             <>
-              <Button variant="ghost" size="icon" aria-label="Move selected items up" title="Move up (⌥↑)" onClick={() => shift(selection, -1)}>
+              <Button variant="ghost" size="icon" aria-label="Move selected items up" title={`Move up (${shortcutLabel("⌥↑")})`} onClick={() => shift(selection, -1)}>
                 <ArrowUp />
               </Button>
-              <Button variant="ghost" size="icon" aria-label="Move selected items down" title="Move down (⌥↓)" onClick={() => shift(selection, 1)}>
+              <Button variant="ghost" size="icon" aria-label="Move selected items down" title={`Move down (${shortcutLabel("⌥↓")})`} onClick={() => shift(selection, 1)}>
                 <ArrowDown />
               </Button>
               {canMergeRange(guide.items, selection) && (
@@ -649,18 +650,18 @@ export function Outline() {
       <p
         className="border-t border-sidebar-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground"
         title={[
-          "J / K or ⌘[ / ⌘]: previous and next, anywhere",
-          "⌘D: guide details",
+          `J / K or ${shortcutLabel("⌘[")} / ${shortcutLabel("⌘]")}: previous and next, anywhere`,
+          `${shortcutLabel("⌘D")}: guide details`,
           "Home / End: first and last",
           "Enter: edit the title; Esc: back to the outline",
           "← / →: collapse and expand a section",
-          "⇧-click or ⇧↑ / ⇧↓: select a range",
+          `${isWindows() ? "Shift" : "⇧"}-click or ${shortcutLabel("⇧↑")} / ${shortcutLabel("⇧↓")}: select a range`,
         ].join("\n")}
       >
         <Kbd>↑</Kbd> <Kbd>↓</Kbd> to move between {noun}s
         {!readOnly && (
           <>
-            , <Kbd>⌥↑</Kbd> <Kbd>⌥↓</Kbd> to reorder
+            , <Kbd>{shortcutLabel("⌥↑")}</Kbd> <Kbd>{shortcutLabel("⌥↓")}</Kbd> to reorder
           </>
         )}
       </p>

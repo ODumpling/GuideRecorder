@@ -5,6 +5,7 @@ import { PermissionList } from "@/components/settings/sections";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { errorMessage, tauriSettingsApi, type SettingsApi } from "@/lib/ipc";
+import { isWindows, keyStore, thisComputer } from "@/lib/platform";
 import type { LibraryInfo, Permission, PermissionStatus } from "@/lib/types";
 import { cn } from "@guiderecorder/ui/utils";
 import { allGranted, setupStore, STEPS, useSetupStep, type SetupStep } from "@/onboarding/onboarding";
@@ -94,7 +95,7 @@ function LibraryStep({ api, onNext }: { api: SettingsApi; onNext(): void }) {
         </Button>
         {info?.defaultPath && (info.path !== info.defaultPath || info.error) && (
           <Button variant="outline" disabled={busy} onClick={() => void useDefault()} title={info.defaultPath}>
-            Use ~/Documents/GuideRecorder
+            {isWindows() ? "Use Documents\\GuideRecorder" : "Use ~/Documents/GuideRecorder"}
           </Button>
         )}
       </div>
@@ -141,8 +142,8 @@ function ApiKeyStep({ api, onDone }: { api: SettingsApi; onDone(): void }) {
     >
       <p className="text-sm text-muted-foreground">
         With an Anthropic API key, GuideRecorder writes the step text for you from the screenshots. It's optional: you
-        can write guides yourself, add a key later, or use another provider or a model on this Mac (Ollama, LM
-        Studio) in Settings. The key is kept in your Keychain.
+        can write guides yourself, add a key later, or use another provider or a model on {thisComputer()} (Ollama, LM
+        Studio) in Settings. The key is kept in {keyStore()}.
       </p>
       {stored && <p className="text-xs text-[var(--status-success)]">A key is already stored.</p>}
       <Input
@@ -168,7 +169,8 @@ function ApiKeyStep({ api, onDone }: { api: SettingsApi; onDone(): void }) {
 }
 
 /**
- * First-run setup: permissions, the library folder, an optional API key.
+ * First-run setup: permissions (not on Windows), the library folder, an
+ * optional API key.
  * Shown on first launch or when the library can't be opened; Settings
  * reopens it. Finishing (or skipping to the end) marks it done.
  */
@@ -201,7 +203,9 @@ export function Onboarding({ api = tauriSettingsApi }: { api?: SettingsApi }) {
           className="fixed top-1/2 left-1/2 z-50 flex max-h-[90vh] w-[34rem] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-2xl border border-border bg-card p-6 text-card-foreground shadow-2xl"
         >
           <Dialog.Title className="text-lg font-semibold">Set up GuideRecorder</Dialog.Title>
-          <Dialog.Description className="sr-only">First-run setup in three steps.</Dialog.Description>
+          <Dialog.Description className="sr-only">
+            {STEPS.length === 3 ? "First-run setup in three steps." : "First-run setup in two steps."}
+          </Dialog.Description>
           <ol aria-label="Setup steps" className="flex gap-2">
             {STEPS.map((s, i) => {
               const Icon = TITLES[s].icon;

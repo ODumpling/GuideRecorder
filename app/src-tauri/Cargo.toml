@@ -31,11 +31,15 @@ tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 
-# PDF pages for annotated guides (`src/pdf.rs`); the capture crate uses the
-# same versions.
 [dev-dependencies]
 tempfile = "3.27.0"
 
+# PDF pages for annotated guides (`src/pdf.rs`); the capture crate uses the
+# same versions.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
+
+# Windows draws them with Windows.Data.Pdf.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Data_Pdf", "Storage_Streams", "UI"] }

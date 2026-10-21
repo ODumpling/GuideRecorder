@@ -45,6 +45,7 @@ import {
   type ExportOutcome,
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
+import { fileManager } from "@/lib/platform";
 import type { ExportFormat, MotionOptions, PaperSize } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
@@ -349,7 +350,7 @@ export function ExportDialog({
                   </Button>
                   {done.files[0] && (
                     <Button variant="outline" onClick={() => void reveal(done.files[0]!)}>
-                      <FolderOpen /> Reveal in Finder
+                      <FolderOpen /> Reveal in {fileManager()}
                     </Button>
                   )}
                   <Button onClick={() => onOpenChange(false)}>Done</Button>

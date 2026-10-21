@@ -1,5 +1,9 @@
 //! OS permissions required for recording (design #440, "Permissions (Q33)").
 //!
+//! These are macOS's (TCC). Windows asks for none of them: desktop apps
+//! may capture the screen, hook input and use UI Automation, so every
+//! permission reports [`PermissionStatus::Granted`] there.
+//!
 //! [`check`] / [`check_all`] are side-effect free and cheap enough to poll for
 //! a live checklist. [`request`] may show a system prompt and must only be
 //! called in response to an explicit user action.
@@ -116,7 +120,12 @@ pub fn check(permission: Permission) -> PermissionStatus {
             Permission::InputMonitoring => sys::check_input_monitoring(),
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _ = permission;
+        PermissionStatus::Granted
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = permission;
         PermissionStatus::Unknown
@@ -162,7 +171,12 @@ pub fn request(permission: Permission) -> PermissionStatus {
             Permission::InputMonitoring => sys::request_input_monitoring(),
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _ = permission;
+        PermissionStatus::Granted
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = permission;
         PermissionStatus::Unknown
@@ -196,7 +210,9 @@ mod tests {
         for p in Permission::ALL {
             assert_eq!(report.get(p), check(p));
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
+        assert!(report.all_granted());
+        #[cfg(not(any(target_os = "macos", windows)))]
         assert!(Permission::ALL
             .into_iter()
             .all(|p| check(p) == PermissionStatus::Unknown));

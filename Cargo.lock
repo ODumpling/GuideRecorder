@@ -2321,6 +2321,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "windows",
 ]
 
 [[package]]
@@ -2342,6 +2343,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]
@@ -2393,6 +2395,7 @@ dependencies = [
  "typst-pdf",
  "typst-render",
  "ulid",
+ "windows",
  "zip 8.6.0",
 ]
 
