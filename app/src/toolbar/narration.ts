@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { errorMessage, NARRATION_EVENT, type NarrationApi } from "@/lib/ipc";
+import { thisComputer } from "@/lib/platform";
 import type { NarrationState } from "@/lib/types";
 
 /** The toolbar's microphone: narrating while recording (see app/src-tauri/src/narration.rs). */
@@ -82,7 +83,7 @@ export function micView({ narration, busy, error }: Pick<MicState, "narration" |
       label: "Turn the microphone off",
       title: paused
         ? "Microphone on, and paused with the recording"
-        : "Microphone on: what you say is transcribed on this Mac and added to the steps. Click to turn it off.",
+        : `Microphone on: what you say is transcribed on ${thisComputer()} and added to the steps. Click to turn it off.`,
       disabled: busy,
     };
   }

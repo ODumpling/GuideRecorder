@@ -1,5 +1,6 @@
 //! Windows capture backend: Windows.Graphics.Capture frames, low-level
-//! input hooks, UI Automation lookups, foreground tracking, Windows OCR.
+//! input hooks, UI Automation lookups, foreground tracking, Windows OCR,
+//! and narration (WASAPI with SAPI's desktop dictation).
 //!
 //! # Coordinates
 //!
@@ -17,7 +18,9 @@ pub mod ax;
 pub mod event_tap;
 pub mod frames;
 mod mask;
+pub(crate) mod narration;
 pub(crate) mod ocr;
+pub(crate) mod permissions;
 
 /// The recording session: the shared engine.
 pub mod session {

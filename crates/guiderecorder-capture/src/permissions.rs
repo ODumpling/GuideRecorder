@@ -7,7 +7,11 @@
 //! Recording needs [`Permission::ALL`]. Narration (#13, see
 //! [`crate::narration`]) needs [`Permission::NARRATION`] as well, but only
 //! when it is turned on: those never hold a recording back. Where narration
-//! is not supported they report [`PermissionStatus::Unknown`].
+//! is not supported they report [`PermissionStatus::Unknown`]. On Windows
+//! they are read from its settings, never prompted for
+//! (`windows::permissions`): the microphone from Settings → Privacy &
+//! security → Microphone, and speech recognition is granted when a desktop
+//! dictation recogniser is installed.
 //!
 //! [`check`] / [`check_all`] are side-effect free and cheap enough to poll for
 //! a live checklist. [`request`] may show a system prompt and must only be
@@ -112,8 +116,20 @@ impl PermissionReport {
     }
 }
 
-/// System Settings deep link for the pane that controls `permission`.
+/// System Settings deep link for the pane that controls `permission`. On
+/// Windows, the Settings page: Privacy & security → Microphone, Time &
+/// language → Speech (where a speech language is added), and Privacy &
+/// security for the rest, which Windows never asks about.
 pub fn settings_url(permission: Permission) -> &'static str {
+    if cfg!(windows) {
+        return match permission {
+            Permission::Microphone => "ms-settings:privacy-microphone",
+            Permission::SpeechRecognition => "ms-settings:speech",
+            Permission::ScreenRecording
+            | Permission::Accessibility
+            | Permission::InputMonitoring => "ms-settings:privacy",
+        };
+    }
     match permission {
         Permission::ScreenRecording => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
@@ -148,10 +164,13 @@ pub fn check(permission: Permission) -> PermissionStatus {
     }
     #[cfg(windows)]
     {
-        if Permission::NARRATION.contains(&permission) {
-            PermissionStatus::Unknown
-        } else {
-            PermissionStatus::Granted
+        use crate::windows::permissions as sys;
+        match permission {
+            Permission::Microphone => sys::check_microphone(),
+            Permission::SpeechRecognition => sys::check_speech_recognition(),
+            Permission::ScreenRecording
+            | Permission::Accessibility
+            | Permission::InputMonitoring => PermissionStatus::Granted,
         }
     }
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -190,6 +209,7 @@ pub fn check_all() -> PermissionReport {
 /// May show a system dialog; call only from an explicit user action. A grant
 /// made in System Settings often only takes effect after an app restart
 /// (notably Screen Recording), so callers should re-[`check`] later.
+/// Windows has no prompt for a desktop app: this only checks.
 pub fn request(permission: Permission) -> PermissionStatus {
     #[cfg(target_os = "macos")]
     {
@@ -228,9 +248,27 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for p in Permission::ALL.into_iter().chain(Permission::NARRATION) {
             let url = settings_url(p);
-            assert!(url.starts_with("x-apple.systempreferences:"), "{url}");
-            assert!(url.contains("?Privacy_"), "{url}");
+            if cfg!(windows) {
+                assert!(url.starts_with("ms-settings:"), "{url}");
+                // Recording's all open Privacy & security.
+                if Permission::ALL.contains(&p) {
+                    continue;
+                }
+            } else {
+                assert!(url.starts_with("x-apple.systempreferences:"), "{url}");
+                assert!(url.contains("?Privacy_"), "{url}");
+            }
             assert!(seen.insert(url), "duplicate url for {p:?}");
+        }
+        if cfg!(windows) {
+            assert_eq!(
+                settings_url(Permission::Microphone),
+                "ms-settings:privacy-microphone"
+            );
+            assert_eq!(
+                settings_url(Permission::SpeechRecognition),
+                "ms-settings:speech"
+            );
         }
     }
 
@@ -250,7 +288,12 @@ mod tests {
         for p in Permission::NARRATION {
             assert!(!Permission::ALL.contains(&p));
             assert_eq!(report.get(p), check(p));
-            #[cfg(not(target_os = "macos"))]
+            // Windows reads its settings: an answer either way.
+            #[cfg(windows)]
+            assert_ne!(check(p), PermissionStatus::Unknown);
+            #[cfg(windows)]
+            assert_eq!(request(p), check(p));
+            #[cfg(not(any(target_os = "macos", windows)))]
             assert_eq!(check(p), PermissionStatus::Unknown);
         }
     }

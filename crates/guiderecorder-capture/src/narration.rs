@@ -1,9 +1,15 @@
 //! Narration (#13): the microphone, transcribed on the device while a
-//! recording runs. macOS only (`macos::narration`: AVAudioEngine and the
-//! Speech framework with `requiresOnDeviceRecognition`); every other
-//! platform refuses to start ([`NarrationError::Unsupported`]). Windows'
-//! dictation needs its online speech service, so it is not used. Audio
-//! and text never leave the device.
+//! recording runs. Audio and text never leave the device.
+//!
+//! - macOS (`macos::narration`): AVAudioEngine and the Speech framework
+//!   with `requiresOnDeviceRecognition`.
+//! - Windows (`windows::narration`): the microphone through WASAPI, and
+//!   SAPI 5's desktop dictation, which runs in process with the recogniser
+//!   a language's speech pack installs. Windows.Media.SpeechRecognition is
+//!   not used: its dictation needs Microsoft's online speech service.
+//!   Dictation adds no punctuation but what is spoken.
+//!
+//! Every other platform refuses to start ([`NarrationError::Unsupported`]).
 //!
 //! A [`Narrator`] runs beside a recording session, not inside it: the app
 //! starts one when narration is on, and the microphone can be turned off
@@ -42,7 +48,14 @@ pub enum NarrationError {
     NotAllowed(Permission),
     #[error("no microphone was found")]
     NoMicrophone,
-    #[error("speech recognition on this device is not available for {0}; download its dictation language in System Settings → Keyboard")]
+    #[cfg_attr(
+        not(windows),
+        error("speech recognition on this device is not available for {0}; download its dictation language in System Settings → Keyboard")
+    )]
+    #[cfg_attr(
+        windows,
+        error("speech recognition on this device is not available for {0}; add the language's speech pack in Settings → Time & language → Speech")
+    )]
     NotOnDevice(String),
     #[error("narration failed: {0}")]
     Failed(String),
@@ -60,16 +73,23 @@ pub struct Narration {
 
 /// Whether narration can work on this platform (permissions aside).
 pub fn is_supported() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", windows))
 }
+
+/// The narrator of this platform.
+#[cfg(target_os = "macos")]
+use crate::macos::narration::Narrator as Backend;
+/// The narrator of this platform.
+#[cfg(windows)]
+use crate::windows::narration::Narrator as Backend;
 
 /// Hears the microphone and transcribes it on the device. Starts
 /// listening; stops when [`Narrator::stop`]ped or dropped (dropping
 /// discards what was heard, and the audio file).
 pub struct Narrator {
-    #[cfg(target_os = "macos")]
-    inner: crate::macos::narration::Narrator,
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "macos", windows))]
+    inner: Backend,
+    #[cfg(not(any(target_os = "macos", windows)))]
     never: std::convert::Infallible,
 }
 
@@ -85,11 +105,11 @@ impl Narrator {
     /// can't be recognised on this device for the user's language (it is
     /// never sent anywhere instead).
     pub fn start(config: NarrationConfig) -> Result<Self, NarrationError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
-            crate::macos::narration::Narrator::start(config).map(|inner| Self { inner })
+            Backend::start(config).map(|inner| Self { inner })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = config;
             Err(NarrationError::Unsupported)
@@ -99,11 +119,11 @@ impl Narrator {
     /// Whether the microphone is heard: off while the toolbar's microphone
     /// is off or the recording is paused.
     pub fn set_listening(&self, listening: bool) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             self.inner.set_listening(listening)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = listening;
             match self.never {}
@@ -113,11 +133,11 @@ impl Narrator {
     /// Stops listening and returns what was heard. Waits a few seconds at
     /// most for the last words to be recognised.
     pub fn stop(self) -> Result<Narration, NarrationError> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             self.inner.stop()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             match self.never {}
         }
@@ -221,9 +241,29 @@ mod tests {
         assert_eq!(word.text, "save");
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn narration_is_refused_off_macos() {
+    fn a_missing_language_says_where_to_get_it() {
+        let text = NarrationError::NotOnDevice("de-DE".into()).to_string();
+        assert!(text.contains("de-DE"), "{text}");
+        if cfg!(windows) {
+            assert!(
+                text.contains("Settings → Time & language → Speech"),
+                "{text}"
+            );
+        } else {
+            assert!(text.contains("System Settings → Keyboard"), "{text}");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn narration_is_supported_on_macos_and_windows() {
+        assert!(is_supported());
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn narration_is_refused_off_macos_and_windows() {
         assert!(!is_supported());
         assert_eq!(
             Narrator::start(NarrationConfig::default()).unwrap_err(),

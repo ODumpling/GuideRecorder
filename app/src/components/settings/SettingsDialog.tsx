@@ -32,7 +32,11 @@ const ALL_PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
   { page: "sync", label: "Sync", icon: Cloud },
 ];
 
-/** The pages, in the sidebar and the command palette. Windows asks for no permissions, so has no Permissions page. */
+/**
+ * The pages, in the sidebar and the command palette. Windows asks for no
+ * permissions to record, so has no Permissions page; narration's are under
+ * Recording there.
+ */
 export const PAGES = ALL_PAGES.filter((p) => !(isWindows() && p.page === "permissions"));
 
 /** The Settings window: a sheet over the editor with one page per section. */

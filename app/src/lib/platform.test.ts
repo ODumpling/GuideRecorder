@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fileManager, isWindows, keyStore, shortcutLabel, thisComputer } from "@/lib/platform";
+import { fileManager, isWindows, keyStore, narrationSupported, shortcutLabel, systemSettings, thisComputer } from "@/lib/platform";
 
 /** WebView2's user agent on Windows 11. */
 const WINDOWS_USER_AGENT =
@@ -31,5 +31,12 @@ describe("platform", () => {
     expect(shortcutLabel("⌥↑")).toBe("Alt+↑");
     expect(shortcutLabel("⇧↓")).toBe("Shift+↓");
     expect([thisComputer(), fileManager(), keyStore()]).toEqual(["this PC", "File Explorer", "Windows Credential Manager"]);
+  });
+
+  it("narrates on both, and names each one's settings", () => {
+    vi.stubGlobal("navigator", { userAgent: MAC_USER_AGENT });
+    expect([narrationSupported(), systemSettings()]).toEqual([true, "System Settings"]);
+    vi.stubGlobal("navigator", { userAgent: WINDOWS_USER_AGENT });
+    expect([narrationSupported(), systemSettings()]).toEqual([true, "Windows Settings"]);
   });
 });

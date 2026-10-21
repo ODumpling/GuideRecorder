@@ -432,7 +432,7 @@ export interface RecordingSaved {
 
 /** The toolbar's microphone (`narration_state`, `recording://narration`). */
 export interface NarrationState {
-  /** Narration works on this computer (macOS). */
+  /** Narration works on this computer (macOS and Windows). */
   supported: boolean;
   /** On: what is said is transcribed while recording. Outside a recording, the same as `enabled`. */
   on: boolean;
