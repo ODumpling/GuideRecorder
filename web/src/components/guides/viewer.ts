@@ -55,7 +55,21 @@ export interface ViewerStep {
 
 export type ViewerNote = { type: "note"; id: string; kind: "tip" | "warning" | "note"; body: string };
 
-export type ViewerItem = ViewerStep | { type: "section"; id: string; title: string } | ViewerNote;
+/** Where a decision option leads, resolved as core `export/render.rs` does. */
+export type ViewerTarget =
+  /** Step `number` (null: past the last step), and the section chosen, if one was. */
+  | { kind: "step"; number: number | null; section: string | null }
+  | { kind: "guide"; id: string; title: string };
+
+export type ViewerDecision = {
+  type: "decision";
+  id: string;
+  /** Markdown. */
+  question: string;
+  options: { id: string; label: string; target: ViewerTarget }[];
+};
+
+export type ViewerItem = ViewerStep | { type: "section"; id: string; title: string; audiences: string[] } | ViewerNote | ViewerDecision;
 
 type RawItem = {
   type: string;
@@ -67,17 +81,30 @@ type RawItem = {
   image?: StepImage;
   annotations?: Annotation[];
   point?: Point | null;
+  audiences?: unknown;
+  question?: string;
+  options?: { id?: string; label?: string; target?: { kind?: string; id?: string; title?: string } }[];
 };
 
 /** The guide's items with steps numbered and placed in their sections. */
 export function viewerItems(guide: Guide): ViewerItem[] {
   let number = 0;
   let section: string | null = null;
-  return ((guide.items ?? []) as RawItem[]).flatMap((item, index): ViewerItem[] => {
+  const raw = (guide.items ?? []) as RawItem[];
+  return raw.flatMap((item, index): ViewerItem[] => {
     const id = item.id ?? String(index);
     if (item.type === "section") {
       section = item.title ?? "";
-      return [{ type: "section", id, title: section }];
+      const audiences = Array.isArray(item.audiences) ? item.audiences.filter((a): a is string => typeof a === "string" && a.trim() !== "").map((a) => a.trim()) : [];
+      return [{ type: "section", id, title: section, audiences }];
+    }
+    if (item.type === "decision") {
+      const options = (Array.isArray(item.options) ? item.options : []).map((option, i) => ({
+        id: option.id ?? String(i),
+        label: (option.label ?? "").replace(/\s+/g, " ").trim(),
+        target: resolveTarget(raw, index, option.target),
+      }));
+      return [{ type: "decision", id, question: item.question ?? "", options }];
     }
     if (item.type === "note") {
       const kind = item.kind === "tip" || item.kind === "warning" ? item.kind : "note";
@@ -102,6 +129,25 @@ export function viewerItems(guide: Guide): ViewerItem[] {
   });
 }
 
+/**
+ * Where an option of the decision at `from` leads: the first step at or
+ * after the item it names (after the decision for `next`). A step or
+ * section that is gone reads as `next`.
+ */
+function resolveTarget(items: RawItem[], from: number, target: { kind?: string; id?: string; title?: string } | undefined): ViewerTarget {
+  if (target?.kind === "guide") return { kind: "guide", id: target.id ?? "", title: (target.title ?? "").trim() };
+  const named = target?.kind === "step" || target?.kind === "section" ? items.findIndex((item) => item.id === target.id) : -1;
+  const at = named >= 0 ? named : from;
+  const section = named >= 0 && target?.kind === "section" ? (items[named]!.title ?? "").trim() : null;
+  let number = 0;
+  for (const [i, item] of items.entries()) {
+    if (item.type !== "step") continue;
+    number += 1;
+    if (i >= at) return { kind: "step", number, section };
+  }
+  return { kind: "step", number: null, section };
+}
+
 const finite = (...values: unknown[]) => values.every((v) => typeof v === "number" && Number.isFinite(v));
 const validPoint = (p: Point | null | undefined): p is Point => Boolean(p) && finite(p!.x, p!.y);
 export const validRect = (r: Rect | null | undefined): r is Rect =>
@@ -109,20 +155,23 @@ export const validRect = (r: Rect | null | undefined): r is Rect =>
 
 export type Slide =
   | { kind: "intro" }
-  | { kind: "step"; step: ViewerStep; notes: ViewerNote[] }
-  | { kind: "done"; notes: ViewerNote[] };
+  | { kind: "step"; step: ViewerStep; notes: SlideNote[] }
+  | { kind: "done"; notes: SlideNote[] };
+
+/** What shows above a slide's step: the notes and decisions before it. */
+export type SlideNote = ViewerNote | ViewerDecision;
 
 /**
  * The guide as slides, like the walkthrough export: an intro slide if
- * there's an intro or prerequisites, one per step (with the notes before
- * it), and an end slide with any notes after the last step.
+ * there's an intro or prerequisites, one per step (with the notes and
+ * decisions before it), and an end slide with any after the last step.
  */
 export function slides(guide: Guide, items: ViewerItem[]): Slide[] {
   const out: Slide[] = [];
   if (guide.intro?.trim() || guide.prerequisites?.trim()) out.push({ kind: "intro" });
-  let notes: ViewerNote[] = [];
+  let notes: SlideNote[] = [];
   for (const item of items) {
-    if (item.type === "note") notes.push(item);
+    if (item.type === "note" || item.type === "decision") notes.push(item);
     else if (item.type === "step") {
       out.push({ kind: "step", step: item, notes });
       notes = [];

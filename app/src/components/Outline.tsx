@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ChevronRight,
   FileText,
+  GitBranch,
   GripVertical,
   Heading,
   ImageIcon,
@@ -74,11 +75,14 @@ export function itemLabel(item: Item, annotated: boolean): string {
       return plainLabel(item.title) || "Untitled section";
     case "note":
       return plainLabel(item.body) || `Empty ${item.kind}`;
+    case "decision":
+      return plainLabel(item.question) || "Untitled decision";
   }
 }
 
 function ItemIcon({ item }: { item: Item }) {
   if (item.type === "section") return <Heading className="size-3.5 text-muted-foreground" />;
+  if (item.type === "decision") return <GitBranch className="size-3.5 text-primary" />;
   if (item.type === "note") {
     if (item.kind === "tip") return <Lightbulb className="size-3.5 text-[var(--status-success)]" />;
     if (item.kind === "warning") return <TriangleAlert className="size-3.5 text-[var(--status-warning)]" />;
@@ -571,7 +575,7 @@ export function Outline() {
                     <StepThumb guideId={guide.id} step={item} />
                   </>
                 ) : (
-                  item.type === "note" && (
+                  (item.type === "note" || item.type === "decision") && (
                     <span className="flex w-4 shrink-0 justify-end">
                       <ItemIcon item={item} />
                     </span>
@@ -580,6 +584,15 @@ export function Outline() {
                 <span className={cn(item.type === "step" ? "line-clamp-2 leading-snug" : "truncate")}>
                   {itemLabel(item, annotated)}
                 </span>
+                {item.type === "section" && !!item.audiences?.length && (
+                  <span
+                    className="shrink-0 truncate rounded-full bg-sidebar-foreground/[0.06] px-1.5 py-px text-[10px] font-medium tracking-normal normal-case"
+                    title="Who this section is for"
+                    data-testid="section-audiences"
+                  >
+                    {item.audiences.join(", ")}
+                  </span>
+                )}
                 {item.id === cover && (
                   <span
                     className="shrink-0 rounded-full bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground"

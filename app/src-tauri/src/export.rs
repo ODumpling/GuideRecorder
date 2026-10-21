@@ -13,6 +13,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
+use guiderecorder_core::branch;
 use guiderecorder_core::export::md::{Branding, CheckedBranding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
     docx, html, md, motion, pdf, pptx, scorm, skill, verify_crop_rect, ExportReport, ImageOptions,
@@ -341,6 +342,8 @@ pub fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
 
 /// Exports a guide from its saved bundle (the editor flushes its changes
 /// first) to `out` on `paper` (DOCX and PDF only), with the review details line when `review_details`, which [`ChosenPaths::check_destination`] has accepted.
+/// With an `audience`, sections for other audiences are left out (see
+/// [`branch::for_audience`]).
 /// The guide lock is held throughout, so no save or close sweep changes the
 /// bundle while it is read.
 #[allow(clippy::too_many_arguments)]
@@ -357,6 +360,7 @@ pub fn export_guide(
     motion_request: &MotionRequest,
     skill_request: &SkillRequest,
     scorm_request: &ScormRequest,
+    audience: Option<&str>,
 ) -> Result<ExportResult> {
     let id = parse_id(guide_id)?;
     if !(motion::MIN_SECONDS_PER_STEP..=motion::MAX_SECONDS_PER_STEP)
@@ -386,7 +390,7 @@ pub fn export_guide(
             format!("{} no longer holds guide {id}", handle.path.display()),
         ));
     }
-    let guide = loaded.guide;
+    let guide = branch::narrow(loaded.guide, audience);
     let handle = loaded.handle;
     let render = RenderGuide::new(&guide, &handle);
     let timestamp = Some(guide.updated_at);
@@ -593,6 +597,7 @@ pub fn preview_guide(
     motion_request: &MotionRequest,
     skill_request: &SkillRequest,
     scorm_request: &ScormRequest,
+    audience: Option<&str>,
 ) -> Result<ExportPreview> {
     let id = parse_id(guide_id)?;
     let branding = check_branding(chosen, branding)?;
@@ -606,7 +611,7 @@ pub fn preview_guide(
             format!("{} no longer holds guide {id}", handle.path.display()),
         ));
     }
-    let guide = loaded.guide;
+    let guide = branch::narrow(loaded.guide, audience);
     let handle = loaded.handle;
     let render = RenderGuide::new(&guide, &handle);
     let image = ImageOptions {
@@ -1032,6 +1037,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
         assert_eq!(md.files[0], dir.join("md").join(md::GUIDE_FILE));
@@ -1053,6 +1059,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
         assert!(html.files[0].ends_with(html::GUIDE_FILE));
@@ -1069,6 +1076,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1088,6 +1096,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest { replay: true },
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
         assert_eq!(skill.files[0], dir.join("skill").join(skill::SKILL_FILE));
@@ -1117,6 +1126,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .is_err());
             chosen.add_file(out.clone());
@@ -1133,6 +1143,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .unwrap();
             assert_eq!(result.files, std::slice::from_ref(&out));
@@ -1151,6 +1162,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .unwrap_err();
             assert_eq!(err.kind, ErrorKind::Exists, "{}", err.message);
@@ -1167,6 +1179,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .unwrap();
         }
@@ -1184,6 +1197,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Exists);
@@ -1200,6 +1214,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
     }
@@ -1227,6 +1242,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .unwrap();
             let pdf = fs::read(&out).unwrap();
@@ -1251,6 +1267,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
             .unwrap();
             fs::read(&out).unwrap()
@@ -1276,6 +1293,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap_err();
         assert!(
@@ -1305,6 +1323,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap_err();
         assert!(
@@ -1326,6 +1345,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap();
         assert!(result.files.iter().any(|f| f.ends_with(md::LOGO_FILE)));
@@ -1347,6 +1367,7 @@ mod tests {
             &MotionRequest::default(),
             &SkillRequest::default(),
             &ScormRequest::default(),
+            None,
         )
         .unwrap_err();
         assert!(err.message.starts_with("branding:"), "{}", err.message);
@@ -1372,6 +1393,7 @@ mod tests {
                     &motion,
                     &skill,
                     request,
+                    None,
                 )?;
                 let ExportPreview::Html { html } = page else {
                     panic!("{page:?}")
@@ -1391,6 +1413,7 @@ mod tests {
                     &motion,
                     &skill,
                     request,
+                    None,
                 )
                 .map(|r| r.files[0].display().to_string())
             }
@@ -1455,6 +1478,7 @@ mod tests {
                 &MotionRequest::default(),
                 &SkillRequest::default(),
                 &ScormRequest::default(),
+                None,
             )
         };
         let is_png = |src: &str| src.starts_with("data:image/png;base64,");

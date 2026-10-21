@@ -21,12 +21,20 @@ use crate::SCHEMA_VERSION;
 pub type Step = fn(Value) -> Result<Value, String>;
 
 /// The real migrations: entry `i` takes version `i + 1` to `i + 2`.
-pub const MIGRATIONS: &[Step] = &[v1_to_v2];
+pub const MIGRATIONS: &[Step] = &[v1_to_v2, v2_to_v3];
 
 /// Version 2 added `Guide.kind` and the `hotspot` annotation. Both are
 /// new, so a version 1 document is already valid version 2; the bump only
 /// keeps older apps from opening (and failing on) guides that use them.
 fn v1_to_v2(value: Value) -> Result<Value, String> {
+    Ok(value)
+}
+
+/// Version 3 added the `decision` item and section `audiences`. Both are
+/// new, so a version 2 document is already valid version 3; as with v2,
+/// the bump keeps older apps from failing on guides that use them: they
+/// open them read-only with the newer-version message.
+fn v2_to_v3(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
@@ -175,12 +183,28 @@ mod tests {
         let v1: Value = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
         assert_eq!(v1["schemaVersion"], 1);
         let (out, applied) = migrate(v1.clone(), 1).unwrap();
-        assert_eq!(applied, [1]);
+        assert_eq!(applied, [1, 2]);
         let mut expected = v1;
-        expected["schemaVersion"] = 2.into();
+        expected["schemaVersion"] = 3.into();
         assert_eq!(out, expected);
         let guide: crate::model::Guide = serde_json::from_value(out).unwrap();
         assert_eq!(guide.kind, crate::model::GuideKind::Walkthrough);
+    }
+
+    #[test]
+    fn v2_guides_migrate_unchanged() {
+        let mut v2: Value = serde_json::from_str(include_str!("../testdata/guide.json")).unwrap();
+        v2["schemaVersion"] = 2.into();
+        let (out, applied) = migrate(v2.clone(), 2).unwrap();
+        assert_eq!(applied, [2]);
+        let mut expected = v2;
+        expected["schemaVersion"] = 3.into();
+        assert_eq!(out, expected);
+        let guide: crate::model::Guide = serde_json::from_value(out).unwrap();
+        assert!(guide
+            .items
+            .iter()
+            .all(|item| !matches!(item, crate::model::Item::Decision(_))));
     }
 
     #[test]

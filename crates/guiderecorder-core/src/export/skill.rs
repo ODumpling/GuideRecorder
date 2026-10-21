@@ -54,8 +54,8 @@ use serde::Serialize;
 
 use super::ast::{plain_text, Block};
 use super::md::{
-    blocks, code_span, escape_line, heading_text, image_names, inlines_single_line, io_err,
-    prepare_out_dir, quote, remove_stale_images, single_line, slug, Labels, Result,
+    blocks, code_span, decision_text, escape_line, heading_text, image_names, inlines_single_line,
+    io_err, prepare_out_dir, quote, remove_stale_images, single_line, slug, Labels, Result,
 };
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderStep};
 use crate::confidence::{describe_issues, element_issues, needs_element, ElementIssue};
@@ -426,7 +426,7 @@ pub fn steps(guide: &RenderGuide, image_names: &[String]) -> SkillSteps {
             RenderItem::Section(s) => {
                 section = Some(single_line(&s.title)).filter(|t| !t.is_empty())
             }
-            RenderItem::Note(_) => {}
+            RenderItem::Note(_) | RenderItem::Decision(_) => {}
             RenderItem::Step(step) => {
                 let stored = &step.step;
                 steps.push(SkillStep {
@@ -546,6 +546,13 @@ pub fn skill_md(guide: &RenderGuide, image_names: &[String], replay: bool) -> St
              you act."
                 .into(),
         );
+        if guide.decisions().next().is_some() {
+            out.push(
+                "At a decision, answer its question from what is on the screen and go where \
+                 the matching option says; the other steps are then skipped or repeated."
+                    .into(),
+            );
+        }
     }
     let has_sections = guide
         .items
@@ -558,6 +565,12 @@ pub fn skill_md(guide: &RenderGuide, image_names: &[String], replay: bool) -> St
             RenderItem::Section(section) => {
                 let title = escape_line(&single_line(&section.title));
                 out.push(format!("### {}", heading_text(&title)));
+                if let Some(audiences) = labels.audiences(&section.audiences) {
+                    out.push(format!("*{}*", escape_line(&audiences)));
+                }
+            }
+            RenderItem::Decision(decision) => {
+                out.push(quote(&decision_text(decision, &labels, guide.kind)));
             }
             RenderItem::Step(step) => {
                 let Some(data) = data_steps.next() else {
@@ -1072,6 +1085,7 @@ mod tests {
             Item::Section(Section {
                 id: Ulid::from_parts(2, 1),
                 title: "Write".into(),
+                audiences: Vec::new(),
             }),
             step(
                 "Type the text",

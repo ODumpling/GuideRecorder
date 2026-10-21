@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'sha256-lkJefMmXPFf8vylDs1iPMD3MfHff730es08FaHj3SLY=' 'sha256-UJ+Qv/TXxypRyWyd+8GC0lt+tZ9PvKo8tpDy+tT9TK8='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self' 'sha256-3nxb9fU69R5/VmVm3hGLSj7tX6xMNRBs02awY6/qs1o=' 'sha256-hDqg2Pf7+wW4LkNKb2ilYNKK7ziXlyafiSiW8ympYl0='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {

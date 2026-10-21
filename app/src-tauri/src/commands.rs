@@ -587,6 +587,7 @@ pub async fn export_guide(
     motion: Option<MotionRequest>,
     skill: Option<SkillRequest>,
     scorm: Option<ScormRequest>,
+    audience: Option<String>,
 ) -> Result<ExportResult> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
@@ -606,6 +607,7 @@ pub async fn export_guide(
             &motion,
             &skill,
             &scorm,
+            audience.as_deref(),
         )
     })
     .await
@@ -626,6 +628,7 @@ pub async fn preview_export(
     motion: Option<MotionRequest>,
     skill: Option<SkillRequest>,
     scorm: Option<ScormRequest>,
+    audience: Option<String>,
 ) -> Result<ExportPreview> {
     let chosen = Arc::clone(&chosen);
     let motion = motion.unwrap_or_default();
@@ -643,6 +646,7 @@ pub async fn preview_export(
             &motion,
             &skill,
             &scorm,
+            audience.as_deref(),
         )
     })
     .await

@@ -10,7 +10,7 @@ import { equal } from "@guiderecorder/sync";
 export type GuideTextField = Extract<GuideField, "title" | "intro" | "prerequisites">;
 
 /** The item fields holding Markdown. */
-export type ItemTextField = "title" | "description" | "body";
+export type ItemTextField = "title" | "description" | "body" | "question";
 
 const GUIDE_FIELDS: readonly GuideField[] = ["title", "intro", "prerequisites", "summary", "tags"];
 
@@ -63,6 +63,8 @@ const ITEM_TEXT: Record<Item["type"], string[]> = {
   step: ["title", "description", "aiState"],
   section: ["title"],
   note: ["body"],
+  // The question only: options and their targets are edited in the app.
+  decision: ["question"],
 };
 
 /** Guide fields the web editor may change. */

@@ -6,17 +6,21 @@ Normal | Admin access to the console.
 Normal shd=FFF4E5 | **Warning: **Creating a new key **revokes** the old one immediately. Update these first:
 Normal num=2/0 shd=FFF4E5 | The CI secret
 Normal num=2/0 shd=FFF4E5 | Local `.env` files
-Heading2 | 1. Open **Settings → API keys**
+Heading2 | {#step-1}1. Open **Settings → API keys**
 Normal | [image 304800x190500]
-Heading2 | 2. Enter your password to confirm
+Heading2 | {#step-2}2. Enter your password to confirm
 Normal | [image 609600x381000]
 Normal | Password input is masked while recording.
-Heading2 | 3. Click **Create key** and copy the new key
+Heading2 | {#step-3}3. Click **Create key** and copy the new key
 Normal | [image 609600x190500]
 Normal | The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
-Heading2 | 4. Drag the new key to **Production**
+Normal shd=E8F0FE | **Decision: **Is the key used in **production**?
+Normal shd=E8F0FE | –**Yes: **[Go to Step 4](#step-4)
+Normal shd=E8F0FE | –**No: **[Go to Step 5](#step-5)
+Normal shd=E8F0FE | –**Unsure: **Go to the guide “Find where an API key is used”
+Heading2 | {#step-4}4. Drag the new key to **Production**
 Normal | [image 609600x381000]
-Heading2 | 5. Check that the key works
+Heading2 | {#step-5}5. Check that the key works
 Normal | [image 609600x381000]
 Normal | Run this in Terminal:
 Normal | `curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`

@@ -1,8 +1,8 @@
 import { useRef } from "react";
 import { DropdownMenu } from "radix-ui";
-import { FilePlus2, Heading, ImagePlus, Info, Lightbulb, ListPlus, Plus, TriangleAlert } from "lucide-react";
+import { FilePlus2, GitBranch, Heading, ImagePlus, Info, Lightbulb, ListPlus, Plus, TriangleAlert } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
-import { insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
+import { insertDecision, insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { IMAGE_EXTENSIONS } from "@/editor/images";
 import { startInsert } from "@/editor/recapture";
@@ -70,6 +70,9 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
             </DropdownMenu.Item>
             <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "note")}>
               <Info /> Note below
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className={ITEM} onSelect={() => insertDecision(editorStore)}>
+              <GitBranch /> Decision below
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

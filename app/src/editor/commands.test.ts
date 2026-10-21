@@ -11,8 +11,15 @@ import {
   mergeSteps,
   mergeWithNext,
   moveItems,
+  newDecision,
   newNote,
   newSection,
+  addDecisionOption,
+  removeDecisionOption,
+  setOptionLabel,
+  setOptionTarget,
+  setSectionAudiences,
+  guideAudiences,
   splitStep,
   dropTarget,
   moveItem,
@@ -487,5 +494,68 @@ describe("cover", () => {
     expect(applyPatches(g, range.forward).coverStepId).toBeUndefined();
     expect(applyPatches(applyPatches(g, range.forward), range.inverse)).toEqual(g);
     expect(applyPatches(g, deleteItems(g, ["A", "C"]).forward).coverStepId).toBe("B");
+  });
+});
+
+describe("decisions and audiences", () => {
+  const withDecision = () => applyPatches(guide(), insertItemAfter(guide(), newDecision("D1", ["O1", "O2"]), "A").forward);
+  const undoes = (before: ReturnType<typeof guide>, command: Command) => {
+    const after = applyPatches(before, command.forward);
+    expect(applyPatches(after, command.inverse)).toEqual(before);
+    return after;
+  };
+
+  it("inserts a decision with Yes and No going on to the next item", () => {
+    const command = insertItemAfter(guide(), newDecision("D1", ["O1", "O2"]), "A");
+    expect(command.label).toBe("Insert decision");
+    expect(roundTrip(command).items[2]).toEqual({
+      type: "decision",
+      id: "D1",
+      question: "",
+      options: [
+        { id: "O1", label: "Yes", target: { kind: "next" } },
+        { id: "O2", label: "No", target: { kind: "next" } },
+      ],
+    });
+    expect(deleteItem(withDecision(), "D1").label).toBe("Delete decision");
+  });
+
+  it("edits the question, options and targets undoably", () => {
+    let g = withDecision();
+    g = undoes(g, setItemText(g, "D1", "question", "Admin?"));
+    g = undoes(g, setOptionLabel(g, "D1", "O1", "Admin"));
+    g = undoes(g, setOptionTarget(g, "D1", "O2", { kind: "step", id: "C" }));
+    g = undoes(g, addDecisionOption(g, "D1", "O3", "Other"));
+    g = undoes(g, setOptionTarget(g, "D1", "O3", { kind: "guide", id: "G2", title: "Other guide" }));
+    g = undoes(g, removeDecisionOption(g, "D1", "O1"));
+    expect(g.items[2]).toMatchObject({
+      question: "Admin?",
+      options: [
+        { id: "O2", label: "No", target: { kind: "step", id: "C" } },
+        { id: "O3", label: "Other", target: { kind: "guide", id: "G2", title: "Other guide" } },
+      ],
+    });
+    expect(() => setOptionLabel(g, "D1", "nope", "x")).toThrow(PatchError);
+    expect(() => addDecisionOption(g, "A", "O9")).toThrow(PatchError);
+  });
+
+  it("coalesces typing into one option label", () => {
+    const g = withDecision();
+    const first = setOptionLabel(g, "D1", "O1", "A");
+    const second = setOptionLabel(applyPatches(g, first.forward), "D1", "O1", "Ad");
+    const merged = coalesce(first, second)!;
+    expect(merged).not.toBeNull();
+    expect(applyPatches(applyPatches(g, merged.forward), merged.inverse)).toEqual(g);
+    expect(coalesce(first, setOptionLabel(g, "D1", "O2", "B"))).toBeNull();
+  });
+
+  it("tags sections with audiences, unset when empty", () => {
+    const tagged = roundTrip(setSectionAudiences(guide(), "S1", [" Admin", "user", "ADMIN", ""]));
+    expect(tagged.items[0]).toEqual({ type: "section", id: "S1", title: "Start", audiences: ["Admin", "user"] });
+    expect(guideAudiences(tagged)).toEqual(["Admin", "user"]);
+    const cleared = applyPatches(tagged, setSectionAudiences(tagged, "S1", [" "]).forward);
+    expect(JSON.parse(JSON.stringify(cleared.items[0]))).toEqual({ type: "section", id: "S1", title: "Start" });
+    expect(guideAudiences(guide())).toEqual([]);
+    expect(() => setSectionAudiences(guide(), "A", ["x"])).toThrow(PatchError);
   });
 });

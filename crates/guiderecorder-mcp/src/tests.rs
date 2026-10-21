@@ -585,6 +585,52 @@ async fn get_guide_returns_markdown_with_anchors() {
 }
 
 #[tokio::test]
+async fn decisions_and_audiences_are_in_the_guide_markdown() {
+    let fx = Fixture::new();
+    let path = fx
+        .library
+        .join("Share a calendar event.guiderecorder")
+        .join("guide.json");
+    let mut guide: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    guide["items"][4]["audiences"] = json!(["Organizer"]);
+    fs::write(&path, serde_json::to_vec_pretty(&guide).unwrap()).unwrap();
+    let mut client = Client::start(fx.config()).await;
+
+    let result = client.ok("get_guide", json!({ "id": ROTATE })).await;
+    let md = text(&result, 0);
+    assert!(
+        md.contains("> **Decision:** Is the key used in **production**? {#decision-"),
+        "{md}"
+    );
+    assert!(
+        md.contains("> - **Yes** → step 4\n> - **No** → step 5\n"),
+        "{md}"
+    );
+    assert!(md.contains("> - **Unsure** → guide “Find where an API key is used” ("));
+
+    let result = client.ok("get_guide", json!({ "id": CALENDAR })).await;
+    let md = text(&result, 0);
+    assert!(
+        md.contains("Sections for: Organizer (pass `audience` to see one)"),
+        "{md}"
+    );
+    assert!(md.contains("## Invite people {#section-"), "{md}");
+    assert!(md.contains("*For: Organizer*"), "{md}");
+    let result = client
+        .ok("get_guide", json!({ "id": CALENDAR, "audience": "Guest" }))
+        .await;
+    let md = text(&result, 0);
+    assert!(!md.contains("Invite people"), "{md}");
+    let result = client
+        .ok(
+            "get_skill",
+            json!({ "guide_id": CALENDAR, "audience": "guest" }),
+        )
+        .await;
+    assert!(!text(&result, 0).contains("Invite people"));
+}
+
+#[tokio::test]
 async fn annotation_guides_list_their_hotspots() {
     let fx = Fixture::new().with_index();
     let mut client = Client::start(fx.config()).await;

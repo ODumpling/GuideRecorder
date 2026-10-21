@@ -51,6 +51,40 @@ describe("viewerItems", () => {
     expect(all.map((s) => s.kind)).toEqual(["intro", "step", "step", "step", "step", "step", "done"]);
     // The note before the first step shows on its slide.
     expect(all[1]).toMatchObject({ kind: "step", notes: [{ kind: "warning" }] });
+    // So does the decision before the fourth.
+    expect(all[4]).toMatchObject({ kind: "step", step: { number: 4 }, notes: [{ type: "decision" }] });
+  });
+
+  it("resolves decision options to step numbers, as the exporter does", () => {
+    const decision = viewerItems(apiKey).find((i) => i.type === "decision");
+    expect(decision).toMatchObject({
+      question: "Is the key used in **production**?",
+      options: [
+        { label: "Yes", target: { kind: "step", number: 4, section: null } },
+        { label: "No", target: { kind: "step", number: 5, section: null } },
+        { label: "Unsure", target: { kind: "guide", title: "Find where an API key is used" } },
+      ],
+    });
+    const guide = {
+      ...apiKey,
+      items: [
+        { type: "decision", id: "d", question: "Admin?", options: [
+          { id: "o1", label: "Yes", target: { kind: "section", id: "s" } },
+          { id: "o2", label: "Gone", target: { kind: "step", id: "missing" } },
+        ] },
+        { type: "step", id: "a", title: "One", kind: "click", image: { full: "a.webp" } },
+        { type: "section", id: "s", title: "Admins", audiences: ["Admin", " "] },
+      ],
+    } as unknown as Guide;
+    expect(viewerItems(guide)).toMatchObject([
+      { type: "decision", options: [{ target: { number: null, section: "Admins" } }, { target: { number: 1, section: null } }] },
+      { type: "step", number: 1 },
+      { type: "section", audiences: ["Admin"] },
+    ]);
+    const html = renderToStaticMarkup(createElement(GuideViewer, { guide, imageUrl: () => null }));
+    expect(html).toContain("For: Admin");
+    expect(html).toContain('<a href="#step-1" class="text-brand underline">Go to Step 1</a>');
+    expect(html).toContain("Go to “Admins”");
   });
 });
 

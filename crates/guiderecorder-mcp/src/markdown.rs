@@ -4,7 +4,10 @@
 //! escaping every string, so guide text can never inject headings, step-id
 //! anchors or links of its own. Items carry stable anchors: steps are
 //! `### 3. Click **Save** {#step-<ulid>}`, sections `## Setup
-//! {#section-<ulid>}` and notes `> **Tip** {#note-<ulid>}`.
+//! {#section-<ulid>}` (then `*For: Admin*` when they name audiences), notes
+//! `> **Tip** {#note-<ulid>}` and decisions `> **Decision:** question
+//! {#decision-<ulid>}` with an option per line: `- **Yes** → step 4` (or
+//! a section, the end, or another guide with its id).
 //!
 //! A step's hotspots follow its description as a numbered list (the
 //! numbers drawn on its image), each with its bold title and description.
@@ -12,7 +15,7 @@
 //! up front, and pages have no recorded action details.
 
 use guiderecorder_core::export::ast::{Block, Inline};
-use guiderecorder_core::export::{RenderGuide, RenderItem, RenderStep};
+use guiderecorder_core::export::{RenderGuide, RenderItem, RenderStep, RenderTarget};
 use guiderecorder_core::model::{ElementInfo, GuideKind, ImageShow, NoteKind, StepKind};
 
 /// Extra facts about the guide that are not in [`RenderGuide`].
@@ -67,6 +70,23 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     if let Some(due) = &meta.review_due {
         facts.push(format!("Review due: {}", escape_line(due)));
     }
+    let mut audiences: Vec<&str> = Vec::new();
+    for item in &render.items {
+        if let RenderItem::Section(section) = item {
+            for audience in &section.audiences {
+                if !audiences.iter().any(|a| a.eq_ignore_ascii_case(audience)) {
+                    audiences.push(audience);
+                }
+            }
+        }
+    }
+    if !audiences.is_empty() {
+        let audiences: Vec<String> = audiences.iter().map(|a| escape_line(a)).collect();
+        facts.push(format!(
+            "Sections for: {} (pass `audience` to see one)",
+            audiences.join(", ")
+        ));
+    }
     if let Some(cover) = &render.cover {
         let number = render
             .steps()
@@ -120,11 +140,48 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
     for item in &render.items {
         match item {
             RenderItem::Step(step) => out.push_str(&self::step(step, render.kind)),
-            RenderItem::Section(section) => out.push_str(&format!(
-                "## {} {{#section-{}}}\n\n",
-                escape_line(&section.title),
-                section.id
-            )),
+            RenderItem::Section(section) => {
+                out.push_str(&format!(
+                    "## {} {{#section-{}}}\n\n",
+                    escape_line(&section.title),
+                    section.id
+                ));
+                if !section.audiences.is_empty() {
+                    out.push_str(&format!(
+                        "*For: {}*\n\n",
+                        escape_line(&section.audiences.join(", "))
+                    ));
+                }
+            }
+            RenderItem::Decision(decision) => {
+                out.push_str(&format!(
+                    "> **Decision:** {} {{#decision-{}}}\n",
+                    inlines_line(&decision.question),
+                    decision.id
+                ));
+                if !decision.options.is_empty() {
+                    out.push_str(">\n");
+                }
+                for option in &decision.options {
+                    let to = match &option.target {
+                        RenderTarget::Step {
+                            number: Some(number),
+                            section,
+                        } => match section {
+                            Some(title) => format!("section “{title}” (step {number})"),
+                            None => format!("step {number}"),
+                        },
+                        RenderTarget::Step { number: None, .. } => "the end".to_owned(),
+                        RenderTarget::Guide { id, title } => format!("guide “{title}” ({id})"),
+                    };
+                    out.push_str(&format!(
+                        "> - **{}** → {}\n",
+                        escape_line(&option.label),
+                        escape_line(&to)
+                    ));
+                }
+                out.push('\n');
+            }
             RenderItem::Note(note) => {
                 let label = match note.kind {
                     NoteKind::Tip => "Tip",

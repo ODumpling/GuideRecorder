@@ -15,6 +15,8 @@ import { ExportPreview } from "@/components/ExportPreview";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
 import { Textarea } from "@guiderecorder/ui/textarea";
+import { NativeSelect, NativeSelectOption } from "@guiderecorder/ui/native-select";
+import { guideAudiences } from "@/editor/commands";
 import { editorStore, useEditor } from "@/editor/editor";
 import { unclearSteps, unclearStepsText } from "@/editor/element";
 import { inspectorStore } from "@/editor/inspector";
@@ -182,6 +184,8 @@ export function ExportDialog({
   const [motion, setMotion] = useState<MotionOptions>(() => initialMotion());
   const [skill, setSkill] = useState<SkillOptions>(() => initialSkill());
   const [scorm, setScorm] = useState<ScormOptions>(() => initialScorm(guideId));
+  // Who the export is for; "" is everyone. Not remembered: audiences are per guide.
+  const [audience, setAudience] = useState("");
   // The seconds and mastery fields as typed, so they can be cleared while editing.
   const [seconds, setSeconds] = useState(() => String(motion.secondsPerStep));
   const [mastery, setMastery] = useState(() => String(scorm.masteryScore));
@@ -232,6 +236,7 @@ export function ExportDialog({
       const startScorm = initialScorm(guideId);
       setScorm(startScorm);
       setMastery(String(startScorm.masteryScore));
+      setAudience("");
       setOutcome(null);
       setRevealError(null);
       setSkipReview(false);
@@ -251,6 +256,9 @@ export function ExportDialog({
   const secondsOk = !isMotionFormat(format) || isSecondsPerStep(Number(seconds));
   const scormChoice: ScormOptions = { ...scorm, masteryScore: mastery.trim() === "" ? NaN : Number(mastery) };
   const scormText = format === "scorm" ? scormProblem(scormChoice) : null;
+  const audiences = doc ? guideAudiences(doc.guide) : [];
+  // An audience no section names any more (renamed meanwhile) is everyone.
+  const forAudience = audiences.find((a) => a === audience) ?? null;
   const unreviewed = unreviewedBlurs(doc?.guide.items ?? []);
   const reviewText = unreviewedBlursText(unreviewed);
   // Only skills find elements again; the other formats show screenshots.
@@ -327,6 +335,7 @@ export function ExportDialog({
         motion: motionChoice,
         skill,
         scorm: scormChoice,
+        audience: forAudience,
       },
     );
     setBusy(false);
@@ -537,6 +546,27 @@ export function ExportDialog({
                       <span className="text-xs text-muted-foreground">Encoding the video can take a little while.</span>
                     )}
                   </>
+                )}
+
+                {audiences.length > 0 && (
+                  <Field label="Audience">
+                    <NativeSelect
+                      aria-label="Audience"
+                      value={forAudience ?? ""}
+                      disabled={busy}
+                      onChange={(e) => setAudience(e.target.value)}
+                    >
+                      <NativeSelectOption value="">Everyone</NativeSelectOption>
+                      {audiences.map((a) => (
+                        <NativeSelectOption key={a} value={a}>
+                          {a}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <span className="text-xs text-muted-foreground">
+                      Sections tagged for other audiences are left out, with the decision options that lead there.
+                    </span>
+                  </Field>
                 )}
 
                 {format === "skill" && (
@@ -833,6 +863,7 @@ export function ExportDialog({
                 motion={motion}
                 skill={skill}
                 scorm={scormChoice}
+                audience={forAudience}
                 api={api}
                 flush={() => editorStore.getState().flush()}
               />

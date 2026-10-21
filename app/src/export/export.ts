@@ -180,7 +180,7 @@ export function rememberSkill(skill: SkillOptions, storage: Pick<Storage, "setIt
 }
 
 export const COMPLETIONS: { completion: ScormCompletion; label: string; detail: string }[] = [
-  { completion: "lastStep", label: "Last step reached", detail: "Completed" },
+  { completion: "lastStep", label: "End of the walkthrough reached", detail: "Completed" },
   { completion: "quizPassed", label: "Quiz passed", detail: "Passed or failed" },
 ];
 
@@ -256,7 +256,7 @@ export function defaultCourseId(guideId: string): string {
  */
 export function scormProblem(scorm: ScormOptions): string | null {
   if (!isMasteryScore(scorm.masteryScore)) return "The mastery score must be a whole number from 0 to 100.";
-  if (scorm.completion === "quizPassed" && !scorm.quiz.trim()) return "Add a quiz, or complete on the last step.";
+  if (scorm.completion === "quizPassed" && !scorm.quiz.trim()) return "Add a quiz, or complete at the end of the walkthrough.";
   return null;
 }
 
@@ -361,6 +361,8 @@ export async function runExport(
     motion: MotionOptions;
     skill?: SkillOptions;
     scorm?: ScormOptions;
+    /** Only the sections for this audience (and for everyone); absent: all. */
+    audience?: string | null;
   },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
@@ -384,6 +386,7 @@ export async function runExport(
       motion,
       request.skill ?? DEFAULT_SKILL,
       request.scorm ?? DEFAULT_SCORM,
+      request.audience || null,
     );
     return { ok: true, result };
   } catch (error) {

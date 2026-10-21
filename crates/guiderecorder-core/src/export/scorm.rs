@@ -24,14 +24,17 @@
 //! for the LMS's `API` object in this window, its parents and its opener,
 //! calls `LMSInitialize`, sets `cmi.core.lesson_status` (`incomplete`
 //! first), bookmarks the slide shown in `cmi.core.lesson_location` (and
-//! starts there next time), and on leaving sets the session time and
-//! `cmi.core.exit`, commits and calls `LMSFinish`. Without an LMS it does
+//! starts there next time) with the way taken to it in `cmi.suspend_data`
+//! (the walkthrough's Back trail, see [`walkthrough`](super::walkthrough)),
+//! and on leaving sets the session time and `cmi.core.exit`, commits and
+//! calls `LMSFinish`. Without an LMS it does
 //! nothing, so the package also works opened on its own.
 //!
 //! # Completion and quiz
 //!
-//! With [`Completion::LastStep`] the lesson is `completed` once the last
-//! step is shown. A short multiple-choice quiz ([`parse_quiz`]) can follow
+//! With [`Completion::LastStep`] the lesson is `completed` once an end of
+//! the walkthrough is shown (a slide marked `data-end`): the last step, or
+//! the end slide, which a decision option may lead to directly. A short multiple-choice quiz ([`parse_quiz`]) can follow
 //! on the end slide; its score (0 to 100, the share of right answers) is
 //! reported as `cmi.core.score.raw` (min 0, max 100) and compared with the
 //! mastery score. With [`Completion::QuizPassed`] (which needs a quiz) the
@@ -92,7 +95,8 @@ pub fn csp() -> String {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Completion {
-    /// `completed` once the last step is shown.
+    /// `completed` once an end of the walkthrough is shown: the last step,
+    /// or the end slide (a decision option may lead straight there).
     #[default]
     LastStep,
     /// `passed` or `failed` by the quiz score against the mastery score.

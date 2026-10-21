@@ -188,7 +188,7 @@ export function GuideEditor({ workspaceId, revision }: Props) {
 
       {draft.items.map((item, index) => {
         if (item.type === "step") stepNumber += 1;
-        const name = item.type === "step" ? `${noun} ${stepNumber}` : item.type === "section" ? "Section" : item.kind;
+        const name = item.type === "step" ? `${noun} ${stepNumber}` : item.type === "section" ? "Section" : item.type === "decision" ? "Decision" : item.kind;
         return (
           <Card key={item.id} className="p-6 grid gap-3" aria-label={name}>
             <ItemToolbar

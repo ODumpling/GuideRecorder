@@ -1267,6 +1267,7 @@ mod tests {
             Item::Section(crate::model::Section {
                 id: Ulid::new(),
                 title: "Section".into(),
+                audiences: Vec::new(),
             }),
         );
         g.title = "Open a file".into();

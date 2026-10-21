@@ -200,7 +200,7 @@ test("exports a SCORM course with a quiz, remembering the course options", async
   await expect(dialog.getByText("Branding (optional)")).toBeVisible();
   await expect.poll(() => backend.previews.at(-1)?.format).toBe("scorm");
   const completion = dialog.getByRole("radiogroup", { name: "Completion" });
-  await expect(completion.getByRole("radio", { name: /Last step reached/ })).toHaveAttribute("aria-checked", "true");
+  await expect(completion.getByRole("radio", { name: /End of the walkthrough reached/ })).toHaveAttribute("aria-checked", "true");
   await expect(dialog.getByPlaceholder(`guiderecorder-${API_KEY}`)).toBeVisible();
 
   backend.dialog.file = "/Users/me/Desktop/Rotate an API key";
@@ -211,7 +211,7 @@ test("exports a SCORM course with a quiz, remembering the course options", async
   // Passing the quiz needs a quiz.
   const exportButton = dialog.getByRole("button", { name: "Export", exact: true });
   await completion.getByRole("radio", { name: /Quiz passed/ }).click();
-  await expect(dialog.getByRole("alert")).toHaveText("Add a quiz, or complete on the last step.");
+  await expect(dialog.getByRole("alert")).toHaveText("Add a quiz, or complete at the end of the walkthrough.");
   await expect(exportButton).toBeDisabled();
   const quiz = "Where are API keys?\n- [ ] Billing\n- [x] Settings";
   await dialog.getByRole("textbox", { name: "Quiz" }).fill(quiz);

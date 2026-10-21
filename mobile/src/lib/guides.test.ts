@@ -38,6 +38,31 @@ describe("guides made on the phone", () => {
     expect(coverImage(guide)).toBe("steps/01J00000000000000000000002.jpg");
   });
 
+  it("say where decision options lead", () => {
+    let guide = newGuide(ID, "t", "en", now);
+    guide = appendItem(guide, {
+      type: "decision",
+      id: "01J00000000000000000000002",
+      question: "Is it on?",
+      options: [
+        { id: "01J00000000000000000000010", label: "Yes", target: { kind: "section", id: "01J00000000000000000000004" } },
+        { id: "01J00000000000000000000011", label: "No", target: { kind: "next" } },
+        { id: "01J00000000000000000000012", label: "Help", target: { kind: "guide", id: ID, title: "Get help" } },
+      ],
+    });
+    guide = appendItem(guide, photoStep("01J00000000000000000000003", "a", ""));
+    guide = appendItem(guide, { type: "section", id: "01J00000000000000000000004", title: "Off", audiences: ["Admin"] });
+    guide = appendItem(guide, photoStep("01J00000000000000000000005", "b", ""));
+    expect(() => parseGuide(guide)).not.toThrow();
+    const items = viewItems(guide);
+    expect(items[0]).toMatchObject({
+      type: "decision",
+      options: [{ to: "Go to “Off” (Step 2)" }, { to: "Go to Step 1" }, { to: "Go to the guide “Get help”" }],
+    });
+    expect(items[2]).toMatchObject({ type: "section", audiences: ["Admin"] });
+    expect(stepCount(guide)).toBe(2);
+  });
+
   it("use the cover the author chose, else the first step", () => {
     let guide = newGuide(ID, "t", "en", now);
     guide = appendItem(guide, photoStep("01J00000000000000000000002", "a", ""));

@@ -41,11 +41,13 @@ Password input is masked while recording.
 Click **Create key** and copy the new key
 === Rotate an API key :: items[3].description
 The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
-=== Rotate an API key :: items[4].title
-Drag the new key to **Production**
+=== Rotate an API key :: items[4].question
+Is the key used in **production**?
 === Rotate an API key :: items[5].title
+Drag the new key to **Production**
+=== Rotate an API key :: items[6].title
 Check that the key works
-=== Rotate an API key :: items[5].description
+=== Rotate an API key :: items[6].description
 Run this in Terminal:
 
 `curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`

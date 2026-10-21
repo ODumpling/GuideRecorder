@@ -454,6 +454,79 @@
         "pixelate"
       ]
     },
+    "BranchTarget": {
+      "description": "Where a [`DecisionOption`] leads. Tagged by `kind`. A step or section\nthat is gone (or left out for an audience) reads as `next`.",
+      "oneOf": [
+        {
+          "description": "Carry on with the item after the decision.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "next"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A step of this guide.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "step"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "description": "A section of this guide: its first step.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "section"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "description": "Another guide of the library. `title` is its title when the option\nwas set, shown by exports, which cannot look it up.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "guide"
+            },
+            "title": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        }
+      ]
+    },
     "CalloutGeometry": {
       "type": "object",
       "properties": {
@@ -512,6 +585,53 @@
           "default": "full"
         }
       }
+    },
+    "Decision": {
+      "description": "A question the reader answers to choose where to go next, e.g. \"Do you\nsee the sign-in dialog?\". Static exports list the options with \"go to\nstep N\"; the interactive walkthrough follows them.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          }
+        },
+        "question": {
+          "description": "Markdown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ]
+    },
+    "DecisionOption": {
+      "description": "One answer of a [`Decision`] and where it leads.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "description": "Plain text, e.g. `Yes`.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/BranchTarget",
+          "default": {
+            "kind": "next"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
     },
     "DisplayInfo": {
       "type": "object",
@@ -715,6 +835,19 @@
             }
           },
           "$ref": "#/$defs/Note",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "decision"
+            }
+          },
+          "$ref": "#/$defs/Decision",
           "required": [
             "type"
           ]
@@ -961,6 +1094,13 @@
     "Section": {
       "type": "object",
       "properties": {
+        "audiences": {
+          "description": "Who the section is for, e.g. `Admin`, as free text. Empty: everyone.\nAn export for one audience leaves out the sections tagged only for\nothers (see [`crate::branch::for_audience`]). Left out while empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "id": {
           "type": "string"
         },

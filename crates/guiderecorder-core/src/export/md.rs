@@ -26,7 +26,16 @@
 //! Description
 //!
 //! > **Tip:** note body
+//!
+//! > **Decision:** question
+//! >
+//! > - **Yes:** Go to Step 5
 //! ```
+//!
+//! A section tagged with audiences has `*For: Admin, User*` under its
+//! heading. Decision options name the step they lead to
+//! ([`Labels::go_to`]); Markdown has no stable heading anchors, so they are
+//! not links.
 //!
 //! Step images have their hotspots drawn in as numbered markers, and the
 //! numbered legend under the image gives each hotspot's title (bold) and
@@ -60,6 +69,7 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
 use super::ast::{plain_text, Block, Inline};
+use super::render::{RenderDecision, RenderTarget};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderStep};
 use crate::library::{write_atomic, Durability, GuideHandle, LibraryError};
 use crate::model::{GuideKind, NoteKind, ReviewInfo};
@@ -120,6 +130,18 @@ pub struct Labels {
     pub version: String,
     pub owner: String,
     pub last_reviewed: String,
+    /// What a decision is called, before its question.
+    pub decision: String,
+    /// Before a section's audiences: `For: Admin, Owner`.
+    pub audience: String,
+    /// Where an option leads (see [`Labels::go_to`]): "Go to" a step,
+    /// "Go to the end" past the last one, "Go to the guide" for another.
+    pub go_to: String,
+    pub go_to_end: String,
+    pub go_to_guide: String,
+    /// Quotation marks around a section or guide title.
+    pub quote_open: String,
+    pub quote_close: String,
 }
 
 impl Labels {
@@ -156,6 +178,27 @@ impl Labels {
                     "Last reviewed",
                 ],
             };
+        let [decision, audience, go_to, go_to_end, go_to_guide, quote_open, quote_close] =
+            match primary.as_str() {
+                "de" => [
+                    "Entscheidung",
+                    "Für",
+                    "Weiter mit",
+                    "Weiter zum Ende",
+                    "Weiter mit der Anleitung",
+                    "„",
+                    "“",
+                ],
+                _ => [
+                    "Decision",
+                    "For",
+                    "Go to",
+                    "Go to the end",
+                    "Go to the guide",
+                    "“",
+                    "”",
+                ],
+            };
         Self {
             prerequisites: prerequisites.into(),
             step: step.into(),
@@ -166,7 +209,41 @@ impl Labels {
             version: version.into(),
             owner: owner.into(),
             last_reviewed: last_reviewed.into(),
+            decision: decision.into(),
+            audience: audience.into(),
+            go_to: go_to.into(),
+            go_to_end: go_to_end.into(),
+            go_to_guide: go_to_guide.into(),
+            quote_open: quote_open.into(),
+            quote_close: quote_close.into(),
         }
+    }
+
+    /// Where an option leads, as plain text: `Go to Step 5`, `Go to
+    /// “Admins” (Step 5)`, `Go to the end`, `Go to the guide “Reset a
+    /// password”`. Steps are called as in [`Labels::step_kind`].
+    pub fn go_to(&self, target: &RenderTarget, kind: GuideKind) -> String {
+        let quoted = |title: &str| format!("{}{title}{}", self.quote_open, self.quote_close);
+        match target {
+            RenderTarget::Guide { title, .. } if title.is_empty() => self.go_to_guide.clone(),
+            RenderTarget::Guide { title, .. } => format!("{} {}", self.go_to_guide, quoted(title)),
+            RenderTarget::Step { number, section } => {
+                let step = number.map(|n| format!("{} {n}", self.step_kind(kind)));
+                match (section.as_deref().filter(|s| !s.is_empty()), step) {
+                    (Some(title), Some(step)) => {
+                        format!("{} {} ({step})", self.go_to, quoted(title))
+                    }
+                    (Some(title), None) => format!("{} {}", self.go_to, quoted(title)),
+                    (None, Some(step)) => format!("{} {step}", self.go_to),
+                    (None, None) => self.go_to_end.clone(),
+                }
+            }
+        }
+    }
+
+    /// `For: Admin, Owner`, or `None` for a section for everyone.
+    pub fn audiences(&self, audiences: &[String]) -> Option<String> {
+        (!audiences.is_empty()).then(|| format!("{}: {}", self.audience, audiences.join(", ")))
     }
 
     /// One plain-text line with the guide's version, owner and last review
@@ -563,6 +640,15 @@ fn render_document(
             RenderItem::Section(section) => {
                 let title = escape_line(&single_line(&section.title));
                 push_block(&mut out, &format!("## {}", heading_text(&title)));
+                if let Some(audiences) = labels.audiences(&section.audiences) {
+                    push_block(&mut out, &format!("*{}*", escape_line(&audiences)));
+                }
+            }
+            RenderItem::Decision(decision) => {
+                push_block(
+                    &mut out,
+                    &quote(&decision_text(decision, labels, guide.kind)),
+                );
             }
             RenderItem::Step(step) => {
                 let title = inlines_single_line(&step.title);
@@ -607,6 +693,28 @@ fn render_document(
     let mut doc = out.join("\n\n");
     doc.push('\n');
     doc
+}
+
+/// A decision as Markdown (unquoted): `**Decision:** question`, then a
+/// bullet per option, `**Label:** Go to Step 5`. Markdown has no stable
+/// heading anchors, so the step is named, not linked.
+pub(super) fn decision_text(decision: &RenderDecision, labels: &Labels, kind: GuideKind) -> String {
+    let mut out = format!("**{}:**", escape_line(&labels.decision));
+    let question = inlines_single_line(&decision.question);
+    if !question.is_empty() {
+        out.push(' ');
+        out.push_str(&question);
+    }
+    for (i, option) in decision.options.iter().enumerate() {
+        out.push_str(if i == 0 { "\n\n" } else { "\n" });
+        let go_to = escape_line(&labels.go_to(&option.target, kind));
+        if option.label.is_empty() {
+            out.push_str(&format!("- {go_to}"));
+        } else {
+            out.push_str(&format!("- **{}:** {go_to}", escape_line(&option.label)));
+        }
+    }
+    out
 }
 
 /// The numbered list of `step`'s hotspots, if it has any: `N) **Title**`,

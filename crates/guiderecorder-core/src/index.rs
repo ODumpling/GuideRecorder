@@ -1291,6 +1291,17 @@ fn rows(guide: &Guide) -> Vec<Row> {
                 markdown::to_plain_text(&note.body),
                 None,
             ),
+            // Found like a note: its question, then its option labels.
+            Item::Decision(decision) => {
+                let mut body = markdown::to_plain_text(&decision.question);
+                for option in &decision.options {
+                    if !option.label.trim().is_empty() {
+                        body.push('\n');
+                        body.push_str(option.label.trim());
+                    }
+                }
+                (HitKind::Note, String::new(), body, None)
+            }
         };
         rows.push(Row {
             kind,

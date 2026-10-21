@@ -2107,6 +2107,7 @@ mod tests {
         guide.items.push(Item::Section(Section {
             id: Ulid::new(),
             title: "More".into(),
+            audiences: Vec::new(),
         }));
         assert_eq!(lib.save(&guide).unwrap(), handle);
         assert_eq!(lib.load(&handle.path).unwrap().guide, guide);

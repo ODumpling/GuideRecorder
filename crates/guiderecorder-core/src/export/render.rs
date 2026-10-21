@@ -1,7 +1,8 @@
 //! Render model: a [`Guide`] resolved for the format writers.
 //!
 //! Text fields are parsed into the [`ast`](super::ast); steps are numbered
-//! 1, 2, 3, ... in item order, with sections and notes taking no number.
+//! 1, 2, 3, ... in item order, with sections, notes and decisions taking no
+//! number. Decision options are resolved to the step number they lead to.
 //! Step images are rendered on demand with [`RenderGuide::step_image`], so a
 //! writer controls size and only pays for the images it emits.
 
@@ -11,7 +12,8 @@ use super::ast::{parse_blocks, parse_inlines, Block, Inline};
 use super::raster::{render_cover_image, render_step_image, ImageOptions, RenderedImage};
 use crate::library::GuideHandle;
 use crate::model::{
-    CoverOptions, Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo, Shape, Step,
+    BranchTarget, CoverOptions, Guide, GuideKind, HotspotGeometry, Item, NoteKind, ReviewInfo,
+    Shape, Step,
 };
 use crate::web;
 
@@ -64,6 +66,7 @@ pub enum RenderItem {
     Step(RenderStep),
     Section(RenderSection),
     Note(RenderNote),
+    Decision(RenderDecision),
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,9 @@ pub struct RenderSection {
     pub id: Ulid,
     /// Plain text.
     pub title: String,
+    /// Who the section is for (see [`crate::branch`]), trimmed, without
+    /// empty entries. Empty: everyone.
+    pub audiences: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +94,36 @@ pub struct RenderNote {
     pub id: Ulid,
     pub kind: NoteKind,
     pub body: Vec<Block>,
+}
+
+/// A question with its options (see [`crate::model::Decision`]).
+#[derive(Debug, Clone)]
+pub struct RenderDecision {
+    pub id: Ulid,
+    pub question: Vec<Inline>,
+    pub options: Vec<RenderOption>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderOption {
+    /// Plain text on one line.
+    pub label: String,
+    pub target: RenderTarget,
+}
+
+/// Where an option leads, resolved against the exported items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderTarget {
+    /// A step, by number: the step chosen, the first step of the section
+    /// chosen, or the step after the decision. `None` past the last step
+    /// (the end of the guide).
+    Step {
+        number: Option<u32>,
+        /// The section's plain-text title when a section was chosen.
+        section: Option<String>,
+    },
+    /// Another guide; `title` as stored, on one line (may be empty).
+    Guide { id: Ulid, title: String },
 }
 
 impl RenderStep {
@@ -155,11 +191,30 @@ impl RenderGuide {
                 Item::Section(section) => RenderItem::Section(RenderSection {
                     id: section.id,
                     title: section.title.clone(),
+                    audiences: section
+                        .audiences
+                        .iter()
+                        .map(|a| a.trim())
+                        .filter(|a| !a.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
                 }),
                 Item::Note(note) => RenderItem::Note(RenderNote {
                     id: note.id,
                     kind: note.kind,
                     body: parse_blocks(&note.body),
+                }),
+                Item::Decision(decision) => RenderItem::Decision(RenderDecision {
+                    id: decision.id,
+                    question: parse_inlines(&decision.question),
+                    options: decision
+                        .options
+                        .iter()
+                        .map(|option| RenderOption {
+                            label: one_line(&option.label),
+                            target: resolve(guide, decision.id, &option.target),
+                        })
+                        .collect(),
                 }),
             })
             .collect();
@@ -189,11 +244,69 @@ impl RenderGuide {
         })
     }
 
+    /// Decisions in order.
+    pub fn decisions(&self) -> impl Iterator<Item = &RenderDecision> {
+        self.items.iter().filter_map(|item| match item {
+            RenderItem::Decision(decision) => Some(decision),
+            _ => None,
+        })
+    }
+
     /// Renders the image of `step` with its annotations and burned-in blur.
     /// Never fails: a missing or broken image becomes a placeholder with a
     /// warning.
     pub fn step_image(&self, step: &RenderStep, opts: &ImageOptions) -> RenderedImage {
         render_step_image(&self.handle, &step.step, opts)
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Where `target`, an option of the decision `from`, leads: the first step
+/// at or after the item it names (after the decision for `next`). A step
+/// or section that is gone reads as `next`.
+fn resolve(guide: &Guide, from: Ulid, target: &BranchTarget) -> RenderTarget {
+    let (id, section) = match target {
+        BranchTarget::Guide { id, title } => {
+            return RenderTarget::Guide {
+                id: *id,
+                title: one_line(title),
+            }
+        }
+        BranchTarget::Next => (from, None),
+        BranchTarget::Step { id } => (*id, None),
+        BranchTarget::Section { id } => (
+            *id,
+            guide.items.iter().find_map(|item| match item {
+                Item::Section(s) if s.id == *id => Some(one_line(&s.title)),
+                _ => None,
+            }),
+        ),
+    };
+    let (id, section) = if guide.items.iter().any(|item| item.id() == id) {
+        (id, section)
+    } else {
+        (from, None)
+    };
+    let mut number = 0;
+    let mut found = false;
+    for item in &guide.items {
+        found |= item.id() == id;
+        if let Item::Step(_) = item {
+            number += 1;
+            if found {
+                return RenderTarget::Step {
+                    number: Some(number),
+                    section,
+                };
+            }
+        }
+    }
+    RenderTarget::Step {
+        number: None,
+        section,
     }
 }
 
@@ -235,6 +348,7 @@ mod tests {
             Item::Section(Section {
                 id: Ulid::new(),
                 title: "Setup".into(),
+                audiences: Vec::new(),
             }),
             step("Click **A**"),
             Item::Note(Note {
@@ -246,6 +360,7 @@ mod tests {
             Item::Section(Section {
                 id: Ulid::new(),
                 title: "Then".into(),
+                audiences: Vec::new(),
             }),
             step("Click C"),
         ];

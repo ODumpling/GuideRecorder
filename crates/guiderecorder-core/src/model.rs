@@ -128,7 +128,7 @@ impl Guide {
         }
     }
 
-    /// Steps in order, skipping sections and notes.
+    /// Steps in order, skipping sections, notes and decisions.
     pub fn steps(&self) -> impl Iterator<Item = &Step> {
         self.items.iter().filter_map(|item| match item {
             Item::Step(step) => Some(step),
@@ -391,6 +391,7 @@ pub enum Item {
     Step(Step),
     Section(Section),
     Note(Note),
+    Decision(Decision),
 }
 
 impl Item {
@@ -399,6 +400,7 @@ impl Item {
             Item::Step(step) => step.id,
             Item::Section(section) => section.id,
             Item::Note(note) => note.id,
+            Item::Decision(decision) => decision.id,
         }
     }
 }
@@ -605,6 +607,65 @@ pub struct Section {
     #[schemars(with = "String")]
     pub id: Ulid,
     pub title: String,
+    /// Who the section is for, e.g. `Admin`, as free text. Empty: everyone.
+    /// An export for one audience leaves out the sections tagged only for
+    /// others (see [`crate::branch::for_audience`]). Left out while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audiences: Vec<String>,
+}
+
+/// A question the reader answers to choose where to go next, e.g. "Do you
+/// see the sign-in dialog?". Static exports list the options with "go to
+/// step N"; the interactive walkthrough follows them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Decision {
+    #[schemars(with = "String")]
+    pub id: Ulid,
+    /// Markdown.
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<DecisionOption>,
+}
+
+/// One answer of a [`Decision`] and where it leads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionOption {
+    #[schemars(with = "String")]
+    pub id: Ulid,
+    /// Plain text, e.g. `Yes`.
+    pub label: String,
+    #[serde(default)]
+    pub target: BranchTarget,
+}
+
+/// Where a [`DecisionOption`] leads. Tagged by `kind`. A step or section
+/// that is gone (or left out for an audience) reads as `next`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BranchTarget {
+    /// Carry on with the item after the decision.
+    #[default]
+    Next,
+    /// A step of this guide.
+    Step {
+        #[schemars(with = "String")]
+        id: Ulid,
+    },
+    /// A section of this guide: its first step.
+    Section {
+        #[schemars(with = "String")]
+        id: Ulid,
+    },
+    /// Another guide of the library. `title` is its title when the option
+    /// was set, shown by exports, which cannot look it up.
+    Guide {
+        #[schemars(with = "String")]
+        id: Ulid,
+        #[serde(default)]
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

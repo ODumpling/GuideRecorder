@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
+use guiderecorder_core::branch;
 use guiderecorder_core::edit::{self, EditError, Edited, GuideFields, Position};
 use guiderecorder_core::export::{render_step_image, skill, ImageOptions, RenderGuide, RenderStep};
 use guiderecorder_core::index::{self, ListFilter};
@@ -127,6 +128,10 @@ pub struct ListGuidesArgs {
 pub struct GetGuideArgs {
     /// Guide id (a ULID, from list_guides or search_steps).
     pub id: String,
+    /// Show the guide as this audience reads it (e.g. "Admin"): sections
+    /// tagged only for other audiences are left out. Default: everything.
+    #[serde(default)]
+    pub audience: Option<String>,
     /// Also return step screenshots as images (annotations and redactions
     /// burned in). Default false.
     #[serde(default)]
@@ -172,6 +177,10 @@ pub struct GetSkillArgs {
     /// through the accessibility API (default false).
     #[serde(default)]
     pub replay: bool,
+    /// Write the skill for this audience (e.g. "Admin"), leaving out the
+    /// sections tagged only for others. Default: everything.
+    #[serde(default)]
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -689,7 +698,8 @@ fn list_guides(config: &Config, args: &ListGuidesArgs) -> ToolResult<CallToolRes
 
 fn get_guide(config: &Config, args: &GetGuideArgs) -> ToolResult<CallToolResult> {
     let id = parse_id(&args.id, "guide")?;
-    let loaded = read_guide(config, id)?;
+    let mut loaded = read_guide(config, id)?;
+    loaded.guide = branch::narrow(loaded.guide, args.audience.as_deref());
     let mut content = vec![ContentBlock::text(guide_markdown(&loaded))];
     if !args.include_images {
         return Ok(CallToolResult::success(content));
@@ -776,6 +786,9 @@ fn get_step(config: &Config, args: &GetStepArgs) -> ToolResult<CallToolResult> {
                 format!("{step_id} is a section of guide {guide_id}, not a step")
             }
             Some(Item::Note(_)) => format!("{step_id} is a note of guide {guide_id}, not a step"),
+            Some(Item::Decision(_)) => {
+                format!("{step_id} is a decision of guide {guide_id}, not a step")
+            }
             _ => format!(
                 "guide {guide_id} has no step {step_id}; use get_guide to see its step ids \
                  (the {{#step-<id>}} anchors)"
@@ -815,7 +828,8 @@ fn get_step(config: &Config, args: &GetStepArgs) -> ToolResult<CallToolResult> {
 /// file name. No images: they would repeat get_step's.
 fn get_skill(config: &Config, args: &GetSkillArgs) -> ToolResult<CallToolResult> {
     let guide_id = parse_id(&args.guide_id, "guide")?;
-    let loaded = read_guide(config, guide_id)?;
+    let mut loaded = read_guide(config, guide_id)?;
+    loaded.guide = branch::narrow(loaded.guide, args.audience.as_deref());
     let render = RenderGuide::new(&loaded.guide, &loaded.handle);
     let (skill_md, steps_json, replay) = skill::render_text(&render, args.replay);
     let mut content = vec![

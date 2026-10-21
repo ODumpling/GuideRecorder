@@ -442,6 +442,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
             items.push(Item::Section(Section {
                 id: Ulid::new(),
                 title: (*text).into(),
+                audiences: Vec::new(),
             }));
         }
         let id = if i == 0 { real } else { Ulid::new() };
@@ -539,7 +540,7 @@ fn hostile_text_is_escaped() {
                     "{expected:?} not in {headings:#?}"
                 );
             }
-            Item::Note(_) => {}
+            Item::Note(_) | Item::Decision(_) => {}
         }
     }
     let paragraphs = paragraphs(&markdown);
