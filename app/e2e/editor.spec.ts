@@ -75,6 +75,31 @@ test("reorders steps by dragging in the outline", async ({ page, backend }) => {
   await expect(outlineItems(page).first()).toHaveText(/^1/);
 });
 
+test("drags a step to the end of the outline, and Esc cancels a drag", async ({ page, backend }) => {
+  await openGuide(page, "Share a calendar event");
+  const before = backend.guide(CALENDAR).items.map((item) => item.id);
+  const row = page.locator("li", { has: page.locator(`[data-outline-item="${before[2]}"]`) });
+  const box = (await row.boundingBox())!;
+  const last = (await page.locator(`[data-outline-item="${before.at(-1)}"]`).boundingBox())!;
+
+  // Esc while dragging leaves the order as it was.
+  await page.mouse.move(box.x + 20, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 20, last.y + last.height / 2, { steps: 5 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(outlineItems(page)).toHaveCount(before.length);
+  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+  // Below the last item: the end.
+  await page.mouse.move(box.x + 20, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 20, last.y + last.height / 2, { steps: 5 });
+  await page.mouse.move(box.x + 20, last.y + last.height + 16, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => lastItems(backend).map((item) => item.id)).toEqual([...before.slice(0, 2), ...before.slice(3), before[2]]);
+});
+
 test("adds a blur annotation that is saved with the step", async ({ page, backend }) => {
   await openGuide(page, "Share a calendar event");
   await page.getByRole("button", { name: "Blur", exact: true }).click();

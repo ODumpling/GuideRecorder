@@ -61,6 +61,7 @@ import {
   CommandShortcut,
 } from "@guiderecorder/ui/command";
 import type { Step } from "@guiderecorder/guide-schema";
+import { AI_ENABLED } from "@/lib/features";
 
 /** How long typing pauses before the library search looks in step text. */
 const STEP_SEARCH_DELAY_MS = 200;
@@ -226,7 +227,7 @@ function useEditorEntries(): Entry[] {
   );
 
   // AI doesn't write annotation guides.
-  if (!annotated && !doc.readOnly) {
+  if (AI_ENABLED && !annotated && !doc.readOnly) {
     if (aiIdle) {
       entries.push(entry("write-with-ai", "Write with AI", <Sparkles />, () => void aiStore.getState().start(), { group: "AI" }));
     } else if (aiRunning) {

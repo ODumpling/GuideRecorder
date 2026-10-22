@@ -2,10 +2,15 @@ import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { LibraryInfo, Permission, PermissionStatus, Settings } from "@/lib/types";
 import { isWindows } from "@/lib/platform";
+import { AI_ENABLED } from "@/lib/features";
 
 export type SetupStep = "permissions" | "library" | "apiKey";
 /** Windows asks for no permissions to record, so setup starts at the library there. */
-export const STEPS: SetupStep[] = isWindows() ? ["library", "apiKey"] : ["permissions", "library", "apiKey"];
+export const STEPS: SetupStep[] = [
+  ...(isWindows() ? [] : ["permissions" as const]),
+  "library" as const,
+  ...(AI_ENABLED ? ["apiKey" as const] : []),
+];
 
 /**
  * Whether first-run setup shows at launch, and at which step: on first

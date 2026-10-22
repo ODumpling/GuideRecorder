@@ -30,6 +30,7 @@ import { ItemView } from "@guiderecorder/ui/step-view";
 import type { RewriteStyleArg } from "@/lib/types";
 import { cn } from "@guiderecorder/ui/utils";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
+import { AI_ENABLED } from "@/lib/features";
 
 // TipTap is most of the bundle; load it with the first opened guide.
 const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
@@ -290,7 +291,7 @@ export function StepView() {
   return (
     <div data-item={item.id} className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-10 pt-6 pb-10">
       <ItemHeader item={item} />
-      {!doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
+      {AI_ENABLED && !doc.readOnly && customFor === item.id && <CustomRewrite stepId={item.id} onClose={() => setCustomFor(null)} />}
       <ItemView
         item={item}
         noun={Noun}
@@ -306,12 +307,12 @@ export function StepView() {
           <TextEditor {...props} handle={props.field === "description" ? description : undefined} id={item.id} readOnly={doc.readOnly} />
         )}
       >
-        {item.type === "step" && item.aiState.error && (
+        {AI_ENABLED && item.type === "step" && item.aiState.error && (
           <p className="text-xs text-muted-foreground" data-testid="ai-error">
             AI could not write this step: {item.aiState.error}
           </p>
         )}
-        {item.type === "step" && !doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
+        {AI_ENABLED && item.type === "step" && !doc.readOnly && !annotated && <AiActions stepId={item.id} onCustom={() => setCustomFor(item.id)} />}
         {item.type === "decision" && <DecisionOptions decision={item} readOnly={doc.readOnly} />}
         {item.type === "section" && <SectionAudiences key={item.id} section={item} readOnly={doc.readOnly} />}
       </ItemView>

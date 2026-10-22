@@ -33,6 +33,7 @@ import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
 import { isWindows, keyStore, narrationSupported, systemSettings, thisComputer } from "@/lib/platform";
 import { progressText } from "@/updater/UpdateBanner";
 import { updaterStore, useUpdater } from "@/updater/updater";
+import { AI_ENABLED } from "@/lib/features";
 
 type Change = (update: (s: Settings) => Settings) => void;
 
@@ -201,7 +202,15 @@ export function GeneralSection({ api }: { api: SettingsApi }) {
       </Row>
       <Row
         label="First-run setup"
-        note={isWindows() ? "The library folder and the API key, step by step." : "Permissions, the library folder and the API key, step by step."}
+        note={
+          AI_ENABLED
+            ? isWindows()
+              ? "The library folder and the API key, step by step."
+              : "Permissions, the library folder and the API key, step by step."
+            : isWindows()
+              ? "The library folder."
+              : "Permissions and the library folder, step by step."
+        }
       >
         <Button variant="outline" size="sm" onClick={() => setupStore.getState().open()}>
           Run setup again
@@ -653,14 +662,8 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
   );
 }
 
-const REDACTION_MODES: { value: RedactionMode; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "suggest", label: "Suggest blurs" },
-  { value: "apply", label: "Blur automatically" },
-];
-
-const REDACTION_NOTES: Record<RedactionMode, string> = {
-  off: "Screenshots are not scanned.",
+const AUTO_BLUR_NOTES: Record<RedactionMode, string> = {
+  off: "Turn on scanning to blur what it finds.",
   suggest: "Each finding becomes a suggested blur to accept or reject in the editor.",
   apply: "Each finding is blurred at once; delete a blur in the editor to show the text again.",
 };
@@ -750,13 +753,20 @@ export function PrivacySection() {
       title="Privacy"
       intro={`When a recording stops, GuideRecorder reads the text in its screenshots on ${thisComputer()} and looks for email addresses, phone numbers, card numbers, IBANs, IP addresses, API keys and tokens, and long numbers. Nothing is uploaded and no API key is needed. Before you export, you are asked to review any suggestions left.`}
     >
-      <Row label="Sensitive text" note={REDACTION_NOTES[r.mode]}>
-        <Select
-          label="Sensitive text"
-          value={r.mode}
-          options={REDACTION_MODES}
+      <Row label="Scan for sensitive text" note={r.mode === "off" ? "Screenshots are not scanned." : undefined}>
+        <Toggle
+          label="Scan for sensitive text"
+          checked={r.mode !== "off"}
           disabled={readOnly}
-          onChange={(mode) => void setRedaction({ mode })}
+          onChange={(on) => void setRedaction({ mode: on ? "apply" : "off" })}
+        />
+      </Row>
+      <Row label="Blur automatically" note={AUTO_BLUR_NOTES[r.mode]}>
+        <Toggle
+          label="Blur automatically"
+          checked={r.mode === "apply"}
+          disabled={readOnly || r.mode === "off"}
+          onChange={(on) => void setRedaction({ mode: on ? "apply" : "suggest" })}
         />
       </Row>
       <RuleList

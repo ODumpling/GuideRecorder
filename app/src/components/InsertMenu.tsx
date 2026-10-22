@@ -14,9 +14,10 @@ const ITEM =
 /**
  * Adds sections, notes, image steps and recorded steps around the selected
  * item; in an annotation guide, pages from images or a PDF instead of
- * image and recorded steps.
+ * image and recorded steps. `atEnd`: the Add step button after the last
+ * item, which adds only steps (or pages), there.
  */
-export default function InsertMenu({ disabled }: { disabled: boolean }) {
+export default function InsertMenu({ disabled, atEnd = false }: { disabled: boolean; atEnd?: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const annotated = useAnnotated();
   const recording = useRecording((s) => s.status.state !== "idle" || s.pending !== null);
@@ -24,24 +25,35 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
     <>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild disabled={disabled}>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="Insert"
-            title={annotated ? "Add pages, a section or a note" : "Add a step from an image, recorded steps, a section or a note"}
-          >
-            <Plus /> Insert
-          </Button>
+          {atEnd ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start text-muted-foreground"
+              title={annotated ? "Add pages at the end" : "Add a step from an image, or recorded steps, at the end"}
+            >
+              <Plus /> {annotated ? "Add pages" : "Add step"}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Insert"
+              title={annotated ? "Add pages, a section or a note" : "Add a step from an image, recorded steps, a section or a note"}
+            >
+              <Plus /> Insert
+            </Button>
+          )}
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            align="end"
+            align={atEnd ? "start" : "end"}
             sideOffset={4}
             className="z-50 min-w-48 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
           >
             {annotated ? (
               // The native dialog runs on the Rust side, which reads PDFs too.
-              <DropdownMenu.Item className={ITEM} onSelect={() => void insertPages(editorStore)}>
+              <DropdownMenu.Item className={ITEM} onSelect={() => void insertPages(editorStore, atEnd)}>
                 <FilePlus2 /> Add pages…
               </DropdownMenu.Item>
             ) : (
@@ -52,28 +64,32 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
                 <DropdownMenu.Item
                   className={`${ITEM} data-[disabled]:opacity-50`}
                   disabled={recording}
-                  onSelect={() => void startInsert(editorStore, startFlow, editorStore.getState().selectedId)}
+                  onSelect={() => void startInsert(editorStore, startFlow, atEnd ? null : editorStore.getState().selectedId)}
                 >
                   <ListPlus /> Recorded steps…
                 </DropdownMenu.Item>
               </>
             )}
-            <DropdownMenu.Separator className="my-1 h-px bg-border" />
-            <DropdownMenu.Item className={ITEM} onSelect={() => insertSection(editorStore)}>
-              <Heading /> Section above
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "tip")}>
-              <Lightbulb /> Tip below
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "warning")}>
-              <TriangleAlert /> Warning below
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "note")}>
-              <Info /> Note below
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className={ITEM} onSelect={() => insertDecision(editorStore)}>
-              <GitBranch /> Decision below
-            </DropdownMenu.Item>
+            {!atEnd && (
+              <>
+                <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                <DropdownMenu.Item className={ITEM} onSelect={() => insertSection(editorStore)}>
+                  <Heading /> Section above
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "tip")}>
+                  <Lightbulb /> Tip below
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "warning")}>
+                  <TriangleAlert /> Warning below
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={ITEM} onSelect={() => insertNote(editorStore, "note")}>
+                  <Info /> Note below
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={ITEM} onSelect={() => insertDecision(editorStore)}>
+                  <GitBranch /> Decision below
+                </DropdownMenu.Item>
+              </>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
@@ -86,7 +102,7 @@ export default function InsertMenu({ disabled }: { disabled: boolean }) {
         onChange={(e) => {
           const files = [...(e.target.files ?? [])];
           e.target.value = "";
-          void insertImages(editorStore, files);
+          void insertImages(editorStore, files, atEnd);
         }}
       />
     </>

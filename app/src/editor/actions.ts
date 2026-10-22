@@ -101,18 +101,20 @@ export async function splitSelected(store: EditorStore, split: [string, string],
 }
 
 /**
- * Manual steps from images, below the selected item. Failures (an
+ * Manual steps from images, below the selected item (`atEnd`: after the
+ * last). Failures (an
  * unreadable file, a read-only guide) end up in the store's notice.
  */
 export async function insertImages(
   store: EditorStore,
   images: (Blob | (() => Promise<Blob>))[],
+  atEnd = false,
 ): Promise<void> {
   const state = current(store);
   if (!state || images.length === 0) return;
   store.getState().notify(null);
   try {
-    await insertImageSteps(store, images, state.selected?.id ?? null);
+    await insertImageSteps(store, images, atEnd ? null : (state.selected?.id ?? null));
   } catch (error) {
     store.getState().notify(`Could not add the image: ${errorMessage(error)}`);
   }
@@ -120,10 +122,10 @@ export async function insertImages(
 
 /**
  * Pages from images or a PDF the user picks (natively), below the selected
- * item, as one undoable command. Returns how many were added; failures end
+ * item (`atEnd`: after the last), as one undoable command. Returns how many were added; failures end
  * up in the store's notice.
  */
-export async function insertPages(store: EditorStore): Promise<number> {
+export async function insertPages(store: EditorStore, atEnd = false): Promise<number> {
   const state = current(store);
   if (!state) return 0;
   store.getState().notify(null);
@@ -140,5 +142,5 @@ export async function insertPages(store: EditorStore): Promise<number> {
   if (!now || now.guide.id !== state.guide.id) return 0;
   const items = pages.map((page): Step => ({ ...page, type: "step" }));
   const label = `Add ${items.length} ${items.length === 1 ? "page" : "pages"}`;
-  return now.dispatch(insertItemsAfter(now.guide, items, now.selected?.id ?? null, label)) ? items.length : 0;
+  return now.dispatch(insertItemsAfter(now.guide, items, atEnd ? null : (now.selected?.id ?? null), label)) ? items.length : 0;
 }

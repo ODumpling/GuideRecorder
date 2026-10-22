@@ -14,6 +14,7 @@ import type { ReviewFields } from "@/lib/types";
 import { cn } from "@guiderecorder/ui/utils";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
 import { addTags, removeTag } from "@/text/tags";
+import { AI_ENABLED } from "@/lib/features";
 
 // TipTap is most of the bundle; load it with the first opened guide.
 const MarkdownEditor = lazy(() => import("@guiderecorder/ui/markdown-editor"));
@@ -38,7 +39,7 @@ function FieldLabel({ id, label, edited, hint }: { id?: string; label: string; e
         <h2 className={LABEL}>{label}</h2>
       )}
       {edited && (
-        <span className="text-[10px] text-muted-foreground" title="Written by you: Write with AI leaves it as it is">
+        <span className="text-[10px] text-muted-foreground" title={AI_ENABLED ? "Written by you: Write with AI leaves it as it is" : "Written by you"}>
           Edited
         </span>
       )}
