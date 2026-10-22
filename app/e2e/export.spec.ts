@@ -26,7 +26,7 @@ test("exports the open guide as PDF, then replaces it", async ({ page, backend }
       format: "pdf",
       out: "/Users/me/Desktop/Rotate an API key.pdf",
       overwrite: false,
-      branding: { logo: null, accent: "#336699" },
+      branding: { logo: null, accent: "#336699", preset: null, layout: null },
     },
   ]);
   // The editor saved (or had nothing to save) before exporting.
@@ -67,7 +67,7 @@ test("exports Markdown into a named folder with a logo", async ({ page, backend 
   expect(backend.exports.at(-1)).toMatchObject({
     format: "md",
     out: "/Users/me/Exports/API key guide",
-    branding: { logo: "/Users/me/logo.png", accent: null },
+    branding: { logo: "/Users/me/logo.png", accent: null, preset: null, layout: null },
   });
 });
 
@@ -98,7 +98,7 @@ test("exports a vertical GIF without zoom, remembering the options", async ({ pa
     format: "gif",
     out: "/Users/me/Desktop/Rotate an API key.gif",
     overwrite: false,
-    branding: { logo: null, accent: null },
+    branding: { logo: null, accent: null, preset: null, layout: null },
     motion: { secondsPerStep: 2.5, aspect: "vertical", zoom: false, captions: true },
   });
 
@@ -125,7 +125,7 @@ test("previews the export's pages with the chosen logo", async ({ page, backend 
   await dialog.getByRole("button", { name: "Choose logo…" }).click();
   await expect
     .poll(() => backend.previews.at(-1))
-    .toEqual({ format: "pdf", branding: { logo: "/Users/me/logo.png", accent: null } });
+    .toEqual({ format: "pdf", branding: { logo: "/Users/me/logo.png", accent: null, preset: null, layout: null } });
   // Typing an accent makes one preview once it is a colour.
   const before = backend.previews.length;
   await dialog.getByPlaceholder(/Accent colour/).pressSequentially("#336699");
@@ -178,7 +178,7 @@ test("exports an agent skill with the replay script, after naming an unclear ele
     format: "skill",
     out: "/Users/me/Skills/Rotate an API key",
     overwrite: false,
-    branding: { logo: null, accent: null },
+    branding: { logo: null, accent: null, preset: null, layout: null },
     skill: { replay: true },
   });
   // The name was saved with the guide before the export.
@@ -231,7 +231,7 @@ test("exports a SCORM course with a quiz, remembering the course options", async
     format: "scorm",
     out: "/Users/me/Desktop/Rotate an API key.zip",
     overwrite: false,
-    branding: { logo: null, accent: null },
+    branding: { logo: null, accent: null, preset: null, layout: null },
     scorm: { title: "API keys 101", identifier: "", completion: "quizPassed", masteryScore: 70, quiz },
   });
 

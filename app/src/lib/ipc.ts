@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, ScormOptions, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, BrandPreset, LogoChange, PresetList, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, ScormOptions, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -225,6 +225,23 @@ export const tauriExportApi: ExportApi = {
     invoke("preview_export", { guideId, format, branding, paper, reviewDetails, motion, skill, scorm, audience }),
   logoPreview: (path) => invoke("logo_preview", { path }),
   reveal: (path) => invoke("reveal_export", { path }),
+};
+
+/** The open library's brand presets (in its `.presets` folder). */
+export interface PresetApi {
+  listPresets(): Promise<PresetList>;
+  /** Saves a preset (a new one when `id` is null); resolves to its id. */
+  savePreset(id: string | null, preset: BrandPreset, logo: LogoChange): Promise<string>;
+  deletePreset(id: string): Promise<void>;
+  /** Makes a preset the library's default; null: none. */
+  setDefaultPreset(id: string | null): Promise<void>;
+}
+
+export const tauriPresetApi: PresetApi = {
+  listPresets: () => invoke("list_presets"),
+  savePreset: (id, preset, logo) => invoke("save_preset", { id, preset, logo }),
+  deletePreset: (id) => invoke("delete_preset", { id }),
+  setDefaultPreset: (id) => invoke("set_default_preset", { id }),
 };
 
 /** Emitted by the Rust side on Cmd+Q; answer with `quit_ack`, then save and quit. */

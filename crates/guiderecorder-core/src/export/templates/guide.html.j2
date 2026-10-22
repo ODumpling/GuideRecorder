@@ -26,7 +26,10 @@
 {%- endif %}
 </aside>
 {%- endmacro %}
-<main class="guide">
+<main class="guide{% if layout %} {{ layout }}{% endif %}">
+{%- if page_header %}
+<p class="page-header">{{ page_header }}</p>
+{%- endif %}
 <header class="guide-header">
 {%- if logo %}
 <img class="logo" src="{{ logo }}" alt="">
@@ -37,6 +40,9 @@
 {%- endif %}
 {%- if details %}
 <p class="details">{{ details }}</p>
+{%- endif %}
+{%- if cover %}
+<p class="cover-fields">{{ cover }}</p>
 {%- endif %}
 </header>
 {%- if intro %}
@@ -65,7 +71,7 @@
 </aside>
 {%- else %}
 <article class="step" id="step-{{ item.number }}">
-<h{{ step_level }} class="step-title"><span class="step-number" aria-label="{{ labels.step }} {{ item.number }}">{{ item.number }}</span><span class="step-text">{{ item.title }}</span></h{{ step_level }}>
+<h{{ step_level }} class="step-title">{% if checklist %}<input class="step-check" type="checkbox" aria-label="{{ labels.step }} {{ item.number }}">{% endif %}<span class="step-number" aria-label="{{ labels.step }} {{ item.number }}">{{ item.number }}</span><span class="step-text">{{ item.title }}</span></h{{ step_level }}>{%- if item.image %}
 <figure class="step-image">
 {%- if item.hotspots %}
 <div class="hotspot-frame">
@@ -80,6 +86,7 @@
 <img src="{{ item.image.src }}" width="{{ item.image.width }}" height="{{ item.image.height }}" alt="{{ item.image.alt }}">
 {%- endif %}
 </figure>
+{%- endif %}
 {%- if item.hotspots %}
 <ol class="hotspot-legend">
 {%- for h in item.hotspots %}
@@ -95,6 +102,9 @@
 </article>
 {%- endif %}
 {%- endfor %}
+{%- if page_footer %}
+<footer class="page-footer">{{ page_footer }}</footer>
+{%- endif %}
 </main>
 </body>
 </html>

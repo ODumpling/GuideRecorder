@@ -4,8 +4,8 @@
 // logo, page breaks, layout and burned-in blurs.
 
 import MarkdownIt from "markdown-it";
-import { DEFAULT_SCORM, isAccent, isDocumentFormat, isMotionFormat, scormProblem } from "@/export/export";
-import type { ExportBranding, ExportFormat, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
+import { DEFAULT_SCORM, exportBranding, isAccent, isDocumentFormat, isMotionFormat, scormProblem } from "@/export/export";
+import type { ExportBranding, ExportFormat, StepLayout, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
 
 /** How long the options must stay unchanged before a new preview is made, in ms. */
 export const PREVIEW_DELAY_MS = 300;
@@ -35,6 +35,10 @@ export function previewRequest(choices: {
   format: ExportFormat;
   logo: string | null;
   accent: string;
+  /** A brand preset id; "" or absent for none (the logo and accent then apply). */
+  preset?: string;
+  /** The layout chosen; absent: the preset's, else image then text. */
+  layout?: StepLayout | null;
   paper: PaperSize;
   reviewDetails: boolean;
   motion: MotionOptions;
@@ -44,14 +48,13 @@ export function previewRequest(choices: {
 }): PreviewRequest | null {
   const { guideId, format } = choices;
   const document = isDocumentFormat(format);
-  if (document && !isAccent(choices.accent)) return null;
+  const preset = (document && choices.preset) || null;
+  if (document && !preset && !isAccent(choices.accent)) return null;
   if (format === "scorm" && choices.scorm && scormProblem(choices.scorm)) return null;
   return {
     guideId,
     format,
-    branding: document
-      ? { logo: choices.logo, accent: format === "md" ? null : choices.accent.trim() || null }
-      : { logo: null, accent: null },
+    branding: exportBranding(format, choices),
     paper: format === "pdf" || format === "docx" ? choices.paper : "a4",
     reviewDetails: document && choices.reviewDetails,
     // Seconds per step change no still; only the frame and captions do.

@@ -1074,7 +1074,7 @@ export function ExportSection({ exportApi = tauriExportApi }: { exportApi?: Expo
           </Button>
         )}
       </Row>
-      <Row label="Logo" note="PNG or JPEG, up to 2 MB.">
+      <Row label="Logo" note="PNG or JPEG, up to 2 MB. Used when no brand preset is chosen.">
         <PathText path={e.logo} empty="No logo" />
         <Button
           variant="outline"
@@ -1090,7 +1090,7 @@ export function ExportSection({ exportApi = tauriExportApi }: { exportApi?: Expo
           </Button>
         )}
       </Row>
-      <Row label="Accent colour" note="#rgb or #rrggbb. Not used by Markdown.">
+      <Row label="Accent colour" note="#rgb or #rrggbb. Not used by Markdown, nor with a brand preset.">
         <CommitInput
           label="Accent colour"
           className="w-32"

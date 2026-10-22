@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use guiderecorder_core::branch;
 use guiderecorder_core::export::md::{Branding, CheckedBranding, MAX_LOGO_BYTES};
+use guiderecorder_core::export::preset::Layout;
 use guiderecorder_core::export::{
     docx, html, md, motion, pdf, pptx, scorm, skill, verify_crop_rect, ExportReport, ImageOptions,
     OutPathError, RenderGuide,
@@ -146,13 +147,21 @@ impl ScormRequest {
     }
 }
 
-/// Branding as the UI sends it: a logo path the user chose with
-/// [`choose_logo`](crate::commands::choose_logo) and an accent colour.
+/// Branding as the UI sends it: a brand preset of the library, or else a
+/// logo path the user chose with
+/// [`choose_logo`](crate::commands::choose_logo) and an accent colour;
+/// and the layout, which overrides the preset's.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrandingRequest {
     pub logo: Option<PathBuf>,
     pub accent: Option<String>,
+    /// A preset id ([`crate::presets`]); the logo and accent are then
+    /// ignored.
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub layout: Option<Layout>,
 }
 
 /// A per-step image warning of an export.
@@ -294,7 +303,7 @@ impl ChosenPaths {
         }
     }
 
-    fn check_logo(&self, path: &Path) -> Result<()> {
+    pub(crate) fn check_logo(&self, path: &Path) -> Result<()> {
         if self.is_logo(path) {
             Ok(())
         } else {
@@ -378,7 +387,7 @@ pub fn export_guide(
     }
     chosen.check_destination(format, out)?;
     // Checked (and the logo decoded) once, before anything is written.
-    let branding = check_branding(chosen, branding)?;
+    let branding = check_branding(session, chosen, branding)?;
 
     let lock = session.guide_lock(id);
     let _guard = lock.lock().unwrap();
@@ -507,23 +516,41 @@ pub fn export_guide(
     Ok(result)
 }
 
-/// The UI's branding, checked: a logo the user chose (read and decoded
-/// here) and a valid accent; a blank accent means none.
-fn check_branding(chosen: &ChosenPaths, branding: &BrandingRequest) -> Result<CheckedBranding> {
-    let logo = match &branding.logo {
-        Some(path) => {
-            chosen.check_logo(path)?;
-            Some(read_logo(path)?)
+/// The UI's branding, checked: the library's preset, or a logo the user
+/// chose (read and decoded here) and a valid accent (blank means none);
+/// with the layout asked for.
+fn check_branding(
+    session: &Session,
+    chosen: &ChosenPaths,
+    request: &BrandingRequest,
+) -> Result<CheckedBranding> {
+    let mut branding = match &request.preset {
+        Some(id) => crate::presets::branding(session, id)?,
+        None => {
+            let logo = match &request.logo {
+                Some(path) => {
+                    chosen.check_logo(path)?;
+                    Some(read_logo(path)?)
+                }
+                None => None,
+            };
+            let accent = request
+                .accent
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(str::to_owned);
+            Branding {
+                logo,
+                accent,
+                ..Branding::default()
+            }
         }
-        None => None,
     };
-    let accent = branding
-        .accent
-        .as_deref()
-        .map(str::trim)
-        .filter(|a| !a.is_empty())
-        .map(str::to_owned);
-    Branding { logo, accent }
+    if let Some(layout) = request.layout {
+        branding.layout = layout;
+    }
+    branding
         .check()
         .map_err(|e| AppError::new(ErrorKind::Invalid, format!("branding: {e}")))
 }
@@ -579,7 +606,7 @@ pub struct PreviewImage {
     pub src: String,
 }
 
-fn png_uri(png: &[u8]) -> String {
+pub(crate) fn png_uri(png: &[u8]) -> String {
     html::data_uri("image/png", png)
 }
 
@@ -601,7 +628,7 @@ pub fn preview_guide(
     audience: Option<&str>,
 ) -> Result<ExportPreview> {
     let id = parse_id(guide_id)?;
-    let branding = check_branding(chosen, branding)?;
+    let branding = check_branding(session, chosen, branding)?;
     let lock = session.guide_lock(id);
     let _guard = lock.lock().unwrap();
     let handle = session.bundle(id)?;
@@ -757,7 +784,7 @@ pub fn logo_preview(chosen: &ChosenPaths, path: &Path) -> Result<String> {
     }
     let branding = Branding {
         logo: Some(bytes),
-        accent: None,
+        ..Branding::default()
     }
     .check()
     .map_err(|e| AppError::new(ErrorKind::Invalid, format!("logo {}: {e}", path.display())))?;
@@ -797,7 +824,7 @@ fn md_error(e: md::ExportError) -> AppError {
 /// Devices and FIFOs are refused before they are opened, the type is
 /// checked again on the open file, and the read stops one byte past the
 /// limit. (The same rules as the CLI's `--logo`.)
-fn read_logo(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_logo(path: &Path) -> Result<Vec<u8>> {
     let not_a_file = || {
         AppError::new(
             ErrorKind::Invalid,
@@ -1310,6 +1337,7 @@ mod tests {
         let branding = BrandingRequest {
             logo: Some(logo.clone()),
             accent: Some("#336699".into()),
+            ..BrandingRequest::default()
         };
         let err = export_guide(
             &session,
@@ -1560,6 +1588,7 @@ mod tests {
         let branding = BrandingRequest {
             logo: Some(logo.clone()),
             accent: Some("#336699".into()),
+            ..BrandingRequest::default()
         };
         let err = preview(Format::Html, &branding).unwrap_err();
         assert!(
@@ -1574,6 +1603,103 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn presets_are_saved_listed_and_used_by_previews() {
+        use crate::presets::{self, LogoChange};
+        use guiderecorder_core::export::preset::Preset;
+
+        let (session, id, chosen, dir) = session();
+        let logo = dir.join("brand.png");
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]))
+            .save(&logo)
+            .unwrap();
+        let preset = Preset {
+            name: "Acme".into(),
+            header: "Acme internal".into(),
+            ..Preset::default()
+        };
+        // A logo path the dialog did not return is refused.
+        let file = LogoChange::File { path: logo.clone() };
+        let err = presets::save(&session, &chosen, None, preset.clone(), &file).unwrap_err();
+        assert!(
+            err.message.contains("not chosen as the logo"),
+            "{}",
+            err.message
+        );
+        chosen.add_logo(logo);
+        let acme = presets::save(&session, &chosen, None, preset.clone(), &file).unwrap();
+        assert_eq!(acme, "acme");
+        presets::set_default(&session, Some(&acme)).unwrap();
+
+        let list = presets::list(&session).unwrap();
+        assert_eq!(list.default_id.as_deref(), Some("acme"));
+        let view = &list.presets[0];
+        assert!(view
+            .logo
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        assert_eq!(
+            view.preset.as_ref().unwrap().logo,
+            None,
+            "only the data URI"
+        );
+
+        // Saving again keeps the logo unless told otherwise.
+        let renamed = Preset {
+            name: "Acme Corp".into(),
+            ..preset
+        };
+        presets::save(
+            &session,
+            &chosen,
+            Some(&acme),
+            renamed.clone(),
+            &LogoChange::Keep,
+        )
+        .unwrap();
+        assert!(presets::list(&session).unwrap().presets[0].logo.is_some());
+
+        let request = BrandingRequest {
+            preset: Some(acme.clone()),
+            layout: Some(Layout::Checklist),
+            ..BrandingRequest::default()
+        };
+        let preview = preview_guide(
+            &session,
+            &chosen,
+            &id,
+            Format::Html,
+            &request,
+            docx::Paper::A4,
+            false,
+            &MotionRequest::default(),
+            &SkillRequest::default(),
+            &ScormRequest::default(),
+            None,
+        )
+        .unwrap();
+        match preview {
+            ExportPreview::Html { html } => {
+                assert!(html.contains("Acme internal") && html.contains("layout-checklist"));
+                assert!(html.contains("class=\"logo\""));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        presets::save(&session, &chosen, Some(&acme), renamed, &LogoChange::Remove).unwrap();
+        assert!(presets::list(&session).unwrap().presets[0].logo.is_none());
+        presets::delete(&session, &acme).unwrap();
+        let list = presets::list(&session).unwrap();
+        assert!(list.presets.is_empty() && list.default_id.is_none());
+        let missing = BrandingRequest {
+            preset: Some(acme),
+            ..BrandingRequest::default()
+        };
+        let err = check_branding(&session, &chosen, &missing).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotFound);
     }
 
     #[test]

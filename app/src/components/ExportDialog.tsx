@@ -25,11 +25,13 @@ import {
   COMPLETIONS,
   defaultCourseId,
   baseName,
+  exportBranding,
   exportName,
   fileExtension,
   FORMATS,
   initialMotion,
   initialPaper,
+  initialPreset,
   initialReviewDetails,
   initialScorm,
   initialSkill,
@@ -37,15 +39,18 @@ import {
   isDocumentFormat,
   isFolderFormat,
   isMasteryScore,
+  isLayoutFormat,
   isMotionFormat,
   isPaperFormat,
   isSecondsPerStep,
+  LAYOUTS,
   MAX_SECONDS_PER_STEP,
   MIN_SECONDS_PER_STEP,
   outPath,
   PAPERS,
   rememberMotion,
   rememberPaper,
+  rememberPreset,
   rememberReviewDetails,
   rememberScorm,
   rememberSkill,
@@ -57,9 +62,9 @@ import {
   type Destination,
   type ExportOutcome,
 } from "@/export/export";
-import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
+import { errorMessage, tauriExportApi, tauriPresetApi, type ExportApi, type PresetApi } from "@/lib/ipc";
 import { fileManager } from "@/lib/platform";
-import type { ExportFormat, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
+import type { ExportFormat, MotionOptions, PaperSize, PresetList, ScormOptions, SkillOptions, StepLayout } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
 
@@ -160,11 +165,13 @@ export function ExportDialog({
   onOpenChange,
   format: startFormat = null,
   api = tauriExportApi,
+  presetApi = tauriPresetApi,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   format?: ExportFormat | null;
   api?: ExportApi;
+  presetApi?: PresetApi;
 }) {
   const doc = useEditor((s) => s.doc);
   const guideId = doc?.guide.id ?? null;
@@ -179,6 +186,11 @@ export function ExportDialog({
   const [overwrite, setOverwrite] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => initialChoices().logo);
   const [accent, setAccent] = useState(() => initialChoices().accent);
+  // The library's brand presets, read when the dialog opens; "" is none.
+  const [presets, setPresets] = useState<PresetList | null>(null);
+  const [preset, setPreset] = useState("");
+  // The layout chosen here; null keeps the preset's.
+  const [layout, setLayout] = useState<StepLayout | null>(null);
   const [paper, setPaper] = useState<PaperSize>(() => initialChoices().paper);
   const [reviewDetails, setReviewDetails] = useState(() => initialReviewDetails());
   const [motion, setMotion] = useState<MotionOptions>(() => initialMotion());
@@ -210,6 +222,25 @@ export function ExportDialog({
     };
   }, [open, logo, api]);
 
+  useEffect(() => {
+    if (!open) return;
+    let gone = false;
+    presetApi.listPresets().then(
+      (list) => {
+        if (gone) return;
+        setPresets(list);
+        setPreset(initialPreset(list));
+      },
+      () => {
+        // No presets to offer; the logo and accent still work.
+        if (!gone) setPresets({ presets: [], defaultId: null });
+      },
+    );
+    return () => {
+      gone = true;
+    };
+  }, [open, presetApi]);
+
   // A new guide starts from its own name, a fresh file and its own course.
   useEffect(() => {
     setDestination((d) => ({ ...d, name: exportName(title), file: null }));
@@ -227,6 +258,7 @@ export function ExportDialog({
       setDestination((d) => ({ ...d, folder: start.folder }));
       setLogo(start.logo);
       setAccent(start.accent);
+      setLayout(null);
       setPaper(start.paper);
       setReviewDetails(initialReviewDetails());
       const startMotion = initialMotion();
@@ -252,7 +284,10 @@ export function ExportDialog({
 
   const isDocument = isDocumentFormat(format);
   // Branding only shows in the document formats.
-  const accentOk = !isDocument || isAccent(accent);
+  const accentOk = !isDocument || !!preset || isAccent(accent);
+  const chosenPreset = presets?.presets.find((p) => p.id === preset) ?? null;
+  // What the layout picker shows: the choice here, else the preset's.
+  const shownLayout: StepLayout = layout ?? chosenPreset?.preset?.layout ?? "image-then-text";
   const secondsOk = !isMotionFormat(format) || isSecondsPerStep(Number(seconds));
   const scormChoice: ScormOptions = { ...scorm, masteryScore: mastery.trim() === "" ? NaN : Number(mastery) };
   const scormText = format === "scorm" ? scormProblem(scormChoice) : null;
@@ -314,6 +349,7 @@ export function ExportDialog({
     if (!guideId || !out || !canExport) return;
     Object.assign(remembered, { format, folder: destination.folder, logo, accent, paper });
     rememberPaper(paper);
+    if (isDocument && presets && presets.presets.length > 0) rememberPreset(preset);
     rememberReviewDetails(reviewDetails);
     const motionChoice = { ...motion, secondsPerStep: Number(seconds) };
     if (isMotionFormat(format)) rememberMotion(motionChoice);
@@ -329,7 +365,7 @@ export function ExportDialog({
         format,
         out,
         overwrite,
-        branding: isDocument ? { logo, accent } : { logo: null, accent: "" },
+        branding: exportBranding(format, { logo, accent, preset, layout }),
         paper,
         reviewDetails: isDocument && reviewDetails,
         motion: motionChoice,
@@ -717,7 +753,64 @@ export function ExportDialog({
                   </label>
                 )}
 
-                {isDocument && (
+                {isDocument && presets && presets.presets.length > 0 && (
+                  <Field label="Brand preset">
+                    <div className="flex items-center gap-2">
+                      {chosenPreset?.logo && (
+                        <img src={chosenPreset.logo} alt="" className="size-6 shrink-0 rounded-[3px] object-contain" />
+                      )}
+                      <NativeSelect
+                        aria-label="Brand preset"
+                        className="flex-1"
+                        value={preset}
+                        disabled={busy}
+                        onChange={(e) => {
+                          setPreset(e.target.value);
+                          setLayout(null);
+                        }}
+                      >
+                        <NativeSelectOption value="">None</NativeSelectOption>
+                        {presets.presets.map((p) => (
+                          <NativeSelectOption key={p.id} value={p.id} disabled={!p.preset || !!p.error}>
+                            {p.preset?.name ?? p.id}
+                            {p.id === presets.defaultId ? " (library default)" : ""}
+                            {p.error ? " (can't be used)" : ""}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {preset
+                        ? "The logo, colours, fonts, cover, header and footer come from the preset. Edit presets in Settings → Export."
+                        : "Without a preset, choose a logo and accent colour below."}
+                    </span>
+                  </Field>
+                )}
+
+                {isLayoutFormat(format) && (
+                  <Field label="Layout">
+                    <NativeSelect
+                      aria-label="Layout"
+                      value={shownLayout}
+                      disabled={busy}
+                      onChange={(e) => setLayout(e.target.value as StepLayout)}
+                    >
+                      {LAYOUTS.map((l) => (
+                        <NativeSelectOption key={l.layout} value={l.layout}>
+                          {l.label}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <span className="text-xs text-muted-foreground">
+                      {LAYOUTS.find((l) => l.layout === shownLayout)?.detail}
+                      {format === "md" && shownLayout !== "checklist" && shownLayout !== "image-then-text"
+                        ? ". Markdown shows images then text."
+                        : "."}
+                    </span>
+                  </Field>
+                )}
+
+                {isDocument && !preset && (
                   <Field label="Branding (optional)">
                     <div className="flex items-center gap-2">
                       {logo && logoImage.src ? (
@@ -859,6 +952,8 @@ export function ExportDialog({
                 paper={paper}
                 logo={logo}
                 accent={accent}
+                preset={isDocument ? preset : ""}
+                layout={layout}
                 reviewDetails={reviewDetails}
                 motion={motion}
                 skill={skill}

@@ -13,7 +13,7 @@ import {
   type PreviewState,
 } from "@/export/preview";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
+import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions, StepLayout } from "@/lib/types";
 
 const SHADOW = "shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]";
 
@@ -320,6 +320,8 @@ export function ExportPreview({
   paper,
   logo,
   accent,
+  preset,
+  layout,
   reviewDetails,
   motion,
   skill,
@@ -333,6 +335,10 @@ export function ExportPreview({
   paper: PaperSize;
   logo: string | null;
   accent: string;
+  /** The brand preset id; "" or absent: none. */
+  preset?: string;
+  /** The layout chosen; null or absent: the preset's. */
+  layout?: StepLayout | null;
   reviewDetails: boolean;
   motion: MotionOptions;
   /** The agent skill options; the replay script (replay.js, or replay.ps1 for a Windows guide) adds a line to SKILL.md. */
@@ -364,7 +370,7 @@ export function ExportPreview({
     return () => s.dispose();
   }, []);
 
-  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion, skill, scorm, audience });
+  const request = previewRequest({ guideId: guide.id, format, logo, accent, preset, layout, paper, reviewDetails, motion, skill, scorm, audience });
   const key = request && JSON.stringify(request);
   useEffect(() => {
     scheduler.current?.request(request);

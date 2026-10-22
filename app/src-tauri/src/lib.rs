@@ -19,6 +19,7 @@ mod navigation;
 mod pdf;
 mod picker;
 mod points;
+mod presets;
 mod recapture;
 mod recording;
 mod redaction;
@@ -230,6 +231,10 @@ pub fn run() {
             commands::export_guide,
             commands::preview_export,
             commands::logo_preview,
+            commands::list_presets,
+            commands::save_preset,
+            commands::delete_preset,
+            commands::set_default_preset,
             commands::reveal_export,
             commands::open_step_url,
             commands::verify_crop,

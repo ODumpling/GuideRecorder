@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use guiderecorder_core::export::ast::{parse_inlines, plain_text};
 use guiderecorder_core::export::md::{self, Branding, BrandingError, ExportError, MdOptions};
+use guiderecorder_core::export::preset::{Layout, Preset};
 use guiderecorder_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guiderecorder_core::library::{GuideHandle, Library, PixelBuffer, StepImageVariant};
 use guiderecorder_core::model::*;
@@ -161,6 +162,7 @@ fn branded() -> MdOptions {
         branding: Branding {
             logo: Some(PNG_1X1.to_vec()),
             accent: Some("#aa1122".into()),
+            ..Default::default()
         }
         .check()
         .unwrap(),
@@ -262,6 +264,7 @@ fn jpeg_logos_become_png() {
         branding: Branding {
             logo: Some(jpeg),
             accent: None,
+            ..Default::default()
         }
         .check()
         .unwrap(),
@@ -274,6 +277,7 @@ fn jpeg_logos_become_png() {
     let svg = Branding {
         logo: Some(b"<svg/>".to_vec()),
         accent: None,
+        ..Default::default()
     };
     assert_eq!(svg.check().unwrap_err(), BrandingError::SvgLogo);
 }
@@ -769,4 +773,65 @@ fn hotspot_legends_parse_back_to_their_text() {
     assert_eq!(lists.len(), 3, "{markdown}");
     assert_eq!(lists[0].len(), 4);
     assert_eq!(lists[1], ["First", "Second"]);
+}
+
+fn preset_options(layout: Layout) -> MdOptions {
+    let mut preset = Preset {
+        name: "Acme".into(),
+        footer: "Confidential".into(),
+        layout,
+        ..Preset::default()
+    };
+    preset.cover.company = "Acme Corp".into();
+    preset.cover.version = "2.1".into();
+    MdOptions {
+        branding: preset.branding().unwrap().check().unwrap(),
+        ..MdOptions::default()
+    }
+}
+
+#[test]
+fn a_preset_adds_the_cover_line_and_footer() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        guide,
+        handle,
+        out.path(),
+        &preset_options(Layout::ImageThenText),
+    );
+    let markdown = fs::read_to_string(&report.files[0]).unwrap();
+    let day = guide.updated_at.format("%Y-%m-%d");
+    assert!(
+        paragraphs(&markdown).contains(&format!("Acme Corp · Version 2.1 · {day}")),
+        "{markdown}"
+    );
+    assert!(
+        markdown.ends_with("\n\n---\n\n*Confidential*\n"),
+        "{markdown}"
+    );
+}
+
+#[test]
+fn a_checklist_has_boxes_and_no_images() {
+    let fixtures = fixtures();
+    for (handle, guide) in &fixtures.guides {
+        let out = tempfile::tempdir().unwrap();
+        let opts = preset_options(Layout::Checklist);
+        let report = export(guide, handle, out.path(), &opts);
+        let markdown = fs::read_to_string(&report.files[0]).unwrap();
+        assert!(image_urls(&markdown).is_empty(), "{markdown}");
+        assert_eq!(report.files.len(), 1, "only guide.md");
+        let render = RenderGuide::new(guide, handle);
+        let steps: Vec<String> = headings(&markdown)
+            .into_iter()
+            .filter(|h| h.starts_with('☐'))
+            .collect();
+        assert_eq!(steps.len(), render.steps().count(), "{markdown}");
+        assert!(steps[0].starts_with("☐ 1. "), "{steps:?}");
+        let preview = md::preview(&render, handle, &opts);
+        assert_eq!(preview.markdown, markdown);
+        assert!(preview.images.is_empty());
+    }
 }

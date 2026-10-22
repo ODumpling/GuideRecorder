@@ -12,6 +12,7 @@ use std::fs;
 
 use guiderecorder_core::export::html::{self, Branding, HtmlMode, HtmlOptions, CSP};
 use guiderecorder_core::export::md::{self, BrandingError, ExportError};
+use guiderecorder_core::export::preset::{Font, FontKind, Fonts, Layout, Preset};
 use guiderecorder_core::export::walkthrough;
 use guiderecorder_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guiderecorder_core::library::{GuideHandle, Library, PixelBuffer, StepImageVariant};
@@ -561,6 +562,7 @@ fn branding_is_off_by_default_and_validated() {
         branding: Branding {
             logo: Some(PNG_1X1.to_vec()),
             accent: Some("#C0FFEE".into()),
+            ..Default::default()
         }
         .check()
         .unwrap(),
@@ -675,6 +677,7 @@ fn branded_fixture_goldens() {
         branding: Branding {
             logo: Some(PNG_1X1.to_vec()),
             accent: Some("#aa1122".into()),
+            ..Default::default()
         }
         .check()
         .unwrap(),
@@ -1053,4 +1056,110 @@ fn walkthrough_export_writes_one_file() {
     // German labels for a German guide.
     assert_eq!(guide.language, "de");
     assert!(written.contains(">Weiter<"));
+}
+
+fn preset_options(layout: Layout) -> HtmlOptions {
+    let mut preset = Preset {
+        name: "Acme".into(),
+        header: "Acme internal".into(),
+        footer: "Confidential <b>".into(),
+        layout,
+        css: ".step { border-width: 3px; }".into(),
+        ..Preset::default()
+    };
+    preset.colors.accent = Some("#aa1122".into());
+    preset.colors.text = Some("#222".into());
+    preset.colors.heading = Some("#123456".into());
+    preset.fonts.body.family = Some("Source Sans 3".into());
+    preset.fonts.heading.kind = FontKind::Serif;
+    preset.cover.company = "Acme & Co".into();
+    preset.cover.date = false;
+    HtmlOptions {
+        branding: preset.branding().unwrap().check().unwrap(),
+        ..HtmlOptions::default()
+    }
+}
+
+#[test]
+fn a_preset_styles_the_page_and_adds_its_lines() {
+    let fixtures = fixtures();
+    let (handle, guide) = &fixtures.guides[0];
+    let (page, _) = render(guide, handle, &preset_options(Layout::ImageThenText));
+    assert!(
+        page.contains("<main class=\"guide\">"),
+        "the default layout has no class"
+    );
+    assert!(page.contains("<p class=\"page-header\">Acme internal</p>"));
+    assert!(page.contains("<footer class=\"page-footer\">Confidential &lt;b&gt;</footer>"));
+    assert!(page.contains("<p class=\"cover-fields\">Acme &amp; Co</p>"));
+    assert!(page.contains(":root { --accent: #aa1122; }"));
+    assert!(
+        page.contains("body { font-family: \"Source Sans 3\", -apple-system, BlinkMacSystemFont")
+    );
+    assert!(page.contains("h1, h2, h3, .step-title { font-family: Georgia"));
+    assert!(page.contains("  :root { --text: #222222; }\n  h1, h2, h3 { color: #123456; }"));
+    // The custom CSS comes last, inside the one style element.
+    let css_at = page.find("/* Custom CSS */\n.step { border-width: 3px; }\n</style>");
+    assert!(css_at.is_some(), "{page}");
+    assert_eq!(page.matches("<style>").count(), 1);
+
+    // The walkthrough takes the colours and fonts, not the CSS or lines.
+    let walkthrough = HtmlOptions {
+        mode: HtmlMode::Walkthrough,
+        ..preset_options(Layout::ImageThenText)
+    };
+    let (page, _) = render(guide, handle, &walkthrough);
+    assert!(page.contains(":root { --accent: #aa1122; }"));
+    assert!(page.contains("\"Source Sans 3\""));
+    assert!(!page.contains("Custom CSS"));
+    assert!(!page.contains("page-footer"));
+}
+
+#[test]
+fn layouts_set_a_class_and_a_checklist_has_no_images() {
+    let fixtures = fixtures();
+    for (handle, guide) in &fixtures.guides {
+        let steps = RenderGuide::new(guide, handle).steps().count();
+        for layout in [Layout::SideBySide, Layout::Compact] {
+            let (page, _) = render(guide, handle, &preset_options(layout));
+            let class = format!("<main class=\"guide layout-{}\">", layout.name());
+            assert!(page.contains(&class), "{class}");
+            assert_eq!(page.matches("<figure class=\"step-image\">").count(), steps);
+            assert!(page.contains(&format!(".layout-{} .step", layout.name())));
+        }
+        let (page, _) = render(guide, handle, &preset_options(Layout::Checklist));
+        assert!(page.contains("<main class=\"guide layout-checklist\">"));
+        assert!(!page.contains("<figure"), "{}", guide.title);
+        assert!(!page.contains("<ol class=\"hotspot-legend\">"));
+        assert_eq!(
+            page.matches("<input class=\"step-check\" type=\"checkbox\"")
+                .count(),
+            steps
+        );
+    }
+}
+
+#[test]
+fn custom_css_cannot_close_the_style_element() {
+    for css in ["</style><script>alert(1)</script>", "a{}<!--"] {
+        let branding = Branding {
+            css: css.into(),
+            ..Branding::default()
+        };
+        assert!(
+            matches!(branding.check(), Err(BrandingError::Css(_))),
+            "{css}"
+        );
+    }
+    let family = Branding {
+        fonts: Fonts {
+            body: Font {
+                family: Some("x\"; } body { color: red".into()),
+                ..Font::default()
+            },
+            ..Fonts::default()
+        },
+        ..Branding::default()
+    };
+    assert!(matches!(family.check(), Err(BrandingError::Font(_))));
 }

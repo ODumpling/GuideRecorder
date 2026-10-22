@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportResult, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordInto, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, BrandPreset, DetailsEdit, ExportBranding, ExportResult, LogoChange, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordInto, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -110,6 +110,12 @@ export class Backend {
   readonly previews: { format: string; branding: ExportBranding; scorm?: unknown; audience?: string }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
+  /**
+   * The library's brand presets by id, each with its logo (a data URI),
+   * and the default; as the `.presets` folder holds them.
+   */
+  presets = new Map<string, { preset: BrandPreset; logo: string | null }>();
+  defaultPreset: string | null = null;
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
   /** Web pages `open_step_url` was asked to open. */
@@ -997,6 +1003,48 @@ export class Backend {
           default:
             return { kind: "pages", pages: [page(1), page(2), page(3)], pageCount: 3, approximate: args.format === "docx" };
         }
+      }
+      case "list_presets":
+        return {
+          presets: [...this.presets]
+            .sort(([, a], [, b]) => a.preset.name.localeCompare(b.preset.name))
+            .map(([id, { preset, logo }]) => ({ id, preset: structuredClone(preset), logo, error: null })),
+          defaultId: this.defaultPreset,
+        };
+      case "save_preset": {
+        const preset = structuredClone(args.preset as BrandPreset);
+        if (!preset.name.trim()) fail("invalid", "a preset needs a name");
+        const change = (args.logo as LogoChange | null) ?? { kind: "keep" };
+        let id = args.id as string | null;
+        if (id && !this.presets.has(id)) fail("notFound", `no preset "${id}" in this library`);
+        const base = preset.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "preset";
+        for (let n = 1; !id; n++) {
+          const candidate = n === 1 ? base : `${base}-${n}`;
+          if (!this.presets.has(candidate)) id = candidate;
+        }
+        if (change.kind === "file" && change.path !== this.dialog.logo) {
+          fail("invalid", `${change.path} was not chosen as the logo`);
+        }
+        const logo =
+          change.kind === "keep"
+            ? (this.presets.get(id)?.logo ?? null)
+            : change.kind === "remove"
+              ? null
+              : "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        this.presets.set(id, { preset: { ...preset, name: preset.name.trim(), logo: null }, logo });
+        return id;
+      }
+      case "delete_preset": {
+        const id = String(args.id);
+        if (!this.presets.delete(id)) fail("notFound", `no preset "${id}" in this library`);
+        if (this.defaultPreset === id) this.defaultPreset = null;
+        return null;
+      }
+      case "set_default_preset": {
+        const id = args.id as string | null;
+        if (id && !this.presets.has(id)) fail("notFound", `no preset "${id}" in this library`);
+        this.defaultPreset = id;
+        return null;
       }
       case "logo_preview":
         if (args.path !== this.dialog.logo) fail("invalid", `${String(args.path)} was not chosen as the logo`);

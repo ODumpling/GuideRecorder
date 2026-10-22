@@ -29,6 +29,7 @@ use guiderecorder_core::export::docx::{
     self, Branding, CheckedBranding, DocxError, DocxOptions, Paper,
 };
 use guiderecorder_core::export::md::Labels;
+use guiderecorder_core::export::preset::{FontKind, Layout, Preset};
 use guiderecorder_core::export::{ExportReport, RenderGuide, RenderWarning};
 use guiderecorder_core::library::{GuideHandle, Library, LoadedGuide};
 use guiderecorder_core::model::*;
@@ -71,6 +72,7 @@ fn branding() -> CheckedBranding {
     Branding {
         logo: Some(PNG_1X1.to_vec()),
         accent: Some("#aa1122".into()),
+        ..Default::default()
     }
     .check()
     .unwrap()
@@ -88,6 +90,7 @@ fn wide_logo() -> CheckedBranding {
     Branding {
         logo: Some(wide),
         accent: Some("#aa1122".into()),
+        ..Default::default()
     }
     .check()
     .unwrap()
@@ -199,6 +202,7 @@ fn branding_is_off_by_default() {
             branding: Branding {
                 logo: None,
                 accent: Some("#Ab1".into()),
+                ..Default::default()
             }
             .check()
             .unwrap(),
@@ -234,6 +238,7 @@ fn wide_logos_fit_the_text_width() {
             branding: Branding {
                 logo: Some(wide),
                 accent: None,
+                ..Default::default()
             }
             .check()
             .unwrap(),
@@ -691,6 +696,124 @@ fn refuses_to_overwrite_unless_asked() {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     assert_eq!(names, ["existing.docx"]);
+}
+
+/// A brand preset's settings, checked, in `layout`.
+fn preset_branding(layout: Layout) -> CheckedBranding {
+    let mut preset = Preset {
+        name: "Acme".into(),
+        header: "Acme internal".into(),
+        footer: "Confidential".into(),
+        layout,
+        ..Preset::default()
+    };
+    preset.colors.heading = Some("#123456".into());
+    preset.colors.text = Some("#222222".into());
+    preset.fonts.body.kind = FontKind::Serif;
+    preset.fonts.heading.family = Some("Inter".into());
+    preset.cover.company = "Acme Corp".into();
+    preset.cover.version = "2.1".into();
+    preset.cover.date = false;
+    preset.branding().unwrap().check().unwrap()
+}
+
+#[test]
+fn a_preset_brings_fonts_colours_cover_header_footer_and_page_numbers() {
+    let fixtures = Fixtures::new();
+    let (_, loaded) = fixtures.guide("Share a calendar event");
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    let out = fixtures.out("preset.docx");
+    let opts = DocxOptions {
+        branding: preset_branding(Layout::ImageThenText),
+        ..DocxOptions::default()
+    };
+    docx::export(&render, &loaded.handle, &out, &opts).unwrap();
+    let package = Package::open(&out);
+    let dump = package.text_dump();
+    assert!(dump.contains("Acme Corp · Version 2.1\n"), "{dump}");
+
+    let styles = package.text("word/styles.xml");
+    let defaults = styles.split("</w:rPrDefault>").next().unwrap();
+    assert!(defaults.contains(r#"w:ascii="Georgia""#), "{defaults}");
+    assert!(
+        defaults.contains(r#"<w:color w:val="222222" />"#),
+        "{defaults}"
+    );
+    assert!(styles.contains(r#"w:ascii="Inter""#));
+    assert!(styles.contains(r#"<w:color w:val="123456" />"#));
+
+    let header = package.text("word/header1.xml");
+    assert!(header.contains("Acme internal"));
+    let footer = package.text("word/footer1.xml");
+    assert!(footer.contains("Confidential"));
+    assert!(
+        footer.contains("PAGE") && footer.contains("NUMPAGES"),
+        "{footer}"
+    );
+
+    // Without a preset: no header, footer or page numbers.
+    let plain = fixtures.out("plain.docx");
+    docx::export(&render, &loaded.handle, &plain, &DocxOptions::default()).unwrap();
+    let plain = Package::open(&plain);
+    assert!(!plain.parts.contains_key("word/header1.xml"));
+    assert!(!plain.parts.contains_key("word/footer1.xml"));
+    assert!(!plain
+        .text("word/styles.xml")
+        .contains("<w:color w:val=\"222222\""));
+}
+
+#[test]
+fn layouts_place_or_leave_out_the_step_images() {
+    let fixtures = Fixtures::new();
+    let (_, loaded) = fixtures.guide("Share a calendar event");
+    let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+    let export = |layout: Layout| {
+        let out = fixtures.out(&format!("{}.docx", layout.name()));
+        let opts = DocxOptions {
+            branding: preset_branding(layout),
+            ..DocxOptions::default()
+        };
+        docx::export(&render, &loaded.handle, &out, &opts).unwrap();
+        Package::open(&out)
+    };
+    let images = |package: &Package| {
+        package
+            .parts
+            .keys()
+            .filter(|p| p.starts_with("word/media/"))
+            .count()
+    };
+    let standard = export(Layout::ImageThenText);
+    let steps = render.steps().count();
+    assert_eq!(images(&standard), steps);
+
+    let checklist = export(Layout::Checklist);
+    assert_eq!(images(&checklist), 0);
+    let dump = checklist.text_dump();
+    assert!(dump.contains("Heading2 | ☐ 1. "), "{dump}");
+
+    let side = export(Layout::SideBySide);
+    let document = side.text("word/document.xml");
+    assert_eq!(
+        document.matches("<w:tbl>").count(),
+        steps,
+        "a table per step"
+    );
+    assert_eq!(images(&side), steps);
+
+    // Compact images are at most half the text width.
+    let width = |package: &Package| {
+        let doc = package.text("word/document.xml");
+        let at = doc.find("<wp:extent cx=\"").unwrap() + 15;
+        doc[at..].split('"').next().unwrap().parse::<u64>().unwrap()
+    };
+    let compact = export(Layout::Compact);
+    let half_a4 = (11906 - 2 * 1440) * 635 / 2;
+    assert!(
+        width(&compact) <= half_a4,
+        "{} > {half_a4}",
+        width(&compact)
+    );
 }
 
 // ---------------------------------------------------------------------------
