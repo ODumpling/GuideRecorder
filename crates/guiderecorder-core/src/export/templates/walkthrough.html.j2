@@ -49,7 +49,7 @@
 </div>
 <p class="wt-hint">{{ labels.hint }}</p>
 {%- for slide in slides %}
-<section class="wt-slide wt-{{ slide.kind }}" id="wt-slide-{{ slide.index }}" aria-labelledby="wt-slide-{{ slide.index }}-title" data-status="{{ slide.status }}">
+<section class="wt-slide wt-{{ slide.kind }}" id="wt-slide-{{ slide.index }}" aria-labelledby="wt-slide-{{ slide.index }}-title" data-status="{{ slide.status }}"{% if slide.end %} data-end{% endif %}>
 {%- if slide.kind == "intro" %}
 <h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1">{{ labels.start }}</h2>
 {%- if intro %}
@@ -68,7 +68,21 @@
 <h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1">{{ labels.done }}</h2>
 <p>{{ labels.done_text }}</p>
 {{- notes(slide.notes) }}
+{%- if extra_end %}
+{{ extra_end }}
+{%- endif %}
 <p class="wt-actions"><button type="button" class="wt-button wt-primary" data-restart>{{ labels.restart }}</button></p>
+{%- elif slide.kind == "decision" %}
+{%- if slide.section %}
+<p class="wt-section">{{ slide.section }}</p>
+{%- endif %}
+<h2 class="wt-heading" id="wt-slide-{{ slide.index }}-title" tabindex="-1"><span class="decision-label">{{ slide.label }}:</span> {{ slide.question }}</h2>
+{{- notes(slide.notes) }}
+<ul class="wt-options">
+{%- for option in slide.options %}
+<li>{% if option.href %}<a class="wt-button wt-option" href="{{ option.href }}" data-branch>{% if option.label %}<strong>{{ option.label }}</strong> {% endif %}<span class="wt-option-text">{{ option.text }}</span></a>{% else %}<span class="wt-option-static">{% if option.label %}<strong>{{ option.label }}:</strong> {% endif %}{{ option.text }}</span>{% endif %}</li>
+{%- endfor %}
+</ul>
 {%- else %}
 {%- if slide.section %}
 <p class="wt-section">{{ slide.section }}</p>
@@ -117,6 +131,9 @@
 </nav>
 </div>
 </main>
+{%- if extra_script %}
+<script>{{ extra_script }}</script>
+{%- endif %}
 <script>{{ script }}</script>
 </body>
 </html>

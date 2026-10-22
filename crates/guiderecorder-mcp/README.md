@@ -28,7 +28,7 @@ Options:
 | Option | Default | |
 | --- | --- | --- |
 | `--library <dir>` | `$GUIDERECORDER_LIBRARY` | Library folder. It must already exist. |
-| `--index <path>` | `~/Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite` | The app's search index. |
+| `--index <path>` | `~/Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite` (Windows: `%LOCALAPPDATA%dev.dufflebear.guiderecorderindex.sqlite`) | The app's search index. |
 | `--writable` | off | Also offer the [write tools](#writing---writable). |
 
 In the app, Settings → MCP shows the command; "Allow MCP to edit guides"
@@ -57,10 +57,10 @@ Without `--writable` the server never writes to the library or the index:
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `list_guides` | `query?`, `tag?`, `limit?` (50, max 500) | `id`, `title`, `summary`, `tags`, `step_count`, `kind` (`walkthrough` or `annotated`; an annotation guide's steps are its pages), `hotspot_count`, `updated_at`, `read_only` and `folder` (the library subfolder, `""` at the top level) for each guide, plus `total`. Also `owner`, `status`, `version`, `last_reviewed`, `review_interval_months`, `review_due` (null when unset) and `review_overdue`. |
-| `get_guide` | `id`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set, and the cover step when one was chosen), and optionally step screenshots (at most about 5 MB of images). |
+| `get_guide` | `id`, `audience?`, `include_images?` (false), `image_steps?`, `max_images?` (10, max 25) | The guide as Markdown (with its owner, status, version and review dates when set, the cover step when one was chosen, the audiences its sections are tagged for, and each decision with the step its options lead to), and optionally step screenshots (at most about 5 MB of images). With `audience`, sections tagged only for other audiences are left out. |
 | `get_step` | `guide_id`, `step_id`, `image?` (`"crop"`, `"full"` or `"none"`; default `"crop"`) | The step's text, element, keys and screenshot. |
 | `search_steps` | `query`, `limit?` (20, max 100) | Hits with `guide_id`, `guide_title`, `kind`, `item_id`, `step_number`, `title` and `snippet` (matches in `**bold**`). |
-| `get_skill` | `guide_id`, `replay?` (false) | The guide as an agent skill, as the app's skill export writes it: `SKILL.md` (front matter with `name` and `description`, then purpose, prerequisites, steps and expected result) and `steps.json` (per step its kind, element locator with app, window, role and label, click point, parsed keys and a `confidence` with issues such as `noLabel` or `genericRole`), one text block each. With `replay`, also `replay.js`, a macOS script that repeats the steps (try `--dry-run` first). No images: use `get_step`. |
+| `get_skill` | `guide_id`, `replay?` (false), `audience?` | The guide as an agent skill, as the app's skill export writes it: `SKILL.md` (front matter with `name` and `description`, then purpose, prerequisites, steps and expected result) and `steps.json` (per step its kind, element locator with app, window, role and label, click point, parsed keys and a `confidence` with issues such as `noLabel` or `genericRole`), one text block each. With `replay`, also the replay script: `replay.js`, a macOS script, or `replay.ps1` for a guide recorded on Windows (try a dry run first). No images: use `get_step`. |
 
 `read_only` is true when the GuideRecorder app won't edit the guide as it is. That
 happens when it was saved by a newer GuideRecorder, or when it uses an older format

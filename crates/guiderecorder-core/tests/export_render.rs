@@ -128,6 +128,7 @@ impl Bundle {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: self.write(id, StepImageVariant::Full, full),
                 crop: crop.map(|crop| self.write(id, StepImageVariant::Crop, crop)),
@@ -1078,6 +1079,12 @@ fn fixture_render_model_and_ast() {
                 RenderItem::Note(note) => {
                     out.push_str(&format!("note {:?}\n", note.kind));
                     dump_blocks(&note.body, 2, &mut out);
+                }
+                RenderItem::Decision(decision) => {
+                    out.push_str(&format!("decision: {}\n", dump_inlines(&decision.question)));
+                    for option in &decision.options {
+                        out.push_str(&format!("  {:?} -> {:?}\n", option.label, option.target));
+                    }
                 }
             }
         }

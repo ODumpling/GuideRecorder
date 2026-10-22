@@ -10,6 +10,14 @@
   var nexts = root.querySelectorAll(".wt-controls [data-next]");
   var current = 0;
   if (!slides.length) return;
+  // The slides moved on from, so Back retraces a branch taken. Kept in
+  // the root's data-trail too, where a SCORM runtime saves and restores it.
+  var trail = (root.getAttribute("data-trail") || "")
+    .split(" ")
+    .filter(function (n) {
+      return /^\d+$/.test(n) && Number(n) < slides.length;
+    })
+    .map(Number);
   document.documentElement.classList.add("wt-js");
 
   function setDisabled(buttons, disabled) {
@@ -50,16 +58,46 @@
     }
   }
 
+  function setTrail(next) {
+    trail = next;
+    root.setAttribute("data-trail", trail.join(" "));
+  }
+
+  // Moves on to slide `index`, remembering this one for Back.
+  function go(index, focus) {
+    if (index === current) return;
+    setTrail(trail.concat(current));
+    show(index, focus);
+  }
+
+  // Follows a decision option to the slide its link names.
+  function branch(href) {
+    var index = slides.findIndex(function (slide) {
+      return "#" + slide.id === href;
+    });
+    if (index >= 0) go(index, "content");
+  }
+
+  // Back along the way taken, else to the slide before.
+  function back() {
+    var to = trail.length ? trail[trail.length - 1] : current - 1;
+    setTrail(trail.slice(0, -1));
+    show(to, "keep");
+  }
+
   root.addEventListener("click", function (event) {
-    var el = event.target.closest("[data-next], [data-back], [data-restart], a[data-slide]");
+    var el = event.target.closest("[data-next], [data-back], [data-restart], [data-branch], a[data-slide]");
     if (!el || !root.contains(el)) return;
     event.preventDefault();
     if (el.getAttribute("aria-disabled") === "true") return;
-    if (el.hasAttribute("data-slide")) show(Number(el.getAttribute("data-slide")), "content");
-    else if (el.hasAttribute("data-restart")) show(0, "content");
-    else if (el.hasAttribute("data-back")) show(current - 1, "keep");
+    if (el.hasAttribute("data-branch")) branch(el.getAttribute("href"));
+    else if (el.hasAttribute("data-slide")) go(Number(el.getAttribute("data-slide")), "content");
+    else if (el.hasAttribute("data-restart")) {
+      setTrail([]);
+      show(0, "content");
+    } else if (el.hasAttribute("data-back")) back();
     // Back and Next keep focus, so they can be pressed again; a target goes.
-    else show(current + 1, "keep");
+    else go(current + 1, "keep");
   });
 
   document.addEventListener("keydown", function (event) {
@@ -69,10 +107,10 @@
     var control = target.closest && target.closest("a, button, input, select, textarea, [role=button], [contenteditable]");
     if (event.key === "ArrowRight" || (event.key === "Enter" && !control)) {
       event.preventDefault();
-      if (current < slides.length - 1) show(current + 1, "keep");
+      if (current < slides.length - 1) go(current + 1, "keep");
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
-      if (current > 0) show(current - 1, "keep");
+      if (current > 0) back();
     }
   });
 

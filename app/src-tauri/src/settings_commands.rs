@@ -517,11 +517,25 @@ pub struct McpSetup {
     pub library: Option<PathBuf>,
 }
 
-/// The `guiderecorder-mcp` binary next to `exe`.
+/// The `guiderecorder-mcp` binary next to `exe` (`.exe` on Windows).
 pub fn mcp_binary(exe: &Path) -> PathBuf {
     exe.parent()
         .unwrap_or_else(|| Path::new("/"))
-        .join("guiderecorder-mcp")
+        .join(format!("guiderecorder-mcp{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// The library `claude mcp add` names when none is chosen yet: the
+/// default one, `~/Documents/GuideRecorder`. Windows shells don't expand
+/// `~` for other programs, so there it is spelt out from the profile
+/// folder.
+fn default_library_arg() -> PathBuf {
+    let profile = std::env::var_os("USERPROFILE").filter(|p| !p.is_empty());
+    match profile {
+        Some(profile) if cfg!(windows) => PathBuf::from(profile)
+            .join("Documents")
+            .join("GuideRecorder"),
+        _ => PathBuf::from("~/Documents/GuideRecorder"),
+    }
 }
 
 /// The command that registers the MCP server with Claude Code for the
@@ -537,9 +551,7 @@ pub fn mcp_setup(
     let library = target.get();
     let command = settings::mcp_add_command(
         &mcp_path,
-        library
-            .as_deref()
-            .unwrap_or(Path::new("~/Documents/GuideRecorder")),
+        &library.clone().unwrap_or_else(default_library_arg),
         store.get().mcp.writable,
     );
     Ok(McpSetup {
@@ -747,11 +759,30 @@ mod tests {
 
     #[test]
     fn mcp_binary_sits_next_to_the_app() {
+        #[cfg(not(windows))]
         assert_eq!(
             mcp_binary(Path::new(
                 "/Applications/GuideRecorder.app/Contents/MacOS/GuideRecorder"
             )),
             Path::new("/Applications/GuideRecorder.app/Contents/MacOS/guiderecorder-mcp")
         );
+        #[cfg(windows)]
+        assert_eq!(
+            mcp_binary(Path::new(
+                r"C:\Users\me\AppData\Local\GuideRecorder\guiderecorder-app.exe"
+            )),
+            Path::new(r"C:\Users\me\AppData\Local\GuideRecorder\guiderecorder-mcp.exe")
+        );
+    }
+
+    #[test]
+    fn the_default_library_is_spelt_out_on_windows() {
+        let library = default_library_arg();
+        if cfg!(windows) && std::env::var_os("USERPROFILE").is_some_and(|p| !p.is_empty()) {
+            assert!(library.is_absolute(), "{library:?}");
+            assert!(library.ends_with(r"Documents\GuideRecorder"));
+        } else {
+            assert_eq!(library, Path::new("~/Documents/GuideRecorder"));
+        }
     }
 }

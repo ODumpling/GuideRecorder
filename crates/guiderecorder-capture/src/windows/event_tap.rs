@@ -58,6 +58,7 @@ use serde::Serialize;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, GetKeyboardLayout, ToUnicodeEx, VK_CAPITAL, VK_CONTROL,
     VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
@@ -66,11 +67,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetMessageW,
     GetSystemMetrics, GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint, GA_ROOT, HHOOK,
-    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    SetWindowsHookExW, SystemParametersInfoW, TranslateMessage, UnhookWindowsHookEx,
+    WindowFromPoint, GA_ROOT, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE,
+    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 use super::PerMonitorAware;
@@ -412,18 +414,22 @@ impl HookState {
                 }
             }
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-                // Notches of 120, up and right positive.
-                let delta = f64::from((info.mouseData >> 16) as u16 as i16) / 120.0;
-                let (delta_x, delta_y) = if msg == WM_MOUSEWHEEL {
-                    (0.0, delta)
+                // Notches of 120, up and right positive. Up moves the
+                // content down (positive, as on a Mac); right moves it left.
+                let notches = f64::from((info.mouseData >> 16) as u16 as i16) / 120.0;
+                let vertical = msg == WM_MOUSEWHEEL;
+                let points = wheel_points(notches, wheel_lines(vertical), dpi_scale_at(info.pt));
+                let (delta_x, delta_y) = if vertical {
+                    (0.0, points)
                 } else {
-                    (delta, 0.0)
+                    (-points, 0.0)
                 };
                 self.emit(
                     CaptureEvent::Scroll {
                         point,
                         delta_x,
                         delta_y,
+                        region: None,
                     },
                     window_pid_at(info.pt),
                 );
@@ -631,6 +637,57 @@ fn foreground_pid() -> i32 {
     window_pid(foreground_window())
 }
 
+/// How far a line of wheel scrolling moves the content at 100 % scaling,
+/// in pixels: what Chromium and Edge scroll (Windows leaves it to each
+/// app, so this is an estimate).
+pub const WHEEL_LINE_PIXELS: f64 = 100.0 / 3.0;
+
+/// Lines a "page per notch" setting counts as.
+const PAGE_LINES: u32 = 20;
+
+/// How far `notches` of the wheel move the content, in physical pixels
+/// (global points on Windows), at `lines` per notch (Windows' setting,
+/// `u32::MAX` for a page) and display scale `scale`.
+pub fn wheel_points(notches: f64, lines: u32, scale: f64) -> f64 {
+    let lines = if lines == u32::MAX { PAGE_LINES } else { lines };
+    notches * f64::from(lines) * WHEEL_LINE_PIXELS * scale
+}
+
+/// Lines (or, sideways, characters) one wheel notch scrolls; 3 if unknown.
+fn wheel_lines(vertical: bool) -> u32 {
+    let action = if vertical {
+        SPI_GETWHEELSCROLLLINES
+    } else {
+        SPI_GETWHEELSCROLLCHARS
+    };
+    let mut lines = 3u32;
+    // SAFETY: a valid out-pointer of the size the action writes.
+    let read = unsafe {
+        SystemParametersInfoW(
+            action,
+            0,
+            Some((&mut lines as *mut u32).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if read.is_ok() {
+        lines
+    } else {
+        3
+    }
+}
+
+/// The scale of the window under `p` (1 at 96 dpi).
+fn dpi_scale_at(p: POINT) -> f64 {
+    // SAFETY: plain queries; 0 for no window.
+    let dpi = unsafe { GetDpiForWindow(GetAncestor(WindowFromPoint(p), GA_ROOT)) };
+    if dpi == 0 {
+        1.0
+    } else {
+        f64::from(dpi) / 96.0
+    }
+}
+
 /// The process of the top-level window under `p` (physical pixels).
 fn window_pid_at(p: POINT) -> i32 {
     // SAFETY: plain queries; the thread is per-monitor aware, so `p` is in
@@ -667,6 +724,14 @@ pub fn now() -> Timestamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_notches_become_points() {
+        assert_eq!(wheel_points(1.0, 3, 1.0), 100.0);
+        assert_eq!(wheel_points(-2.0, 3, 1.5), -300.0);
+        assert_eq!(wheel_points(1.0, u32::MAX, 1.0), 20.0 * WHEEL_LINE_PIXELS);
+        assert_eq!(wheel_points(1.0, 0, 1.0), 0.0);
+    }
 
     #[test]
     fn now_is_monotonic_ns() {

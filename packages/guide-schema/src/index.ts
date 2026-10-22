@@ -9,7 +9,7 @@ export * from "./guide.gen.ts";
 export type AnnotationType = Annotation["type"];
 
 /** The guide.json schema version this package was generated for. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Validates a parsed `guide.json`. */
 export const guideSchema = z.fromJSONSchema(

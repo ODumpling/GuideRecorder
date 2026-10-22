@@ -172,6 +172,7 @@ fn branding_is_off_by_default() {
         Item::Section(Section {
             id: Ulid::new(),
             title: "Part".into(),
+            audiences: Vec::new(),
         }),
         step("Click A"),
         Item::Note(Note {
@@ -493,6 +494,7 @@ fn markdown_maps_to_runs_and_lists() {
         Item::Section(Section {
             id: Ulid::new(),
             title: "Part".into(),
+            audiences: Vec::new(),
         }),
         step("Press `⌘S`"),
         Item::Note(Note {
@@ -797,6 +799,7 @@ fn step(title: &str) -> Item {
         end_point: None,
         element: None,
         keystrokes: None,
+        url: None,
         image: StepImage {
             full: format!("steps/{id}.webp"),
             crop: None,
@@ -936,9 +939,18 @@ impl Package {
                     );
                 }
                 ("w:hyperlink", false) => {
-                    let id = attr(tag, "r:id").expect("external hyperlink");
-                    link_target = Some(links.get(&id).cloned().expect("relationship"));
+                    link_target = Some(match attr(tag, "w:anchor") {
+                        // An in-document link to a bookmark.
+                        Some(anchor) => format!("#{anchor}"),
+                        None => {
+                            let id = attr(tag, "r:id").expect("external hyperlink");
+                            links.get(&id).cloned().expect("relationship")
+                        }
+                    });
                     para.text.push('[');
+                }
+                ("w:bookmarkStart", false) => {
+                    para.text += &format!("{{#{}}}", attr(tag, "w:name").unwrap());
                 }
                 ("", true) if tag == "/w:hyperlink" => {
                     para.text += &format!("]({})", link_target.take().unwrap());

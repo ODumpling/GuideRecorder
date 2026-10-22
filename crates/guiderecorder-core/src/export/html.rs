@@ -6,6 +6,10 @@
 //! (only `data:` images and the inline style may load). Link hrefs are the
 //! only URLs; they are followed only when clicked.
 //!
+//! Decisions are boxes with the question and an option per line, whose
+//! "Go to Step N" links to that step's `#step-N` article; a section tagged
+//! with audiences has a "For: Admin" line under its heading.
+//!
 //! That is the default [`HtmlMode::Document`]. [`HtmlMode::Walkthrough`]
 //! writes an interactive click-through of the same guide instead, with one
 //! inline script allowed by its hash; see [`walkthrough`](super::walkthrough).
@@ -67,10 +71,11 @@ use super::ast::{plain_text, Block, Inline};
 use super::md::{prepare_out_dir, ExportError, Labels, Result};
 pub use super::md::{Branding, CheckedBranding};
 use super::{
-    render_step_image, ExportReport, ImageOptions, PlacedHotspot, RenderGuide, RenderItem,
+    render_step_image, ExportReport, ImageOptions, PlacedHotspot, RenderDecision, RenderGuide,
+    RenderItem, RenderTarget,
 };
 use crate::library::{write_atomic, Durability, GuideHandle};
-use crate::model::{NoteKind, Rect};
+use crate::model::{GuideKind, NoteKind, Rect};
 
 /// File name of the HTML document inside the output folder.
 pub const GUIDE_FILE: &str = "guide.html";
@@ -177,7 +182,17 @@ pub fn render_string(
             RenderItem::Section(section) => context! {
                 kind => "section",
                 title => &section.title,
+                audiences => labels.audiences(&section.audiences),
             },
+            RenderItem::Decision(decision) => {
+                decision_context(decision, &labels, guide.kind, |target| match target {
+                    RenderTarget::Step {
+                        number: Some(number),
+                        ..
+                    } => Some(format!("#step-{number}")),
+                    _ => None,
+                })
+            }
             RenderItem::Note(note) => context! {
                 kind => "note",
                 note_kind => note_kind_class(note.kind),
@@ -244,6 +259,34 @@ pub fn render_string(
 
     let env = environment("guide.html", TEMPLATE)?;
     Ok((render_template(&env, "guide.html", ctx)?, report))
+}
+
+/// A decision for the templates: `kind` `decision`, its label, the question
+/// as safe HTML, and per option its label, where it leads (plain text) and
+/// `href`, the in-page link `href` gives for the target, if any.
+pub(super) fn decision_context(
+    decision: &RenderDecision,
+    labels: &Labels,
+    kind: GuideKind,
+    href: impl Fn(&RenderTarget) -> Option<String>,
+) -> Value {
+    let options: Vec<Value> = decision
+        .options
+        .iter()
+        .map(|option| {
+            context! {
+                label => &option.label,
+                text => labels.go_to(&option.target, kind),
+                href => href(&option.target),
+            }
+        })
+        .collect();
+    context! {
+        kind => "decision",
+        label => &labels.decision,
+        question => Value::from_safe_string(inlines_html(&decision.question)),
+        options => options,
+    }
 }
 
 /// The chosen cover ([`RenderGuide::cover`]) as a PNG data URI for the

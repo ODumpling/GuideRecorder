@@ -442,6 +442,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
             items.push(Item::Section(Section {
                 id: Ulid::new(),
                 title: (*text).into(),
+                audiences: Vec::new(),
             }));
         }
         let id = if i == 0 { real } else { Ulid::new() };
@@ -454,6 +455,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: if i == 0 {
                     full.clone()
@@ -538,7 +540,7 @@ fn hostile_text_is_escaped() {
                     "{expected:?} not in {headings:#?}"
                 );
             }
-            Item::Note(_) => {}
+            Item::Note(_) | Item::Decision(_) => {}
         }
     }
     let paragraphs = paragraphs(&markdown);
@@ -600,6 +602,7 @@ fn empty_titles_use_no_heading_or_label_only() {
         end_point: None,
         element: None,
         keystrokes: None,
+        url: None,
         image: StepImage {
             full: format!("steps/{id}.webp"),
             crop: None,
@@ -627,6 +630,65 @@ fn empty_titles_use_no_heading_or_label_only() {
     export(&guide, &handle, &out, &opts);
     let markdown = fs::read_to_string(out.join("guide.md")).unwrap();
     assert_eq!(headings(&markdown), ["1. Page"]);
+}
+
+#[test]
+fn web_steps_link_to_their_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("lib")).unwrap();
+    let mut guide = Guide::new("Web", "en");
+    let handle = library.create(&guide).unwrap();
+    let step = |title: &str, url: &str| {
+        let id = Ulid::new();
+        Item::Step(Step {
+            id,
+            title: title.into(),
+            description: "As usual.".into(),
+            kind: StepKind::Click,
+            point: None,
+            end_point: None,
+            element: None,
+            keystrokes: None,
+            url: Some(url.into()),
+            image: StepImage {
+                full: format!("steps/{id}.webp"),
+                crop: None,
+                crop_rect: None,
+                after: None,
+                show: ImageShow::Full,
+            },
+            annotations: Vec::new(),
+            narration: String::new(),
+            ai_state: AiState::default(),
+        })
+    };
+    guide.items = vec![
+        step("Click **Keys**", "https://example.com/settings"),
+        step("Click **Rotate**", "https://example.com/settings"),
+        step(
+            "Go to [example.com/keys](https://example.com/keys)",
+            "https://example.com/keys",
+        ),
+    ];
+    library.save_to(&handle, &guide).unwrap();
+    let out = dir.path().join("out");
+    export(&guide, &handle, &out, &MdOptions::default());
+    let markdown = fs::read_to_string(out.join("guide.md")).unwrap();
+    let links: Vec<String> = Parser::new_ext(&markdown, Options::empty())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+            _ => None,
+        })
+        .collect();
+    // Once where the page changes; a "Go to" step's title is its link.
+    assert_eq!(
+        links,
+        ["https://example.com/settings", "https://example.com/keys"]
+    );
+    assert!(
+        markdown.contains("[example.com/settings](https://example.com/settings)"),
+        "{markdown}"
+    );
 }
 
 /// The ordered lists of `markdown`: each item's text, hard breaks as `\n`,

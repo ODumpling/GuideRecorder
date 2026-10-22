@@ -196,8 +196,9 @@ pub fn frontmost_bundle_id() -> Option<String> {
 /// Reports every change of foreground window to another app
 /// (`EVENT_SYSTEM_FOREGROUND`, out of context, on its own thread) until
 /// dropped, with its time and the app's id. Unlike macOS it needs no main
-/// run loop. The frame streams have no content filter to refresh, so
-/// nothing is sent to the session's refresh thread, which ends at once.
+/// run loop. The frame streams find the excluded apps' windows again for
+/// every frame and have no filter to refresh, so nothing is sent to the
+/// session's refresh thread, which ends at once.
 pub struct FrontmostObserver {
     thread_id: u32,
     thread: Option<JoinHandle<()>>,

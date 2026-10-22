@@ -4,6 +4,8 @@
 //! See design scratchpads #444 (format), #443 (export) and #442 (AI).
 
 pub mod ai;
+pub mod app_dir;
+pub mod branch;
 pub mod confidence;
 pub mod edit;
 pub mod events;
@@ -20,10 +22,11 @@ pub mod pages;
 pub mod redact;
 pub mod steps;
 pub mod sync;
+pub mod web;
 
 pub use ulid::Ulid;
 
 /// Current `guide.json` schema version. Bumped together with a migration.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 const _: () = assert!(SCHEMA_VERSION >= 1);

@@ -21,6 +21,8 @@ The steps use: Safari.
 
 Do the steps in order. Each names the element to act on (its role, label, window and app) and the keys to press; check the screen against the step's image before you act.
 
+At a decision, answer its question from what is on the screen and go where the matching option says; the other steps are then skipped or repeated.
+
 > **Warning:** Creating a new key **revokes** the old one immediately. Update these first:
 >
 > 1. The CI secret
@@ -51,6 +53,12 @@ Password input is masked while recording.
 The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
 
 ![Step 3](images/03-click-create-key-and-copy-the-new-key.png)
+
+> **Decision:** Is the key used in **production**?
+>
+> - **Yes:** Go to Step 4
+> - **No:** Go to Step 5
+> - **Unsure:** Go to the guide “Find where an API key is used”
 
 ### 4. Drag the new key to **Production**
 

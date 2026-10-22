@@ -14,6 +14,18 @@
 {{ css }}</style>
 </head>
 <body>
+{%- macro decision(item) %}
+<aside class="decision" role="group" aria-label="{{ item.label }}">
+<p class="decision-question"><span class="decision-label">{{ item.label }}:</span> {{ item.question }}</p>
+{%- if item.options %}
+<ul class="decision-options">
+{%- for option in item.options %}
+<li>{% if option.label %}<strong>{{ option.label }}:</strong> {% endif %}{% if option.href %}<a href="{{ option.href }}">{{ option.text }}</a>{% else %}{{ option.text }}{% endif %}</li>
+{%- endfor %}
+</ul>
+{%- endif %}
+</aside>
+{%- endmacro %}
 <main class="guide">
 <header class="guide-header">
 {%- if logo %}
@@ -41,6 +53,11 @@
 {%- for item in items %}
 {%- if item.kind == "section" %}
 <h2 class="section">{{ item.title }}</h2>
+{%- if item.audiences %}
+<p class="audience">{{ item.audiences }}</p>
+{%- endif %}
+{%- elif item.kind == "decision" %}
+{{- decision(item) }}
 {%- elif item.kind == "note" %}
 <aside class="note note-{{ item.note_kind }}" role="note">
 <p class="note-label">{{ item.label }}</p>

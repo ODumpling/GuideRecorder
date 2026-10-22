@@ -13,7 +13,7 @@ import {
   type PreviewState,
 } from "@/export/preview";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
-import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
+import type { ExportFormat, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
 
 const SHADOW = "shadow-[0_2px_4px_rgb(0_0_0/0.06),0_12px_40px_rgb(0_0_0/0.16)]";
 
@@ -207,9 +207,9 @@ function PreviewBody({
       return (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
           <BrowserChrome name="guide.html">
-            <PageFrame html={preview.html} title="Export preview" scripts={format === "walkthrough"} />
+            <PageFrame html={preview.html} title="Export preview" scripts={format === "walkthrough" || format === "scorm"} />
           </BrowserChrome>
-          {format === "walkthrough" && (
+          {(format === "walkthrough" || format === "scorm") && (
             <p className="shrink-0 text-center text-xs text-muted-foreground">Click through it as your readers will.</p>
           )}
         </div>
@@ -323,6 +323,8 @@ export function ExportPreview({
   reviewDetails,
   motion,
   skill,
+  scorm,
+  audience,
   api,
   flush,
 }: {
@@ -333,8 +335,12 @@ export function ExportPreview({
   accent: string;
   reviewDetails: boolean;
   motion: MotionOptions;
-  /** The agent skill options; the replay script adds a line to SKILL.md. */
+  /** The agent skill options; the replay script (replay.js, or replay.ps1 for a Windows guide) adds a line to SKILL.md. */
   skill?: SkillOptions;
+  /** The SCORM options; the page shows the quiz. */
+  scorm?: ScormOptions;
+  /** Only the sections for this audience; null or absent: everyone. */
+  audience?: string | null;
   api: ExportApi;
   /** Saves the editor's changes, so the preview shows them. */
   flush(): Promise<boolean>;
@@ -349,7 +355,7 @@ export function ExportPreview({
     const s = new PreviewScheduler(
       async (r) => {
         await deps.current.flush();
-        return deps.current.api.previewExport(r.guideId, r.format, r.branding, r.paper, r.reviewDetails, r.motion, r.skill);
+        return deps.current.api.previewExport(r.guideId, r.format, r.branding, r.paper, r.reviewDetails, r.motion, r.skill, r.scorm, r.audience);
       },
       setState,
       errorMessage,
@@ -358,7 +364,7 @@ export function ExportPreview({
     return () => s.dispose();
   }, []);
 
-  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion, skill });
+  const request = previewRequest({ guideId: guide.id, format, logo, accent, paper, reviewDetails, motion, skill, scorm, audience });
   const key = request && JSON.stringify(request);
   useEffect(() => {
     scheduler.current?.request(request);

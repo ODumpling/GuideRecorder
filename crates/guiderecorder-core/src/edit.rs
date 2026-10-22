@@ -546,6 +546,9 @@ pub fn set_cover(
             Item::Step(_) => String::new(),
             Item::Section(_) => format!("{step_id} is a section of guide {guide_id}, not a step"),
             Item::Note(_) => format!("{step_id} is a note of guide {guide_id}, not a step"),
+            Item::Decision(_) => {
+                format!("{step_id} is a decision of guide {guide_id}, not a step")
+            }
         };
         if !problem.is_empty() {
             return Err(EditError::Invalid(problem));
@@ -731,6 +734,7 @@ mod tests {
         guide.items.push(Item::Section(Section {
             id: section,
             title: "S".into(),
+            audiences: Vec::new(),
         }));
         let err = set_step_text(&mut guide, section, Some("x".into()), None).unwrap_err();
         assert!(err.to_string().contains("is a section"), "{err}");
@@ -817,6 +821,7 @@ mod tests {
         guide.items.push(Item::Section(Section {
             id: Ulid::new(),
             title: "S".into(),
+            audiences: Vec::new(),
         }));
         let before = ids(&guide);
         assert!(before.len() >= 3);

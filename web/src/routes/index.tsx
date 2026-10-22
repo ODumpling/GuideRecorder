@@ -7,7 +7,7 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "GuideRecorder · Do it once, get the guide" },
-      { name: "description", content: "Record a task on your Mac and get a step-by-step guide with screenshots. Edit it, then share it as a PDF, doc, video or link." },
+      { name: "description", content: "Record a task on your Mac or Windows PC and get a step-by-step guide with screenshots. Edit it, then share it as a PDF, doc, video or link." },
     ],
   }),
   component: Home,

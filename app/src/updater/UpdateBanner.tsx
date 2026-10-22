@@ -57,7 +57,7 @@ export function UpdateBanner() {
       return (
         <div role="status" aria-label="Update" className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-sm">
           <CircleCheck className="size-4 shrink-0 text-[var(--status-success)]" />
-          <span className="flex-1">GuideRecorder {banner.version} is installed. Restart to use it; your guide is saved first.</span>
+          <span className="flex-1">GuideRecorder {banner.version} is ready. Restart to use it; your guide is saved first.</span>
           <Button variant="outline" size="sm" onClick={() => void restart()}>
             <RotateCw /> Restart now
           </Button>

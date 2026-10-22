@@ -74,11 +74,27 @@ export interface AppError {
   message: string;
 }
 
-export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif" | "skill";
+export type ExportFormat = "md" | "html" | "walkthrough" | "docx" | "pdf" | "pptx" | "mp4" | "gif" | "skill" | "scorm";
+
+/** When an LMS counts a SCORM course as done (core `export::scorm::Completion`). */
+export type ScormCompletion = "lastStep" | "quizPassed";
+
+/** SCORM package options (core `export::scorm::ScormOptions`). */
+export interface ScormOptions {
+  /** Course title; blank: the guide title. */
+  title: string;
+  /** Course identifier; blank: `guiderecorder-<guide id>`. */
+  identifier: string;
+  completion: ScormCompletion;
+  /** 0 to 100: the quiz score that passes. */
+  masteryScore: number;
+  /** The quiz as text (a line per question, `- [x]` / `- [ ]` choices); blank for none. */
+  quiz: string;
+}
 
 /** Agent skill options (core `export::skill::SkillOptions`). */
 export interface SkillOptions {
-  /** Also write `replay.js`, a macOS script that repeats the steps. */
+  /** Also write the replay script: `replay.js` for macOS, or `replay.ps1` (PowerShell) for a guide recorded on Windows. */
   replay: boolean;
 }
 
@@ -416,7 +432,7 @@ export interface RecordingSaved {
 
 /** The toolbar's microphone (`narration_state`, `recording://narration`). */
 export interface NarrationState {
-  /** Narration works on this computer (macOS). */
+  /** Narration works on this computer (macOS and Windows). */
   supported: boolean;
   /** On: what is said is transcribed while recording. Outside a recording, the same as `enabled`. */
   on: boolean;

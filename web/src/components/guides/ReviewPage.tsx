@@ -358,6 +358,7 @@ function Side({
           {"title" in item && item.title ? <p className="font-medium whitespace-pre-wrap">{item.title}</p> : null}
           {item.type === "step" && item.description ? <p className="text-sm whitespace-pre-wrap">{item.description}</p> : null}
           {item.type === "note" ? <p className="text-sm whitespace-pre-wrap">{item.body}</p> : null}
+          {item.type === "decision" ? <p className="text-sm whitespace-pre-wrap">{[item.question, ...item.options.map((o) => `– ${o.label}`)].join("\n")}</p> : null}
           {item.type === "step" && showImage ? (
             <AnnotatedImage image={item.image} annotations={item.annotations} src={src(assets)} label={`${label} screenshot`} />
           ) : null}
@@ -373,7 +374,7 @@ function itemNames(items: Item[]): Map<string, string> {
   return new Map(
     items.map((item) => {
       if (item.type === "step") step += 1;
-      return [item.id, item.type === "step" ? `Step ${step}` : item.type === "section" ? "Section" : "Note"];
+      return [item.id, item.type === "step" ? `Step ${step}` : item.type === "section" ? "Section" : item.type === "decision" ? "Decision" : "Note"];
     }),
   );
 }

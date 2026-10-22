@@ -18,7 +18,7 @@
 //! function [`choose_target`]. Secure and text-entry targets never inherit
 //! a label ([`may_inherit_label`]).
 
-use guiderecorder_core::events::RawElement;
+use guiderecorder_core::events::{AppRef, RawElement};
 
 /// How many parent hops a backend's hit test may take looking for a better
 /// target.
@@ -118,6 +118,97 @@ pub(crate) fn role_in(role: Option<&str>, set: &[&str]) -> bool {
     role.is_some_and(|r| set.contains(&r))
 }
 
+/// Whether a field's text may be read for typed text (see
+/// [`guiderecorder_core::steps`], `# Typed text`): a text-entry role or
+/// subrole that is not secure. Its value is user data, read for nothing
+/// else.
+pub fn may_read_value(role: Option<&str>, subrole: Option<&str>, is_secure: bool) -> bool {
+    !is_secure
+        && !self::is_secure(role, subrole)
+        && (role_in(role, NO_INHERIT_ROLES) || role_in(subrole, NO_INHERIT_ROLES))
+}
+
+/// A field value as kept: whole, or `None` when longer than `max_chars`
+/// characters (a document, not a field).
+pub fn field_text(value: &str, max_chars: usize) -> Option<String> {
+    (value.chars().count() <= max_chars).then(|| value.to_owned())
+}
+
+/// Roles of what scrolls: the scrolled area a click is checked against
+/// (see [`guiderecorder_core::steps`], `# Scrolling`).
+pub const SCROLLED_ROLES: &[&str] = &["AXScrollArea", "AXWebArea"];
+
+/// How many parent hops a backend takes looking for the scrolled area
+/// around the element under the pointer.
+pub const MAX_SCROLL_DEPTH: usize = 12;
+
+/// How many elements of a browser window a backend reads, at most, looking
+/// for its web address. Web content is never searched.
+pub const MAX_PAGE_NODES: usize = 200;
+
+/// The frontmost window of a browser (see [`guiderecorder_core::web`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrowserPage {
+    pub app: AppRef,
+    /// Its web address, if one could be read; never one of a private
+    /// window.
+    pub url: Option<String>,
+    /// An incognito or private window.
+    pub private: bool,
+    /// The address bar is being typed in: the address is not known now,
+    /// and the last one read still holds.
+    pub typing: bool,
+}
+
+impl BrowserPage {
+    /// A private window: no address.
+    pub fn private(app: AppRef) -> Self {
+        Self {
+            app,
+            private: true,
+            ..Self::default()
+        }
+    }
+
+    /// A window whose address bar is being typed in.
+    pub fn typing(app: AppRef) -> Self {
+        Self {
+            app,
+            typing: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// The last web address read from a browser window, by its app and title:
+/// while the title stays the same, so does the page (see
+/// [`PageCache::get`]), and nothing more is read. Each backend keeps one
+/// per thread.
+#[derive(Debug, Default)]
+pub struct PageCache {
+    last: Option<(i32, Option<String>, BrowserPage)>,
+}
+
+impl PageCache {
+    /// The page read last for app `pid`'s window titled `title`, if it is
+    /// the same window and title.
+    pub fn get(&self, pid: i32, title: Option<&str>) -> Option<BrowserPage> {
+        self.last
+            .as_ref()
+            .filter(|(p, t, _)| *p == pid && t.as_deref() == title)
+            .map(|(_, _, page)| page.clone())
+    }
+
+    pub fn put(&mut self, pid: i32, title: Option<String>, page: BrowserPage) {
+        self.last = Some((pid, title, page));
+    }
+
+    /// Forgets the page, e.g. while its address bar is being typed in.
+    pub fn clear(&mut self) {
+        self.last = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +273,44 @@ mod tests {
 
         let in_cell = [Some("AXStaticText"), Some("AXGroup"), Some("AXCell")];
         assert_eq!(choose_target(&in_cell), 2);
+    }
+
+    #[test]
+    fn values_only_of_plain_text_fields() {
+        assert!(may_read_value(Some("AXTextField"), None, false));
+        assert!(may_read_value(Some("AXTextArea"), None, false));
+        assert!(may_read_value(
+            Some("AXTextField"),
+            Some("AXSearchField"),
+            false
+        ));
+        assert!(!may_read_value(Some("AXTextField"), None, true));
+        assert!(!may_read_value(
+            Some("AXTextField"),
+            Some("AXSecureTextField"),
+            false
+        ));
+        assert!(!may_read_value(Some("AXButton"), None, false));
+        assert!(!may_read_value(None, None, false));
+        assert_eq!(field_text("abc", 3).as_deref(), Some("abc"));
+        assert_eq!(field_text("日本語", 3).as_deref(), Some("日本語"));
+        assert_eq!(field_text("abcd", 3), None);
+    }
+
+    #[test]
+    fn page_cache_holds_while_the_title_does() {
+        let page = BrowserPage {
+            url: Some("https://example.com/".into()),
+            ..BrowserPage::default()
+        };
+        let mut cache = PageCache::default();
+        assert_eq!(cache.get(1, Some("Example")), None);
+        cache.put(1, Some("Example".into()), page.clone());
+        assert_eq!(cache.get(1, Some("Example")), Some(page));
+        assert_eq!(cache.get(1, Some("Other")), None);
+        assert_eq!(cache.get(2, Some("Example")), None);
+        cache.clear();
+        assert_eq!(cache.get(1, Some("Example")), None);
     }
 
     #[test]

@@ -15,6 +15,10 @@ Warning: Creating a new key revokes the old one immediately. Update these first:
 Password input is masked while recording.
 3. Click Create key and copy the new key
 The key is shown once. Store it in your password manager; see Managing keys.
+Decision: Is the key used in production?
+• Yes: Go to Step 4
+• No: Go to Step 5
+• Unsure: Go to the guide “Find where an API key is used”
 4. Drag the new key to Production
 5. Check that the key works
 Run this in Terminal:

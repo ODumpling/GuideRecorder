@@ -30,7 +30,7 @@ import {
 } from "@/settings/validate";
 import { isAccent } from "@/export/export";
 import { appName, DEFAULT_EXCLUDED_IDS } from "@/recording/apps";
-import { isWindows, keyStore, thisComputer } from "@/lib/platform";
+import { isWindows, keyStore, narrationSupported, systemSettings, thisComputer } from "@/lib/platform";
 import { progressText } from "@/updater/UpdateBanner";
 import { updaterStore, useUpdater } from "@/updater/updater";
 
@@ -57,7 +57,7 @@ function updateText(status: UpdateStatus): string | null {
     case "downloading":
       return `Downloading ${status.version}… ${progressText(status.downloaded, status.total)}`;
     case "ready":
-      return `Version ${status.version} is installed; restart to use it.`;
+      return `Version ${status.version} is ready; restart to use it.`;
     case "failed":
       return status.message;
     default:
@@ -561,6 +561,8 @@ export function RecordingSection({ api }: { api: SettingsApi }) {
               onChange={(keepAudio) => setNarration({ keepAudio })}
             />
           </Row>
+          {/* Windows has no Permissions page: what narration needs is shown here. */}
+          {isWindows() && <NarrationPermissions api={api} />}
         </>
       )}
       <Row
@@ -1094,21 +1096,31 @@ export function ExportSection({ exportApi = tauriExportApi }: { exportApi?: Expo
   );
 }
 
-const PERMISSIONS: Record<Permission, { label: string; why: string }> = {
-  screen_recording: { label: "Screen Recording", why: "Takes the screenshots for each step." },
-  accessibility: { label: "Accessibility", why: "Names the button or field you clicked." },
-  input_monitoring: { label: "Input Monitoring", why: "Notices your clicks and typing while recording." },
-  microphone: { label: "Microphone", why: "Hears you narrate, only while the toolbar's microphone is on." },
-  speech_recognition: {
-    label: "Speech Recognition",
-    why: "Turns what you say into text, on this Mac: the audio is never sent anywhere.",
-  },
-};
-
-/** Narration works on macOS only (the Speech framework, on the device). */
-export function narrationSupported(): boolean {
-  return !isWindows();
+/** Each permission's name and why it is needed, as this platform calls them. */
+function permissionText(permission: Permission): { label: string; why: string } {
+  switch (permission) {
+    case "screen_recording":
+      return { label: "Screen Recording", why: "Takes the screenshots for each step." };
+    case "accessibility":
+      return { label: "Accessibility", why: "Names the button or field you clicked." };
+    case "input_monitoring":
+      return { label: "Input Monitoring", why: "Notices your clicks and typing while recording." };
+    case "microphone":
+      return { label: "Microphone", why: "Hears you narrate, only while the toolbar's microphone is on." };
+    case "speech_recognition":
+      return isWindows()
+        ? {
+            label: "Speech recognition",
+            why: "Turns what you say into text with Windows' own dictation, on this PC: the audio is never sent anywhere. Needs your language's speech pack.",
+          }
+        : {
+            label: "Speech Recognition",
+            why: `Turns what you say into text, on ${thisComputer()}: the audio is never sent anywhere.`,
+          };
+  }
 }
+
+export { narrationSupported };
 
 const STATUS: Record<PermissionStatus, { label: string; color: string }> = {
   granted: { label: "Allowed", color: "var(--status-success)" },
@@ -1132,9 +1144,14 @@ function readAsked(): Permission[] {
   }
 }
 
-/** Where to turn a permission on, once macOS has been asked. */
+/** Where to turn a permission on, once macOS has been asked (on Windows, at once: it never asks). */
 function howTo(permission: Permission): string {
-  return `In System Settings → Privacy & Security → ${PERMISSIONS[permission].label}, turn on GuideRecorder. Not in the list? Click + and choose GuideRecorder from Applications.`;
+  if (isWindows()) {
+    return permission === "speech_recognition"
+      ? "In Windows Settings → Time & language → Speech, add a speech language (its speech pack), ideally the one Windows is in."
+      : "In Windows Settings → Privacy & security → Microphone, turn on Microphone access and Let desktop apps access your microphone.";
+  }
+  return `In System Settings → Privacy & Security → ${permissionText(permission).label}, turn on GuideRecorder. Not in the list? Click + and choose GuideRecorder from Applications.`;
 }
 
 /**
@@ -1145,7 +1162,8 @@ function howTo(permission: Permission): string {
  * to the list in System Settings, and may show its own prompt); after
  * that it opens the right System Settings pane. A Screen Recording grant
  * that macOS applies only at launch offers a restart. With `narration`, it
- * lists the optional ones narration needs instead.
+ * lists the optional ones narration needs instead. Windows never asks, so
+ * there the button opens the right page of Windows Settings straight away.
  */
 export function PermissionList({
   api,
@@ -1187,7 +1205,8 @@ export function PermissionList({
 
   const turnOn = async (permission: Permission) => {
     setError(null);
-    if (asked.includes(permission)) {
+    // Windows has nothing to ask: its Settings is where it is turned on.
+    if (isWindows() || asked.includes(permission)) {
       await openSettings(permission);
       return;
     }
@@ -1205,9 +1224,9 @@ export function PermissionList({
   return (
     <div className="flex flex-col">
       {rows?.map(({ permission, status, restartNeeded }) => {
-        const { label, why } = PERMISSIONS[permission];
+        const { label, why } = permissionText(permission);
         const granted = status === "granted";
-        const wasAsked = asked.includes(permission);
+        const wasAsked = isWindows() || asked.includes(permission);
         return (
           <Row key={permission} label={label} note={granted || restartNeeded || !wasAsked ? why : howTo(permission)}>
             {restartNeeded ? (
@@ -1227,7 +1246,7 @@ export function PermissionList({
                   <Button variant={wasAsked ? "outline" : "default"} size="sm" onClick={() => void turnOn(permission)}>
                     {wasAsked ? (
                       <>
-                        <ExternalLink /> Open System Settings
+                        <ExternalLink /> Open {systemSettings()}
                       </>
                     ) : (
                       "Turn on…"
@@ -1274,8 +1293,8 @@ export function NarrationPermissions({ api }: { api: SettingsApi }) {
     <div className="mt-4 flex flex-col gap-1">
       <span className="text-sm font-medium">Narration (optional)</span>
       <span className="text-xs text-muted-foreground">
-        To narrate while you record, allow these too. Speech is transcribed on this Mac; the audio never leaves it.
-        Recording works without them.
+        To narrate while you record, allow these too. Speech is transcribed on {thisComputer()}; the audio never
+        leaves it. Recording works without them.
       </span>
       <PermissionList api={api} narration />
     </div>

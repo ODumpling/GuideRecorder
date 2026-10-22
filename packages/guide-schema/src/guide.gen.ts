@@ -21,7 +21,7 @@ export type GuideField = ("title" | "intro" | "prerequisites" | "summary" | "tag
 /**
  * One entry of [`Guide::items`], tagged by `type`.
  */
-export type Item = (Step | Section | Note)
+export type Item = (Step | Section | Note | Decision)
 /**
  * An SVG-compatible overlay shape; never baked into source images.
  * 
@@ -56,6 +56,23 @@ type: "hotspot"
 })
 export type StepKind = ("click" | "doubleClick" | "rightClick" | "type" | "shortcut" | "drag" | "manual")
 export type NoteKind = ("tip" | "warning" | "note")
+/**
+ * Where a [`DecisionOption`] leads. Tagged by `kind`. A step or section
+ * that is gone (or left out for an audience) reads as `next`.
+ */
+export type BranchTarget = ({
+kind: "next"
+} | {
+id: string
+kind: "step"
+} | {
+id: string
+kind: "section"
+} | {
+id: string
+kind: "guide"
+title: string
+})
 /**
  * What a guide is made of.
  */
@@ -253,6 +270,12 @@ point?: (Point | null)
  * Markdown.
  */
 title: string
+/**
+ * Web address of the page the step was on, when it was recorded in a
+ * browser (see [`crate::web`]): an http or https URL. Absent for other
+ * apps, private windows and guides recorded before it was kept.
+ */
+url?: (string | null)
 }
 /**
  * Visual style; unset fields use the app's defaults.
@@ -353,6 +376,12 @@ show: ImageShow
 }
 export interface Section {
 type: "section"
+/**
+ * Who the section is for, e.g. `Admin`, as free text. Empty: everyone.
+ * An export for one audience leaves out the sections tagged only for
+ * others (see [`crate::branch::for_audience`]). Left out while empty.
+ */
+audiences?: string[]
 id: string
 title: string
 }
@@ -364,6 +393,31 @@ type: "note"
 body: string
 id: string
 kind: NoteKind
+}
+/**
+ * A question the reader answers to choose where to go next, e.g. "Do you
+ * see the sign-in dialog?". Static exports list the options with "go to
+ * step N"; the interactive walkthrough follows them.
+ */
+export interface Decision {
+type: "decision"
+id: string
+options: DecisionOption[]
+/**
+ * Markdown.
+ */
+question: string
+}
+/**
+ * One answer of a [`Decision`] and where it leads.
+ */
+export interface DecisionOption {
+id: string
+/**
+ * Plain text, e.g. `Yes`.
+ */
+label: string
+target: BranchTarget
 }
 /**
  * Environment the guide was recorded in.
@@ -862,6 +916,79 @@ export const guideJsonSchema = {
         "pixelate"
       ]
     },
+    "BranchTarget": {
+      "description": "Where a [`DecisionOption`] leads. Tagged by `kind`. A step or section\nthat is gone (or left out for an audience) reads as `next`.",
+      "oneOf": [
+        {
+          "description": "Carry on with the item after the decision.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "next"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A step of this guide.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "step"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "description": "A section of this guide: its first step.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "section"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "description": "Another guide of the library. `title` is its title when the option\nwas set, shown by exports, which cannot look it up.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "guide"
+            },
+            "title": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        }
+      ]
+    },
     "CalloutGeometry": {
       "type": "object",
       "properties": {
@@ -920,6 +1047,53 @@ export const guideJsonSchema = {
           "default": "full"
         }
       }
+    },
+    "Decision": {
+      "description": "A question the reader answers to choose where to go next, e.g. \"Do you\nsee the sign-in dialog?\". Static exports list the options with \"go to\nstep N\"; the interactive walkthrough follows them.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          }
+        },
+        "question": {
+          "description": "Markdown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ]
+    },
+    "DecisionOption": {
+      "description": "One answer of a [`Decision`] and where it leads.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "description": "Plain text, e.g. `Yes`.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/BranchTarget",
+          "default": {
+            "kind": "next"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
     },
     "DisplayInfo": {
       "type": "object",
@@ -1137,6 +1311,25 @@ export const guideJsonSchema = {
                 "type": {
                   "type": "string",
                   "const": "note"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Decision"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "decision"
                 }
               },
               "required": [
@@ -1387,6 +1580,13 @@ export const guideJsonSchema = {
     "Section": {
       "type": "object",
       "properties": {
+        "audiences": {
+          "description": "Who the section is for, e.g. `Admin`, as free text. Empty: everyone.\nAn export for one audience leaves out the sections tagged only for\nothers (see [`crate::branch::for_audience`]). Left out while empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "id": {
           "type": "string"
         },
@@ -1475,6 +1675,13 @@ export const guideJsonSchema = {
         "title": {
           "description": "Markdown.",
           "type": "string"
+        },
+        "url": {
+          "description": "Web address of the page the step was on, when it was recorded in a\nbrowser (see [`crate::web`]): an http or https URL. Absent for other\napps, private windows and guides recorded before it was kept.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

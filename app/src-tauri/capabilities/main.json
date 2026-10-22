@@ -43,6 +43,7 @@
     "allow-preview-export",
     "allow-logo-preview",
     "allow-reveal-export",
+    "allow-open-step-url",
     "allow-verify-crop",
     "allow-get-settings",
     "allow-update-settings",

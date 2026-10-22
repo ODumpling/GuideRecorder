@@ -33,6 +33,19 @@ export function fileManager(): string {
   return isWindows() ? "File Explorer" : "Finder";
 }
 
+/** The OS's settings app, where permissions are allowed: System Settings, or Windows Settings. */
+export function systemSettings(): string {
+  return isWindows() ? "Windows Settings" : "System Settings";
+}
+
+/**
+ * Whether narration works here: on both (macOS's Speech framework, or
+ * Windows' desktop dictation), always on the device.
+ */
+export function narrationSupported(): boolean {
+  return true;
+}
+
 /** Where API keys are kept, as in "The key is kept in …": your Keychain, or Windows Credential Manager. */
 export function keyStore(): string {
   return isWindows() ? "Windows Credential Manager" : "your Keychain";

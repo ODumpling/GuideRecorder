@@ -13,6 +13,7 @@ import {
   FilePlus2,
   FileText,
   FolderInput,
+  GitBranch,
   Hash,
   Heading,
   Info,
@@ -38,7 +39,7 @@ import { guidesAt, selectionStore } from "@/components/library/selection";
 import { itemLabel } from "@/components/Outline";
 import { PAGES, type SettingsPage } from "@/components/settings/SettingsDialog";
 import { REWRITES } from "@/components/StepView";
-import { insertNote, insertPages, insertSection } from "@/editor/actions";
+import { insertDecision, insertNote, insertPages, insertSection } from "@/editor/actions";
 import { editorStore, stepNoun, stepNumbers, useEditor } from "@/editor/editor";
 import { folderName, folderPaths, libraryTags, localToday } from "@/editor/library";
 import { FORMATS } from "@/export/export";
@@ -196,6 +197,7 @@ function useEditorEntries(): Entry[] {
       entry("insert-tip", "Insert tip below", <Lightbulb />, () => insertNote(editor, "tip")),
       entry("insert-warning", "Insert warning below", <TriangleAlert />, () => insertNote(editor, "warning")),
       entry("insert-note", "Insert note below", <Info />, () => insertNote(editor, "note")),
+      entry("insert-decision", "Insert decision below", <GitBranch />, () => insertDecision(editor)),
     );
   }
   if (canUndo) entries.push(entry("undo", "Undo", <Undo2 />, () => editor.getState().undo(), { shortcut: shortcutLabel("⌘Z") }));

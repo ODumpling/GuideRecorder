@@ -391,13 +391,14 @@ mod variants {
     all_variants!(audiences, Audience: Beginner, Expert);
     all_variants!(guide_kinds, GuideKind: Walkthrough, Annotated);
 
-    pub const ITEMS: &[&str] = &["step", "section", "note"];
+    pub const ITEMS: &[&str] = &["step", "section", "note", "decision"];
 
     pub fn item(item: &Item) -> &'static str {
         match item {
             Item::Step(_) => "step",
             Item::Section(_) => "section",
             Item::Note(_) => "note",
+            Item::Decision(_) => "decision",
         }
     }
 
@@ -440,6 +441,9 @@ fn rich_text_fields(guide: &Guide) -> Vec<(String, &str)> {
                 fields.push((format!("items[{i}].description"), &step.description));
             }
             Item::Note(note) => fields.push((format!("items[{i}].body"), &note.body)),
+            Item::Decision(decision) => {
+                fields.push((format!("items[{i}].question"), &decision.question))
+            }
             Item::Section(_) => {}
         }
     }
@@ -553,6 +557,7 @@ impl Builder {
         self.items.push(Item::Section(Section {
             id,
             title: title.to_owned(),
+            audiences: Vec::new(),
         }));
     }
 
@@ -563,6 +568,27 @@ impl Builder {
             kind,
             body: body.to_owned(),
         }));
+    }
+
+    /// A decision at item index `at`, with an option per `(label, target)`.
+    fn decision(&mut self, at: usize, question: &str, options: Vec<(&str, BranchTarget)>) {
+        let id = self.id();
+        let options = options
+            .into_iter()
+            .map(|(label, target)| DecisionOption {
+                id: self.id(),
+                label: label.to_owned(),
+                target,
+            })
+            .collect();
+        self.items.insert(
+            at,
+            Item::Decision(Decision {
+                id,
+                question: question.to_owned(),
+                options,
+            }),
+        );
     }
 
     /// A recorded step with a full screenshot and a crop.
@@ -581,6 +607,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: Some(crop),
@@ -611,6 +638,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: None,
@@ -638,6 +666,7 @@ impl Builder {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full,
                 crop: None,
@@ -1026,6 +1055,24 @@ fn api_key() -> Fixture {
         "Run this in Terminal:\n\n`curl -H \"x-api-key: $KEY\" https://api.example.com/v1/ping`\n\nIt should print *pong*."
             .to_owned();
     step.ai_state = ai(AiStatus::Ai, "step.v1");
+    let check = step.id;
+
+    // Made last so the other items keep their ids; it sits before the drag.
+    b.decision(
+        4,
+        "Is the key used in **production**?",
+        vec![
+            ("Yes", BranchTarget::Next),
+            ("No", BranchTarget::Step { id: check }),
+            (
+                "Unsure",
+                BranchTarget::Guide {
+                    id: Ulid::from_parts(1_792_000_000_000, 0x0D00),
+                    title: "Find where an API key is used".to_owned(),
+                },
+            ),
+        ],
+    );
 
     b.guide("Rotate an API key", "en", |g| {
         g.summary = "Replace a leaked or expiring API key without downtime.".to_owned();

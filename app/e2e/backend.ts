@@ -12,7 +12,7 @@ type AiGenerateArgs = { stepIds?: string[]; guidePass?: boolean; force?: boolean
 
 const FIXTURES = resolve(import.meta.dirname, "../../fixtures/guides");
 /** Core's `SCHEMA_VERSION`: a guide saved with a newer one opens read-only. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface AppError {
   kind: string;
@@ -102,13 +102,18 @@ export class Backend {
     branding: ExportBranding;
     motion?: unknown;
     skill?: unknown;
+    scorm?: unknown;
+    /** Only when one was chosen. */
+    audience?: string;
   }[] = [];
-  /** Every `preview_export` call. */
-  readonly previews: { format: string; branding: ExportBranding }[] = [];
+  /** Every `preview_export` call; `audience` only when one was chosen. */
+  readonly previews: { format: string; branding: ExportBranding; scorm?: unknown; audience?: string }[] = [];
   /** Export targets that exist (written by an earlier export). */
   readonly exported = new Set<string>();
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
+  /** Web pages `open_step_url` was asked to open. */
+  readonly openedUrls: string[] = [];
   /** The web app: who's signed in, the stored sync state, what was pushed. */
   sync = {
     server: null as string | null,
@@ -920,8 +925,8 @@ export class Backend {
       case "choose_logo":
         return this.dialog.logo;
       case "choose_export_file": {
-        const ext = String(args.format);
-        if (!["docx", "pdf", "pptx", "mp4", "gif"].includes(ext)) {
+        const ext = args.format === "scorm" ? "zip" : String(args.format);
+        if (!["docx", "pdf", "pptx", "mp4", "gif", "zip"].includes(ext)) {
           fail("invalid", "Markdown, HTML and skills export into a folder");
         }
         const file = this.dialog.file;
@@ -935,13 +940,22 @@ export class Backend {
         const overwrite = args.overwrite === true;
         if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
         this.exported.add(out);
-        const record = { guideId, format, out, overwrite, branding: args.branding as ExportBranding };
+        const record = {
+          guideId,
+          format,
+          out,
+          overwrite,
+          branding: args.branding as ExportBranding,
+          ...(typeof args.audience === "string" && { audience: args.audience }),
+        };
         this.exports.push(
           format === "mp4" || format === "gif"
             ? { ...record, motion: args.motion }
             : format === "skill"
               ? { ...record, skill: args.skill }
-              : record,
+              : format === "scorm"
+                ? { ...record, scorm: args.scorm }
+                : record,
         );
         const main =
           format === "md"
@@ -955,7 +969,12 @@ export class Backend {
       }
       case "preview_export": {
         this.bundle(String(args.guideId));
-        this.previews.push({ format: String(args.format), branding: args.branding as ExportBranding });
+        this.previews.push({
+          format: String(args.format),
+          branding: args.branding as ExportBranding,
+          ...(args.format === "scorm" ? { scorm: args.scorm } : {}),
+          ...(typeof args.audience === "string" && { audience: args.audience }),
+        });
         const page = (n: number) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="14"><text y="10">${n}</text></svg>`)}`;
         switch (String(args.format)) {
           case "md":
@@ -968,6 +987,7 @@ export class Backend {
             };
           case "html":
           case "walkthrough":
+          case "scorm":
             return { kind: "html", html: "<!doctype html><title>Guide</title><h1>Guide</h1>" };
           case "pptx":
             return { kind: "slides", images: [page(1), page(2)] };
@@ -983,6 +1003,10 @@ export class Backend {
         return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       case "reveal_export":
         this.revealed.push(String(args.path));
+        return null;
+      case "open_step_url":
+        if (!/^https?:\/\//i.test(String(args.url))) fail("invalid", "not a web address");
+        this.openedUrls.push(String(args.url));
         return null;
       case "get_settings":
         return { settings: structuredClone(this.settings), readOnly: false, loadError: null };

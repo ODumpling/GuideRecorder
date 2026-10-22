@@ -2,20 +2,22 @@
 
 **Do a task once, get a step-by-step guide.**
 
-GuideRecorder watches what you do on your Mac and turns it into a how-to guide:
+GuideRecorder watches what you do on your Mac or PC and turns it into a how-to guide:
 one step per click or shortcut, each with a screenshot of the moment you did
 it. You then tidy the guide up in a built-in editor and export it as PDF, Word,
 Markdown, HTML, slides, a video or a GIF to share with your team, customers or future self.
 
 Everything stays on your machine. AI writing is optional and uses your own
 Anthropic API key, any OpenAI-compatible API, or a local model in Ollama or
-LM Studio, in which case nothing leaves your Mac.
+LM Studio, in which case nothing leaves your computer.
 
-> **Status:** early and in active development, on macOS and, newer,
-> Windows ([#14](https://github.com/ODumpling/GuideRecorder/issues/14)).
-> On Windows the installer is not code-signed yet, so SmartScreen asks
-> before the first run, and windows of excluded apps can still show in
-> screenshots taken while another app is in front. Download the latest version from
+> **Status:** early and in active development, on macOS and Windows
+> ([#14](https://github.com/ODumpling/GuideRecorder/issues/14)). The
+> Windows app has the same features; where one works differently there
+> (narration's speech engine, the replay script, how excluded apps are kept
+> out of screenshots, the tray), [docs/windows.md](docs/windows.md) says
+> how. The Windows installer is not code-signed yet, so SmartScreen asks
+> before the first run. This README describes the Mac app. Download the latest version from
 > [Releases](https://github.com/ODumpling/GuideRecorder/releases) (it updates
 > itself), or build it from source (see [Build from source](#build-from-source)).
 
@@ -23,13 +25,19 @@ LM Studio, in which case nothing leaves your Mac.
 
 1. **Record.** Press Record (or the record shortcut, ⌃⌥R by default) and do the task as you normally would.
    GuideRecorder notes each click, typed text and shortcut, and takes a
-   screenshot of each one. A small floating toolbar shows the elapsed time and
+   screenshot of each one. Typed text is read from the field when it can be,
+   so text from an input method (Japanese, Chinese, Korean) or with accents
+   comes out as you see it. Scrolling to something before clicking it
+   becomes a "Scroll to …" step. In Safari, Chrome, Edge, Firefox, Arc and
+   Brave, each step keeps the web address it was on (shown as a link in the
+   editor and exports), and going to an address becomes a "Go to …" step.
+   A small floating toolbar shows the elapsed time and
    the number of screenshots, with Pause, Stop and a button to add a manual
    step. You can record your whole screen, a single window or a region you
    draw.
 
-   On a Mac you can also **narrate**: turn on the toolbar's microphone and
-   say what you're doing and why. Your speech is transcribed on the Mac and
+   You can also **narrate**: turn on the toolbar's microphone and
+   say what you're doing and why. Your speech is transcribed on the device and
    split across the steps by when you said it (speech just before a click
    goes with that click), so each step's description starts as your own
    words. With AI on, the narration is extra context for the step and guide
@@ -38,6 +46,11 @@ LM Studio, in which case nothing leaves your Mac.
    title and description (written for you from what you clicked, e.g. "Click
    **Save**"), and you can:
    - reword, reorder, merge, split or delete steps, and add sections and notes;
+   - add a **Decision** where the procedure depends on the situation ("Do
+     you see the sign-in dialog?"): each option leads to a step, a section
+     or another guide. Sections can be tagged with who they are for (for
+     example Admin or User), and an export can be made for one audience,
+     leaving out the sections meant only for others;
    - **Re-capture** a step when the app has changed (in the step's ⋯ menu or
      its right-click menu): a short recording starts on the same screen,
      window or region the guide was recorded on, and your next click,
@@ -69,14 +82,19 @@ LM Studio, in which case nothing leaves your Mac.
 4. **Export.** Save the guide as **PDF**, **Word (DOCX)**, **Markdown** or
    **HTML**, with your logo if you like. PDF and Word come on A4 or Letter
    paper (the default follows your region). Blurs are applied to the actual pixels
-   on export, so hidden information is really gone.
+   on export, so hidden information is really gone. Decisions show their
+   options with where each leads ("No: Go to Step 5", a link in PDF, Word and
+   HTML), and the interactive HTML walkthrough follows the option you pick.
+   When sections are tagged with audiences, choose an audience in the Export
+   dialog to leave out the others' sections.
 
    For a chat, a ticket, a README or a training session, export a **video
    (MP4)** or an **animated GIF** instead: each step is shown for a few
    seconds, zooming smoothly into where you clicked, with a cursor, a click
    marker and the step's title as a caption. Choose the seconds per step,
    the frame (wide 16:9, square or vertical), and whether to zoom and show
-   captions. Video is encoded on your Mac with AVFoundation. **Slides
+   captions. Video is encoded on your computer (AVFoundation on a Mac,
+   Media Foundation on Windows). **Slides
    (PPTX)** give one slide per step with its image, title and description,
    and the description in the speaker notes.
 
@@ -85,8 +103,11 @@ LM Studio, in which case nothing leaves your Mac.
    expected result, in the [Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview)
    format), `steps.json` (each step's element locator: app, window, role and
    label, plus the click point and the keys) and the step images, blurs
-   burned in. Optionally it includes `replay.js`, a macOS script that repeats
-   the steps by finding each element through the accessibility API:
+   burned in. Optionally it includes a replay script (`replay.ps1` for a
+   guide recorded on Windows, through UI Automation; see
+   [docs/windows.md](docs/windows.md#replayps1)), or for a Mac
+   `replay.js`, which repeats the steps by finding each element through the
+   accessibility API:
    `osascript -l JavaScript replay.js --dry-run` reports what it would do and
    whether each element is there, without touching anything. The script stops
    at any step it can't do safely (an element it can't find or tell apart, a
@@ -95,6 +116,21 @@ LM Studio, in which case nothing leaves your Mac.
    label, a generic role such as a group, no app or window) are flagged in the
    export dialog, in the step inspector, where you can name the element, and in
    `steps.json` and `SKILL.md`.
+
+   For a learning management system (LMS), export a **SCORM course**: a
+   SCORM 1.2 `.zip` with an `imsmanifest.xml` and the interactive
+   walkthrough, which tells the LMS where the learner is (and resumes there,
+   with the way they took through any decisions) and marks the course
+   completed once they reach an end: the last step, or the end a decision
+   option leads to. Choose an audience to package only its sections. Add a
+   short quiz for the end if you like, one line per question followed by
+   its choices (`- [x]` for the right one, `- [ ]` for the others); its score
+   is reported to the LMS, and with the "Quiz passed" rule the course is
+   passed or failed against the mastery score instead. Choose the course
+   title and identifier; the identifier stays the same for every export of a
+   guide by default, so the LMS sees a new version of the course. The quiz is
+   kept with the export options, not in the guide. The package also works
+   opened on its own, without an LMS.
 
 ## Annotation guides
 
@@ -137,10 +173,14 @@ GuideRecorder is built to be safe to leave running:
   so they work with any backup or sync tool. Nothing is uploaded unless you
   sign in to sync (below), and then only the guides you choose.
 - **Password fields are never recorded.** Keystrokes in secure fields are
-  masked before they are stored.
+  masked before they are stored, and their text is never read.
+- **No web addresses from private windows.** Incognito and private browser
+  windows, and excluded apps, record no address. Addresses keep their query
+  (e.g. `?q=…`) but never a user name or password.
 - **Excluded apps.** While an app on your exclusion list is in front, nothing
   from it is captured: no screenshots, keys or clicks. Its windows are also
-  kept out of every screenshot, even behind other apps. By default this covers
+  kept out of every screenshot, even behind other apps (on Windows they are
+  painted over in grey instead; see [docs/windows.md](docs/windows.md)). By default this covers
   1Password, Bitwarden, Keychain Access, Passwords and Messages, and you can
   edit the list in Settings.
 - **Sensitive text is found on your Mac.** When a recording stops, the text
@@ -156,17 +196,23 @@ GuideRecorder is built to be safe to leave running:
   on in the toolbar, and only heard while a recording runs (not while
   paused). Speech is recognised on the device (Apple's Speech framework,
   on-device only): if your language can't be recognised offline, narration
-  says so rather than use Apple's servers. The audio is kept only if you ask
+  says so rather than use Apple's servers. On Windows it is Windows' desktop
+  speech recogniser, also on the device (see [docs/windows.md](docs/windows.md#narration)).
+  The audio is kept only if you ask
   (`narration.m4a` in the guide's folder), and sync never uploads it. The
   transcript is kept with each step, like its text (so it syncs with the
   guide), and with AI on it is sent with that step.
 - **AI only when you say so.** Nothing is sent anywhere unless AI is turned
-  on and you have added your own key, which is kept in the macOS Keychain.
+  on and you have added your own key, which is kept in the macOS Keychain
+  (Windows Credential Manager on Windows).
   Screenshots are sent with their blurs, and the sensitive text found on your
   Mac, already blurred. Blur suggestions are only suggestions until you
   accept them.
 
 ## Requirements
+
+On Windows: Windows 11 or Windows 10 (2004 or later), no permissions to
+grant; see [docs/windows.md](docs/windows.md#requirements). On a Mac:
 
 - macOS 12.3 or later.
 - Permissions, granted on first launch: **Screen Recording** (screenshots),
@@ -180,7 +226,8 @@ GuideRecorder is built to be safe to leave running:
 
 ## Keyboard shortcuts
 
-The defaults; change them in Settings → Recording.
+The defaults; change them in Settings → Recording. On Windows they are
+Ctrl+Alt+R, Ctrl+Alt+P and Ctrl+Alt+S.
 
 | Shortcut | Action |
 | --- | --- |
@@ -215,12 +262,16 @@ cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder --index <p
 cargo run -p guiderecorder-cli -- --library ~/Documents/GuideRecorder export "<guide>.guiderecorder" --format pdf --out guide.pdf --paper letter
 ```
 
-`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif|skill`
+`export` takes `--format md|html|walkthrough|docx|pdf|pptx|mp4|gif|skill|scorm`
 (`walkthrough` is an interactive click-through `guide.html`; `mp4` needs
-macOS; `skill` is an agent skill folder), `--out`, and optionally
-`--paper a4|letter` (DOCX and PDF; default A4), `--seconds-per-step`,
-`--size wide|square|vertical`, `--no-zoom` and `--no-captions` (MP4 and
-GIF), `--replay` (a skill's `replay.js`), `--logo`, `--accent`,
+macOS or Windows; `skill` is an agent skill folder; `scorm` is a SCORM 1.2 `.zip`),
+`--out`, and optionally `--paper a4|letter` (DOCX and PDF; default A4),
+`--seconds-per-step`, `--size wide|square|vertical`, `--no-zoom` and
+`--no-captions` (MP4 and GIF), `--replay` (a skill's `replay.js`, or
+`replay.ps1` for a guide recorded on Windows),
+`--course-title`, `--course-id`, `--completion last-step|quiz-passed`,
+`--mastery-score` (default 80) and `--quiz <file>` (SCORM), `--audience <name>`
+(leave out the sections tagged only for other audiences), `--logo`, `--accent`,
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.
@@ -270,7 +321,7 @@ simulator or Expo Go.
 ```
 crates/
   guiderecorder-core/      guide format, library, search index, step detection, export, AI
-  guiderecorder-capture/   screen and input capture (macOS backend; a stub elsewhere)
+  guiderecorder-capture/   screen and input capture (macOS and Windows backends; a stub elsewhere)
   guiderecorder-mcp/       read-only MCP server (binary: guiderecorder-mcp)
   guiderecorder-cli/       command line tool (binary: guiderecorder)
 app/                       desktop app: Tauri 2, React, TypeScript, Tailwind

@@ -60,10 +60,20 @@ pub enum CaptureEvent {
         point: Point,
         button: MouseButton,
     },
+    /// Scroll wheel or trackpad scrolling. The deltas are how far the
+    /// content moved, in points: positive moves it right or down (towards
+    /// its start), so an element now at `p` was at `p - delta` before.
+    /// Windows reports wheel notches; its backend estimates the points.
     Scroll {
         point: Point,
         delta_x: f64,
         delta_y: f64,
+        /// Frame of the scrolled area under the pointer (a scroll area or
+        /// web page, else the window). The event tap leaves this `None`;
+        /// the recording session looks it up for the first event of a
+        /// burst.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<Rect>,
     },
     KeyDown {
         key: Key,
@@ -85,6 +95,20 @@ pub enum CaptureEvent {
     /// The frontmost application changed.
     AppActivated {
         app: AppRef,
+    },
+    /// The web address of the frontmost browser window changed (see
+    /// [`crate::web`]). `None` when the frontmost app is not a browser, or
+    /// its window is private or belongs to an excluded app.
+    UrlChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    /// The text of the focused field, read when a typing run settles, just
+    /// before a key or click ends it (stamped just before that event), and
+    /// after a click into a field. Never read from a secure field; emptied
+    /// if the field turns out to be secure.
+    FieldValue {
+        value: String,
     },
     /// User pressed the manual-step hotkey.
     ManualStep,
@@ -212,6 +236,29 @@ mod tests {
         assert_eq!(json["event"]["clickCount"], 1);
         let back: TimedEvent = serde_json::from_value(json).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn older_traces_still_load() {
+        // Scrolling recorded before the scrolled area was looked up.
+        let ev: TimedEvent = serde_json::from_str(
+            r#"{"ts": 1, "event": {"type": "scroll", "point": {"x": 1, "y": 2}, "deltaX": 0.0, "deltaY": -3.5}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ev.event,
+            CaptureEvent::Scroll { region: None, delta_y, .. } if delta_y == -3.5
+        ));
+        let url = serde_json::to_value(CaptureEvent::UrlChanged { url: None }).unwrap();
+        assert_eq!(url, serde_json::json!({"type": "urlChanged"}));
+        let value = serde_json::to_value(CaptureEvent::FieldValue {
+            value: "日本語".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"type": "fieldValue", "value": "日本語"})
+        );
     }
 
     #[test]

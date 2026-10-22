@@ -19,6 +19,7 @@ pub mod pptx;
 pub mod raster;
 pub mod render;
 pub mod report;
+pub mod scorm;
 pub mod skill;
 pub mod walkthrough;
 
@@ -28,5 +29,8 @@ pub use raster::{
     has_redactions, redacted_image, render_cover_image, render_step_image, verify_crop_rect,
     ImageOptions, PlacedHotspot, RenderWarning, RenderedImage,
 };
-pub use render::{RenderCover, RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep};
+pub use render::{
+    RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderOption, RenderSection,
+    RenderStep, RenderTarget,
+};
 pub use report::ExportReport;

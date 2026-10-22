@@ -452,6 +452,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
         items.push(Item::Section(Section {
             id: Ulid::new(),
             title: (*text).into(),
+            audiences: Vec::new(),
         }));
         let id = if i == 0 { real } else { Ulid::new() };
         items.push(Item::Step(Step {
@@ -463,6 +464,7 @@ fn hostile_guide(library: &Library) -> (GuideHandle, Guide) {
             end_point: None,
             element: None,
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: if i == 0 {
                     full.clone()
@@ -718,6 +720,8 @@ const WALKTHROUGH_ATTRS: &[&str] = &[
     "data-next",
     "data-back",
     "data-restart",
+    "data-branch",
+    "data-end",
 ];
 
 /// The body of the page's one script.

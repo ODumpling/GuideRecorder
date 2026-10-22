@@ -800,6 +800,7 @@ mod tests {
                 ..ElementInfo::default()
             }),
             keystrokes: None,
+            url: None,
             image: StepImage {
                 full: format!("steps/{id}.webp"),
                 crop: Some(format!("steps/{id}.crop.webp")),
@@ -1266,6 +1267,7 @@ mod tests {
             Item::Section(crate::model::Section {
                 id: Ulid::new(),
                 title: "Section".into(),
+                audiences: Vec::new(),
             }),
         );
         g.title = "Open a file".into();

@@ -14,21 +14,29 @@ import { create } from "zustand";
 import { ExportPreview } from "@/components/ExportPreview";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
+import { Textarea } from "@guiderecorder/ui/textarea";
+import { NativeSelect, NativeSelectOption } from "@guiderecorder/ui/native-select";
+import { guideAudiences } from "@/editor/commands";
 import { editorStore, useEditor } from "@/editor/editor";
 import { unclearSteps, unclearStepsText } from "@/editor/element";
 import { inspectorStore } from "@/editor/inspector";
 import {
   ASPECTS,
+  COMPLETIONS,
+  defaultCourseId,
   baseName,
   exportName,
+  fileExtension,
   FORMATS,
   initialMotion,
   initialPaper,
   initialReviewDetails,
+  initialScorm,
   initialSkill,
   isAccent,
   isDocumentFormat,
   isFolderFormat,
+  isMasteryScore,
   isMotionFormat,
   isPaperFormat,
   isSecondsPerStep,
@@ -39,8 +47,10 @@ import {
   rememberMotion,
   rememberPaper,
   rememberReviewDetails,
+  rememberScorm,
   rememberSkill,
   runExport,
+  scormProblem,
   unreviewedBlurs,
   unreviewedBlursText,
   warningLines,
@@ -49,7 +59,7 @@ import {
 } from "@/export/export";
 import { errorMessage, tauriExportApi, type ExportApi } from "@/lib/ipc";
 import { fileManager } from "@/lib/platform";
-import type { ExportFormat, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
+import type { ExportFormat, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
 import { settingsStore } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
 
@@ -118,6 +128,7 @@ const FORMAT_BADGES: Record<ExportFormat, string> = {
   mp4: "MP4",
   gif: "GIF",
   skill: "SKILL",
+  scorm: "SCORM",
 };
 const FORMAT_COLORS: Record<ExportFormat, string> = {
   md: "#4a4740",
@@ -129,6 +140,7 @@ const FORMAT_COLORS: Record<ExportFormat, string> = {
   mp4: "#1d1c1a",
   gif: "#c2398f",
   skill: "#b8740f",
+  scorm: "#0f766e",
 };
 
 /** Whether the export dialog is open, and the format it opens on (null: the remembered one). */
@@ -171,8 +183,12 @@ export function ExportDialog({
   const [reviewDetails, setReviewDetails] = useState(() => initialReviewDetails());
   const [motion, setMotion] = useState<MotionOptions>(() => initialMotion());
   const [skill, setSkill] = useState<SkillOptions>(() => initialSkill());
-  // The seconds field as typed, so it can be cleared while editing.
+  const [scorm, setScorm] = useState<ScormOptions>(() => initialScorm(guideId));
+  // Who the export is for; "" is everyone. Not remembered: audiences are per guide.
+  const [audience, setAudience] = useState("");
+  // The seconds and mastery fields as typed, so they can be cleared while editing.
   const [seconds, setSeconds] = useState(() => String(motion.secondsPerStep));
+  const [mastery, setMastery] = useState(() => String(scorm.masteryScore));
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -194,9 +210,12 @@ export function ExportDialog({
     };
   }, [open, logo, api]);
 
-  // A new guide starts from its own name and a fresh file.
+  // A new guide starts from its own name, a fresh file and its own course.
   useEffect(() => {
     setDestination((d) => ({ ...d, name: exportName(title), file: null }));
+    const startScorm = initialScorm(guideId);
+    setScorm(startScorm);
+    setMastery(String(startScorm.masteryScore));
     setOutcome(null);
     // Only when the guide changes, not on every title edit.
   }, [guideId]);
@@ -214,6 +233,10 @@ export function ExportDialog({
       setMotion(startMotion);
       setSeconds(String(startMotion.secondsPerStep));
       setSkill(initialSkill());
+      const startScorm = initialScorm(guideId);
+      setScorm(startScorm);
+      setMastery(String(startScorm.masteryScore));
+      setAudience("");
       setOutcome(null);
       setRevealError(null);
       setSkipReview(false);
@@ -231,12 +254,17 @@ export function ExportDialog({
   // Branding only shows in the document formats.
   const accentOk = !isDocument || isAccent(accent);
   const secondsOk = !isMotionFormat(format) || isSecondsPerStep(Number(seconds));
+  const scormChoice: ScormOptions = { ...scorm, masteryScore: mastery.trim() === "" ? NaN : Number(mastery) };
+  const scormText = format === "scorm" ? scormProblem(scormChoice) : null;
+  const audiences = doc ? guideAudiences(doc.guide) : [];
+  // An audience no section names any more (renamed meanwhile) is everyone.
+  const forAudience = audiences.find((a) => a === audience) ?? null;
   const unreviewed = unreviewedBlurs(doc?.guide.items ?? []);
   const reviewText = unreviewedBlursText(unreviewed);
   // Only skills find elements again; the other formats show screenshots.
   const unclear = format === "skill" ? unclearSteps(doc?.guide.items ?? []) : { stepIds: [], steps: [] };
   const unclearText = unclearStepsText(unclear.steps);
-  const canExport = !!guideId && !!out && accentOk && secondsOk && !busy && (!reviewText || skipReview);
+  const canExport = !!guideId && !!out && accentOk && secondsOk && !scormText && !busy && (!reviewText || skipReview);
 
   /** Closes the dialog on the privacy review of the first step with suggestions left. */
   const review = () => {
@@ -290,6 +318,7 @@ export function ExportDialog({
     const motionChoice = { ...motion, secondsPerStep: Number(seconds) };
     if (isMotionFormat(format)) rememberMotion(motionChoice);
     if (format === "skill") rememberSkill(skill);
+    if (format === "scorm") rememberScorm(guideId, scormChoice);
     setBusy(true);
     setOutcome(null);
     setRevealError(null);
@@ -305,6 +334,8 @@ export function ExportDialog({
         reviewDetails: isDocument && reviewDetails,
         motion: motionChoice,
         skill,
+        scorm: scormChoice,
+        audience: forAudience,
       },
     );
     setBusy(false);
@@ -441,7 +472,7 @@ export function ExportDialog({
                 ) : (
                   <Field label="Save as">
                     <div className="flex items-center gap-2">
-                      <PathLabel path={out} empty={`No .${format} file chosen`} />
+                      <PathLabel path={out} empty={`No .${fileExtension(format)} file chosen`} />
                       <Button variant="outline" size="sm" disabled={busy} onClick={() => void chooseDestination()}>
                         Choose…
                       </Button>
@@ -517,6 +548,27 @@ export function ExportDialog({
                   </>
                 )}
 
+                {audiences.length > 0 && (
+                  <Field label="Audience">
+                    <NativeSelect
+                      aria-label="Audience"
+                      value={forAudience ?? ""}
+                      disabled={busy}
+                      onChange={(e) => setAudience(e.target.value)}
+                    >
+                      <NativeSelectOption value="">Everyone</NativeSelectOption>
+                      {audiences.map((a) => (
+                        <NativeSelectOption key={a} value={a}>
+                          {a}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <span className="text-xs text-muted-foreground">
+                      Sections tagged for other audiences are left out, with the decision options that lead there.
+                    </span>
+                  </Field>
+                )}
+
                 {format === "skill" && (
                   <label className="flex items-start gap-2 text-sm">
                     <input
@@ -529,10 +581,92 @@ export function ExportDialog({
                     <span>
                       Include a replay script
                       <span className="block text-xs text-muted-foreground">
-                        replay.js repeats the steps on a Mac through the accessibility API. Run it with --dry-run first.
+                        It repeats the steps through the accessibility API: replay.js on a Mac (run it with --dry-run first), or replay.ps1 in PowerShell for a guide recorded on Windows (-DryRun first).
                       </span>
                     </span>
                   </label>
+                )}
+
+                {format === "scorm" && (
+                  <>
+                    <Field label="Course title">
+                      <Input
+                        value={scorm.title}
+                        placeholder={title || "Guide"}
+                        disabled={busy}
+                        onChange={(e) => setScorm((s) => ({ ...s, title: e.target.value }))}
+                      />
+                    </Field>
+                    <Field label="Course identifier">
+                      <Input
+                        value={scorm.identifier}
+                        placeholder={guideId ? defaultCourseId(guideId) : ""}
+                        disabled={busy}
+                        onChange={(e) => setScorm((s) => ({ ...s, identifier: e.target.value }))}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Keep it the same for every export, so your LMS sees a new version of the course.
+                      </span>
+                    </Field>
+                    <Field label="Completion">
+                      <div role="radiogroup" aria-label="Completion" className="grid grid-cols-2 gap-2">
+                        {COMPLETIONS.map((c) => (
+                          <button
+                            key={c.completion}
+                            type="button"
+                            role="radio"
+                            aria-checked={scorm.completion === c.completion}
+                            disabled={busy}
+                            onClick={() => setScorm((s) => ({ ...s, completion: c.completion }))}
+                            className={cn(
+                              "flex flex-col gap-0.5 rounded-xl border border-border px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              scorm.completion === c.completion
+                                ? "border-foreground ring-1 ring-foreground"
+                                : "hover:bg-foreground/[0.04]",
+                            )}
+                          >
+                            <span className="text-sm font-medium">{c.label}</span>
+                            <span className="text-xs text-muted-foreground">{c.detail}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </Field>
+                    <Field label="Quiz (optional)">
+                      <Textarea
+                        aria-label="Quiz"
+                        value={scorm.quiz}
+                        rows={5}
+                        disabled={busy}
+                        placeholder={"Which button saves the key?\n- [ ] Cancel\n- [x] Save"}
+                        className="font-mono text-xs"
+                        onChange={(e) => setScorm((s) => ({ ...s, quiz: e.target.value }))}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Shown at the end: a line per question, then its choices, “- [x]” for the right one.
+                      </span>
+                    </Field>
+                    {(scorm.quiz.trim() !== "" || scorm.completion === "quizPassed") && (
+                      <Field label="Mastery score (%)">
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={mastery}
+                          disabled={busy}
+                          aria-invalid={!isMasteryScore(scormChoice.masteryScore)}
+                          className={cn("w-28", !isMasteryScore(scormChoice.masteryScore) && "border-[var(--status-danger)]")}
+                          onChange={(e) => setMastery(e.target.value)}
+                        />
+                      </Field>
+                    )}
+                    {scormText && (
+                      <span role="alert" className="text-xs text-[var(--status-danger)]">
+                        {scormText}
+                      </span>
+                    )}
+                  </>
                 )}
 
                 {isPaperFormat(format) && (
@@ -728,6 +862,8 @@ export function ExportDialog({
                 reviewDetails={reviewDetails}
                 motion={motion}
                 skill={skill}
+                scorm={scormChoice}
+                audience={forAudience}
                 api={api}
                 flush={() => editorStore.getState().flush()}
               />

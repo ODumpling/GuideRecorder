@@ -1,7 +1,18 @@
 import { stepNumbers } from "@/editor/editor";
 import { errorMessage, type ExportApi } from "@/lib/ipc";
 import type { Item, Step } from "@guiderecorder/guide-schema";
-import type { AppError, ExportBranding, ExportFormat, ExportResult, MotionAspect, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
+import type {
+  AppError,
+  ExportBranding,
+  ExportFormat,
+  ExportResult,
+  MotionAspect,
+  MotionOptions,
+  PaperSize,
+  ScormCompletion,
+  ScormOptions,
+  SkillOptions,
+} from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
   { format: "md", label: "Markdown", detail: "A folder with guide.md and its images" },
@@ -17,6 +28,7 @@ export const FORMATS: { format: ExportFormat; label: string; detail: string }[] 
   { format: "mp4", label: "Video", detail: "An .mp4 zooming in on each click" },
   { format: "gif", label: "GIF", detail: "An animated .gif to paste anywhere" },
   { format: "skill", label: "Agent skill", detail: "SKILL.md and steps.json for AI agents" },
+  { format: "scorm", label: "SCORM course", detail: "A .zip for a learning system (LMS)" },
 ];
 
 export const ASPECTS: { aspect: MotionAspect; label: string; detail: string }[] = [
@@ -144,7 +156,7 @@ export function rememberReviewDetails(on: boolean, storage: Pick<Storage, "setIt
   }
 }
 
-/** Whether the Export dialog last added the replay script to a skill (on this Mac). */
+/** Whether the Export dialog last added the replay script to a skill (on this computer). */
 const REPLAY_KEY = "guiderecorder.exportReplay";
 
 export const DEFAULT_SKILL: SkillOptions = { replay: false };
@@ -167,6 +179,87 @@ export function rememberSkill(skill: SkillOptions, storage: Pick<Storage, "setIt
   }
 }
 
+export const COMPLETIONS: { completion: ScormCompletion; label: string; detail: string }[] = [
+  { completion: "lastStep", label: "End of the walkthrough reached", detail: "Completed" },
+  { completion: "quizPassed", label: "Quiz passed", detail: "Passed or failed" },
+];
+
+export const DEFAULT_SCORM: ScormOptions = {
+  title: "",
+  identifier: "",
+  completion: "lastStep",
+  masteryScore: 80,
+  quiz: "",
+};
+
+/** The SCORM completion rule and mastery score chosen last time (on this Mac). */
+const SCORM_KEY = "guiderecorder.exportScorm";
+/** A guide's own SCORM course title, identifier and quiz, by guide id. */
+const scormGuideKey = (guideId: string) => `guiderecorder.exportScorm.${guideId}`;
+
+function readJson(storage: Pick<Storage, "getItem">, key: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(storage.getItem(key) ?? "null");
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The SCORM options chosen last time: the completion rule and mastery
+ * score of the last SCORM export, and this guide's title, identifier and
+ * quiz (they belong to the course). Anything invalid falls back to the
+ * defaults.
+ */
+export function initialScorm(guideId: string | null, storage: Pick<Storage, "getItem"> = localStorage): ScormOptions {
+  const shared = readJson(storage, SCORM_KEY);
+  const own = guideId ? readJson(storage, scormGuideKey(guideId)) : {};
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  return {
+    title: text(own.title),
+    identifier: text(own.identifier),
+    completion: COMPLETIONS.some((c) => c.completion === shared.completion)
+      ? (shared.completion as ScormCompletion)
+      : DEFAULT_SCORM.completion,
+    masteryScore: isMasteryScore(shared.masteryScore) ? shared.masteryScore : DEFAULT_SCORM.masteryScore,
+    quiz: text(own.quiz),
+  };
+}
+
+/** Remembers the SCORM options (the course's own under `guideId`), also after a restart. */
+export function rememberScorm(guideId: string, scorm: ScormOptions, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(SCORM_KEY, JSON.stringify({ completion: scorm.completion, masteryScore: scorm.masteryScore }));
+    storage.setItem(
+      scormGuideKey(guideId),
+      JSON.stringify({ title: scorm.title, identifier: scorm.identifier, quiz: scorm.quiz }),
+    );
+  } catch {
+    // Not remembered; the defaults apply next time.
+  }
+}
+
+/** Whether `value` is a mastery score the exporter accepts: a whole number from 0 to 100. */
+export function isMasteryScore(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
+/** The course identifier a SCORM export uses when none is given (core `scorm::identifier`). */
+export function defaultCourseId(guideId: string): string {
+  return `guiderecorder-${guideId}`;
+}
+
+/**
+ * Why the SCORM options can't be exported yet, or null. The quiz itself is
+ * checked by the exporter (the preview shows its error).
+ */
+export function scormProblem(scorm: ScormOptions): string | null {
+  if (!isMasteryScore(scorm.masteryScore)) return "The mastery score must be a whole number from 0 to 100.";
+  if (scorm.completion === "quizPassed" && !scorm.quiz.trim()) return "Add a quiz, or complete at the end of the walkthrough.";
+  return null;
+}
+
 /** MP4 and GIF: a step after the other, zooming in on each click. */
 export function isMotionFormat(format: ExportFormat): boolean {
   return format === "mp4" || format === "gif";
@@ -185,6 +278,11 @@ export function isDocumentFormat(format: ExportFormat): boolean {
 /** Markdown, HTML (either kind) and skills export into a folder; the other formats into one file. */
 export function isFolderFormat(format: ExportFormat): boolean {
   return format === "md" || format === "html" || format === "walkthrough" || format === "skill";
+}
+
+/** The extension of a one-file format's file: a SCORM package is a .zip. */
+export function fileExtension(format: ExportFormat): string {
+  return format === "scorm" ? "zip" : format;
 }
 
 /**
@@ -238,7 +336,7 @@ export function outPath(format: ExportFormat, destination: Destination): string 
     return destination.folder && isPlainName(name) ? joinPath(destination.folder, name) : null;
   }
   const file = destination.file;
-  return file && file.toLowerCase().endsWith(`.${format}`) ? file : null;
+  return file && file.toLowerCase().endsWith(`.${fileExtension(format)}`) ? file : null;
 }
 
 export type ExportOutcome =
@@ -262,6 +360,9 @@ export async function runExport(
     reviewDetails: boolean;
     motion: MotionOptions;
     skill?: SkillOptions;
+    scorm?: ScormOptions;
+    /** Only the sections for this audience (and for everyone); absent: all. */
+    audience?: string | null;
   },
 ): Promise<ExportOutcome> {
   if (!(await deps.flush())) {
@@ -284,6 +385,8 @@ export async function runExport(
       reviewDetails,
       motion,
       request.skill ?? DEFAULT_SKILL,
+      request.scorm ?? DEFAULT_SCORM,
+      request.audience || null,
     );
     return { ok: true, result };
   } catch (error) {

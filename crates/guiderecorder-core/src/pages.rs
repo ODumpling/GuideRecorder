@@ -176,6 +176,7 @@ pub fn image_step(
         end_point: None,
         element: None,
         keystrokes: None,
+        url: None,
         image: StepImage {
             full,
             crop: None,

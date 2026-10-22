@@ -15,6 +15,11 @@
 //!   with its line breaks kept. The image shows the numbered markers.
 //! - Notes are shaded paragraphs with a coloured left border, starting with
 //!   a bold label ("Tip:", "Warning:", "Note:").
+//! - Decisions are shaded like neutral notes: "Decision: " and the
+//!   question, then a paragraph per option whose "Go to Step N" links to a
+//!   `step-N` bookmark on the step's heading (only guides with decisions
+//!   get bookmarks). A section tagged with audiences has "For: Admin" in
+//!   grey italics under its heading.
 //! - Fixed words (prerequisites heading, note labels, "Step") come from
 //!   [`Labels`]: [`DocxOptions::labels`], or by default
 //!   [`Labels::for_language`] of the guide's language.
@@ -72,7 +77,10 @@ use super::ast::{plain_text, Block, Inline};
 pub use super::md::{Branding, CheckedBranding};
 use super::md::{Labels, Logo};
 use super::raster::{render_step_image, ImageOptions};
-use super::render::{RenderCover, RenderGuide, RenderItem, RenderNote, RenderStep};
+use super::render::{
+    RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep,
+    RenderTarget,
+};
 use super::report::ExportReport;
 use crate::library::GuideHandle;
 use crate::model::{GuideKind, NoteKind};
@@ -341,6 +349,9 @@ struct Writer<'a> {
     next_numbering: usize,
     next_link: usize,
     next_image: usize,
+    /// Whether step headings carry `step-N` bookmarks, for the links of
+    /// decision options; only guides with decisions have them.
+    bookmarks: bool,
     /// Text area size in EMU.
     text_width: u64,
     text_height: u64,
@@ -394,6 +405,7 @@ impl<'a> Writer<'a> {
             next_numbering: FIRST_NUMBERING,
             next_link: 1,
             next_image: 1,
+            bookmarks: false,
             text_width: u64::from(page_w - 2 * MARGIN) * EMU_PER_TWIP,
             text_height: u64::from(page_h - 2 * MARGIN) * EMU_PER_TWIP,
         }
@@ -401,6 +413,7 @@ impl<'a> Writer<'a> {
 
     fn document(mut self, guide: &RenderGuide, logo: Option<&Logo>) -> Docx {
         self.kind = guide.kind;
+        self.bookmarks = guide.decisions().next().is_some();
         if let Some(logo) = logo {
             self.logo(logo);
         }
@@ -438,9 +451,10 @@ impl<'a> Writer<'a> {
         }
         for item in &guide.items {
             match item {
-                RenderItem::Section(section) => self.heading("Heading1", &section.title),
+                RenderItem::Section(section) => self.section(section),
                 RenderItem::Step(step) => self.step(step),
                 RenderItem::Note(note) => self.note(note),
+                RenderItem::Decision(decision) => self.decision(decision),
             }
         }
         self.docx
@@ -476,8 +490,15 @@ impl<'a> Writer<'a> {
         } else {
             self.inlines(&step.title, Format::default(), &mut pieces);
         }
-        let heading = self.paragraph().style("Heading2").keep_next(true);
-        let heading = add_pieces(heading, pieces);
+        let mut heading = self.paragraph().style("Heading2").keep_next(true);
+        let bookmark = step.number as usize;
+        if self.bookmarks {
+            heading = heading.add_bookmark_start(bookmark, step_bookmark(step.number));
+        }
+        let mut heading = add_pieces(heading, pieces);
+        if self.bookmarks {
+            heading = heading.add_bookmark_end(bookmark);
+        }
         self.push(heading);
         self.image(step);
         self.hotspot_legend(step);
@@ -614,6 +635,69 @@ impl<'a> Writer<'a> {
                 self.push(p);
                 self.blocks(&note.body, ctx);
             }
+        }
+    }
+
+    /// A `Heading1`, then "For: Admin" in grey italics when the section
+    /// names its audiences.
+    fn section(&mut self, section: &RenderSection) {
+        self.heading("Heading1", &section.title);
+        if let Some(audiences) = self.labels.audiences(&section.audiences) {
+            let p = self
+                .paragraph()
+                .keep_next(true)
+                .add_run(text_run(&audiences).italic().size(20).color("595959"));
+            self.push(p);
+        }
+    }
+
+    /// Shaded like a neutral note: "Decision: " and the question, then a
+    /// paragraph per option, "Label: Go to Step 5", linked to the step's
+    /// bookmark.
+    fn decision(&mut self, decision: &RenderDecision) {
+        let ctx = Context {
+            note: Some(NoteStyle::of(NoteKind::Note, self.accent.is_some())),
+            list: None,
+        };
+        let label = format!("{}: ", self.labels.decision);
+        let mut pieces = vec![Piece::run(Run::new().bold().add_text(xml_text(&label)))];
+        self.inlines(&decision.question, Format::default(), &mut pieces);
+        let p = add_pieces(self.paragraph().keep_next(true), pieces);
+        let p = self.decorate(p, ctx);
+        self.push(p);
+        for (i, option) in decision.options.iter().enumerate() {
+            let mut p = self.paragraph().add_run(text_run("–").add_tab()).indent(
+                Some(LIST_INDENT),
+                Some(SpecialIndentType::Hanging(LIST_HANGING)),
+                None,
+                None,
+            );
+            if i + 1 < decision.options.len() {
+                p = p.keep_next(true);
+            }
+            if !option.label.is_empty() {
+                p = p.add_run(text_run(&format!("{}: ", option.label)).bold());
+            }
+            let text = self.labels.go_to(&option.target, self.kind);
+            p = match option.target {
+                RenderTarget::Step {
+                    number: Some(number),
+                    ..
+                } => p.add_hyperlink(
+                    Hyperlink::new(step_bookmark(number), HyperlinkType::Anchor).add_run(
+                        styled_run(
+                            &text,
+                            Format {
+                                link: true,
+                                ..Format::default()
+                            },
+                        ),
+                    ),
+                ),
+                _ => p.add_run(text_run(&text)),
+            };
+            let p = self.decorate(p, ctx);
+            self.push(p);
         }
     }
 
@@ -759,6 +843,11 @@ fn add_pieces(paragraph: Paragraph, pieces: Vec<Piece>) -> Paragraph {
         Piece::Run(run) => p.add_run(*run),
         Piece::Link(link) => p.add_hyperlink(link),
     })
+}
+
+/// The bookmark on step `number`'s heading.
+fn step_bookmark(number: u32) -> String {
+    format!("step-{number}")
 }
 
 fn text_run(text: &str) -> Run {

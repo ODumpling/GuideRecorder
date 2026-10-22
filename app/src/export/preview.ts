@@ -4,8 +4,8 @@
 // logo, page breaks, layout and burned-in blurs.
 
 import MarkdownIt from "markdown-it";
-import { isAccent, isDocumentFormat, isMotionFormat } from "@/export/export";
-import type { ExportBranding, ExportFormat, ExportPreviewData, MotionOptions, PaperSize, SkillOptions } from "@/lib/types";
+import { DEFAULT_SCORM, isAccent, isDocumentFormat, isMotionFormat, scormProblem } from "@/export/export";
+import type { ExportBranding, ExportFormat, ExportPreviewData, MotionOptions, PaperSize, ScormOptions, SkillOptions } from "@/lib/types";
 
 /** How long the options must stay unchanged before a new preview is made, in ms. */
 export const PREVIEW_DELAY_MS = 300;
@@ -19,12 +19,16 @@ export interface PreviewRequest {
   reviewDetails: boolean;
   motion: MotionOptions;
   skill: SkillOptions;
+  scorm: ScormOptions;
+  /** Only the sections for this audience; null: everyone. */
+  audience: string | null;
 }
 
 /**
  * The preview request for the dialog's choices, with what the format
  * ignores left out (so changing it makes no new preview), as the export
- * sends them. Null while the accent is not a valid colour.
+ * sends them. Null while the accent is not a valid colour, or the SCORM
+ * options are incomplete.
  */
 export function previewRequest(choices: {
   guideId: string;
@@ -35,10 +39,13 @@ export function previewRequest(choices: {
   reviewDetails: boolean;
   motion: MotionOptions;
   skill?: SkillOptions;
+  scorm?: ScormOptions;
+  audience?: string | null;
 }): PreviewRequest | null {
   const { guideId, format } = choices;
   const document = isDocumentFormat(format);
   if (document && !isAccent(choices.accent)) return null;
+  if (format === "scorm" && choices.scorm && scormProblem(choices.scorm)) return null;
   return {
     guideId,
     format,
@@ -53,6 +60,13 @@ export function previewRequest(choices: {
       : { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
     // The replay script only adds a line to SKILL.md.
     skill: { replay: format === "skill" && !!choices.skill?.replay },
+    // The page shows the completion rule, mastery score and quiz; the
+    // course title and identifier are only in the manifest.
+    scorm:
+      format === "scorm" && choices.scorm
+        ? { ...DEFAULT_SCORM, completion: choices.scorm.completion, masteryScore: choices.scorm.masteryScore, quiz: choices.scorm.quiz }
+        : DEFAULT_SCORM,
+    audience: choices.audience || null,
   };
 }
 

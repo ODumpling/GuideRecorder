@@ -16,6 +16,17 @@
 //! title of the section it is in, and notes before it show above its image.
 //! Notes after the last step go on the end slide.
 //!
+//! # Decisions
+//!
+//! A decision is a slide of its own: its question, and an option per
+//! button linking to the slide it leads to (the step chosen, the first step
+//! of the section chosen, or the end slide). Another guide can't be linked
+//! from the file, so that option is named only. Back retraces the way
+//! taken, so after an option it returns to the decision; the way is kept
+//! in the root's `data-trail` (slide indices), where a SCORM runtime
+//! saves it for the next visit. The last step's slide and the end slide
+//! carry `data-end`: whichever path is taken, it ends on one of them.
+//!
 //! # Click target
 //!
 //! The target is placed from [`RenderedImage::point`](super::RenderedImage)
@@ -47,17 +58,27 @@
 //!
 //! A comment at the top of the page holds an `<iframe>` snippet for
 //! embedding it in a help centre or wiki.
+//!
+//! A SCORM package ([`scorm`](super::scorm)) adds a second inline script
+//! (also allowed by its hash), some style, and markup on the end slide; see
+//! [`Extra`].
+
+use std::collections::HashMap;
 
 use minijinja::{context, Value};
 use sha2::{Digest, Sha256};
 
 use super::ast::plain_text;
 use super::html::{
-    base64_into, blocks_html, data_uri, environment, escape, hotspot_context, inlines_html,
-    language_tag, note_kind_class, og_image, percent, render_template, stylesheet, HtmlOptions,
+    base64_into, blocks_html, data_uri, decision_context, environment, escape, hotspot_context,
+    inlines_html, language_tag, note_kind_class, og_image, percent, render_template, stylesheet,
+    HtmlOptions,
 };
 use super::md::{Labels, Result};
-use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderNote};
+use super::{
+    render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderNote,
+    RenderTarget,
+};
 use crate::library::GuideHandle;
 use crate::model::Point;
 
@@ -70,12 +91,36 @@ pub const SCRIPT: &str = include_str!("templates/walkthrough.js");
 /// The Content-Security-Policy of a walkthrough: the document mode's
 /// [`CSP`](super::html::CSP) plus [`SCRIPT`] by its SHA-256 hash.
 pub fn csp() -> String {
-    let mut hash = String::new();
-    base64_into(&Sha256::digest(SCRIPT.as_bytes()), &mut hash);
+    csp_with(None)
+}
+
+/// [`csp`], also allowing `extra` (a second inline script) by its hash.
+pub(super) fn csp_with(extra: Option<&str>) -> String {
+    let mut hashes = String::new();
+    for script in std::iter::once(SCRIPT).chain(extra) {
+        if !hashes.is_empty() {
+            hashes.push(' ');
+        }
+        hashes.push_str("'sha256-");
+        base64_into(&Sha256::digest(script.as_bytes()), &mut hashes);
+        hashes.push('\'');
+    }
     format!(
         "default-src 'none'; img-src data:; style-src 'unsafe-inline'; \
-         script-src 'sha256-{hash}'; base-uri 'none'; form-action 'none'"
+         script-src {hashes}; base-uri 'none'; form-action 'none'"
     )
+}
+
+/// What another format adds to the page: a SCORM package's runtime and
+/// quiz.
+pub(super) struct Extra<'a> {
+    /// A static inline script, run before [`SCRIPT`]; it must not contain
+    /// `</script`.
+    pub script: &'static str,
+    /// Appended to the stylesheet.
+    pub style: &'static str,
+    /// Safe HTML on the end slide, above Restart.
+    pub end: &'a str,
 }
 
 /// The walkthrough's own words, by guide language like [`Labels`].
@@ -136,6 +181,16 @@ pub(super) fn render_string(
     handle: &GuideHandle,
     opts: &HtmlOptions,
 ) -> Result<(String, ExportReport)> {
+    render_with(guide, handle, opts, None)
+}
+
+/// [`render_string`] with what another format adds to the page.
+pub(super) fn render_with(
+    guide: &RenderGuide,
+    handle: &GuideHandle,
+    opts: &HtmlOptions,
+    extra: Option<&Extra>,
+) -> Result<(String, ExportReport)> {
     let branding = &opts.branding;
     let labels = opts
         .labels
@@ -160,6 +215,32 @@ pub(super) fn render_string(
         list.push(context! { kind => "slide", index => 0, title => words.start });
         slides.push(context! { kind => "intro", index => 0, status => words.start });
     }
+    // Where each step's slide will be, so decisions can lead forward.
+    let first = slides.len();
+    let mut step_slides = HashMap::new();
+    let mut count = 0;
+    for item in &guide.items {
+        match item {
+            RenderItem::Step(step) => {
+                step_slides.insert(step.number, first + count);
+                count += 1;
+            }
+            RenderItem::Decision(_) => count += 1,
+            RenderItem::Section(_) | RenderItem::Note(_) => {}
+        }
+    }
+    let done = first + count;
+    // Where the walkthrough ends: the last step, and the end slide (which
+    // an option may lead to directly). Marked `data-end` for SCORM.
+    let last_step = step_slides.values().max().copied();
+    let slide_of = |target: &RenderTarget| match target {
+        RenderTarget::Step {
+            number: Some(number),
+            ..
+        } => step_slides.get(number).copied(),
+        RenderTarget::Step { number: None, .. } => Some(done),
+        RenderTarget::Guide { .. } => None,
+    };
     let mut section: Option<&str> = None;
     let mut section_listed = true;
     let mut notes = Vec::new();
@@ -170,6 +251,35 @@ pub(super) fn render_string(
                 section_listed = false;
             }
             RenderItem::Note(note) => notes.push(note_context(note, &labels)),
+            RenderItem::Decision(decision) => {
+                let index = slides.len();
+                if !section_listed {
+                    list.push(context! { kind => "section", title => section });
+                    section_listed = true;
+                }
+                let question = plain_text(&decision.question).replace('\n', " ");
+                let question = question.trim();
+                let status = if question.is_empty() {
+                    labels.decision.clone()
+                } else {
+                    format!("{}: {question}", labels.decision)
+                };
+                list.push(context! {
+                    kind => "slide",
+                    index => index,
+                    title => if question.is_empty() { labels.decision.as_str() } else { question },
+                });
+                let ctx = decision_context(decision, &labels, guide.kind, |target| {
+                    slide_of(target).map(|i| format!("#wt-slide-{i}"))
+                });
+                slides.push(context! {
+                    index => index,
+                    status => status,
+                    section => section,
+                    notes => std::mem::take(&mut notes),
+                    ..ctx
+                });
+            }
             RenderItem::Step(step) => {
                 let index = slides.len();
                 if !section_listed {
@@ -205,6 +315,7 @@ pub(super) fn render_string(
                 slides.push(context! {
                     kind => "step",
                     index => index,
+                    end => last_step == Some(index),
                     number => step.number,
                     status => status,
                     section => section,
@@ -225,20 +336,28 @@ pub(super) fn render_string(
     }
     let last = slides.len();
     list.push(context! { kind => "slide", index => last, title => words.done });
-    slides.push(context! { kind => "done", index => last, status => words.done, notes => notes });
+    slides.push(context! { kind => "done", index => last, end => true, status => words.done, notes => notes });
 
     let logo = branding
         .logo()
         .map(|logo| Value::from_safe_string(data_uri("image/png", logo.png())));
     let ctx = context! {
         language => language_tag(&guide.language),
-        csp => csp(),
+        // Made here from fixed text and base64 hashes; escaping would turn a
+        // hash's `/` into `&#x2f;`.
+        csp => Value::from_safe_string(csp_with(extra.map(|e| e.script))),
         title => &guide.title,
         og_image => og_image(guide, handle, &opts.image),
         summary => &guide.summary,
         details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
-        css => Value::from_safe_string(format!("{}{STYLE}", stylesheet(branding))),
+        css => Value::from_safe_string(format!(
+            "{}{STYLE}{}",
+            stylesheet(branding),
+            extra.map_or("", |e| e.style)
+        )),
         script => Value::from_safe_string(SCRIPT.to_owned()),
+        extra_script => extra.map(|e| Value::from_safe_string(e.script.to_owned())),
+        extra_end => extra.map(|e| Value::from_safe_string(e.end.to_owned())),
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,

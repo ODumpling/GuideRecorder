@@ -103,13 +103,18 @@ function Hero({ signedIn }: { signedIn: boolean }) {
         Do it once. <span className="font-serif font-normal tracking-normal text-blue-300 italic">Get the guide.</span>
       </h1>
       <p className="relative mx-auto mt-6 max-w-xl animate-landing-rise text-lg text-pretty text-slate-400 [animation-delay:80ms]">
-        GuideRecorder watches you do a task on your Mac and writes the how-to: one step per click, each with its screenshot. Tidy it up, then
+        GuideRecorder watches you do a task on your computer and writes the how-to: one step per click, each with its screenshot. Tidy it up, then
         share it as a PDF, a doc, a video or a link.
       </p>
       <div className="relative mt-9 flex animate-landing-rise flex-wrap items-center justify-center gap-3 [animation-delay:160ms]">
         <a href={DOWNLOAD} className="flex h-11 items-center gap-2 rounded-full bg-white px-5 font-medium text-slate-950 shadow-[0_0_40px_rgb(59_130_246/0.35)] hover:bg-slate-200">
           <AppleIcon className="size-4" />
           Download for macOS
+        </a>
+        <a href={DOWNLOAD} className="flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 font-medium text-white hover:bg-white/10">
+          <WindowsIcon className="size-4" />
+          Download for Windows
+          <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">Alpha</span>
         </a>
         <Link
           to={signedIn ? "/library" : "/sign-up"}
@@ -119,7 +124,7 @@ function Hero({ signedIn }: { signedIn: boolean }) {
           <ArrowRight className="size-4" />
         </Link>
       </div>
-      <p className="relative mt-5 text-xs text-slate-500">Free and open source · macOS 12.3+ · Windows on the way</p>
+      <p className="relative mt-5 text-xs text-slate-500">Free and open source · macOS 12.3+ · Windows 10 (2004+) and 11, in alpha</p>
       <div className="relative mx-auto mt-14 max-w-5xl animate-landing-rise [animation-delay:260ms] [perspective:2000px]">
         <AppMock />
       </div>
@@ -319,7 +324,7 @@ function Privacy() {
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <Card className="flex flex-col gap-5 p-6">
           <div>
-            <h3 className="text-lg font-medium text-white">Sensitive text is found on your Mac</h3>
+            <h3 className="text-lg font-medium text-white">Sensitive text is found on your computer</h3>
             <p className="mt-1 text-sm text-slate-400">
               When you stop recording, the text in every screenshot is read on the device and checked for emails, card numbers, IBANs, API keys
               and your own patterns. Each finding becomes a blur you keep or dismiss, and blurs are burned into the pixels on export.
@@ -530,6 +535,11 @@ function Closing({ signedIn }: { signedIn: boolean }) {
           <AppleIcon className="size-4" />
           Download for macOS
         </a>
+        <a href={DOWNLOAD} className="flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 font-medium text-white hover:bg-white/10">
+          <WindowsIcon className="size-4" />
+          Download for Windows
+          <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">Alpha</span>
+        </a>
         <a href={REPO} className="flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 font-medium hover:bg-white/10">
           <GitHubIcon className="size-4" />
           Star on GitHub
@@ -646,6 +656,14 @@ function GitHubIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden className={className}>
       <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
+
+function WindowsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 448 512" fill="currentColor" aria-hidden className={className}>
+      <path d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z" />
     </svg>
   );
 }

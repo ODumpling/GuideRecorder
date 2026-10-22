@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   baseName,
+  defaultCourseId,
   DEFAULT_MOTION,
+  DEFAULT_SCORM,
   DEFAULT_SKILL,
   exportName,
   initialMotion,
@@ -13,6 +15,8 @@ import {
   initialPaper,
   initialReviewDetails,
   initialSkill,
+  initialScorm,
+  isMasteryScore,
   isAccent,
   isPlainName,
   localePaper,
@@ -21,7 +25,9 @@ import {
   rememberPaper,
   rememberReviewDetails,
   rememberSkill,
+  rememberScorm,
   runExport,
+  scormProblem,
   unreviewedBlurs,
   unreviewedBlursText,
   warningLines,
@@ -194,7 +200,60 @@ describe("skill options", () => {
   it("are sent with a skill export", async () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/SKILL.md"], warnings: [], notes: [] }));
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "skill", skill: { replay: true } });
-    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true });
+    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true }, DEFAULT_SCORM, null);
+  });
+});
+
+describe("SCORM options", () => {
+  it("export a .zip file", () => {
+    expect(isFolderFormat("scorm")).toBe(false);
+    // Walkthrough-based: branding and the review details apply.
+    expect(isDocumentFormat("scorm")).toBe(true);
+    expect(outPath("scorm", { folder: null, name: "x", file: "/out/Course.zip" })).toBe("/out/Course.zip");
+    expect(outPath("scorm", { folder: null, name: "x", file: "/out/Course.scorm" })).toBeNull();
+    expect(defaultCourseId("01ABC")).toBe("guiderecorder-01ABC");
+  });
+
+  it("remember the rule and mastery score, and each guide's course and quiz", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    expect(initialScorm("A", storage)).toEqual(DEFAULT_SCORM);
+    const chosen = { title: "Course", identifier: "c-1", completion: "quizPassed" as const, masteryScore: 70, quiz: "Q?\n- [x] A\n- [ ] B" };
+    rememberScorm("A", chosen, storage);
+    expect(initialScorm("A", storage)).toEqual(chosen);
+    // Another guide keeps the rule and score, not the course or quiz.
+    expect(initialScorm("B", storage)).toEqual({ ...DEFAULT_SCORM, completion: "quizPassed", masteryScore: 70 });
+    store.set("guiderecorder.exportScorm", JSON.stringify({ completion: "never", masteryScore: 101 }));
+    store.set("guiderecorder.exportScorm.A", "{not json");
+    expect(initialScorm("A", storage)).toEqual(DEFAULT_SCORM);
+    const broken = { getItem: () => { throw new Error("no storage"); } };
+    expect(initialScorm(null, broken)).toEqual(DEFAULT_SCORM);
+  });
+
+  it("need a whole mastery score, and a quiz for the quiz rule", () => {
+    expect([0, 80, 100].every(isMasteryScore)).toBe(true);
+    expect([-1, 101, 50.5, Number.NaN, "80"].some(isMasteryScore)).toBe(false);
+    expect(scormProblem(DEFAULT_SCORM)).toBeNull();
+    expect(scormProblem({ ...DEFAULT_SCORM, masteryScore: Number.NaN })).toMatch(/mastery score/);
+    expect(scormProblem({ ...DEFAULT_SCORM, completion: "quizPassed", quiz: "  " })).toMatch(/Add a quiz/);
+    expect(scormProblem({ ...DEFAULT_SCORM, completion: "quizPassed", quiz: "Q?" })).toBeNull();
+  });
+
+  it("are sent with a SCORM export", async () => {
+    const exportGuide = vi.fn(async () => ({ files: ["/out/Course.zip"], warnings: [], notes: [] }));
+    const scorm = { ...DEFAULT_SCORM, title: "Course" };
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "scorm", out: "/out/Course.zip", scorm });
+    expect(exportGuide).toHaveBeenCalledWith("G", "scorm", "/out/Course.zip", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, scorm, null);
+  });
+});
+
+describe("audience", () => {
+  it("is sent when chosen, and null (everyone) otherwise", async () => {
+    const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/guide.md"], warnings: [], notes: [] }));
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "Admin" });
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, "Admin");
+    await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "" });
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
   });
 });
 
@@ -216,7 +275,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL);
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 

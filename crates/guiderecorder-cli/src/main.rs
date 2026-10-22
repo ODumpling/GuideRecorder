@@ -24,9 +24,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::builder::RangedU64ValueParser;
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use guiderecorder_core::branch;
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
 use guiderecorder_core::export::{
-    docx, html, md, motion, pdf, pptx, render_step_image, skill, ExportReport, ImageOptions,
+    docx, html, md, motion, pdf, pptx, render_step_image, scorm, skill, ExportReport, ImageOptions,
     OutPathError, RenderGuide, RenderWarning,
 };
 use guiderecorder_core::index::{
@@ -119,16 +120,16 @@ enum Command {
         output: Output,
     },
     /// Export a guide as Markdown, HTML, an interactive HTML walkthrough,
-    /// DOCX, PDF, PPTX slides, an MP4 video, an animated GIF or an agent
-    /// skill.
+    /// DOCX, PDF, PPTX slides, an MP4 video, an animated GIF, an agent
+    /// skill or a SCORM 1.2 package.
     ///
     /// Reads the guide without changing the library. Markdown, HTML and
     /// skills write into the `--out` folder (`guide.md` plus `images/`,
     /// `guide.html`, or `SKILL.md`, `steps.json` and `images/`; a
     /// walkthrough is also one `guide.html`); the other formats write the
-    /// `--out` file. Image problems become placeholders and warnings, not
-    /// errors; a skill's unclear elements are notes. MP4 needs macOS or
-    /// Windows.
+    /// `--out` file (a SCORM package is one zip). Image problems become
+    /// placeholders and warnings, not errors; a skill's unclear elements
+    /// are notes. MP4 needs macOS or Windows.
     Export(ExportArgs),
 }
 
@@ -171,10 +172,40 @@ struct ExportArgs {
     /// under the summary, or on the PDF cover.
     #[arg(long)]
     review_details: bool,
-    /// Also write `replay.js` into a skill: a macOS script that repeats
-    /// the steps through the accessibility API (try it with `--dry-run`).
+    /// Also write a replay script into a skill: `replay.js`, a macOS script
+    /// that repeats the steps through the accessibility API (try it with
+    /// `--dry-run`), or for a guide recorded on Windows `replay.ps1`, a
+    /// PowerShell script that does it through UI Automation (`-DryRun`).
     #[arg(long)]
     replay: bool,
+    /// Course title of a SCORM package (default: the guide title).
+    #[arg(long, value_name = "TITLE")]
+    course_title: Option<String>,
+    /// Course identifier of a SCORM package: letters, digits, `.`, `-`
+    /// and `_` (default: `guiderecorder-<guide id>`, the same for every
+    /// export of the guide, so an LMS sees a new version).
+    #[arg(long, value_name = "ID")]
+    course_id: Option<String>,
+    /// When the LMS counts a SCORM package as done.
+    #[arg(long, value_enum, default_value_t = Completion::LastStep)]
+    completion: Completion,
+    /// Quiz score (0 to 100) that passes a SCORM package's quiz.
+    #[arg(
+        long,
+        default_value_t = scorm::DEFAULT_MASTERY_SCORE,
+        value_name = "N",
+        value_parser = clap::value_parser!(u8).range(0..=100)
+    )]
+    mastery_score: u8,
+    /// A quiz at the end of a SCORM package: a text file with a line per
+    /// question, then a line per choice, `- [x] right` or `- [ ] wrong`.
+    #[arg(long, value_name = "FILE")]
+    quiz: Option<PathBuf>,
+    /// Export for one audience: leave out the sections tagged only for
+    /// others, and the decision options that lead there. Untagged
+    /// sections are for everyone.
+    #[arg(long, value_name = "NAME")]
+    audience: Option<String>,
     /// Exit with 1 when the export has warnings or notes (the export is
     /// still written).
     #[arg(long)]
@@ -193,13 +224,34 @@ enum Format {
     Pdf,
     /// Slides, one per step, with speaker notes.
     Pptx,
-    /// A video zooming in on each click (macOS only).
+    /// A video zooming in on each click (macOS and Windows).
     Mp4,
     /// An animated GIF zooming in on each click.
     Gif,
     /// An agent skill: SKILL.md, steps.json with element locators, and
     /// the step images.
     Skill,
+    /// A SCORM 1.2 zip for a learning management system: the
+    /// walkthrough, with completion and an optional quiz reported.
+    Scorm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Completion {
+    /// Completed once an end of the walkthrough is shown: the last step,
+    /// or the end a decision option leads to.
+    LastStep,
+    /// Passed or failed by the quiz score (needs `--quiz`).
+    QuizPassed,
+}
+
+impl From<Completion> for scorm::Completion {
+    fn from(completion: Completion) -> Self {
+        match completion {
+            Completion::LastStep => Self::LastStep,
+            Completion::QuizPassed => Self::QuizPassed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -249,6 +301,7 @@ impl Format {
             Self::Mp4 => "mp4",
             Self::Gif => "gif",
             Self::Skill => "skill",
+            Self::Scorm => "scorm",
         }
     }
 }
@@ -781,9 +834,14 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     }
     .check()
     .context("invalid branding")?;
+    let quiz = match &args.quiz {
+        Some(path) => read_quiz(path)?,
+        None => Vec::new(),
+    };
     check_out_path(&args.out, &loaded.handle.path, library_root.as_deref())?;
 
     let LoadedGuide { handle, guide, .. } = loaded;
+    let guide = branch::narrow(guide, args.audience.as_deref());
     let render = RenderGuide::new(&guide, &handle);
     let out = &args.out;
     let overwrite = args.overwrite;
@@ -898,6 +956,21 @@ fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
             };
             skill::export(&render, &handle, out, &opts)?
         }
+        Format::Scorm => {
+            let opts = scorm::ScormOptions {
+                overwrite,
+                branding,
+                image: unreviewed(&scorm::ScormOptions::default().image),
+                review_details,
+                title: args.course_title.clone(),
+                identifier: args.course_id.clone(),
+                completion: args.completion.into(),
+                mastery_score: args.mastery_score,
+                quiz,
+                ..scorm::ScormOptions::default()
+            };
+            scorm::export(&render, &handle, out, &opts)?
+        }
     };
     Ok(Export {
         id: guide.id.to_string(),
@@ -965,6 +1038,18 @@ fn read_logo(path: &Path) -> Result<Vec<u8>> {
         );
     }
     Ok(bytes)
+}
+
+/// Reads and parses `--quiz` (at most 1 MB of text).
+fn read_quiz(path: &Path) -> Result<Vec<scorm::QuizQuestion>> {
+    let context = || format!("--quiz {}", path.display());
+    let mut text = String::new();
+    File::open(path)
+        .with_context(context)?
+        .take(1 << 20)
+        .read_to_string(&mut text)
+        .with_context(context)?;
+    scorm::parse_quiz(&text).with_context(context)
 }
 
 /// Refuses an output path inside a guide bundle or the library; see

@@ -378,17 +378,11 @@ enum Existing {
 
 impl Index {
     /// Where the app keeps its index and readers look for it:
-    /// `~/Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite` on
-    /// macOS (from `$HOME`); `None` elsewhere or without `$HOME`.
+    /// `index.sqlite` in the app's folder
+    /// ([`app_data_dir`](crate::app_dir::app_data_dir): Application
+    /// Support on macOS, `%LOCALAPPDATA%` on Windows); `None` without it.
     pub fn default_path() -> Option<PathBuf> {
-        if !cfg!(target_os = "macos") {
-            return None;
-        }
-        let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-        Some(
-            PathBuf::from(home)
-                .join("Library/Application Support/dev.dufflebear.guiderecorder/index.sqlite"),
-        )
+        Some(crate::app_dir::app_data_dir()?.join("index.sqlite"))
     }
 
     /// Opens the index at `path` for writing, creating it (and its folder)
@@ -1291,6 +1285,17 @@ fn rows(guide: &Guide) -> Vec<Row> {
                 markdown::to_plain_text(&note.body),
                 None,
             ),
+            // Found like a note: its question, then its option labels.
+            Item::Decision(decision) => {
+                let mut body = markdown::to_plain_text(&decision.question);
+                for option in &decision.options {
+                    if !option.label.trim().is_empty() {
+                        body.push('\n');
+                        body.push_str(option.label.trim());
+                    }
+                }
+                (HitKind::Note, String::new(), body, None)
+            }
         };
         rows.push(Row {
             kind,
@@ -1805,6 +1810,7 @@ mod tests {
                         end_point: None,
                         element: None,
                         keystrokes: None,
+                        url: None,
                         image: StepImage {
                             full: format!("steps/{id}.webp"),
                             crop: None,

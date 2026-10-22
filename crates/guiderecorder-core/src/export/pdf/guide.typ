@@ -91,6 +91,39 @@
   ]
 }
 
+// A link to step `number`, found by the metadata its block carries (only
+// guides with decisions have it, see `data.anchors`); plain `body` if none.
+#let go-to(number, body) = context {
+  let found = query(metadata).filter(m => m.value == ("step", number))
+  if found.len() > 0 {
+    link(found.first().location(), text(fill: link-color, underline(body)))
+  } else {
+    body
+  }
+}
+
+// A decision: the question after a bold label, then an option per line,
+// (label, text, step): its plain label, where it leads, and the step
+// number to link (none for the end or another guide).
+#let decision(d) = {
+  block(
+    width: 100%,
+    stroke: (left: 3pt + accent),
+    inset: (x: 12pt, y: 9pt),
+    above: 1.2em,
+    below: 1.2em,
+    breakable: false,
+  )[
+    #text(fill: accent, styled(labels.decision + ":", true, false)) #inlines(d.question)
+    #if d.options.len() > 0 {
+      list(..d.options.map(o => {
+        if o.label != "" { strong(o.label + ":") + " " }
+        if o.step == none { o.text } else { go-to(o.step, o.text) }
+      }))
+    }
+  ]
+}
+
 // The numbered legend of a step's hotspots: (number, color, title, lines);
 // title and lines are plain text, color a checked hex colour. The image
 // shows the same numbers in the same colours.
@@ -125,6 +158,7 @@
 // start on this one). The description flows freely, however long it is.
 #let step(s) = {
   block(breakable: false, sticky: true, width: 100%, above: 1.8em, below: 0.9em)[
+    #if data.anchors { metadata(("step", s.number)) }
     #heading(level: 2, {
       str(s.number) + ". "
       if s.title.len() == 0 { labels.step + " " + str(s.number) } else { inlines(s.title) }
@@ -225,6 +259,11 @@
 #for item in data.items {
   if item.kind == "section" {
     heading(level: 1, item.title)
+    if item.audiences != none {
+      block(above: 0pt, below: 1em, text(size: 9.5pt, fill: muted, style: "italic", item.audiences))
+    }
+  } else if item.kind == "decision" {
+    decision(item)
   } else if item.kind == "step" {
     step(item)
   } else if item.kind == "note" {

@@ -28,12 +28,15 @@
 //!   can start a step, as soon as the event arrives. New snapshot frames go
 //!   to the encoder; the router keeps only their timestamps and geometry.
 //! - The **element thread** fills `MouseDown.element` from
-//!   [`ax::element_at`] and drops presses on excluded apps.
+//!   [`ax::element_at`] and drops presses on excluded apps, and fills the
+//!   scrolled area of a scroll burst (see `# Scrolling`).
 //! - The **after thread** picks each step's after frame, once the step
 //!   has settled (see `# After frames`), and sends it to the encoder.
 //! - The **focus thread** fills `KeyDown.secure` and emits
 //!   [`CaptureEvent::FocusChanged`]. It is separate so a slow `element_at`
-//!   never delays a key's focus lookup.
+//!   never delays a key's focus lookup. It also reads typed fields' text
+//!   (see `# Field values`) and polls the browser's address (see
+//!   `# Web addresses`).
 //! - The **encoder** writes each snapshot frame once, as lossless WebP, to
 //!   a hidden session folder (`.guiderecorder-session-<ulid>` in
 //!   [`SessionConfig::work_dir`], by default [`default_work_dir`], a local
@@ -212,6 +215,43 @@
 //! one within 2 × [`StepConfig::typing_idle_ms`] ([`match_snapshot`]), or
 //! gets no image and counts as skipped.
 //!
+//! # Scrolling
+//!
+//! The router sends the first scroll of a burst (after a gap of
+//! [`SCROLL_BURST_GAP_MS`], or with the pointer elsewhere) to the element
+//! thread, which fills its `region` from [`ax::scroll_region_at`]; the
+//! rest go straight to the events. Scrolls take no snapshot: a "Scroll to"
+//! step shares its click's.
+//!
+//! # Field values
+//!
+//! For typed text (see [`guiderecorder_core::steps`], `# Typed text`) the
+//! focus thread reads the focused field's text ([`ax::field_value`]: text
+//! fields only, never secure ones, at most [`MAX_FIELD_VALUE_CHARS`]) and
+//! emits [`CaptureEvent::FieldValue`]:
+//!
+//! - [`VALUE_SETTLE_MS`] after the last plain typing key, between
+//!   messages;
+//! - when Tab, Return, Esc, a shortcut or a click ends a run before that,
+//!   stamped 1 ns before it (read after the key's own lookup, so it is
+//!   never delayed);
+//! - after a click into a field ([`FocusMsg::Probe`]): its text before any
+//!   typing.
+//!
+//! A read is skipped unless the last key was plain and the focus has not
+//! moved since it. [`retro_scrub`] empties values read in the stretch it
+//! masks.
+//!
+//! # Web addresses
+//!
+//! Every [`PAGE_POLL_MS`], between messages, the focus thread reads the
+//! frontmost browser window's page ([`ax::browser_page`]) and emits
+//! [`CaptureEvent::UrlChanged`] when its address changes: none for another
+//! app, a private window or an excluded app, and nothing while the address
+//! bar is typed in. Polls during a pause are removed with the pause's
+//! events, and a resume reports the address again. An address changed
+//! without the window title changing (some single-page apps) is not seen.
+//!
 //! # Live feed
 //!
 //! Each [`LiveSnapshot`] says what took it ([`LiveAction`], never typed
@@ -314,11 +354,16 @@
 //!   `IsPassword`. Apps are identified by their executable's file name
 //!   (`1password.exe`), which stands in for a bundle id everywhere above.
 //! - Frames come from Windows.Graphics.Capture, which has no content
-//!   filter: an excluded app's window behind the frontmost one, or a
-//!   floating panel of one that is not frontmost, can show in a frame.
-//!   Nothing is captured while one is frontmost, as on macOS. This
-//!   process's windows are kept out of the frames by display affinity
-//!   (`WDA_EXCLUDEFROMCAPTURE`).
+//!   filter. Instead, each display or region frame has the visible parts
+//!   of the excluded apps' windows (behind the frontmost one, floating
+//!   panels, menus) painted over in grey before it is kept, from the
+//!   windows listed when it is copied; so an app that launches later needs
+//!   no refresh, and the refresh thread has nothing to do. What is under
+//!   the grey is lost, where macOS shows the windows behind, and a window
+//!   moving at that moment can show at its edges (see the Windows frames
+//!   module's `# Excluded windows`). Nothing is captured while an excluded
+//!   app is frontmost, as on macOS. This process's windows are kept out of
+//!   the frames by display affinity (`WDA_EXCLUDEFROMCAPTURE`).
 //! - App activations are seen through `EVENT_SYSTEM_FOREGROUND`, on the
 //!   observer's own thread, so no main run loop is needed.
 
@@ -342,7 +387,9 @@ use guiderecorder_core::library::{
 use guiderecorder_core::model::{
     self, AppInfo, Guide, ImageShow, Item, Point, RecordingInfo, Rect, Step, StepImage,
 };
-use guiderecorder_core::steps::{detect_steps, DraftStep, LiveAction, StepConfig};
+use guiderecorder_core::steps::{
+    detect_steps, DraftStep, LiveAction, StepConfig, MAX_FIELD_VALUE_CHARS,
+};
 use guiderecorder_core::Ulid;
 
 pub use crate::backend::apps::{
@@ -362,6 +409,19 @@ use crate::cpu::{process_cpu_time, CpuTime};
 /// A focus lookup that runs later than this after its key no longer says
 /// where the key went; the key is treated as secure.
 pub const STALE_LOOKUP_MS: u64 = 75;
+/// How long after the last key of a typing run its field's text is read
+/// (see `# Field values`). Well under [`StepConfig::typing_idle_ms`], so
+/// the read lands inside the run.
+pub const VALUE_SETTLE_MS: u64 = 400;
+/// How often the frontmost browser window's address is read (see
+/// `# Web addresses`).
+pub const PAGE_POLL_MS: u64 = 500;
+/// A scroll this long after the previous one, or away from where it was,
+/// starts a new burst, whose scrolled area is looked up again.
+pub const SCROLL_BURST_GAP_MS: u64 = 500;
+/// How far the pointer moves between scrolls, in points, before they are
+/// two bursts (see [`SCROLL_BURST_GAP_MS`]).
+const SCROLL_BURST_MOVE: f64 = 50.0;
 /// Prefix of the hidden per-session folder holding encoded snapshots.
 pub const SESSION_DIR_PREFIX: &str = ".guiderecorder-session-";
 /// Session folders older than this are swept when a session starts.
@@ -1539,8 +1599,18 @@ impl Recording {
                 skipped += 1;
                 continue;
             };
+            // A "Scroll to" step comes just before its click, at the same
+            // time: a title given to the capture is the click's.
+            let leads = self
+                .drafts
+                .get(i + 1)
+                .is_some_and(|next| next.at == draft.at);
             let title = match self.edits.edit(snap_ts, &mut titled) {
                 CaptureEdit::Drop => continue,
+                CaptureEdit::Retitle(_) if leads => {
+                    titled.remove(&snap_ts);
+                    None
+                }
                 CaptureEdit::Retitle(title) => Some(title.to_owned()),
                 CaptureEdit::Keep => None,
             };
@@ -1860,6 +1930,8 @@ struct Router {
     /// Where the pointer was last seen (any mouse event, kept or dropped),
     /// to pick the display for events without a point (keys, manual steps).
     pointer: Option<Point>,
+    /// The last scroll kept, to tell where a burst starts.
+    last_scroll: Option<(Timestamp, Point)>,
     out: Outputs,
     sent_frames: HashSet<FrameKey>,
     events: Vec<TimedEvent>,
@@ -1914,6 +1986,7 @@ impl Router {
             app_pid: None,
             sources,
             pointer: None,
+            last_scroll: None,
             out,
             sent_frames: HashSet::new(),
             events: Vec::new(),
@@ -2070,6 +2143,20 @@ impl Router {
             }
             CaptureEvent::ManualStep => {
                 let _ = self.out.focus.send(FocusMsg::Manual(event.ts));
+            }
+            CaptureEvent::Scroll { point, .. } => {
+                // The first scroll of a burst: the element thread looks up
+                // the scrolled area.
+                let starts = self.last_scroll.is_none_or(|(at, from)| {
+                    event.ts.millis_since(at) > SCROLL_BURST_GAP_MS
+                        || (from.x - point.x).hypot(from.y - point.y) > SCROLL_BURST_MOVE
+                });
+                self.last_scroll = Some((event.ts, point));
+                if starts {
+                    let _ = self.out.element.send(event);
+                } else {
+                    self.events.push(event);
+                }
             }
             _ => self.events.push(event),
         }
@@ -2260,7 +2347,8 @@ impl AxStats {
 }
 
 /// Mouse events: fills `MouseDown.element` and drops presses on excluded
-/// apps that the router could not see (target pid 0 or another pid).
+/// apps that the router could not see (target pid 0 or another pid), and
+/// fills `Scroll.region` for the first scroll of a burst.
 struct ElementWorker {
     excluded: Vec<String>,
     sink: Option<PressSink>,
@@ -2295,6 +2383,10 @@ impl ElementWorker {
     }
 
     fn handle(&mut self, mut event: TimedEvent) {
+        if let CaptureEvent::Scroll { point, region, .. } = &mut event.event {
+            let point = *point;
+            *region = self.ax.time(|| ax::scroll_region_at(point)).ok().flatten();
+        }
         let mut found = None;
         let mut excluded = false;
         if let CaptureEvent::MouseDown { point, .. } = &event.event {
@@ -2375,6 +2467,11 @@ trait FocusSource {
     /// The focused element's identity (one cheap read), `None` if unknown.
     fn focused_ref(&mut self) -> Option<Self::Ref>;
     fn focused_element(&mut self) -> ax::Result<Option<RawElement>>;
+    /// The focused field's text, if it may be read ([`ax::may_read_value`])
+    /// and is at most [`MAX_FIELD_VALUE_CHARS`] long.
+    fn field_value(&mut self) -> ax::Result<Option<String>>;
+    /// The frontmost browser window's page; `None` for any other app.
+    fn page(&mut self) -> ax::Result<Option<ax::BrowserPage>>;
     /// The clock event timestamps are on.
     fn now(&self) -> Timestamp;
 }
@@ -2390,6 +2487,14 @@ impl FocusSource for AxFocus {
 
     fn focused_element(&mut self) -> ax::Result<Option<RawElement>> {
         ax::focused_element()
+    }
+
+    fn field_value(&mut self) -> ax::Result<Option<String>> {
+        ax::field_value(MAX_FIELD_VALUE_CHARS)
+    }
+
+    fn page(&mut self) -> ax::Result<Option<ax::BrowserPage>> {
+        ax::browser_page()
     }
 
     fn now(&self) -> Timestamp {
@@ -2468,6 +2573,8 @@ impl<K: PartialEq> SettleGuard<K> {
 ///   cannot leave earlier characters of the run in clear.
 /// - Without: keys at most `settle_ms` before `secure_at`, the step
 ///   detector's late-secure-focus rule.
+///
+/// Field values read in that stretch are emptied too.
 pub fn retro_scrub(
     events: &mut [TimedEvent],
     since: Option<Timestamp>,
@@ -2501,6 +2608,10 @@ pub fn retro_scrub(
                 scrubbed += 1;
             }
         }
+        // The text read from the field those keys went to.
+        if let CaptureEvent::FieldValue { value } = &mut ev.event {
+            value.clear();
+        }
     }
     scrubbed
 }
@@ -2517,7 +2628,9 @@ struct Lookup<R> {
 
 /// Keys and manual steps: fills `KeyDown.secure`, scrubs secure keys, drops
 /// keys and manual steps focused on excluded apps, and emits
-/// `FocusChanged`.
+/// `FocusChanged`. Also reads typed fields' text (`FieldValue`, see
+/// `# Field values`) and polls the frontmost browser's address
+/// (`UrlChanged`, see `# Web addresses`).
 struct FocusWorker<S: FocusSource> {
     source: S,
     excluded: Vec<String>,
@@ -2532,6 +2645,12 @@ struct FocusWorker<S: FocusSource> {
     last_verdict: Option<KeyVerdict>,
     /// Last focused element reported; outer `None` until the first lookup.
     focus: Option<Option<RawElement>>,
+    /// When the typed field's text is to be read: [`VALUE_SETTLE_MS`] after
+    /// the last plain typing key, until something ends the run.
+    value_due: Option<Instant>,
+    /// Last address reported (none at the start of a stretch, as the step
+    /// detector assumes).
+    url: Option<String>,
     events: Vec<TimedEvent>,
     dropped_ts: Vec<Timestamp>,
     stale_masked: usize,
@@ -2564,6 +2683,8 @@ impl<S: FocusSource> FocusWorker<S> {
             boundary: None,
             last_verdict: None,
             focus: None,
+            value_due: None,
+            url: None,
             events: Vec::new(),
             dropped_ts: Vec::new(),
             stale_masked: 0,
@@ -2576,13 +2697,30 @@ impl<S: FocusSource> FocusWorker<S> {
 
     fn run(&mut self, rx: Receiver<FocusMsg>) {
         let mut pending = VecDeque::new();
+        let poll = Duration::from_millis(PAGE_POLL_MS);
+        let mut next_poll = Instant::now();
         loop {
             let msg = match pending.pop_front() {
                 Some(msg) => msg,
-                None => match rx.recv() {
-                    Ok(msg) => msg,
-                    Err(_) => break,
-                },
+                None => {
+                    // Between messages: a settled run's value, the page.
+                    let now = Instant::now();
+                    if self.value_due.is_some_and(|due| due <= now) {
+                        let ts = self.source.now();
+                        self.read_value(ts);
+                    }
+                    if next_poll <= now {
+                        let ts = self.source.now();
+                        self.poll_page(ts);
+                        next_poll = now + poll;
+                    }
+                    let wake = self.value_due.map_or(next_poll, |due| due.min(next_poll));
+                    match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+                        Ok(msg) => msg,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
             };
             if matches!(msg, FocusMsg::Probe(_)) {
                 pending.extend(rx.try_iter());
@@ -2605,6 +2743,11 @@ impl<S: FocusSource> FocusWorker<S> {
                 let source = &mut self.source;
                 let before = self.ax.time(|| source.focused_ref().ok_or(())).ok();
                 self.arm(ts, before);
+                // The click ends a typing run: its field's text, as just
+                // before the click.
+                if self.value_due.is_some() {
+                    self.read_value(Timestamp(ts.0.saturating_sub(1)));
+                }
             }
             FocusMsg::Probe(ts) => {
                 // Only for labels; never delay waiting keys with it.
@@ -2615,6 +2758,12 @@ impl<S: FocusSource> FocusWorker<S> {
                 let source = &mut self.source;
                 let focused = self.ax.time(|| source.focused_element());
                 self.note_focus(ts, &focused);
+                // A click into a field: its text before any typing.
+                let readable = matches!(&focused, Ok(Some(el))
+                    if ax::may_read_value(el.role.as_deref(), el.subrole.as_deref(), el.is_secure));
+                if readable && key_verdict(&focused, &self.excluded) == KeyVerdict::Plain {
+                    self.push_value(ts);
+                }
             }
             FocusMsg::Resume(ts) => {
                 // The next key gets a full lookup, the focus is reported
@@ -2626,8 +2775,60 @@ impl<S: FocusSource> FocusWorker<S> {
                 self.last_verdict = None;
                 self.focus = None;
                 self.boundary = Some(ts);
+                self.value_due = None;
+                self.url = None;
             }
         }
+    }
+
+    /// Reads the text of the field the last key went to, as of `ts`, if it
+    /// is still focused and the key was plain (see `# Field values`).
+    fn read_value(&mut self, ts: Timestamp) {
+        self.value_due = None;
+        if self.last_verdict != Some(KeyVerdict::Plain) {
+            return;
+        }
+        let source = &mut self.source;
+        let current = self.ax.time(|| source.focused_ref().ok_or(())).ok();
+        if current.is_none() || current != self.last_ref {
+            return;
+        }
+        self.push_value(ts);
+    }
+
+    /// Emits the focused field's text at `ts`, if it can be read.
+    fn push_value(&mut self, ts: Timestamp) {
+        let source = &mut self.source;
+        if let Ok(Some(value)) = self.ax.time(|| source.field_value()) {
+            self.events.push(TimedEvent {
+                ts,
+                event: CaptureEvent::FieldValue { value },
+            });
+        }
+    }
+
+    /// Emits `UrlChanged` at `ts` when the frontmost browser window's
+    /// address differs from the last one reported: none for another app,
+    /// a private window or an excluded app. A failed read, or an address
+    /// bar being typed in, changes nothing.
+    fn poll_page(&mut self, ts: Timestamp) {
+        let source = &mut self.source;
+        let Ok(page) = source.page() else {
+            return;
+        };
+        let url = match page {
+            Some(page) if page.typing => return,
+            Some(page) if !page.private && !is_excluded_app(&page.app, &self.excluded) => page.url,
+            _ => None,
+        };
+        if self.url == url {
+            return;
+        }
+        self.url.clone_from(&url);
+        self.events.push(TimedEvent {
+            ts,
+            event: CaptureEvent::UrlChanged { url },
+        });
     }
 
     /// Arms the settle guard at `ts` with the focus from before the move.
@@ -2695,9 +2896,20 @@ impl<S: FocusSource> FocusWorker<S> {
         }
         self.last_verdict = Some(verdict);
         self.cache.after_key(key.code, *modifiers);
-        if moves_focus(key.code, *modifiers) {
+        let ends_run = moves_focus(key.code, *modifiers);
+        if ends_run {
             // This key's own lookup saw the focus from before the move.
             self.arm(ts, self.last_ref.clone());
+            // Tab, Return, Esc or a shortcut ends a typing run: its field's
+            // text, as just before the key (read after this key's lookup,
+            // so as not to delay it).
+            if self.value_due.is_some() {
+                self.read_value(Timestamp(ts.0.saturating_sub(1)));
+            }
+        } else if verdict == KeyVerdict::Plain {
+            self.value_due = Some(Instant::now() + Duration::from_millis(VALUE_SETTLE_MS));
+        } else {
+            self.value_due = None;
         }
         match verdict {
             KeyVerdict::Excluded => {
@@ -4622,6 +4834,7 @@ mod tests {
             element: None,
             app: None,
             keystrokes: None,
+            url: None,
             title: "Drag".into(),
         };
         let (p, end) = step_points(&geometry, &draft);
@@ -5071,6 +5284,9 @@ mod tests {
     struct FakeFocus {
         current: Option<(u32, RawElement)>,
         clock: Timestamp,
+        /// The focused field's text.
+        value: Option<String>,
+        page: Option<ax::BrowserPage>,
     }
 
     impl FocusSource for FakeFocus {
@@ -5082,6 +5298,17 @@ mod tests {
 
         fn focused_element(&mut self) -> ax::Result<Option<RawElement>> {
             Ok(self.current.as_ref().map(|(_, el)| el.clone()))
+        }
+
+        fn field_value(&mut self) -> ax::Result<Option<String>> {
+            let readable = self.current.as_ref().is_some_and(|(_, el)| {
+                ax::may_read_value(el.role.as_deref(), el.subrole.as_deref(), el.is_secure)
+            });
+            Ok(self.value.clone().filter(|_| readable))
+        }
+
+        fn page(&mut self) -> ax::Result<Option<ax::BrowserPage>> {
+            Ok(self.page.clone())
         }
 
         fn now(&self) -> Timestamp {
@@ -5114,6 +5341,8 @@ mod tests {
             FakeFocus {
                 current: focus,
                 clock: Timestamp(0),
+                value: None,
+                page: None,
             },
         )
     }
@@ -5205,6 +5434,158 @@ mod tests {
         assert_eq!(keys[0], (0, Some("a".into()), false));
         assert_eq!(keys[1], (1000, Some("•".into()), true));
         assert_eq!(keys[2], (1100, Some("•".into()), true));
+    }
+
+    fn values(events: &[TimedEvent]) -> Vec<(u64, String)> {
+        events
+            .iter()
+            .filter_map(|ev| match &ev.event {
+                CaptureEvent::FieldValue { value } => Some((ev.ts.0, value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn field_values_are_read_around_typing_runs() {
+        let name = field("Name", false, "com.apple.Safari");
+        let mut w = worker(Some((1, name)));
+        // A click into the field: its text before typing.
+        w.source.value = Some(String::new());
+        w.handle(FocusMsg::Probe(Timestamp(100 * MS)), false);
+        type_key(&mut w, 200, 0, "n");
+        type_key(&mut w, 300, 0, "i");
+        assert!(w.value_due.is_some(), "read once the run settles");
+        // The input method composed the keys.
+        w.source.value = Some("日本".into());
+        w.read_value(Timestamp(800 * MS));
+        assert!(w.value_due.is_none());
+        // Return ends the next run: read as just before it.
+        type_key(&mut w, 900, 0, "x");
+        w.source.value = Some("日本x".into());
+        type_key(&mut w, 1000, KEY_RETURN, "\r");
+        // A click ends a run too.
+        type_key(&mut w, 2000, 0, "y");
+        w.source.value = Some("日本xy".into());
+        w.handle(FocusMsg::Invalidate(Timestamp(2100 * MS)), false);
+        // Nothing pending: a click reads nothing.
+        w.handle(FocusMsg::Invalidate(Timestamp(2200 * MS)), false);
+        let out = w.finish();
+        assert_eq!(
+            values(&out.events),
+            [
+                (100 * MS, String::new()),
+                (800 * MS, "日本".into()),
+                (1000 * MS - 1, "日本x".into()),
+                (2100 * MS - 1, "日本xy".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn field_values_never_of_secure_or_moved_focus() {
+        let pass = field("Password", true, "com.apple.Safari");
+        let mut w = worker(Some((1, pass)));
+        w.source.value = Some("hunter2".into());
+        w.handle(FocusMsg::Probe(Timestamp(100 * MS)), false);
+        type_key(&mut w, 200, 0, "h");
+        assert!(w.value_due.is_none());
+        w.read_value(Timestamp(700 * MS));
+
+        // Focus moved on since the last key: not that field's text.
+        let a = field("Search", false, "com.apple.Safari");
+        let b = field("Name", false, "com.apple.Safari");
+        w.source.current = Some((2, a));
+        type_key(&mut w, 1000, 0, "s");
+        w.source.current = Some((3, b));
+        w.source.value = Some("other".into());
+        w.read_value(Timestamp(1500 * MS));
+
+        // An excluded app's field: never read.
+        let vault = field("Search", false, "com.1password.1password");
+        w.source.current = Some((4, vault));
+        w.handle(FocusMsg::Probe(Timestamp(2000 * MS)), false);
+        assert!(values(&w.finish().events).is_empty());
+    }
+
+    #[test]
+    fn retro_scrub_empties_field_values() {
+        let user = field("Username", false, "com.apple.Safari");
+        let pass = field("Password", true, "com.apple.Safari");
+        let mut w = worker(Some((1, user)));
+        type_key(&mut w, 0, 0, "p");
+        w.source.value = Some("p".into());
+        w.read_value(Timestamp(100 * MS));
+        // The page moved focus to the password field by itself.
+        w.source.current = Some((2, pass));
+        type_key(&mut w, 200, 0, "q");
+        let out = w.finish();
+        assert_eq!(values(&out.events), [(100 * MS, String::new())]);
+    }
+
+    #[test]
+    fn page_polls_report_address_changes() {
+        let safari = AppRef {
+            pid: 5,
+            name: Some("Safari".into()),
+            bundle_id: Some("com.apple.Safari".into()),
+        };
+        let page = |url: Option<&str>| {
+            Some(ax::BrowserPage {
+                app: safari.clone(),
+                url: url.map(Into::into),
+                ..ax::BrowserPage::default()
+            })
+        };
+        let mut w = worker(None);
+        let poll = |w: &mut FocusWorker<FakeFocus>, ms: u64, p: Option<ax::BrowserPage>| {
+            w.source.page = p;
+            w.poll_page(Timestamp(ms * MS));
+        };
+        // Not a browser at the start: nothing to say.
+        poll(&mut w, 0, None);
+        poll(&mut w, 100, page(Some("https://example.com/")));
+        poll(&mut w, 200, page(Some("https://example.com/")));
+        // Being typed in: the last address holds.
+        poll(&mut w, 300, Some(ax::BrowserPage::typing(safari.clone())));
+        poll(&mut w, 400, page(Some("https://example.com/a")));
+        poll(&mut w, 500, Some(ax::BrowserPage::private(safari.clone())));
+        poll(&mut w, 600, page(Some("https://example.com/b")));
+        // Another app.
+        poll(&mut w, 700, None);
+        // An excluded browser.
+        let excluded = ax::BrowserPage {
+            app: AppRef {
+                bundle_id: Some("com.1password.1password".into()),
+                ..safari.clone()
+            },
+            url: Some("https://vault.example/".into()),
+            ..ax::BrowserPage::default()
+        };
+        poll(&mut w, 800, page(Some("https://example.com/b")));
+        poll(&mut w, 900, Some(excluded));
+        let urls: Vec<(u64, Option<String>)> = w
+            .finish()
+            .events
+            .into_iter()
+            .filter_map(|ev| match ev.event {
+                CaptureEvent::UrlChanged { url } => Some((ev.ts.0 / MS, url)),
+                _ => None,
+            })
+            .collect();
+        let some = |s: &str| Some(s.to_owned());
+        assert_eq!(
+            urls,
+            [
+                (100, some("https://example.com/")),
+                (400, some("https://example.com/a")),
+                (500, None),
+                (600, some("https://example.com/b")),
+                (700, None),
+                (800, some("https://example.com/b")),
+                (900, None),
+            ]
+        );
     }
 
     #[test]
@@ -5785,13 +6166,14 @@ mod tests {
         let full = w.ax.lookups;
         type_key(&mut w, 100, 11, "b");
         assert_eq!(w.ax.lookups, full + 1, "cache hit");
-        // A click just before the pause armed the settle guard (one read).
+        // A click just before the pause armed the settle guard (one read)
+        // and ended the run, whose field's text it read (two more).
         w.handle(FocusMsg::Invalidate(Timestamp(150 * MS)), false);
         w.handle(FocusMsg::Resume(Timestamp(200 * MS)), false);
         // After the resume: a full lookup (three reads), the focus reported
         // again, and the guard no longer holds.
         type_key(&mut w, 300, 0, "c");
-        assert_eq!(w.ax.lookups, full + 5);
+        assert_eq!(w.ax.lookups, full + 7);
         let focus_changes: Vec<u64> = w
             .events
             .iter()
@@ -5911,6 +6293,8 @@ mod tests {
             .spawn_threads(&cfg, sources, move || FakeFocus {
                 current: Some((1, focus)),
                 clock: Timestamp(0),
+                value: None,
+                page: None,
             })
             .unwrap();
         let tx = session.tap_tx.clone().unwrap();
@@ -6575,6 +6959,8 @@ mod tests {
             FakeFocus {
                 current: Some((1, password)),
                 clock: Timestamp(0),
+                value: None,
+                page: None,
             },
         );
         type_key(&mut w, 0, 0, "p");

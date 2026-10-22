@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use guiderecorder_core::index::Index;
 use serde::Serialize;
-use tauri::menu::Menu;
-use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, WindowEvent};
+#[cfg(target_os = "macos")]
+use tauri::{menu::Menu, AppHandle, Runtime};
+use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
 
 mod ai;
 mod annotated;
@@ -58,9 +59,14 @@ const CHECK_UPDATES_MENU_ID: &str = "guiderecorder-check-updates";
 /// item sends NSApp `terminate:`, which tao handles in
 /// `applicationWillTerminate` without a `RunEvent::ExitRequested`, so the
 /// editor would not get to save.
+///
+/// macOS only. Windows apps like this one have no menu bar, and Tauri's
+/// default one there (File, Edit, Window, Help) would bring a Quit that
+/// posts `WM_QUIT` past the `QuitGate`; the tray menu has Check for
+/// Updates… and Quit instead.
+#[cfg(target_os = "macos")]
 fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
-    #[cfg(target_os = "macos")]
     {
         use tauri::menu::{MenuItem, MenuItemKind};
         if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
@@ -95,8 +101,10 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .menu(app_menu)
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu);
+    builder
         .on_menu_event(|app, event| {
             if event.id() == QUIT_MENU_ID {
                 app.state::<Arc<commands::QuitGate>>().on_quit_menu(app);
@@ -177,8 +185,14 @@ pub fn run() {
         // Files dropped on the window are the only ones `read_image_file`
         // reads.
         .on_window_event(|window, event| {
-            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
-                window.state::<Arc<DroppedFiles>>().record(paths);
+            match event {
+                WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                    window.state::<Arc<DroppedFiles>>().record(paths);
+                }
+                // Windows' light or dark mode changed: so may the taskbar's,
+                // which the tray icon follows there.
+                WindowEvent::ThemeChanged(_) if cfg!(windows) => tray::refresh(window.app_handle()),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -217,6 +231,7 @@ pub fn run() {
             commands::preview_export,
             commands::logo_preview,
             commands::reveal_export,
+            commands::open_step_url,
             commands::verify_crop,
             settings_commands::get_settings,
             settings_commands::update_settings,
@@ -286,9 +301,15 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            // After `QuitGate::restart` (an update, a Screen Recording grant).
-            RunEvent::Exit if app.state::<Arc<commands::QuitGate>>().restart_requested() => {
-                tauri::process::restart(&app.env());
+            RunEvent::Exit => {
+                // After `QuitGate::restart` (an update, a Screen Recording grant).
+                let restart = app.state::<Arc<commands::QuitGate>>().restart_requested();
+                // On Windows a downloaded update installs now, and the
+                // installer restarts the app; see `updater::install_on_exit`.
+                updater::install_on_exit(app, restart);
+                if restart {
+                    tauri::process::restart(&app.env());
+                }
             }
             _ => {}
         });
