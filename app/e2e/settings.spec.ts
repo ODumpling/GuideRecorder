@@ -1,3 +1,4 @@
+import { AI_ENABLED } from "../src/lib/features";
 import { expect, openGuide, test } from "./fixtures";
 
 test("changes settings, which the Export dialog then starts from", async ({ page, backend }) => {
@@ -33,6 +34,22 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await dialog.getByRole("switch", { name: "Keep narration audio" }).click();
   await expect.poll(() => backend.settings.recording.narration).toEqual({ enabled: true, keepAudio: true });
 
+  // Privacy: scanning and automatic blurs are on by default.
+  await dialog.getByRole("button", { name: "Privacy" }).click();
+  const scan = dialog.getByRole("switch", { name: "Scan for sensitive text" });
+  const autoBlur = dialog.getByRole("switch", { name: "Blur automatically" });
+  await expect(scan).toBeChecked();
+  await expect(autoBlur).toBeChecked();
+  await autoBlur.click();
+  await expect.poll(() => backend.settings.redaction.mode).toBe("suggest");
+  await scan.click();
+  await expect.poll(() => backend.settings.redaction.mode).toBe("off");
+  await expect(autoBlur).toBeDisabled();
+  await scan.click();
+  await expect.poll(() => backend.settings.redaction.mode).toBe("apply");
+  await expect(autoBlur).toBeChecked();
+  await dialog.getByRole("button", { name: "Recording" }).click();
+
   // Excluded apps: a vendor prefix is refused with a reason; a full id is added.
   const appId = dialog.getByLabel("App bundle id");
   await appId.fill("com.apple");
@@ -46,30 +63,35 @@ test("changes settings, which the Export dialog then starts from", async ({ page
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
   await expect.poll(() => backend.settings.recording.excludedApps).toContain("com.apple.Safari");
 
-  // AI: the key goes to the Keychain and is never shown back.
-  await dialog.getByRole("button", { name: "AI", exact: true }).click();
-  await dialog.getByLabel("API key").fill("sk-ant-test");
-  await dialog.getByRole("button", { name: "Save key" }).click();
-  await expect(dialog.getByText(/A key is stored in your Keychain/)).toBeVisible();
-  await expect(dialog.getByLabel("API key")).toHaveValue("");
-  expect(backend.apiKeyStored).toBe(true);
+  if (AI_ENABLED) {
+    // AI: the key goes to the Keychain and is never shown back.
+    await dialog.getByRole("button", { name: "AI", exact: true }).click();
+    await dialog.getByLabel("API key").fill("sk-ant-test");
+    await dialog.getByRole("button", { name: "Save key" }).click();
+    await expect(dialog.getByText(/A key is stored in your Keychain/)).toBeVisible();
+    await expect(dialog.getByLabel("API key")).toHaveValue("");
+    expect(backend.apiKeyStored).toBe(true);
 
-  // A local provider: no key, its own models, and text only.
-  await dialog.getByLabel("Provider").selectOption("ollama");
-  await expect.poll(() => backend.settings.ai.provider).toBe("ollama");
-  await expect(dialog.getByText(/Nothing leaves your Mac/)).toBeVisible();
-  await expect(dialog.getByLabel("API key")).toHaveCount(0);
-  await expect(dialog.getByLabel("Base URL")).toHaveAttribute("placeholder", "http://localhost:11434/v1");
-  await dialog.getByRole("textbox", { name: "Step model" }).fill("qwen3-vl:8b");
-  await dialog.getByRole("textbox", { name: "Step model" }).press("Enter");
-  await dialog.getByRole("switch", { name: "Send screenshots" }).click();
-  await expect
-    .poll(() => backend.settings.ai.ollama)
-    .toMatchObject({ stepModel: "qwen3-vl:8b", images: false });
-  // Anthropic's models are kept.
-  expect(backend.settings.ai.stepModel).toBe("claude-haiku-5-5");
-  await dialog.getByLabel("Provider").selectOption("anthropic");
-  await expect(dialog.getByText(/A key is stored in your Keychain/)).toBeVisible();
+    // A local provider: no key, its own models, and text only.
+    await dialog.getByLabel("Provider").selectOption("ollama");
+    await expect.poll(() => backend.settings.ai.provider).toBe("ollama");
+    await expect(dialog.getByText(/Nothing leaves your Mac/)).toBeVisible();
+    await expect(dialog.getByLabel("API key")).toHaveCount(0);
+    await expect(dialog.getByLabel("Base URL")).toHaveAttribute("placeholder", "http://localhost:11434/v1");
+    await dialog.getByRole("textbox", { name: "Step model" }).fill("qwen3-vl:8b");
+    await dialog.getByRole("textbox", { name: "Step model" }).press("Enter");
+    await dialog.getByRole("switch", { name: "Send screenshots" }).click();
+    await expect
+      .poll(() => backend.settings.ai.ollama)
+      .toMatchObject({ stepModel: "qwen3-vl:8b", images: false });
+    // Anthropic's models are kept.
+    expect(backend.settings.ai.stepModel).toBe("claude-haiku-5-5");
+    await dialog.getByLabel("Provider").selectOption("anthropic");
+    await expect(dialog.getByText(/A key is stored in your Keychain/)).toBeVisible();
+  } else {
+    // AI is off for now: no AI page.
+    await expect(dialog.getByRole("button", { name: "AI", exact: true })).toHaveCount(0);
+  }
 
   // Export defaults.
   await dialog.getByRole("button", { name: "Export", exact: true }).click();

@@ -11,6 +11,7 @@ import { cn } from "@guiderecorder/ui/utils";
 import { allGranted, setupStore, STEPS, useSetupStep, type SetupStep } from "@/onboarding/onboarding";
 import { switchLibrary } from "@/settings/library";
 import { settingsStore } from "@/settings/settings";
+import { AI_ENABLED } from "@/lib/features";
 
 const TITLES: Record<SetupStep, { title: string; icon: typeof Check }> = {
   permissions: { title: "Permissions", icon: ShieldCheck },
@@ -103,7 +104,7 @@ function LibraryStep({ api, onNext }: { api: SettingsApi; onNext(): void }) {
       {error && <p className="text-xs text-[var(--status-danger)]">{error}</p>}
       <div className="flex justify-end">
         <Button disabled={!ready || busy} onClick={onNext}>
-          Continue
+          {AI_ENABLED ? "Continue" : "Finish"}
         </Button>
       </div>
     </>
@@ -205,7 +206,7 @@ export function Onboarding({ api = tauriSettingsApi }: { api?: SettingsApi }) {
         >
           <Dialog.Title className="text-lg font-semibold">Set up GuideRecorder</Dialog.Title>
           <Dialog.Description className="sr-only">
-            {STEPS.length === 3 ? "First-run setup in three steps." : "First-run setup in two steps."}
+            First-run setup in {["one", "two", "three"][STEPS.length - 1]} {STEPS.length === 1 ? "step" : "steps"}.
           </Dialog.Description>
           <ol aria-label="Setup steps" className="flex gap-2">
             {STEPS.map((s, i) => {
@@ -233,7 +234,7 @@ export function Onboarding({ api = tauriSettingsApi }: { api?: SettingsApi }) {
             })}
           </ol>
           {step === "permissions" && <PermissionsStep api={api} onNext={() => go("library")} />}
-          {step === "library" && <LibraryStep api={api} onNext={() => go("apiKey")} />}
+          {step === "library" && <LibraryStep api={api} onNext={() => (AI_ENABLED ? go("apiKey") : void finish())} />}
           {step === "apiKey" && <ApiKeyStep api={api} onDone={() => void finish()} />}
           {finishError && <p className="text-xs text-[var(--status-danger)]">{finishError}</p>}
         </Dialog.Content>

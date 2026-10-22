@@ -1,4 +1,13 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Menu } from "@tauri-apps/api/menu";
 import {
   ArrowDown,
@@ -49,6 +58,7 @@ import { isWindows, shortcutLabel } from "@/lib/platform";
 import type { Item, Step } from "@guiderecorder/guide-schema";
 import { cn } from "@guiderecorder/ui/utils";
 import { markdownToPlainText } from "@guiderecorder/ui/markdown";
+import { AI_ENABLED } from "@/lib/features";
 
 // Plain-text labels by Markdown source. The outline re-renders on every
 // keystroke, but only the edited item's text changes.
@@ -97,7 +107,7 @@ function StepThumb({ guideId, step }: { guideId: string; step: Step }) {
   const url = useStepThumbnail(guideId, step.image.crop || step.image.full || null);
   return (
     <span className="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[5px] border border-sidebar-border bg-background compact:h-6 compact:w-9">
-      {url ? <img src={url} alt="" className="size-full object-cover" /> : <ItemIcon item={step} />}
+      {url ? <img src={url} alt="" draggable={false} className="size-full object-cover" /> : <ItemIcon item={step} />}
     </span>
   );
 }
@@ -226,6 +236,65 @@ function Kbd({ children }: { children: string }) {
   return <kbd className="rounded border border-sidebar-border px-1 font-sans text-[10px]">{children}</kbd>;
 }
 
+/**
+ * A floating copy of the outline row being dragged: it lifts, follows the
+ * pointer up and down, then lands on its new place (or back on its old one).
+ * `count`: how many items it carries, when more than one.
+ */
+function liftRow(row: HTMLElement, count: number) {
+  const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const from = row.getBoundingClientRect();
+  const float = document.createElement("div");
+  float.setAttribute("aria-hidden", "true");
+  float.inert = true;
+  Object.assign(float.style, {
+    position: "fixed",
+    left: `${from.left}px`,
+    top: `${from.top}px`,
+    width: `${from.width}px`,
+    zIndex: "50",
+    pointerEvents: "none",
+  });
+  const copy = row.cloneNode(true) as HTMLElement;
+  copy.querySelector("[data-row-controls]")?.remove();
+  // Not another outline row to find or drop on.
+  for (const el of [copy, ...copy.querySelectorAll<HTMLElement>("*")]) {
+    for (const name of el.getAttributeNames()) if (name.startsWith("data-") || name === "id") el.removeAttribute(name);
+  }
+  copy.className = cn(copy.className, "bg-sidebar ring-1 ring-sidebar-border opacity-95");
+  copy.style.transition = motion ? "transform 150ms ease-out, box-shadow 150ms ease-out" : "";
+  if (count > 1) {
+    const badge = document.createElement("span");
+    badge.textContent = String(count);
+    badge.className =
+      "absolute -top-1.5 -right-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-brand px-1 text-[11px] font-semibold text-white tabular-nums";
+    copy.append(badge);
+  }
+  float.append(copy);
+  document.body.append(float);
+  requestAnimationFrame(() => {
+    copy.style.transform = "scale(1.03) rotate(-1deg)";
+    copy.style.boxShadow = "0 10px 24px -6px rgb(0 0 0 / 0.25)";
+  });
+
+  return {
+    follow(dy: number) {
+      float.style.transform = `translateY(${dy}px)`;
+    },
+    /** Glides onto `target` (null: where it started), then goes. */
+    land(target: () => HTMLElement | null) {
+      requestAnimationFrame(() => {
+        const to = target()?.getBoundingClientRect() ?? from;
+        if (motion) float.style.transition = "transform 150ms ease-out";
+        float.style.transform = `translateY(${to.top - from.top}px)`;
+        copy.style.transform = "";
+        copy.style.boxShadow = "";
+        setTimeout(() => float.remove(), motion ? 150 : 0);
+      });
+    },
+  };
+}
+
 /** Where dragged items will land: a line with a dot, above the item. */
 function DropLine() {
   return (
@@ -291,10 +360,11 @@ export function Outline() {
   };
 
   /** Moves the items `ids` and announces where they went. */
-  const moveTo = (ids: string[], to: number | null) => {
-    if (to === null || !dispatch(moveItems(editorStore.getState().doc!.guide, ids, to))) return;
+  const moveTo = (ids: string[], to: number | null): boolean => {
+    if (to === null || !dispatch(moveItems(editorStore.getState().doc!.guide, ids, to))) return false;
     reveal(ids[0]);
     setAnnouncement(moveAnnouncement(items(), ids));
+    return true;
   };
   /** Moves the items `ids` past the item shown above (-1) or below (1). */
   const shift = (ids: string[], by: -1 | 1) => {
@@ -313,23 +383,68 @@ export function Outline() {
     focusOutlineItem(editorStore.getState().selectedId);
   };
 
-  /** Drops the dragged items before position `before` (items.length: the end). */
-  const drop = (before: number) => {
-    if (dragIds.length > 0) moveTo(dragIds, blockDropTarget(items(), dragIds, before));
-    setDragIds([]);
-    setDropIndex(null);
-  };
-  const dropZone = (before: number) => ({
-    onDragOver: (e: DragEvent) => {
-      if (dragIds.length === 0) return;
-      e.preventDefault();
+  /**
+   * Drags item `id` (or the range or collapsed section it is in) to a new
+   * place with the pointer. Not HTML drag and drop: the webview's native
+   * file drop (images dropped on the window) keeps those events from the page.
+   */
+  const startDrag = (e: ReactPointerEvent, id: string) => {
+    if (readOnly || e.button !== 0 || e.shiftKey || e.metaKey || e.ctrlKey) return;
+    if (!(e.target as HTMLElement).closest("[data-outline-item], [data-drag-handle]")) return;
+    const row = e.currentTarget as HTMLElement;
+    const list = row.closest("ol")!;
+    const start = { x: e.clientX, y: e.clientY };
+    let ids: string[] | null = null;
+    let lifted: ReturnType<typeof liftRow> | null = null;
+    let before: number | null = null;
+    const move = (event: PointerEvent) => {
+      if (!ids) {
+        // A click, until the pointer moves a little.
+        if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
+        ids = withCollapsed(items(), targets(id), collapsed);
+        lifted = liftRow(row, ids.length);
+        setDragIds(ids);
+        document.body.style.userSelect = "none";
+      }
+      lifted!.follow(event.clientY - start.y);
+      const zone = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-before]");
+      before = zone && list.contains(zone) ? Number(zone.dataset.dropBefore) : null;
       setDropIndex(before);
-    },
-    onDrop: (e: DragEvent) => {
-      e.preventDefault();
-      drop(before);
-    },
-  });
+      // Near the top or bottom edge, the outline scrolls.
+      const bounds = list.getBoundingClientRect();
+      if (event.clientY < bounds.top + 24) list.scrollBy(0, -8);
+      else if (event.clientY > bounds.bottom - 24) list.scrollBy(0, 8);
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", escape, true);
+      if (!ids) return;
+      document.body.style.userSelect = "";
+      // Releasing the pointer over an item is not a click on it.
+      window.addEventListener("click", swallow, true);
+      setTimeout(() => window.removeEventListener("click", swallow, true));
+      const moved = drop && before !== null && moveTo(ids, blockDropTarget(items(), ids, before));
+      const first = ids[0];
+      lifted!.land(() => (moved ? document.querySelector<HTMLElement>(`li:has(> [data-outline-item="${first}"])`) : null));
+      setDragIds([]);
+      setDropIndex(null);
+    };
+    const swallow = (click: globalThis.MouseEvent) => click.stopPropagation();
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || !ids) return;
+      event.preventDefault();
+      event.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", escape, true);
+  };
   /** Whether dropping before `index` would leave the dragged items where they are. */
   const dropsInPlace = (index: number) =>
     dragIds.includes(guide.items[index]?.id) || dragIds.includes(guide.items[index - 1]?.id);
@@ -472,7 +587,7 @@ export function Outline() {
             disabled={readOnly}
             onChange={(e) => dispatch(renameGuide(editorStore.getState().doc!.guide, e.target.value))}
           />
-          {!annotated && <RegenerateGuide readOnly={readOnly} />}
+          {AI_ENABLED && !annotated && <RegenerateGuide readOnly={readOnly} />}
         </div>
         <button
           type="button"
@@ -494,11 +609,7 @@ export function Outline() {
           <FileText className="size-3.5 text-muted-foreground" /> Guide details
         </button>
       </div>
-      <ol
-        aria-label="Outline"
-        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2"
-        onDragLeave={() => setDropIndex(null)}
-      >
+      <ol aria-label="Outline" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto p-2">
         {guide.items.map((item, index) => {
           if (!shown.has(item.id)) return null;
           const folded = item.type === "section" && collapsed.has(item.id);
@@ -506,20 +617,14 @@ export function Outline() {
           return (
             <li
               key={item.id}
-              draggable={!readOnly}
-              onDragStart={(e) => {
-                setDragIds(withCollapsed(guide.items, targets(item.id), collapsed));
-                e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragEnd={() => {
-                setDragIds([]);
-                setDropIndex(null);
-              }}
-              {...dropZone(index)}
+              data-drop-before={index}
+              onPointerDown={(e) => startDrag(e, item.id)}
+              // A thumbnail's own image drag would cancel the pointer's.
+              onDragStart={(e) => e.preventDefault()}
               className={cn(
-                "group relative flex items-center gap-0.5 rounded-lg",
+                "group relative flex items-center gap-0.5 rounded-lg select-none",
                 item.type === "section" && "mt-2 first:mt-0",
-                dragIds.includes(item.id) && "opacity-50",
+                dragIds.includes(item.id) && "opacity-30",
               )}
             >
               {dropIndex === index && !dropsInPlace(index) && <DropLine />}
@@ -606,12 +711,13 @@ export function Outline() {
                     {count} {count === 1 ? noun : `${noun}s`}
                   </span>
                 )}
-                {item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
+                {AI_ENABLED && item.type === "step" && !annotated && <StepStatusBadge stepId={item.id} aiState={item.aiState} />}
               </button>
               {!readOnly && (
-                <span className="flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+                <span data-row-controls className="flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
                   <span
                     aria-hidden
+                    data-drag-handle
                     title="Drag to reorder"
                     className="flex h-7 w-4 cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
                   >
@@ -644,8 +750,15 @@ export function Outline() {
         })}
         {dragIds.length > 0 && (
           // Drop target after the last item.
-          <li aria-hidden {...dropZone(guide.items.length)} className="relative h-8">
+          <li aria-hidden data-drop-before={guide.items.length} className="relative h-8">
             {dropIndex === guide.items.length && !dropsInPlace(guide.items.length) && <DropLine />}
+          </li>
+        )}
+        {!readOnly && dragIds.length === 0 && (
+          <li className="mt-1">
+            <Suspense fallback={null}>
+              <InsertMenu disabled={false} atEnd />
+            </Suspense>
           </li>
         )}
       </ol>

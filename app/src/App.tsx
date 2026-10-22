@@ -39,6 +39,7 @@ import { settingsStore } from "@/settings/settings";
 import { UpdateBanner } from "@/updater/UpdateBanner";
 import { updaterStore } from "@/updater/updater";
 import { startSync } from "@/sync/sync";
+import { AI_ENABLED } from "@/lib/features";
 
 function ReadOnlyBanner() {
   const doc = useEditor((s) => s.doc);
@@ -128,7 +129,7 @@ function Toolbar({ onSettings, onSyncSettings }: { onSettings(): void; onSyncSet
           </>
         )}
         {/* AI doesn't write annotation guides. */}
-        {doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
+        {AI_ENABLED && doc && doc.guide.kind !== "annotated" && <WriteWithAi />}
         {doc && (
           <>
             <Button variant="ghost" size="icon" aria-label="Version history" title="Version history" onClick={() => setHistory(true)}>

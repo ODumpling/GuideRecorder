@@ -29,7 +29,8 @@ test("records a guide: start, pause, resume, stop, then edit it", async ({ page,
   const id = backend.recordings[0].guideId;
   await expect(outlineItems(page)).toHaveCount(backend.guide(id).items.length);
   await expect(page.getByRole("alert")).toHaveText(/2 steps had no screenshot and were left out\./);
-  await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
+  // New Guide is only in the library.
+  await expect(page.getByRole("button", { name: "New Guide" })).toHaveCount(0);
   expect(backend.recording).toEqual({ state: "idle" });
   // Opening the guide happened once, though both the result and the event announce it.
   expect(backend.calls.filter((c) => c.cmd === "open_guide")).toHaveLength(1);
@@ -66,7 +67,7 @@ test("follows the recorder's events and shows the capture fallback", async ({ pa
   await emitEvent(page, "recording://status", { state: "idle" });
   await emitEvent(page, "recording://saved", { guideId: CALENDAR, steps: 3, skipped: 0, suggestedBlurs: 0, appliedBlurs: 0 });
   await expect(page.getByRole("textbox", { name: "Guide title" })).toHaveValue("Share a calendar event");
-  await expect(page.getByRole("button", { name: "New Guide" })).toBeEnabled();
+  await expect(page.getByRole("group", { name: "Recording" })).toHaveCount(0);
 });
 
 test("shows the screenshots taken so far while recording", async ({ page, backend }) => {

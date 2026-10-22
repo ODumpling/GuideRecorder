@@ -10,6 +10,7 @@ import { diffLines, diffStats, guideLines, versionName } from "@/editor/versions
 import { errorMessage, tauriHistoryApi } from "@/lib/ipc";
 import type { VersionInfo } from "@/lib/types";
 import { makeThumbnail } from "@/recording/thumbnails";
+import { AI_ENABLED } from "@/lib/features";
 
 // The open guide's version history: save a version, look through earlier
 // ones (a text diff or a preview), and restore one as a new version.
@@ -195,7 +196,7 @@ export function HistoryDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             <div>
               <Dialog.Title className="text-base font-semibold">Version history</Dialog.Title>
               <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-                A version is saved when you close the guide, before Write with AI, and when you save one here. They are kept in the guide's folder.
+                A version is saved when you close the guide, {AI_ENABLED && "before Write with AI, "}and when you save one here. They are kept in the guide's folder.
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>

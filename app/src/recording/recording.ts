@@ -8,6 +8,7 @@ import type { RecordingSaved } from "@/lib/types";
 import { createStartFlow } from "@/recording/startFlow";
 import { createRecordingStore, type RecordingState } from "@/recording/store";
 import { settingsStore } from "@/settings/settings";
+import { AI_ENABLED } from "@/lib/features";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -57,7 +58,7 @@ async function openSaved(saved: RecordingSaved) {
   const notice = savedNotice(saved);
   if (notice) editor.notify(notice);
   // Write it with AI when the settings say so and a key is set.
-  await autoRun(aiStore, guideId, settingsStore.getState().settings, tauriSettingsApi.apiKeyStored);
+  if (AI_ENABLED) await autoRun(aiStore, guideId, settingsStore.getState().settings, tauriSettingsApi.apiKeyStored);
 }
 
 /** A re-captured step waiting for the annotations choice (see RecaptureDialog). */

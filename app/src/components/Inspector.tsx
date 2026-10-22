@@ -15,6 +15,7 @@ import { describeIssues, elementIssues, setElementLabel } from "@/editor/element
 import { inspectorStore, tabCounts, useInspector, type InspectorTab } from "@/editor/inspector";
 import { displayUrl, isWebAddress } from "@/editor/web";
 import { openStepUrl } from "@/lib/ipc";
+import { AI_ENABLED } from "@/lib/features";
 
 export const KIND_LABELS: Record<StepKind, string> = {
   click: "Click",
@@ -307,9 +308,11 @@ function StepDetails({ step: item, readOnly }: { step: Step; readOnly: boolean }
               {item.endPoint && ` → ${Math.round(item.endPoint.x)}, ${Math.round(item.endPoint.y)}`}
             </Field>
           )}
-          <Field label="Text">
-            <span className={cn(item.aiState.status === "ai" && "font-medium text-ai")}>{AI_LABELS[item.aiState.status]}</span>
-          </Field>
+          {AI_ENABLED && (
+            <Field label="Text">
+              <span className={cn(item.aiState.status === "ai" && "font-medium text-ai")}>{AI_LABELS[item.aiState.status]}</span>
+            </Field>
+          )}
         </dl>
       </section>
       {(element || elementIssues(item).length > 0) && (
