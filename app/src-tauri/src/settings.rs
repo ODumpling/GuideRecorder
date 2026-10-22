@@ -1241,7 +1241,7 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(
             serde_json::to_value(&settings).unwrap()["redaction"],
-            serde_json::json!({ "mode": "suggest", "patterns": [], "words": [] })
+            serde_json::json!({ "mode": "apply", "patterns": [], "words": [] })
         );
         let mut s = Settings {
             redaction: Redaction {

@@ -245,7 +245,10 @@ mod tests {
     #[test]
     fn steps_that_cannot_be_scanned_are_counted() {
         let (dir, library, handle, mut guide) = recorded("unscanned", &[false, true, false]);
-        let settings = Redaction::default();
+        let settings = Redaction {
+            mode: RedactionMode::Suggest,
+            ..Redaction::default()
+        };
         let failing = |_: &RgbaImage| Err::<Vec<TextLine>, _>("Vision failed".to_owned());
         assert_eq!(
             redact_with(&library, &handle, &mut guide, &settings, &failing),

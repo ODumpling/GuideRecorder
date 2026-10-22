@@ -3,6 +3,7 @@ import { AlertDialog } from "radix-ui";
 import { Info, LoaderCircle, Pause, Play, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
 import { NewGuideButton } from "@/components/NewGuideDialog";
 import { Button } from "@guiderecorder/ui/button";
+import { useEditor } from "@/editor/editor";
 import type { RecordingSnapshot } from "@/lib/types";
 import { appName } from "@/recording/apps";
 import { DisplayPicker } from "@/picker/DisplayPicker";
@@ -61,9 +62,9 @@ function CancelButton({ disabled }: { disabled: boolean }) {
 }
 
 /**
- * The toolbar's New Guide button, or the live recording's controls; and the
- * display and window pickers a recording asks with when the capture area is
- * One display or Application.
+ * The toolbar's New Guide button (only in the library), or the live
+ * recording's controls; and the display and window pickers a recording asks
+ * with when the capture area is One display or Application.
  */
 export function RecordingControls() {
   return (
@@ -78,9 +79,10 @@ export function RecordingControls() {
 function Controls() {
   const status = useRecording((s) => s.status);
   const pending = useRecording((s) => s.pending);
+  const open = useEditor((s) => s.doc !== null);
   const { pause, resume, stop } = recordingStore.getState();
 
-  if (status.state === "idle") return <NewGuideButton />;
+  if (status.state === "idle") return open ? null : <NewGuideButton />;
 
   if (status.state === "saving") {
     return (

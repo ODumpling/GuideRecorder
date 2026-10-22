@@ -17,6 +17,7 @@ import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } fr
 import { isWindows } from "@/lib/platform";
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
+import { AI_ENABLED } from "@/lib/features";
 
 export type SettingsPage = "general" | "appearance" | "recording" | "privacy" | "ai" | "export" | "permissions" | "mcp" | "sync";
 
@@ -37,7 +38,9 @@ const ALL_PAGES: { page: SettingsPage; label: string; icon: typeof Bot }[] = [
  * permissions to record, so has no Permissions page; narration's are under
  * Recording there.
  */
-export const PAGES = ALL_PAGES.filter((p) => !(isWindows() && p.page === "permissions"));
+export const PAGES = ALL_PAGES.filter(
+  (p) => !(isWindows() && p.page === "permissions") && (AI_ENABLED || p.page !== "ai"),
+);
 
 /** The Settings window: a sheet over the editor with one page per section. */
 export function SettingsDialog({

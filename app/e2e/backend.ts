@@ -172,7 +172,7 @@ export class Backend {
       audience: "beginner",
     },
     export: { format: "pdf", folder: null, logo: null, accent: null },
-    redaction: { mode: "suggest", patterns: [], words: [] },
+    redaction: { mode: "apply", patterns: [], words: [] },
     mcp: { writable: false },
     history: { keepVersions: 50, keepDays: 90 },
   };

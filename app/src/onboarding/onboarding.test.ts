@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { allGranted, setupAtLaunch, setupAtStartup, setupStore } from "@/onboarding/onboarding";
+import { AI_ENABLED } from "@/lib/features";
 import type { LibraryInfo, Settings } from "@/lib/types";
 
 const settings = (onboarded: boolean) => ({ general: { onboarded } }) as Settings;
@@ -64,7 +65,7 @@ it("skips the permissions step on Windows, which asks for none", async () => {
   vi.resetModules();
   try {
     const onboarding = await import("@/onboarding/onboarding");
-    expect(onboarding.STEPS).toEqual(["library", "apiKey"]);
+    expect(onboarding.STEPS).toEqual(AI_ENABLED ? ["library", "apiKey"] : ["library"]);
     expect(onboarding.setupAtLaunch(settings(false), library(null))).toBe("library");
     onboarding.setupStore.getState().open();
     expect(onboarding.setupStore.getState().step).toBe("library");

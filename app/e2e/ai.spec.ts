@@ -2,6 +2,9 @@ import type { Page } from "@playwright/test";
 import type { Guide, Step } from "@guiderecorder/guide-schema";
 import type { Backend } from "./backend";
 import { API_KEY, emitEvents, expect, openGuide, outlineItems, record, saved, test } from "./fixtures";
+import { AI_ENABLED } from "../src/lib/features";
+
+test.skip(!AI_ENABLED, "AI writing is off for now");
 
 // "Rotate an API key": steps 1, 2, 4 and 5 can be written; step 3 is edited.
 const STEP_1 = "01M4WZCE2000000000000002R2";

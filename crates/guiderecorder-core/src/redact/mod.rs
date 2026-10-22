@@ -53,9 +53,9 @@ pub enum RedactionMode {
     /// Nothing is scanned.
     Off,
     /// Blur suggestions to accept or reject in the editor.
-    #[default]
     Suggest,
     /// Blur annotations straight away.
+    #[default]
     Apply,
 }
 
