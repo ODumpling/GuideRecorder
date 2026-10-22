@@ -9,6 +9,14 @@
 //! target app gives [`AxError::Timeout`]. Unlike AX on macOS, a lookup over
 //! one of this process's windows does not need the main thread to be free.
 //!
+//! # Hit testing
+//!
+//! `ElementFromPoint` can look through a window: while a press is held on
+//! the Start menu it answers with the window behind it. When the hit
+//! belongs neither to the top-level window under the point nor to a window
+//! hosted in it, [`element_at`] finds the element itself, walking down that
+//! window's tree by bounds ([`descend_to`]).
+//!
 //! # Roles
 //!
 //! UI Automation control types are reported as the AX role names the rest
@@ -24,11 +32,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use guiderecorder_core::events::{AppRef, RawElement};
 use guiderecorder_core::model::{Point, Rect};
-use windows::core::{Interface, BSTR};
-use windows::Win32::Foundation::{HWND, POINT, RPC_E_CHANGED_MODE};
+use windows::core::{Interface, BOOL, BSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
@@ -37,37 +46,41 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationTreeWalker, TreeScope_Element, UIA_BoundingRectanglePropertyId,
-    UIA_ButtonControlTypeId, UIA_CalendarControlTypeId, UIA_CheckBoxControlTypeId,
-    UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId, UIA_CustomControlTypeId,
-    UIA_DataGridControlTypeId, UIA_DataItemControlTypeId, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HeaderControlTypeId,
-    UIA_HeaderItemControlTypeId, UIA_HelpTextPropertyId, UIA_HyperlinkControlTypeId,
-    UIA_ImageControlTypeId, UIA_IsPasswordPropertyId, UIA_LabeledByPropertyId,
-    UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId,
-    UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PaneControlTypeId,
-    UIA_ProcessIdPropertyId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
-    UIA_ScrollBarControlTypeId, UIA_SeparatorControlTypeId, UIA_SliderControlTypeId,
-    UIA_SpinnerControlTypeId, UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId,
-    UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId,
+    IUIAutomationTreeWalker, TreeScope_Children, TreeScope_Element,
+    UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId, UIA_CalendarControlTypeId,
+    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+    UIA_CustomControlTypeId, UIA_DataGridControlTypeId, UIA_DataItemControlTypeId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_GroupControlTypeId,
+    UIA_HeaderControlTypeId, UIA_HeaderItemControlTypeId, UIA_HelpTextPropertyId,
+    UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_IsOffscreenPropertyId,
+    UIA_IsPasswordPropertyId, UIA_LabeledByPropertyId, UIA_ListControlTypeId,
+    UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId, UIA_MenuControlTypeId,
+    UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PaneControlTypeId, UIA_ProcessIdPropertyId,
+    UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId,
+    UIA_SeparatorControlTypeId, UIA_SliderControlTypeId, UIA_SpinnerControlTypeId,
+    UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId, UIA_TabControlTypeId,
+    UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId,
     UIA_ThumbControlTypeId, UIA_TitleBarControlTypeId, UIA_ToolBarControlTypeId,
     UIA_ToolTipControlTypeId, UIA_TreeControlTypeId, UIA_TreeItemControlTypeId,
     UIA_WindowControlTypeId, UIA_CONTROLTYPE_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetForegroundWindow, GetWindowTextW, WindowFromPoint, GA_ROOT,
+    EnumChildWindows, GetAncestor, GetForegroundWindow, GetWindowTextW, WindowFromPoint, GA_ROOT,
 };
 
 use crate::element::role_in;
 pub use crate::element::*;
 
 use super::apps;
+use super::event_tap::window_pid;
 use super::PerMonitorAware;
 
 /// How long UI Automation waits to connect to a target app.
 pub const CONNECTION_TIMEOUT_MS: u32 = 250;
 /// How long UI Automation waits for a target app to answer a request.
 pub const TRANSACTION_TIMEOUT_MS: u32 = 500;
+/// How many levels [`descend_to`] walks down at most.
+const MAX_DESCEND_DEPTH: usize = 40;
 
 /// `UIA_E_TIMEOUT`: the target app did not answer in time.
 const UIA_E_TIMEOUT: i32 = 0x8013_1505_u32 as i32;
@@ -100,9 +113,12 @@ struct Client {
 }
 
 thread_local! {
-    static CLIENT: RefCell<Option<std::result::Result<Client, AxError>>> =
-        const { RefCell::new(None) };
+    static CLIENT: RefCell<Option<Client>> = const { RefCell::new(None) };
 }
+
+/// Held while a client is created: two threads creating theirs at once can
+/// fail with `E_FAIL`.
+static CREATING: Mutex<()> = Mutex::new(());
 
 impl Client {
     fn new() -> Result<Self> {
@@ -137,6 +153,7 @@ impl Client {
                 UIA_ProcessIdPropertyId,
                 UIA_HelpTextPropertyId,
                 UIA_LabeledByPropertyId,
+                UIA_IsOffscreenPropertyId,
             ] {
                 cache.AddProperty(property).map_err(unavailable)?;
             }
@@ -162,15 +179,17 @@ impl Client {
     }
 }
 
-/// Runs `f` with this thread's client, creating it on first use.
+/// Runs `f` with this thread's client, creating it on first use. A failed
+/// creation is not kept: the next call tries again.
 fn with_client<T>(f: impl FnOnce(&mut Client) -> Result<T>) -> Result<T> {
     let _dpi = PerMonitorAware::enter();
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
-        match c.get_or_insert_with(Client::new) {
-            Ok(client) => f(client),
-            Err(e) => Err(e.clone()),
+        if c.is_none() {
+            let _creating = CREATING.lock().unwrap_or_else(|e| e.into_inner());
+            *c = Some(Client::new()?);
         }
+        f(c.as_mut().expect("created above"))
     })
 }
 
@@ -211,7 +230,12 @@ pub fn element_at(point: Point) -> Result<Option<RawElement>> {
                 .automation
                 .ElementFromPointBuildCache(at, &client.cache)
         };
-        let Some(hit) = absent_or(hit, "ElementFromPoint")? else {
+        let root = root_window_at(at);
+        let hit = match absent_or(hit, "ElementFromPoint")? {
+            Some(hit) if !looks_through(&hit, root) => Some(hit),
+            hit => descend_from_window(client, root, at)?.or(hit),
+        };
+        let Some(hit) = hit else {
             return Ok(None);
         };
         let hit_role = role(&hit);
@@ -239,7 +263,7 @@ pub fn element_at(point: Point) -> Result<Option<RawElement>> {
         let roles: Vec<Option<&str>> = chain.iter().map(|(_, r)| *r).collect();
         let target = choose_target(&roles);
         let (el, _) = &chain[target];
-        let mut raw = read_element(client, el, window_title(root_window_at(at)))?;
+        let mut raw = read_element(client, el, window_title(root))?;
         if may_inherit_label(raw.role.as_deref(), raw.is_secure) && raw.best_label().is_none() {
             // Nearest label below the target, walking back towards the hit.
             for (child, _) in chain[..target].iter().rev() {
@@ -445,6 +469,116 @@ fn root_window_at(p: POINT) -> HWND {
     unsafe { GetAncestor(WindowFromPoint(p), GA_ROOT) }
 }
 
+/// True when `hit` is not in `root` (see `# Hit testing`): another process
+/// owns it, and no window of that process is hosted in `root` (as a web
+/// view's or a UWP app's frame hosts its content).
+fn looks_through(hit: &IUIAutomationElement, root: HWND) -> bool {
+    let root_pid = window_pid(root);
+    // SAFETY: a live element with the process id cached.
+    let hit_pid = unsafe { hit.CachedProcessId() }.unwrap_or(0);
+    root_pid > 0 && hit_pid > 0 && hit_pid != root_pid && !hosts_pid(root, hit_pid)
+}
+
+/// True if a window of process `pid` is a descendant of `root`.
+fn hosts_pid(root: HWND, pid: i32) -> bool {
+    struct Search {
+        pid: i32,
+        found: bool,
+    }
+    unsafe extern "system" fn visit(window: HWND, param: LPARAM) -> BOOL {
+        // SAFETY: `param` is the `Search` below, alive for the enumeration.
+        let search = unsafe { &mut *(param.0 as *mut Search) };
+        search.found = window_pid(window) == search.pid;
+        BOOL::from(!search.found)
+    }
+    let mut search = Search { pid, found: false };
+    // SAFETY: the callback only touches `search`, which outlives the call;
+    // the result only says whether the enumeration was stopped.
+    unsafe {
+        let _ = EnumChildWindows(
+            Some(root),
+            Some(visit),
+            LPARAM(&mut search as *mut Search as isize),
+        );
+    }
+    search.found
+}
+
+/// The deepest element of `window`'s tree whose bounds hold `at` (see
+/// [`descend_to`]), or `None` if there is no window or no element for it.
+fn descend_from_window(
+    client: &Client,
+    window: HWND,
+    at: POINT,
+) -> Result<Option<IUIAutomationElement>> {
+    if window.is_invalid() {
+        return Ok(None);
+    }
+    // SAFETY: a live client and cache request; a stale handle is an error,
+    // read as no element.
+    let top = unsafe {
+        client
+            .automation
+            .ElementFromHandleBuildCache(window, &client.cache)
+    };
+    match absent_or(top, "ElementFromHandle") {
+        Ok(Some(top)) => descend_to(client, top, at).map(Some),
+        Ok(None) | Err(AxError::Uia { .. }) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Walks down from `el` while a child on screen holds `at`, into the
+/// smallest such child, up to [`MAX_DESCEND_DEPTH`] levels. The element
+/// reached is `ElementFromPoint`'s answer when it does not look through.
+fn descend_to(
+    client: &Client,
+    mut el: IUIAutomationElement,
+    at: POINT,
+) -> Result<IUIAutomationElement> {
+    // SAFETY: a live client.
+    let condition = unsafe { client.automation.ControlViewCondition() }
+        .map_err(uia_error("ControlViewCondition"))?;
+    for _ in 0..MAX_DESCEND_DEPTH {
+        // SAFETY: a live element, condition and cache request.
+        let children =
+            unsafe { el.FindAllBuildCache(TreeScope_Children, &condition, &client.cache) };
+        let Some(children) = absent_or(children, "FindAll")? else {
+            break;
+        };
+        // SAFETY: a live array; each element comes with the cache.
+        let count = unsafe { children.Length() }.unwrap_or(0);
+        let mut best: Option<(i64, IUIAutomationElement)> = None;
+        for i in 0..count {
+            // SAFETY: an index within the array.
+            let Ok(child) = (unsafe { children.GetElement(i) }) else {
+                continue;
+            };
+            // SAFETY: a live element with these properties cached.
+            let (offscreen, rect) = unsafe {
+                (
+                    child.CachedIsOffscreen().is_ok_and(|b| b.as_bool()),
+                    child.CachedBoundingRectangle(),
+                )
+            };
+            let Ok(r) = rect else { continue };
+            let holds = r.left <= at.x && at.x < r.right && r.top <= at.y && at.y < r.bottom;
+            if offscreen || !holds {
+                continue;
+            }
+            let area = i64::from(r.right - r.left) * i64::from(r.bottom - r.top);
+            if best.as_ref().is_none_or(|(a, _)| area < *a) {
+                best = Some((area, child));
+            }
+        }
+        match best {
+            Some((_, child)) => el = child,
+            None => break,
+        }
+    }
+    Ok(el)
+}
+
 /// A window's title (read without messaging the window, so a hung app
 /// cannot stall it), cleaned.
 fn window_title(window: HWND) -> Option<String> {
@@ -497,5 +631,24 @@ mod tests {
         element_at(Point { x: 1.0, y: 1.0 }).expect("element_at");
         focused_element().expect("focused_element");
         let _ = focused_ref();
+    }
+
+    #[test]
+    fn descends_into_the_window_under_a_point() {
+        let at = POINT { x: 1, y: 1 };
+        let root = root_window_at(at);
+        let found = with_client(|client| descend_from_window(client, root, at))
+            .expect("descend_from_window");
+        assert_eq!(found.is_some(), !root.is_invalid());
+        // No window, no element.
+        assert!(with_client(|c| descend_from_window(c, HWND::default(), at))
+            .expect("no window")
+            .is_none());
+    }
+
+    #[test]
+    fn a_window_hosts_no_process_without_children() {
+        // A pid that owns no window.
+        assert!(!hosts_pid(root_window_at(POINT { x: 1, y: 1 }), i32::MAX));
     }
 }
