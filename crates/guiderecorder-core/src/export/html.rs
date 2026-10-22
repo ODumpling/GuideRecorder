@@ -68,8 +68,9 @@ use std::path::Path;
 use minijinja::{context, AutoEscape, Environment, Value};
 
 use super::ast::{plain_text, Block, Inline};
-use super::md::{prepare_out_dir, ExportError, Labels, Result};
+use super::md::{hex, prepare_out_dir, ExportError, Labels, Result};
 pub use super::md::{Branding, CheckedBranding};
+use super::preset::{Font, FontKind, Layout};
 use super::{
     render_step_image, ExportReport, ImageOptions, PlacedHotspot, RenderDecision, RenderGuide,
     RenderItem, RenderTarget,
@@ -166,6 +167,7 @@ pub fn render_string(
         return super::walkthrough::render_string(guide, handle, opts);
     }
     let branding = &opts.branding;
+    let layout = branding.layout();
     let labels = opts
         .labels
         .clone()
@@ -200,30 +202,37 @@ pub fn render_string(
                 body => Value::from_safe_string(blocks_html(&note.body)),
             },
             RenderItem::Step(step) => {
-                let image = render_step_image(handle, &step.step, &image_opts);
-                report.add_warnings(step.step.id, image.warnings.iter().cloned());
                 let title = inlines_html(&step.title);
                 let title = if title.is_empty() {
                     escape(&step_label)
                 } else {
                     title
                 };
-                let hotspots: Vec<Value> = image
-                    .hotspots
-                    .iter()
-                    .map(|h| hotspot_context(step.number, h))
-                    .collect();
+                // A checklist has no images, so they are not rendered.
+                let (image, hotspots) = if layout.has_images() {
+                    let image = render_step_image(handle, &step.step, &image_opts);
+                    report.add_warnings(step.step.id, image.warnings.iter().cloned());
+                    let hotspots: Vec<Value> = image
+                        .hotspots
+                        .iter()
+                        .map(|h| hotspot_context(step.number, h))
+                        .collect();
+                    let image = context! {
+                        src => Value::from_safe_string(data_uri("image/png", &image.png)),
+                        width => image.width,
+                        height => image.height,
+                        alt => plain_text(&step.title).replace('\n', " "),
+                    };
+                    (Some(image), hotspots)
+                } else {
+                    (None, Vec::new())
+                };
                 context! {
                     kind => "step",
                     number => step.number,
                     title => Value::from_safe_string(title),
                     description => Value::from_safe_string(blocks_html(&step.description)),
-                    image => context! {
-                        src => Value::from_safe_string(data_uri("image/png", &image.png)),
-                        width => image.width,
-                        height => image.height,
-                        alt => plain_text(&step.title).replace('\n', " "),
-                    },
+                    image => image,
                     hotspots => hotspots,
                 }
             }
@@ -246,7 +255,12 @@ pub fn render_string(
         og_image => og_image(guide, handle, &opts.image),
         summary => &guide.summary,
         details => opts.review_details.then(|| labels.review_details(&guide.review)).flatten(),
-        css => Value::from_safe_string(stylesheet(branding)),
+        cover => cover_line(branding, guide, &labels),
+        page_header => branding.header(),
+        page_footer => branding.footer(),
+        layout => layout_class(layout),
+        checklist => layout == Layout::Checklist,
+        css => Value::from_safe_string(document_stylesheet(branding)),
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,
@@ -422,14 +436,122 @@ pub(super) fn percent(fraction: f64) -> String {
     format!("{value}%")
 }
 
-/// The default stylesheet plus the accent override, if any. The accent is
-/// the checked RGB value, written as `#rrggbb`.
+/// The default stylesheet plus the branding's accent, colours and fonts,
+/// if any (shared with the walkthrough). Colours are the checked RGB
+/// values, written as `#rrggbb`; font families passed
+/// [`is_font_family`](super::preset::is_font_family) and are quoted. The text
+/// and heading colours apply in the light appearance only, where they were
+/// chosen to be read.
 pub(super) fn stylesheet(branding: &CheckedBranding) -> String {
     let mut css = STYLE.to_owned();
     if let Some(accent) = branding.accent_hex() {
         let _ = writeln!(css, ":root {{ --accent: {accent}; }}");
     }
+    let fonts = branding.fonts();
+    if fonts.body != Font::default() {
+        let _ = writeln!(css, "body {{ font-family: {}; }}", font_stack(&fonts.body));
+    }
+    if fonts.heading != Font::default() {
+        let _ = writeln!(
+            css,
+            "h1, h2, h3, .step-title {{ font-family: {}; }}",
+            font_stack(&fonts.heading)
+        );
+    }
+    let text = branding.text_color().map(hex);
+    let heading = branding.heading_color().map(hex);
+    if text.is_some() || heading.is_some() {
+        css.push_str("@media (prefers-color-scheme: light) {\n");
+        if let Some(text) = text {
+            let _ = writeln!(css, "  :root {{ --text: {text}; }}");
+        }
+        if let Some(heading) = heading {
+            let _ = writeln!(css, "  h1, h2, h3 {{ color: {heading}; }}");
+        }
+        css.push_str("}\n");
+    }
     css
+}
+
+/// [`stylesheet`] plus what only the document page has: its header and
+/// footer lines, cover line, layout, and last the custom CSS.
+fn document_stylesheet(branding: &CheckedBranding) -> String {
+    let mut css = stylesheet(branding);
+    if branding.header().is_some() || branding.footer().is_some() {
+        css.push_str(
+            ".page-header, .page-footer { color: var(--muted); font-size: .8rem; margin: 0; }\n\
+             .page-header { margin-bottom: 1.5rem; }\n\
+             .page-footer { margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: .75rem; }\n",
+        );
+    }
+    if branding.cover().is_some() {
+        css.push_str(
+            ".cover-fields { color: var(--muted); font-size: .875rem; margin: .5rem 0 0; }\n",
+        );
+    }
+    css.push_str(match branding.layout() {
+        Layout::ImageThenText => "",
+        Layout::SideBySide => {
+            "@media (min-width: 40rem) {\n\
+             \x20 .layout-side-by-side .step { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 1.25rem; align-items: start; }\n\
+             \x20 .layout-side-by-side .step-title { grid-column: 1 / -1; }\n\
+             \x20 .layout-side-by-side .step-image { grid-column: 1; grid-row: 2; margin-bottom: 0; }\n\
+             \x20 .layout-side-by-side .hotspot-legend { grid-column: 1; grid-row: 3; }\n\
+             \x20 .layout-side-by-side .step-description { grid-column: 2; grid-row: 2 / span 2; }\n\
+             }\n"
+        }
+        Layout::Compact => {
+            ".layout-compact .step { padding: .9rem 1rem; margin-bottom: .75rem; }\n\
+             .layout-compact .step-title { margin-bottom: .6rem; }\n\
+             .layout-compact .step-image { max-width: 50%; }\n"
+        }
+        Layout::Checklist => {
+            ".layout-checklist .step { padding: .75rem 1rem; margin-bottom: .5rem; }\n\
+             .layout-checklist .step-title { align-items: center; margin-bottom: .25rem; }\n\
+             .layout-checklist .step-check { flex: none; width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--accent); }\n\
+             .layout-checklist .step-description { padding-left: 2rem; }\n"
+        }
+    });
+    if let Some(custom) = branding.css() {
+        css.push_str("/* Custom CSS */\n");
+        css.push_str(custom);
+        if !custom.ends_with('\n') {
+            css.push('\n');
+        }
+    }
+    css
+}
+
+/// A CSS font list: the family (quoted) if any, then the kind's stack.
+fn font_stack(font: &Font) -> String {
+    let stack = match font.kind {
+        FontKind::Sans => {
+            r#"-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif"#
+        }
+        FontKind::Serif => r#"Georgia, Cambria, "Times New Roman", Times, serif"#,
+        FontKind::Mono => "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    };
+    match font.family() {
+        Some(family) => format!("\"{family}\", {stack}"),
+        None => stack.to_owned(),
+    }
+}
+
+/// The class `<main>` gets for a layout; none for the default.
+fn layout_class(layout: Layout) -> Option<String> {
+    (layout != Layout::ImageThenText).then(|| format!("layout-{}", layout.name()))
+}
+
+/// The cover fields as one line, `Acme · Jo Bloggs · Version 2 · 2026-10-22`
+/// (the day the guide was last changed); `None` without any.
+pub(super) fn cover_line(
+    branding: &CheckedBranding,
+    guide: &RenderGuide,
+    labels: &Labels,
+) -> Option<String> {
+    let date = guide.updated_at.format("%Y-%m-%d").to_string();
+    let parts = branding.cover_parts(&labels.version, Some(&date));
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// The language tag if it looks like BCP 47 (letters, digits, `-`), else

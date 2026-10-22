@@ -1545,3 +1545,85 @@ fn reindex_refuses_another_format_without_full() {
     assert_eq!(value["added"].as_array().unwrap().len(), 4);
     assert_eq!(fx.json(&["list", "--json"])["source"], "index");
 }
+
+/// Writes `<library>/.presets/<id>.preset.json`.
+fn write_preset(fx: &Fixture, id: &str, json: &str) {
+    let dir = fx.library().join(".presets");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("{id}.preset.json")), json).unwrap();
+}
+
+#[test]
+fn presets_are_listed_and_used_by_export() {
+    let fx = Fixture::new();
+    let out = fx.run(&["presets"]);
+    assert_success(&out);
+    assert!(
+        stdout(&out).starts_with("No presets in "),
+        "{}",
+        stdout(&out)
+    );
+
+    write_preset(
+        &fx,
+        "acme",
+        r##"{"name": "Acme", "header": "Acme internal", "layout": "checklist",
+            "colors": {"accent": "#aa1122"}}"##,
+    );
+    write_preset(&fx, "plain", r#"{"name": "Plain"}"#);
+    write_preset(&fx, "broken", "{");
+    fs::write(
+        fx.library().join(".presets/library.json"),
+        r#"{"default": "acme"}"#,
+    )
+    .unwrap();
+    let list = fx.json(&["presets", "--json"]);
+    let presets = list["presets"].as_array().unwrap();
+    assert_eq!(presets.len(), 3);
+    let acme = presets.iter().find(|p| p["id"] == "acme").unwrap();
+    assert_eq!(acme["default"], true);
+    assert_eq!(acme["layout"], "checklist");
+    assert!(presets
+        .iter()
+        .any(|p| p["id"] == "broken" && p["error"].is_string()));
+    let text = stdout(&fx.run(&["presets"]));
+    assert!(text.contains("acme  Acme (default)  [checklist]"), "{text}");
+
+    let page = |out: &Path| fs::read_to_string(out.join("guide.html")).unwrap();
+    let bundle = fx.bundle(CALENDAR);
+    let bundle = bundle.to_str().unwrap();
+
+    // The library's default applies by itself.
+    let target = fx.out("default");
+    assert_success(&fx.export(bundle, "html", &target, &[]));
+    let html = page(&target);
+    assert!(html.contains("<p class=\"page-header\">Acme internal</p>"));
+    assert!(html.contains("layout-checklist") && !html.contains("<figure"));
+    assert!(html.contains("--accent: #aa1122"));
+
+    // By name, with the layout and accent overridden.
+    let target = fx.out("named");
+    let args = [
+        "--preset",
+        "ACME",
+        "--layout",
+        "side-by-side",
+        "--accent",
+        "#123",
+    ];
+    assert_success(&fx.export(bundle, "html", &target, &args));
+    let html = page(&target);
+    assert!(html.contains("layout-side-by-side") && html.contains("<figure"));
+    assert!(html.contains("--accent: #112233"));
+
+    // No preset at all.
+    let target = fx.out("none");
+    assert_success(&fx.export(bundle, "html", &target, &["--no-preset"]));
+    assert!(!page(&target).contains("page-header"));
+
+    let out = fx.export(bundle, "html", &fx.out("missing"), &["--preset", "nope"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("--preset nope"), "{}", stderr(&out));
+    let out = fx.export(bundle, "html", &fx.out("bad"), &["--preset", "broken"]);
+    assert!(!out.status.success());
+}

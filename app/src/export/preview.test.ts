@@ -28,7 +28,7 @@ describe("previewRequest", () => {
     expect(previewRequest(choices)).toEqual({
       guideId: "g1",
       format: "pdf",
-      branding: { logo: "/Users/me/logo.png", accent: "#336699" },
+      branding: { logo: "/Users/me/logo.png", accent: "#336699", preset: null, layout: null },
       paper: "letter",
       reviewDetails: true,
       motion: { secondsPerStep: 3, aspect: "wide", zoom: true, captions: true },
@@ -38,12 +38,12 @@ describe("previewRequest", () => {
     });
     // HTML has no paper; Markdown no accent.
     expect(previewRequest({ ...choices, format: "html" })?.paper).toBe("a4");
-    expect(previewRequest({ ...choices, format: "md" })?.branding).toEqual({ logo: "/Users/me/logo.png", accent: null });
+    expect(previewRequest({ ...choices, format: "md" })?.branding).toEqual({ logo: "/Users/me/logo.png", accent: null, preset: null, layout: null });
   });
 
   it("drops branding outside the documents and keeps the frame options of motion", () => {
     const gif = previewRequest({ ...choices, format: "gif" })!;
-    expect(gif.branding).toEqual({ logo: null, accent: null });
+    expect(gif.branding).toEqual({ logo: null, accent: null, preset: null, layout: null });
     expect(gif.reviewDetails).toBe(false);
     expect(gif.motion).toEqual({ secondsPerStep: 3, aspect: "square", zoom: false, captions: false });
     expect(previewRequest({ ...choices, format: "pptx", accent: "red" })).not.toBeNull();
@@ -58,7 +58,7 @@ describe("previewRequest", () => {
   it("sends the replay choice only for skills, without branding", () => {
     const skill = previewRequest({ ...choices, format: "skill", skill: { replay: true } })!;
     expect(skill.skill).toEqual({ replay: true });
-    expect(skill.branding).toEqual({ logo: null, accent: null });
+    expect(skill.branding).toEqual({ logo: null, accent: null, preset: null, layout: null });
     expect(skill.reviewDetails).toBe(false);
     expect(previewRequest({ ...choices, skill: { replay: true } })?.skill).toEqual({ replay: false });
   });
@@ -68,7 +68,7 @@ describe("previewRequest", () => {
     const request = previewRequest({ ...choices, format: "scorm", scorm })!;
     // The title and identifier are only in the manifest.
     expect(request.scorm).toEqual({ ...DEFAULT_SCORM, completion: "quizPassed", masteryScore: 60, quiz: "Q?" });
-    expect(request.branding).toEqual({ logo: "/Users/me/logo.png", accent: "#336699" });
+    expect(request.branding).toEqual({ logo: "/Users/me/logo.png", accent: "#336699", preset: null, layout: null });
     expect(previewRequest({ ...choices, scorm })?.scorm).toEqual(DEFAULT_SCORM);
     expect(previewRequest({ ...choices, format: "scorm", scorm: { ...scorm, quiz: "" } })).toBeNull();
     expect(previewRequest({ ...choices, format: "scorm", scorm: { ...scorm, masteryScore: Number.NaN } })).toBeNull();

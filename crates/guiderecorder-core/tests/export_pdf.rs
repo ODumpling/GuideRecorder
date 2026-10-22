@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use guiderecorder_core::export::docx::Paper;
 use guiderecorder_core::export::md::Labels;
 use guiderecorder_core::export::pdf::{self, Branding, PdfError, PdfOptions, PdfOutput};
+use guiderecorder_core::export::preset::{FontKind, Layout, Preset};
 use guiderecorder_core::export::{RenderGuide, RenderWarning};
 use guiderecorder_core::library::{Library, LoadedGuide};
 use guiderecorder_core::model::*;
@@ -401,6 +402,7 @@ fn branding_hooks_are_off_by_default_and_work() {
         branding: Branding {
             logo: Some(logo),
             accent: Some("#aa1122".into()),
+            ..Default::default()
         }
         .check()
         .unwrap(),
@@ -448,6 +450,7 @@ fn branded_fixtures_match_text_goldens() {
         let branding = Branding {
             logo: Some(PNG_1X1.to_vec()),
             accent: Some("#aa1122".into()),
+            ..Default::default()
         };
         let golden = branded_golden(&render, &loaded, branding);
         // 1.6 cm square.
@@ -469,10 +472,112 @@ fn branded_fixtures_match_text_goldens() {
     let branding = Branding {
         logo: Some(wide),
         accent: Some("#aa1122".into()),
+        ..Default::default()
     };
     let golden = branded_golden(&render, &loaded, branding);
     assert!(golden.contains("cover images: 481.89x10.15\n"), "{golden}");
     assert_golden_text("pdf/branded/wide-logo.golden", &golden);
+}
+
+fn preset(layout: Layout) -> Preset {
+    let mut preset = Preset {
+        name: "Acme".into(),
+        header: "Acme internal".into(),
+        footer: "Confidential".into(),
+        page_numbers: false,
+        layout,
+        ..Preset::default()
+    };
+    preset.cover.company = "Acme Corp".into();
+    preset.cover.author = "Jo Bloggs".into();
+    preset.cover.version = "2.1".into();
+    preset
+}
+
+#[test]
+fn a_preset_sets_the_cover_fields_header_footer_and_numbering() {
+    let lib = Synthetic::new();
+    let mut guide = Guide::new("Preset test", "en");
+    guide.items = (1..=6).map(|n| step(&format!("Click {n}"))).collect();
+    let timestamp = Some("2026-03-04T05:06:07Z".parse().unwrap());
+    let opts = |preset: &Preset| PdfOptions {
+        timestamp,
+        branding: preset.branding().unwrap().check().unwrap(),
+        ..PdfOptions::default()
+    };
+    let mut acme = preset(Layout::ImageThenText);
+    let output = lib.render_with(&guide, opts(&acme));
+    assert!(output.page_count() > 2);
+    assert_eq!(
+        output.page_text[0],
+        "Preset test\nAcme Corp · Jo Bloggs · Version 2.1\n2026-03-04"
+    );
+    let pages = output.page_count();
+    for page in &output.page_text[1..] {
+        assert!(page.starts_with("Acme internal\n"), "{page}");
+        assert!(page.ends_with("\nConfidential"), "{page}");
+        assert!(!page.contains(&format!(" / {pages}")), "{page}");
+    }
+
+    // Numbered, without the date, the default header and no footer.
+    acme.page_numbers = true;
+    acme.cover.date = false;
+    acme.header.clear();
+    acme.footer.clear();
+    let output = lib.render_with(&guide, opts(&acme));
+    assert!(!output.page_text[0].contains("2026-03-04"));
+    assert!(output.page_text[1].starts_with("Preset test\n"));
+    assert!(output.page_text[1].ends_with(&format!("2 / {}", output.page_count())));
+}
+
+#[test]
+fn every_layout_typesets_every_fixture() {
+    let fixtures = Fixtures::new();
+    for (name, loaded) in fixtures.guides() {
+        let render = RenderGuide::new(&loaded.guide, &loaded.handle);
+        let standard = pdf::render(&render, &loaded.handle, &fixture_options(&loaded)).unwrap();
+        for layout in Layout::ALL {
+            let mut preset = preset(layout);
+            preset.fonts.body.kind = FontKind::Serif;
+            preset.fonts.heading.kind = FontKind::Mono;
+            preset.colors.heading = Some("#123456".into());
+            preset.colors.text = Some("#333".into());
+            let opts = PdfOptions {
+                branding: preset.branding().unwrap().check().unwrap(),
+                ..fixture_options(&loaded)
+            };
+            let output = pdf::render(&render, &loaded.handle, &opts).unwrap();
+            assert!(
+                output.report.notes.is_empty(),
+                "{name} {layout:?}: {:?}",
+                output.report.notes
+            );
+            // The serif text and mono headings, both bundled.
+            let pdf = String::from_utf8_lossy(&output.pdf);
+            assert!(
+                pdf.contains("+LibertinusSerif") && pdf.contains("+DejaVuSansMono"),
+                "{name}"
+            );
+            let text = flat_text(&output);
+            for step in render.steps() {
+                assert!(
+                    text.contains(&format!("{}. ", step.number)),
+                    "{name} {layout:?}"
+                );
+            }
+            let images = count(&output.pdf, b"/Subtype/Image");
+            let cover = usize::from(render.cover.is_some());
+            if layout == Layout::Checklist {
+                assert!(images <= cover, "{name}: a checklist has no step images");
+            } else {
+                let expected = count(&standard.pdf, b"/Subtype/Image");
+                assert_eq!(images, expected, "{name} {layout:?}");
+            }
+            if layout == Layout::Compact {
+                assert!(output.page_count() <= standard.page_count(), "{name}");
+            }
+        }
+    }
 }
 
 /// The page dump plus image count, cover image sizes and cover colours.

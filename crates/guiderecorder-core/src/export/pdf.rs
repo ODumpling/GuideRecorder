@@ -100,6 +100,7 @@ use super::ast::{plain_text, Block, Inline};
 use super::docx::Paper;
 use super::md::Labels;
 pub use super::md::{Branding, CheckedBranding};
+use super::preset::FontKind;
 use super::raster::{render_step_image, ImageOptions};
 use super::render::{RenderGuide, RenderItem, RenderTarget};
 use super::report::ExportReport;
@@ -432,6 +433,8 @@ fn guide_data(
     report: &mut ExportReport,
 ) -> Value {
     let mut cx = Cx::default();
+    let branding = &opts.branding;
+    let layout = branding.layout();
     let items: Vec<Value> = guide
         .items
         .iter()
@@ -463,6 +466,21 @@ fn guide_data(
                 "label": clean(labels.note_kind(note.kind)),
                 "body": cx.blocks(&note.body),
             }),
+            RenderItem::Step(step) if !layout.has_images() => {
+                let title = if plain_text(&step.title).trim().is_empty() {
+                    Vec::new()
+                } else {
+                    cx.inlines(&step.title)
+                };
+                json!({
+                    "kind": "step",
+                    "number": step.number,
+                    "title": title,
+                    "description": cx.blocks(&step.description),
+                    "image": null,
+                    "hotspots": [],
+                })
+            }
             RenderItem::Step(step) => {
                 let image = render_step_image(handle, &step.step, &opts.image);
                 report.add_warnings(step.step.id, image.warnings);
@@ -536,6 +554,17 @@ fn guide_data(
             now.day()?
         ))
     });
+    // A preset's cover may leave the date out; its fields go above it.
+    let date = date.filter(|_| branding.cover().is_none_or(|c| c.date));
+    let cover_fields: Vec<String> = branding
+        .cover_parts(&labels.version, None)
+        .iter()
+        .map(|part| clean(part))
+        .collect();
+    let fonts = branding.fonts();
+    let heading_fonts =
+        (fonts.heading.kind != fonts.body.kind).then(|| typst_fonts(fonts.heading.kind));
+    let colour = |c: Option<[u8; 3]>| c.map(super::md::hex);
     json!({
         "title": title,
         "summary": clean(guide.summary.trim()),
@@ -568,7 +597,38 @@ fn guide_data(
         "prerequisites": prerequisites,
         "anchors": guide.decisions().next().is_some(),
         "items": items,
+        "brand": {
+            "text_fonts": typst_fonts(fonts.body.kind),
+            "heading_fonts": heading_fonts,
+            "heading_color": colour(branding.heading_color()),
+            "text_color": colour(branding.text_color()),
+            "cover_fields": cover_fields,
+            "header": branding.header().map(clean),
+            "footer": branding.footer().map(clean),
+            "page_numbers": branding.page_numbers().unwrap_or(true),
+            "layout": layout.name(),
+        },
     })
+}
+
+/// The bundled fonts for a kind of typeface, first choice first, then the
+/// fallbacks for glyphs it lacks (such as ⌘ ⇧ ⌥).
+fn typst_fonts(kind: FontKind) -> Vec<&'static str> {
+    match kind {
+        FontKind::Sans => vec![
+            "Lato",
+            "DejaVu Sans Mono",
+            "New Computer Modern Math",
+            "Libertinus Serif",
+        ],
+        FontKind::Serif => vec![
+            "Libertinus Serif",
+            "Lato",
+            "DejaVu Sans Mono",
+            "New Computer Modern Math",
+        ],
+        FontKind::Mono => vec!["DejaVu Sans Mono", "Lato", "New Computer Modern Math"],
+    }
 }
 
 /// Text area of the template's page (2 cm side margins, 2.6 cm top, 2.4 cm

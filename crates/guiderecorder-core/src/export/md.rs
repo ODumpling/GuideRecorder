@@ -69,6 +69,7 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
 use super::ast::{plain_text, Block, Inline};
+use super::preset::{check_css, is_font_family, CoverFields, Fonts, Layout, MAX_TEXT_CHARS};
 use super::render::{RenderDecision, RenderTarget};
 use super::{render_step_image, ExportReport, ImageOptions, RenderGuide, RenderItem, RenderStep};
 use crate::library::{write_atomic, Durability, GuideHandle, LibraryError};
@@ -298,9 +299,12 @@ pub const MAX_LOGO_BYTES: usize = 2 * 1024 * 1024;
 /// Largest logo width or height accepted, in pixels.
 pub const MAX_LOGO_SIDE: u32 = 2000;
 
-/// Branding as given by the user: a logo and an accent colour. Turn it into
-/// a [`CheckedBranding`] with [`Branding::check`]; the writers' options take
+/// Branding as given by the user: a logo, colours, fonts, cover fields,
+/// header and footer, page numbering, a layout and custom CSS, usually
+/// from a [`Preset`](super::preset::Preset). Turn it into a
+/// [`CheckedBranding`] with [`Branding::check`]; the writers' options take
 /// that, so a writer never sees an invalid logo and never decodes it again.
+/// [`Default`] is no branding: each writer's own look.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Branding {
     /// PNG or JPEG bytes, at most [`MAX_LOGO_BYTES`] and
@@ -309,6 +313,24 @@ pub struct Branding {
     pub logo: Option<Vec<u8>>,
     /// Hex colour, `#rgb` or `#rrggbb`.
     pub accent: Option<String>,
+    /// Heading colour, `#rgb` or `#rrggbb`; `None` keeps the writer's
+    /// (which may be the accent).
+    pub heading_color: Option<String>,
+    /// Body text colour, `#rgb` or `#rrggbb`.
+    pub text_color: Option<String>,
+    pub fonts: Fonts,
+    /// Company, author, version and date for the cover; `None` keeps each
+    /// writer's own (the PDF's date, nothing elsewhere).
+    pub cover: Option<CoverFields>,
+    /// Header and footer text; blank for none.
+    pub header: String,
+    pub footer: String,
+    /// Number the pages (PDF and Word); `None` keeps each writer's own (the
+    /// PDF numbers its pages, Word does not).
+    pub page_numbers: Option<bool>,
+    pub layout: Layout,
+    /// Custom CSS for an HTML document ([`check_css`]); blank for none.
+    pub css: String,
 }
 
 /// Why a [`Branding`] was refused.
@@ -326,6 +348,12 @@ pub enum BrandingError {
     LogoUnreadable(String),
     #[error("accent {0:?} is not a hex colour (#rgb or #rrggbb)")]
     Accent(String),
+    #[error("{0:?} is not a font name (letters, digits, spaces, - _ .)")]
+    Font(String),
+    #[error("the {0} is too long or has line breaks (at most {MAX_TEXT_CHARS} characters)")]
+    Text(&'static str),
+    #[error("{0}")]
+    Css(String),
 }
 
 /// A validated logo, re-encoded as PNG.
@@ -359,18 +387,39 @@ impl Logo {
 ///
 /// Where each writer puts it:
 ///
-/// - Markdown: the logo as `images/logo.png` under the title; no accent.
+/// - Markdown: the logo as `images/logo.png` under the title, the cover
+///   fields under the summary, the footer at the end; checklist steps have
+///   a box and no image. No colours or fonts.
 /// - HTML: the logo above the title (a data URI); the accent on step
-///   numbers, links and the header rule.
+///   numbers, links and the header rule; fonts, colours, cover fields,
+///   header and footer lines, the layout and the custom CSS. The
+///   walkthrough takes the logo, colours and fonts.
 /// - DOCX: the logo above the title; the accent on headings and on the
 ///   border of neutral notes (tips and warnings keep their green and
-///   orange, which carry meaning).
+///   orange, which carry meaning); fonts, colours, the cover fields under
+///   the title, a page header and footer, page numbers and the layout.
 /// - PDF: the logo at the top of the cover page; the accent on the cover
-///   rule and section headings.
+///   rule and section headings; the cover fields on the cover page, the
+///   header and footer on the later pages, page numbers, the bundled font
+///   of each kind and the layout.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckedBranding {
     logo: Option<Logo>,
     accent: Option<[u8; 3]>,
+    heading_color: Option<[u8; 3]>,
+    text_color: Option<[u8; 3]>,
+    fonts: Fonts,
+    cover: Option<CoverFields>,
+    header: String,
+    footer: String,
+    page_numbers: Option<bool>,
+    layout: Layout,
+    css: String,
+}
+
+/// RGB as lowercase `#rrggbb`.
+pub(super) fn hex([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 impl CheckedBranding {
@@ -385,19 +434,131 @@ impl CheckedBranding {
 
     /// The accent as lowercase `#rrggbb`.
     pub fn accent_hex(&self) -> Option<String> {
-        self.accent
-            .map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}"))
+        self.accent.map(hex)
+    }
+
+    /// The heading colour as RGB.
+    pub fn heading_color(&self) -> Option<[u8; 3]> {
+        self.heading_color
+    }
+
+    /// The body text colour as RGB.
+    pub fn text_color(&self) -> Option<[u8; 3]> {
+        self.text_color
+    }
+
+    /// The fonts; families passed [`is_font_family`].
+    pub fn fonts(&self) -> &Fonts {
+        &self.fonts
+    }
+
+    /// The cover fields, trimmed; `None` for the writer's own cover.
+    pub fn cover(&self) -> Option<&CoverFields> {
+        self.cover.as_ref()
+    }
+
+    /// The header text, trimmed; `None` when blank.
+    pub fn header(&self) -> Option<&str> {
+        Some(self.header.as_str()).filter(|s| !s.is_empty())
+    }
+
+    /// The footer text, trimmed; `None` when blank.
+    pub fn footer(&self) -> Option<&str> {
+        Some(self.footer.as_str()).filter(|s| !s.is_empty())
+    }
+
+    /// Whether to number pages; `None` for the writer's own choice.
+    pub fn page_numbers(&self) -> Option<bool> {
+        self.page_numbers
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// The custom CSS ([`check_css`]); `None` when blank.
+    pub fn css(&self) -> Option<&str> {
+        Some(self.css.as_str()).filter(|s| !s.trim().is_empty())
+    }
+
+    /// The same branding with another layout (an export's own choice).
+    pub fn with_layout(mut self, layout: Layout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// The cover fields as plain text parts: company, author, the version
+    /// after `version_label`, and `date` when the cover shows it.
+    pub fn cover_parts(&self, version_label: &str, date: Option<&str>) -> Vec<String> {
+        let Some(cover) = &self.cover else {
+            return Vec::new();
+        };
+        let mut parts = Vec::new();
+        for field in [&cover.company, &cover.author] {
+            if !field.is_empty() {
+                parts.push(field.clone());
+            }
+        }
+        if !cover.version.is_empty() {
+            parts.push(format!("{version_label} {}", cover.version));
+        }
+        if let Some(date) = date.filter(|_| cover.date) {
+            parts.push(date.to_owned());
+        }
+        parts
     }
 }
 
 impl Branding {
-    /// Validates the accent colour and the logo (format, file size, pixel
-    /// size from the header before decoding), then decodes the logo once
-    /// and re-encodes it as an upright PNG.
+    /// Validates the colours, fonts, texts, CSS and the logo (format, file
+    /// size, pixel size from the header before decoding), then decodes the
+    /// logo once and re-encodes it as an upright PNG.
     pub fn check(&self) -> Result<CheckedBranding, BrandingError> {
-        let accent = self.accent.as_deref().map(parse_accent).transpose()?;
+        let colour = |c: &Option<String>| c.as_deref().map(parse_accent).transpose();
+        let accent = colour(&self.accent)?;
+        let heading_color = colour(&self.heading_color)?;
+        let text_color = colour(&self.text_color)?;
+        let mut fonts = self.fonts.clone();
+        for font in [&mut fonts.body, &mut fonts.heading] {
+            font.family = match font.family() {
+                Some(family) if !is_font_family(family) => {
+                    return Err(BrandingError::Font(family.to_owned()))
+                }
+                family => family.map(str::to_owned),
+            };
+        }
+        let text = |what: &'static str, s: &str| {
+            let s = s.trim();
+            if s.chars().count() > MAX_TEXT_CHARS || s.chars().any(char::is_control) {
+                Err(BrandingError::Text(what))
+            } else {
+                Ok(s.to_owned())
+            }
+        };
+        let cover = match &self.cover {
+            Some(c) => Some(CoverFields {
+                company: text("company", &c.company)?,
+                author: text("author", &c.author)?,
+                version: text("version", &c.version)?,
+                date: c.date,
+            }),
+            None => None,
+        };
+        check_css(&self.css).map_err(|e| BrandingError::Css(e.to_string()))?;
         let logo = self.logo.as_deref().map(check_logo).transpose()?;
-        Ok(CheckedBranding { logo, accent })
+        Ok(CheckedBranding {
+            logo,
+            accent,
+            heading_color,
+            text_color,
+            fonts,
+            cover,
+            header: text("header", &self.header)?,
+            footer: text("footer", &self.footer)?,
+            page_numbers: self.page_numbers,
+            layout: self.layout,
+            css: self.css.clone(),
+        })
     }
 }
 
@@ -499,7 +660,7 @@ pub fn export(
         .labels
         .clone()
         .unwrap_or_else(|| Labels::for_language(&guide.language));
-    let names = image_names(guide);
+    let names = step_image_names(guide, &opts.branding);
     let mut report = ExportReport::default();
     let mut images = Vec::new();
     for (step, name) in guide.steps().zip(&names) {
@@ -519,7 +680,14 @@ pub fn export(
         .review_details
         .then(|| labels.review_details(&guide.review))
         .flatten();
-    let markdown = render_document(guide, &names, &labels, logo.is_some(), details.as_deref());
+    let extras = Extras::new(
+        guide,
+        &labels,
+        &opts.branding,
+        logo.is_some(),
+        details.as_deref(),
+    );
+    let markdown = render_document(guide, &names, &labels, &extras);
     let doc = out_dir.join(GUIDE_FILE);
     write_atomic(&doc, markdown.as_bytes(), Durability::RenameOnly)?;
     report.files.push(doc);
@@ -553,7 +721,7 @@ pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &MdOptions) -> M
         .labels
         .clone()
         .unwrap_or_else(|| Labels::for_language(&guide.language));
-    let names = image_names(guide);
+    let names = step_image_names(guide, &opts.branding);
     let mut report = ExportReport::default();
     let mut images = Vec::new();
     let logo = opts.branding.logo().map(Logo::png);
@@ -569,7 +737,14 @@ pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &MdOptions) -> M
         .review_details
         .then(|| labels.review_details(&guide.review))
         .flatten();
-    let markdown = render_document(guide, &names, &labels, logo.is_some(), details.as_deref());
+    let extras = Extras::new(
+        guide,
+        &labels,
+        &opts.branding,
+        logo.is_some(),
+        details.as_deref(),
+    );
+    let markdown = render_document(guide, &names, &labels, &extras);
     MdPreview {
         markdown,
         images,
@@ -591,7 +766,11 @@ pub fn render_with_logo(
     labels: &Labels,
     logo: bool,
 ) -> String {
-    render_document(guide, image_names, labels, logo, None)
+    let extras = Extras {
+        logo,
+        ..Extras::default()
+    };
+    render_document(guide, image_names, labels, &extras)
 }
 
 /// [`render_with_logo`], plus a `details` line (the review details) under
@@ -600,23 +779,25 @@ fn render_document(
     guide: &RenderGuide,
     image_names: &[String],
     labels: &Labels,
-    logo: bool,
-    details: Option<&str>,
+    extras: &Extras,
 ) -> String {
     let mut out = Vec::new();
     let title = escape_line(&single_line(&guide.title));
     if !title.is_empty() {
         push_block(&mut out, &format!("# {}", heading_text(&title)));
     }
-    if logo {
+    if extras.logo {
         push_block(&mut out, &format!("![]({IMAGES_DIR}/{LOGO_FILE})"));
     }
     let summary = single_line(&guide.summary);
     if !summary.is_empty() {
         push_block(&mut out, &escape_line(&summary));
     }
-    if let Some(details) = details {
+    if let Some(details) = extras.details {
         push_block(&mut out, &format!("*{}*", escape_line(details)));
+    }
+    if let Some(cover) = &extras.cover {
+        push_block(&mut out, &format!("*{}*", escape_line(cover)));
     }
     if !guide.intro.is_empty() {
         push_block(&mut out, &blocks(&guide.intro));
@@ -657,15 +838,20 @@ fn render_document(
                 } else {
                     title
                 };
+                let check = if extras.checklist { "☐ " } else { "" };
                 push_block(
                     &mut out,
-                    &format!("{step_heading} {}. {}", step.number, heading_text(&title)),
+                    &format!(
+                        "{step_heading} {check}{}. {}",
+                        step.number,
+                        heading_text(&title)
+                    ),
                 );
                 if let Some(name) = names.next() {
                     let alt = escape_line(&single_line(&plain_text(&step.title)));
                     push_block(&mut out, &format!("![{alt}]({IMAGES_DIR}/{name})"));
                 }
-                if let Some(legend) = hotspot_legend(step) {
+                if let Some(legend) = hotspot_legend(step).filter(|_| !extras.checklist) {
                     push_block(&mut out, &legend);
                 }
                 if !step.description.is_empty() {
@@ -690,9 +876,57 @@ fn render_document(
             }
         }
     }
+    if let Some(footer) = &extras.footer {
+        push_block(&mut out, "---");
+        push_block(&mut out, &format!("*{}*", escape_line(footer)));
+    }
     let mut doc = out.join("\n\n");
     doc.push('\n');
     doc
+}
+
+/// What [`render_document`] adds around the guide besides its text.
+#[derive(Debug, Default)]
+struct Extras<'a> {
+    /// `images/logo.png` under the title.
+    logo: bool,
+    /// The review details line under the summary.
+    details: Option<&'a str>,
+    /// The branding's cover fields as one line, under the details.
+    cover: Option<String>,
+    /// The branding's footer, after a rule at the end.
+    footer: Option<String>,
+    /// Steps start with a box to tick and have no legend (nor images).
+    checklist: bool,
+}
+
+impl<'a> Extras<'a> {
+    fn new(
+        guide: &RenderGuide,
+        labels: &Labels,
+        branding: &CheckedBranding,
+        logo: bool,
+        details: Option<&'a str>,
+    ) -> Self {
+        let date = guide.updated_at.format("%Y-%m-%d").to_string();
+        let cover = branding.cover_parts(&labels.version, Some(&date));
+        Self {
+            logo,
+            details,
+            cover: (!cover.is_empty()).then(|| cover.join(" · ")),
+            footer: branding.footer().map(str::to_owned),
+            checklist: branding.layout() == Layout::Checklist,
+        }
+    }
+}
+
+/// [`image_names`], or none when the layout has no images.
+fn step_image_names(guide: &RenderGuide, branding: &CheckedBranding) -> Vec<String> {
+    if branding.layout().has_images() {
+        image_names(guide)
+    } else {
+        Vec::new()
+    }
 }
 
 /// A decision as Markdown (unquoted): `**Decision:** question`, then a
@@ -1149,6 +1383,7 @@ mod tests {
         let branding = Branding {
             accent: Some("#C0F".into()),
             logo: None,
+            ..Default::default()
         };
         assert_eq!(
             branding.check().unwrap().accent_hex().as_deref(),
@@ -1169,6 +1404,7 @@ mod tests {
         let branding = Branding {
             logo: Some(bytes.to_vec()),
             accent: None,
+            ..Default::default()
         };
         branding.check().map(|b| b.logo.unwrap())
     }

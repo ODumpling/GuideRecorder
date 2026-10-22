@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  blankPreset,
+  exportBranding,
+  initialPreset,
+  isFontFamily,
+  LAYOUTS,
+  presetProblem,
+  rememberPreset,
   baseName,
   defaultCourseId,
   DEFAULT_MOTION,
@@ -34,7 +41,7 @@ import {
 } from "@/export/export";
 import type { ExportApi } from "@/lib/ipc";
 import type { Item } from "@guiderecorder/guide-schema";
-import type { ExportResult } from "@/lib/types";
+import type { ExportResult, PresetList } from "@/lib/types";
 
 function api(overrides: Partial<ExportApi> = {}): ExportApi {
   return {
@@ -200,7 +207,7 @@ describe("skill options", () => {
   it("are sent with a skill export", async () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/SKILL.md"], warnings: [], notes: [] }));
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "skill", skill: { replay: true } });
-    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, { replay: true }, DEFAULT_SCORM, null);
+    expect(exportGuide).toHaveBeenCalledWith("G", "skill", "/out/Guide", false, { logo: null, accent: "#abc", preset: null, layout: null }, "letter", true, DEFAULT_MOTION, { replay: true }, DEFAULT_SCORM, null);
   });
 });
 
@@ -243,7 +250,7 @@ describe("SCORM options", () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Course.zip"], warnings: [], notes: [] }));
     const scorm = { ...DEFAULT_SCORM, title: "Course" };
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, format: "scorm", out: "/out/Course.zip", scorm });
-    expect(exportGuide).toHaveBeenCalledWith("G", "scorm", "/out/Course.zip", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, scorm, null);
+    expect(exportGuide).toHaveBeenCalledWith("G", "scorm", "/out/Course.zip", false, { logo: null, accent: "#abc", preset: null, layout: null }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, scorm, null);
   });
 });
 
@@ -251,9 +258,9 @@ describe("audience", () => {
   it("is sent when chosen, and null (everyone) otherwise", async () => {
     const exportGuide = vi.fn(async () => ({ files: ["/out/Guide/guide.md"], warnings: [], notes: [] }));
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "Admin" });
-    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, "Admin");
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc", preset: null, layout: null }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, "Admin");
     await runExport({ flush: async () => true, api: api({ exportGuide }) }, { ...request, audience: "" });
-    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
+    expect(exportGuide).toHaveBeenLastCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc", preset: null, layout: null }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
   });
 });
 
@@ -275,7 +282,7 @@ describe("runExport", () => {
       request,
     );
     expect(order).toEqual(["flush", "export"]);
-    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc" }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
+    expect(exportGuide).toHaveBeenCalledWith("G", "md", "/out/Guide", false, { logo: null, accent: "#abc", preset: null, layout: null }, "letter", true, DEFAULT_MOTION, DEFAULT_SKILL, DEFAULT_SCORM, null);
     expect(outcome).toEqual({ ok: true, result: { files: ["/out/Guide/guide.md"], warnings: [], notes: [] } });
   });
 
@@ -353,5 +360,60 @@ describe("unreviewed blur suggestions", () => {
     );
     expect(unreviewedBlursText({ steps: [1, 2, 3, 4, 5, 6, 7], count: 7 })).toContain("in steps 1, 2, 3, 4 and 3 more have");
     expect(unreviewedBlursText({ steps: [1, 2, 3, 4, 5], count: 5 })).toContain("in steps 1, 2, 3, 4 and 5 have");
+  });
+});
+
+describe("brand presets", () => {
+  const list = (ids: string[], defaultId: string | null = null): PresetList => ({
+    presets: ids.map((id) => ({
+      id,
+      preset: id === "broken" ? null : blankPreset(id),
+      logo: null,
+      error: id === "broken" ? "not a valid preset" : null,
+    })),
+    defaultId,
+  });
+  const storage = (value: string | null) => ({ getItem: () => value });
+
+  it("start from the last choice, else the library's default", () => {
+    expect(initialPreset(list(["acme", "zeta"], "zeta"), storage(null))).toBe("zeta");
+    expect(initialPreset(list(["acme", "zeta"], "zeta"), storage("acme"))).toBe("acme");
+    // None chosen last time stays none.
+    expect(initialPreset(list(["acme"], "acme"), storage(""))).toBe("");
+    // Gone or unreadable: the default, else none.
+    expect(initialPreset(list(["acme"], "acme"), storage("old"))).toBe("acme");
+    expect(initialPreset(list(["broken"], "broken"), storage(null))).toBe("");
+    expect(initialPreset(list([]), storage(null))).toBe("");
+  });
+
+  it("are remembered", () => {
+    const setItem = vi.fn();
+    rememberPreset("acme", { setItem });
+    expect(setItem).toHaveBeenCalledWith("guiderecorder.exportPreset", "acme");
+  });
+
+  it("send the preset instead of the logo and accent, and the layout where it applies", () => {
+    const choices = { logo: "/logo.png", accent: "#abc", preset: "acme", layout: "compact" as const };
+    expect(exportBranding("pdf", choices)).toEqual({ logo: null, accent: null, preset: "acme", layout: "compact" });
+    // The walkthrough has no layout; slides no branding.
+    expect(exportBranding("walkthrough", choices)).toEqual({ logo: null, accent: null, preset: "acme", layout: null });
+    expect(exportBranding("pptx", choices)).toEqual({ logo: null, accent: null, preset: null, layout: null });
+    expect(exportBranding("md", { ...choices, preset: "" })).toEqual({ logo: "/logo.png", accent: null, preset: null, layout: "compact" });
+    expect(exportBranding("html", { ...choices, preset: "", layout: null })).toEqual({ logo: "/logo.png", accent: "#abc", preset: null, layout: null });
+    expect(LAYOUTS.map((l) => l.layout)).toEqual(["image-then-text", "side-by-side", "compact", "checklist"]);
+  });
+
+  it("are checked before saving", () => {
+    expect(presetProblem(blankPreset(""))).toMatch(/name/);
+    expect(presetProblem(blankPreset("Acme"))).toBeNull();
+    const preset = blankPreset("Acme");
+    expect(presetProblem({ ...preset, colors: { ...preset.colors, heading: "navy" } })).toMatch(/Colours/);
+    expect(presetProblem({ ...preset, css: "</style>" })).toMatch(/</);
+    const font = { kind: "serif" as const, family: "Inter; x" };
+    expect(presetProblem({ ...preset, fonts: { ...preset.fonts, body: font } })).toMatch(/Font/);
+    expect(isFontFamily("Source Sans 3")).toBe(true);
+    expect(isFontFamily("Noto Sans 日本語")).toBe(true);
+    expect(isFontFamily("")).toBe(true);
+    expect(isFontFamily("a\"b")).toBe(false);
   });
 });

@@ -3,15 +3,18 @@ import { errorMessage, type ExportApi } from "@/lib/ipc";
 import type { Item, Step } from "@guiderecorder/guide-schema";
 import type {
   AppError,
+  BrandPreset,
   ExportBranding,
   ExportFormat,
   ExportResult,
   MotionAspect,
   MotionOptions,
   PaperSize,
+  PresetList,
   ScormCompletion,
   ScormOptions,
   SkillOptions,
+  StepLayout,
 } from "@/lib/types";
 
 export const FORMATS: { format: ExportFormat; label: string; detail: string }[] = [
@@ -81,6 +84,99 @@ export function isSecondsPerStep(value: unknown): value is number {
     value >= MIN_SECONDS_PER_STEP &&
     value <= MAX_SECONDS_PER_STEP
   );
+}
+
+export const LAYOUTS: { layout: StepLayout; label: string; detail: string }[] = [
+  { layout: "image-then-text", label: "Image, then text", detail: "Each step's screenshot above its text" },
+  { layout: "side-by-side", label: "Side by side", detail: "The screenshot beside the text" },
+  { layout: "compact", label: "Compact", detail: "Smaller screenshots, closer together" },
+  { layout: "checklist", label: "Checklist", detail: "A box to tick per step, no screenshots" },
+];
+
+/** A new preset's settings: the exporters' own look. */
+export function blankPreset(name = ""): BrandPreset {
+  return {
+    name,
+    colors: { accent: null, heading: null, text: null },
+    fonts: { body: { kind: "sans", family: null }, heading: { kind: "sans", family: null } },
+    cover: { company: "", author: "", version: "", date: true },
+    header: "",
+    footer: "",
+    pageNumbers: true,
+    layout: "image-then-text",
+    css: "",
+  };
+}
+
+/** Longest custom CSS a preset takes, in characters (the Rust side counts bytes). */
+export const MAX_PRESET_CSS = 100 * 1024;
+
+/** A font family name the exporters accept: letters, digits, spaces, `-`, `_`, `.`; blank is none. */
+export function isFontFamily(value: string): boolean {
+  const family = value.trim();
+  return family === "" || (family.length <= 64 && /^[\p{L}\p{N} ._-]+$/u.test(family));
+}
+
+/** Why a preset can't be saved yet, or null. The Rust side checks again. */
+export function presetProblem(preset: BrandPreset): string | null {
+  if (!preset.name.trim()) return "Give the preset a name.";
+  const colours = [preset.colors.accent, preset.colors.heading, preset.colors.text];
+  if (colours.some((c) => c && !isAccent(c))) return "Colours are #rgb or #rrggbb.";
+  if (![preset.fonts.body.family, preset.fonts.heading.family].every((f) => isFontFamily(f ?? ""))) {
+    return "Font names have letters, digits, spaces, - _ and . only.";
+  }
+  if (preset.css.includes("<")) return "The custom CSS can't contain <.";
+  if (preset.css.length > MAX_PRESET_CSS) return "The custom CSS is over 100 kB.";
+  return null;
+}
+
+/**
+ * The branding an export of `format` sends for the dialog's choices: none
+ * for the formats without branding; the preset, else the logo and accent
+ * (no accent in Markdown); and the layout where the format has one.
+ */
+export function exportBranding(
+  format: ExportFormat,
+  choices: { logo: string | null; accent: string; preset?: string; layout?: StepLayout | null },
+): ExportBranding {
+  if (!isDocumentFormat(format)) return { logo: null, accent: null, preset: null, layout: null };
+  const layout = (isLayoutFormat(format) && choices.layout) || null;
+  if (choices.preset) return { logo: null, accent: null, preset: choices.preset, layout };
+  const accent = format === "md" ? null : choices.accent.trim() || null;
+  return { logo: choices.logo, accent, preset: null, layout };
+}
+
+/** The preset chosen in the Export dialog last time (on this computer). */
+const PRESET_KEY = "guiderecorder.exportPreset";
+
+/**
+ * The preset to start the Export dialog with: the one chosen last time if
+ * it still exists ("" for none), else the library's default.
+ */
+export function initialPreset(
+  list: PresetList,
+  storage: Pick<Storage, "getItem"> = localStorage,
+): string {
+  let stored: string | null = null;
+  try {
+    stored = storage.getItem(PRESET_KEY);
+  } catch {
+    // Unreadable: the default applies.
+  }
+  const usable = (id: string | null) =>
+    !!id && list.presets.some((p) => p.id === id && p.preset && !p.error);
+  if (stored === "") return "";
+  if (usable(stored)) return stored!;
+  return usable(list.defaultId) ? list.defaultId! : "";
+}
+
+/** Remembers the preset chosen ("" for none), also after a restart. */
+export function rememberPreset(id: string, storage: Pick<Storage, "setItem"> = localStorage) {
+  try {
+    storage.setItem(PRESET_KEY, id);
+  } catch {
+    // Not remembered; the library's default applies next time.
+  }
 }
 
 export const PAPERS: { paper: PaperSize; label: string; detail: string }[] = [
@@ -265,6 +361,11 @@ export function isMotionFormat(format: ExportFormat): boolean {
   return format === "mp4" || format === "gif";
 }
 
+/** Markdown, HTML, Word and PDF lay their steps out (Markdown only knows the checklist). */
+export function isLayoutFormat(format: ExportFormat): boolean {
+  return format === "md" || format === "html" || format === "docx" || format === "pdf";
+}
+
 /** DOCX and PDF come on a paper size. */
 export function isPaperFormat(format: ExportFormat): boolean {
   return format === "docx" || format === "pdf";
@@ -380,7 +481,7 @@ export async function runExport(
       format,
       out,
       overwrite,
-      { logo: branding.logo, accent },
+      { logo: branding.logo, accent, preset: branding.preset ?? null, layout: branding.layout ?? null },
       paper,
       reviewDetails,
       motion,

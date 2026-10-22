@@ -7,15 +7,21 @@
 
 #let data = json("/guide.json")
 #let labels = data.labels
+#let brand = data.brand
 #let accent = rgb(data.accent)
 #let muted = rgb("#5f6368")
 #let link-color = rgb("#0563c1")
 #let code-fill = luma(242)
 
-// Fonts: Lato for text; Typst's bundled fonts (no system fonts) fill in
-// glyphs Lato lacks, such as ⌘ ⇧ ⌥, and set code.
-#let text-fonts = ("Lato", "DejaVu Sans Mono", "New Computer Modern Math", "Libertinus Serif")
+// Fonts: Lato for text (or the preset's kind of font); Typst's bundled
+// fonts (no system fonts) fill in glyphs Lato lacks, such as ⌘ ⇧ ⌥, and
+// set code.
+#let text-fonts = brand.text_fonts
 #let code-fonts = ("DejaVu Sans Mono", "Lato", "New Computer Modern Math")
+
+// The layout of steps: "image-then-text", "side-by-side", "compact" or
+// "checklist" (no images).
+#let step-layout = brand.layout
 
 #let styled(s, bold, italic) = {
   let body = if italic { emph(s) } else { s }
@@ -181,14 +187,76 @@
   blocks(s.description)
 }
 
+// A step heading on its own: checklists get a box to tick before it.
+#let step-heading(s) = {
+  if data.anchors { metadata(("step", s.number)) }
+  heading(level: 2, {
+    if step-layout == "checklist" {
+      box(width: 0.8em, height: 0.8em, stroke: 0.8pt + muted, radius: 1.5pt, baseline: 0.05em)
+      h(0.5em)
+    }
+    str(s.number) + ". "
+    if s.title.len() == 0 { labels.step + " " + str(s.number) } else { inlines(s.title) }
+  })
+}
+
+// A step image at its 96 dpi size, at most `scale` of the width there is.
+#let step-image(s, scale: 1) = layout(size => {
+  let (w, h) = (s.image.width * 0.75pt, s.image.height * 0.75pt)
+  let width = calc.min(w, size.width * scale)
+  let height = width * (h / w)
+  if height > data.max_image_height * 1pt {
+    height = data.max_image_height * 1pt
+    width = height * (w / h)
+  }
+  align(center, block(
+    stroke: 0.5pt + luma(210),
+    image(s.image.path, width: width, height: height, alt: s.image.alt),
+  ))
+})
+
+// A step in a preset's layout; the default one is `step` above.
+#let laid-out-step(s) = {
+  let head = block.with(breakable: false, sticky: true, width: 100%, above: 1.8em, below: 0.9em)
+  if s.image == none {
+    head(step-heading(s))
+    blocks(s.description)
+  } else if step-layout == "side-by-side" {
+    head(step-heading(s))
+    grid(
+      columns: (3fr, 2fr),
+      column-gutter: 14pt,
+      step-image(s),
+      block(above: 0pt, {
+        legend(s.hotspots)
+        blocks(s.description)
+      }),
+    )
+  } else {
+    head({
+      step-heading(s)
+      step-image(s, scale: 0.5)
+    })
+    legend(s.hotspots)
+    blocks(s.description)
+  }
+}
+
+// Optional preset settings, spread into the rules below (empty: the
+// defaults).
+#let text-args = if brand.text_color == none { (:) } else { (fill: rgb(brand.text_color)) }
+#let heading-color = if brand.heading_color == none { none } else { rgb(brand.heading_color) }
+#let heading-args = if brand.heading_fonts == none { (:) } else { (font: brand.heading_fonts) }
+#let heading2-args = if heading-color == none { heading-args } else { (fill: heading-color, ..heading-args) }
+
 #set document(title: data.title)
-#set text(font: text-fonts, size: 10.5pt, lang: data.lang, hyphenate: false)
+#set text(font: text-fonts, size: 10.5pt, lang: data.lang, hyphenate: false, ..text-args)
 #set par(leading: 0.65em, spacing: 0.9em)
 #set list(indent: 0.4em)
 #set enum(indent: 0.4em)
-#show heading.where(level: 1): set text(size: 16pt, fill: accent)
+#show heading.where(level: 1): set text(size: 16pt, fill: if heading-color == none { accent } else { heading-color }, ..heading-args)
 #show heading.where(level: 1): set block(above: 2em, below: 1em)
-#show heading.where(level: 2): set text(size: 12.5pt)
+#show heading.where(level: 2): set text(size: 12.5pt, ..heading2-args)
 #show heading.where(level: 2): set block(above: 0pt, below: 0.9em)
 
 #set page(
@@ -196,11 +264,16 @@
   margin: (x: 2cm, top: 2.6cm, bottom: 2.4cm),
   header: context if here().page() > 1 {
     set text(size: 8.5pt, fill: muted)
-    block(width: 100%, stroke: (bottom: 0.5pt + luma(200)), inset: (bottom: 5pt), data.title)
+    block(width: 100%, stroke: (bottom: 0.5pt + luma(200)), inset: (bottom: 5pt), if brand.header == none { data.title } else { brand.header })
   },
   footer: context if here().page() > 1 {
     set text(size: 8.5pt, fill: muted)
-    align(right, counter(page).display("1 / 1", both: true))
+    let numbers = if brand.page_numbers { counter(page).display("1 / 1", both: true) }
+    if brand.footer == none {
+      if numbers != none { align(right, numbers) }
+    } else {
+      grid(columns: (1fr, auto), column-gutter: 12pt, brand.footer, numbers)
+    }
   },
 )
 
@@ -215,7 +288,7 @@
   }
   v(1fr)
   block(width: 100%, stroke: (left: 4pt + accent), inset: (left: 16pt, y: 4pt))[
-    #text(size: 28pt, weight: "bold", data.title)
+    #text(size: 28pt, weight: "bold", ..heading-args, ..if heading-color == none { (:) } else { (fill: heading-color) }, data.title)
     #if data.summary != "" {
       parbreak()
       text(size: 14pt, fill: muted, data.summary)
@@ -239,6 +312,9 @@
     })
   }
   v(1fr)
+  if brand.cover_fields.len() > 0 {
+    block(below: 0.8em, text(size: 11pt, brand.cover_fields.join(" · ")))
+  }
   if data.date != none {
     text(fill: muted, data.date)
   }
@@ -265,7 +341,7 @@
   } else if item.kind == "decision" {
     decision(item)
   } else if item.kind == "step" {
-    step(item)
+    if step-layout == "image-then-text" { step(item) } else { laid-out-step(item) }
   } else if item.kind == "note" {
     note(item)
   }

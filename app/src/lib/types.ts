@@ -115,11 +115,68 @@ export interface MotionOptions {
 /** Paper size of a DOCX or PDF export (core `export::docx::Paper`). */
 export type PaperSize = "a4" | "letter";
 
-/** Export branding: a logo the user chose in the logo dialog, and an accent colour. */
+/**
+ * Export branding: a brand preset of the library, or else a logo the user
+ * chose in the logo dialog and an accent colour; and a layout, which
+ * overrides the preset's.
+ */
 export interface ExportBranding {
   logo: string | null;
   accent: string | null;
+  /** A preset id; the logo and accent are then ignored. */
+  preset?: string | null;
+  layout?: StepLayout | null;
 }
+
+/** How steps are laid out (core `export::preset::Layout`). */
+export type StepLayout = "image-then-text" | "side-by-side" | "compact" | "checklist";
+
+/** A kind of typeface; the PDF uses a bundled one of each. */
+export type FontKind = "sans" | "serif" | "mono";
+
+/** A font: a kind, and optionally a family (such as a brand font) HTML and Word use where installed. */
+export interface BrandFont {
+  kind: FontKind;
+  family: string | null;
+}
+
+/**
+ * A brand preset (core `export::preset::Preset`), as stored in the
+ * library's `.presets` folder. The logo is not sent to the webview; see
+ * `PresetView.logo`.
+ */
+export interface BrandPreset {
+  version?: number;
+  name: string;
+  logo?: null;
+  colors: { accent: string | null; heading: string | null; text: string | null };
+  fonts: { body: BrandFont; heading: BrandFont };
+  cover: { company: string; author: string; version: string; date: boolean };
+  header: string;
+  footer: string;
+  pageNumbers: boolean;
+  layout: StepLayout;
+  css: string;
+}
+
+/** A preset as listed: null `preset` when its file can't be read. */
+export interface PresetView {
+  id: string;
+  preset: BrandPreset | null;
+  /** The logo as a PNG data URI. */
+  logo: string | null;
+  /** Why the preset can't be read or used. */
+  error: string | null;
+}
+
+export interface PresetList {
+  presets: PresetView[];
+  /** The library's default preset. */
+  defaultId: string | null;
+}
+
+/** What happens to a preset's logo when it is saved. */
+export type LogoChange = { kind: "keep" } | { kind: "remove" } | { kind: "file"; path: string };
 
 /**
  * The Export dialog's preview, made by the format's own exporter (Rust

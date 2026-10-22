@@ -1,6 +1,6 @@
 //! `guiderecorder` CLI. See design scratchpad #441 ("CLI").
 //!
-//! `list`, `search`, `validate` and `export` are readers: they go through
+//! `list`, `search`, `validate`, `presets` and `export` are readers: they go through
 //! [`Library::read`] and read-only index opens, and never write to the
 //! library or the index (`export` writes only its `--out` target, which may
 //! not be inside the bundle). `reindex` is the only command that writes to
@@ -26,6 +26,7 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use guiderecorder_core::branch;
 use guiderecorder_core::export::md::{Branding, MAX_LOGO_BYTES};
+use guiderecorder_core::export::preset::{Layout, PresetStore};
 use guiderecorder_core::export::{
     docx, html, md, motion, pdf, pptx, render_step_image, scorm, skill, ExportReport, ImageOptions,
     OutPathError, RenderGuide, RenderWarning,
@@ -130,7 +131,13 @@ enum Command {
     /// `--out` file (a SCORM package is one zip). Image problems become
     /// placeholders and warnings, not errors; a skill's unclear elements
     /// are notes. MP4 needs macOS or Windows.
-    Export(ExportArgs),
+    Export(Box<ExportArgs>),
+    /// List the library's brand presets (`.presets/*.preset.json`), the
+    /// default one marked. `export --preset NAME` uses one.
+    Presets {
+        #[command(flatten)]
+        output: Output,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -147,10 +154,25 @@ struct ExportArgs {
     /// Replace an earlier export at `--out`.
     #[arg(long)]
     overwrite: bool,
-    /// Logo image (PNG or JPEG, at most 2 MB and 2000 px a side).
+    /// Brand preset of the library, by name or id (see `presets`): logo,
+    /// colours, fonts, cover fields, header and footer, page numbers,
+    /// layout and custom CSS. Without it the library's default preset is
+    /// used, if it has one and the library is known.
+    #[arg(long, value_name = "NAME", conflicts_with = "no_preset")]
+    preset: Option<String>,
+    /// Use no preset, not even the library's default.
+    #[arg(long)]
+    no_preset: bool,
+    /// How steps are laid out (HTML, DOCX, PDF; Markdown keeps only the
+    /// checklist). Overrides the preset's.
+    #[arg(long, value_enum, value_name = "LAYOUT")]
+    layout: Option<LayoutArg>,
+    /// Logo image (PNG or JPEG, at most 2 MB and 2000 px a side); replaces
+    /// the preset's.
     #[arg(long, value_name = "FILE")]
     logo: Option<PathBuf>,
-    /// Accent colour, `#rgb` or `#rrggbb` (not used by Markdown).
+    /// Accent colour, `#rgb` or `#rrggbb` (not used by Markdown); replaces
+    /// the preset's.
     #[arg(long, value_name = "#HEX")]
     accent: Option<String>,
     /// Paper size of a DOCX or PDF export.
@@ -270,6 +292,29 @@ impl From<Size> for motion::Aspect {
             Size::Wide => Self::Wide,
             Size::Square => Self::Square,
             Size::Vertical => Self::Vertical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LayoutArg {
+    /// The step's image, then its text.
+    ImageThenText,
+    /// The image beside the text.
+    SideBySide,
+    /// Smaller images.
+    Compact,
+    /// A box to tick per step, without images.
+    Checklist,
+}
+
+impl From<LayoutArg> for Layout {
+    fn from(layout: LayoutArg) -> Self {
+        match layout {
+            LayoutArg::ImageThenText => Self::ImageThenText,
+            LayoutArg::SideBySide => Self::SideBySide,
+            LayoutArg::Compact => Self::Compact,
+            LayoutArg::Checklist => Self::Checklist,
         }
     }
 }
@@ -399,6 +444,10 @@ fn run(cli: Cli, out: &mut impl Write) -> Result<ExitCode> {
                 index.sync(&library)?
             };
             print_reindex(out, &path, &report, output.json)?;
+        }
+        Command::Presets { output } => {
+            let library = open_library(&cli)?;
+            print_presets(out, &PresetStore::new(library.root()), output.json)?;
         }
         Command::Export(args) => {
             let export = export(&cli, args)?;
@@ -828,12 +877,17 @@ impl Export {
 fn export(cli: &Cli, args: &ExportArgs) -> Result<Export> {
     let (loaded, library_root) = resolve_guide(cli, &args.guide)?;
     // Checked (and the logo decoded) once, before anything is written.
-    let branding = Branding {
-        logo: args.logo.as_deref().map(read_logo).transpose()?,
-        accent: args.accent.clone(),
+    let mut branding = preset_branding(args, library_root.as_deref())?;
+    if let Some(logo) = &args.logo {
+        branding.logo = Some(read_logo(logo)?);
     }
-    .check()
-    .context("invalid branding")?;
+    if let Some(accent) = &args.accent {
+        branding.accent = Some(accent.clone());
+    }
+    if let Some(layout) = args.layout {
+        branding.layout = layout.into();
+    }
+    let branding = branding.check().context("invalid branding")?;
     let quiz = match &args.quiz {
         Some(path) => read_quiz(path)?,
         None => Vec::new(),
@@ -1113,6 +1167,87 @@ fn print_export(out: &mut impl Write, export: &Export, as_json: bool) -> io::Res
 
 // ---------------------------------------------------------------------------
 // reindex
+
+/// The library's presets: id, name and layout, the default marked; a
+/// preset that can't be read is listed with its error.
+fn print_presets(out: &mut impl Write, store: &PresetStore, as_json: bool) -> Result<()> {
+    let presets = store.list()?;
+    let default = store.default_id()?;
+    if as_json {
+        let presets: Vec<Value> = presets
+            .iter()
+            .map(|entry| match &entry.preset {
+                Ok(preset) => json!({
+                    "id": entry.id,
+                    "name": preset.name,
+                    "layout": preset.layout.name(),
+                    "default": default.as_deref() == Some(entry.id.as_str()),
+                }),
+                Err(e) => json!({ "id": entry.id, "error": e.to_string() }),
+            })
+            .collect();
+        writeln!(out, "{:#}", json!({ "presets": presets }))?;
+        return Ok(());
+    }
+    if presets.is_empty() {
+        writeln!(out, "No presets in {}", store.dir().display())?;
+        return Ok(());
+    }
+    for entry in &presets {
+        let mark = if default.as_deref() == Some(entry.id.as_str()) {
+            " (default)"
+        } else {
+            ""
+        };
+        match &entry.preset {
+            Ok(preset) => writeln!(
+                out,
+                "{}  {}{mark}  [{}]",
+                entry.id,
+                preset.name,
+                preset.layout.name()
+            )?,
+            Err(e) => writeln!(out, "{}  error: {e}", entry.id)?,
+        }
+    }
+    Ok(())
+}
+
+/// The branding of `--preset`, else of the library's default preset
+/// (unless `--no-preset`); no branding without either.
+fn preset_branding(args: &ExportArgs, library_root: Option<&Path>) -> Result<Branding> {
+    if args.no_preset {
+        return Ok(Branding::default());
+    }
+    let preset = match (&args.preset, library_root) {
+        (Some(name), Some(root)) => Some(
+            PresetStore::new(root)
+                .find(name)
+                .with_context(|| format!("--preset {name}"))?
+                .1,
+        ),
+        (Some(name), None) => {
+            bail!("--preset {name}: no library folder; pass --library DIR or set {LIBRARY_ENV}")
+        }
+        (None, Some(root)) => {
+            let store = PresetStore::new(root);
+            // A broken default is an error rather than a quietly plain export.
+            match store.default_id().context("reading the default preset")? {
+                Some(id) => Some(
+                    store
+                        .read(&id)
+                        .with_context(|| format!("the library's default preset {id}"))?,
+                ),
+                None => None,
+            }
+        }
+        (None, None) => None,
+    };
+    match preset {
+        Some(preset) => preset.branding().context("invalid preset"),
+        None => Ok(Branding::default()),
+    }
+}
 
 fn print_reindex(
     out: &mut impl Write,

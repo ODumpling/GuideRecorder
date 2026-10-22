@@ -76,6 +76,7 @@ use std::path::{Path, PathBuf};
 use super::ast::{plain_text, Block, Inline};
 pub use super::md::{Branding, CheckedBranding};
 use super::md::{Labels, Logo};
+use super::preset::{Font, FontKind, Layout};
 use super::raster::{render_step_image, ImageOptions};
 use super::render::{
     RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep,
@@ -86,10 +87,11 @@ use crate::library::GuideHandle;
 use crate::model::{GuideKind, NoteKind};
 use chrono::{DateTime, Utc};
 use docx_rs::{
-    AbstractNumbering, AlignmentType, BorderType, BreakType, Docx, Hyperlink, HyperlinkData,
-    HyperlinkType, IndentLevel, Level, LevelJc, LevelOverride, LevelText, NumberFormat, Numbering,
-    NumberingId, PageMargin, Paragraph, ParagraphBorder, ParagraphBorderPosition, ParagraphBorders,
-    Pic, Run, RunFonts, Shading, ShdType, SpecialIndentType, Start, Style, StyleType,
+    AbstractNumbering, AlignmentType, BorderType, BreakType, Docx, Footer, Header, Hyperlink,
+    HyperlinkData, HyperlinkType, IndentLevel, Level, LevelJc, LevelOverride, LevelText, NumPages,
+    NumberFormat, Numbering, NumberingId, PageMargin, PageNum, Paragraph, ParagraphBorder,
+    ParagraphBorderPosition, ParagraphBorders, Pic, Run, RunFonts, Shading, ShdType,
+    SpecialIndentType, Start, Style, StyleType, Table, TableCell, TableRow, WidthType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -220,6 +222,9 @@ pub fn export(
         .tempfile_in(dir)?;
     let mut xml = docx.build();
     xml.document_rels = sort_hyperlink_rels(&xml.document_rels);
+    if let Some(color) = opts.branding.text_color() {
+        xml.styles = default_text_color(&xml.styles, &rrggbb(color));
+    }
     xml.pack(tmp.as_file_mut())
         .map_err(|e| DocxError::Package(e.to_string()))?;
     tmp.as_file().sync_all()?;
@@ -343,6 +348,9 @@ struct Writer<'a> {
     kind: GuideKind,
     /// Branding accent as `RRGGBB`.
     accent: Option<String>,
+    branding: &'a CheckedBranding,
+    /// Paragraphs go here instead of the body while a table cell is built.
+    sink: Option<Vec<Paragraph>>,
     report: &'a mut ExportReport,
     docx: Docx,
     next_paragraph: u32,
@@ -362,7 +370,7 @@ impl<'a> Writer<'a> {
         handle: &'a GuideHandle,
         opts: &'a DocxOptions,
         labels: Labels,
-        branding: &CheckedBranding,
+        branding: &'a CheckedBranding,
         report: &'a mut ExportReport,
     ) -> Self {
         let (page_w, page_h) = opts.paper.size();
@@ -387,18 +395,28 @@ impl<'a> Writer<'a> {
             .default_size(22)
             .add_abstract_numbering(list_levels(BULLET_ABSTRACT, false))
             .add_abstract_numbering(list_levels(DECIMAL_ABSTRACT, true));
-        let accent = branding
-            .accent()
-            .map(|[r, g, b]| format!("{r:02X}{g:02X}{b:02X}"));
-        let docx = styles(accent.as_deref())
-            .into_iter()
-            .fold(docx, Docx::add_style);
+        let accent = branding.accent().map(rrggbb);
+        let heading = branding.heading_color().map(rrggbb);
+        let fonts = branding.fonts();
+        let mut docx = styles(
+            heading.as_deref().or(accent.as_deref()),
+            heading.as_deref(),
+            word_font(&fonts.heading).as_deref(),
+        )
+        .into_iter()
+        .fold(docx, Docx::add_style);
+        if let Some(font) = word_font(&fonts.body) {
+            docx = docx.default_fonts(run_fonts(&font));
+        }
+        let docx = header_and_footer(docx, branding);
         Self {
             handle,
             opts,
             labels,
             kind: GuideKind::default(),
             accent,
+            branding,
+            sink: None,
             report,
             docx,
             next_paragraph: 1,
@@ -440,6 +458,14 @@ impl<'a> Writer<'a> {
                 .add_run(text_run(&details).size(20).color("595959"));
             self.push(details);
         }
+        let date = guide.updated_at.format("%Y-%m-%d").to_string();
+        let cover = self.branding.cover_parts(&self.labels.version, Some(&date));
+        if !cover.is_empty() {
+            let cover = self
+                .paragraph()
+                .add_run(text_run(&cover.join(" · ")).size(20).color("595959"));
+            self.push(cover);
+        }
         if let Some(cover) = &guide.cover {
             self.cover(cover);
         }
@@ -469,7 +495,10 @@ impl<'a> Writer<'a> {
     }
 
     fn push(&mut self, paragraph: Paragraph) {
-        self.docx = std::mem::take(&mut self.docx).add_paragraph(paragraph);
+        match &mut self.sink {
+            Some(sink) => sink.push(paragraph),
+            None => self.docx = std::mem::take(&mut self.docx).add_paragraph(paragraph),
+        }
     }
 
     fn heading(&mut self, style: &str, text: &str) {
@@ -482,7 +511,12 @@ impl<'a> Writer<'a> {
     }
 
     fn step(&mut self, step: &RenderStep) {
-        let mut pieces = vec![Piece::run(text_run(&format!("{}. ", step.number)))];
+        let layout = self.branding.layout();
+        let mut pieces = Vec::new();
+        if layout == Layout::Checklist {
+            pieces.push(Piece::run(text_run("☐ ")));
+        }
+        pieces.push(Piece::run(text_run(&format!("{}. ", step.number))));
         if plain_text(&step.title).trim().is_empty() {
             // Same fallback as the Markdown writer: "2. Step 2".
             let title = format!("{} {}", self.labels.step_kind(self.kind), step.number);
@@ -500,9 +534,51 @@ impl<'a> Writer<'a> {
             heading = heading.add_bookmark_end(bookmark);
         }
         self.push(heading);
-        self.image(step);
+        match layout {
+            Layout::ImageThenText => {
+                let p = self.image(step, self.text_width);
+                self.push(p);
+                self.hotspot_legend(step);
+                self.blocks(&step.description, Context::default());
+            }
+            Layout::Compact => {
+                let p = self.image(step, self.text_width / 2);
+                self.push(p);
+                self.hotspot_legend(step);
+                self.blocks(&step.description, Context::default());
+            }
+            Layout::Checklist => self.blocks(&step.description, Context::default()),
+            Layout::SideBySide => self.side_by_side(step),
+        }
+    }
+
+    /// The image in a left column (3/5 of the text width), the legend and
+    /// description beside it, as a table without borders.
+    fn side_by_side(&mut self, step: &RenderStep) {
+        const GAP: u32 = 284; // twips, 0.5 cm
+        let total = (self.text_width / EMU_PER_TWIP) as u32;
+        let left = total * 3 / 5;
+        let right = total - left;
+        let image = self.image(step, u64::from(left - GAP) * EMU_PER_TWIP);
+        let previous = self.sink.replace(Vec::new());
         self.hotspot_legend(step);
         self.blocks(&step.description, Context::default());
+        let mut text = std::mem::replace(&mut self.sink, previous).unwrap_or_default();
+        if text.is_empty() {
+            // A cell needs a paragraph.
+            text.push(self.paragraph());
+        }
+        let left_cell = TableCell::new()
+            .width(left as usize, WidthType::Dxa)
+            .add_paragraph(image);
+        let right_cell = text.into_iter().fold(
+            TableCell::new().width(right as usize, WidthType::Dxa),
+            TableCell::add_paragraph,
+        );
+        let table = Table::without_borders(vec![TableRow::new(vec![left_cell, right_cell])])
+            .set_grid(vec![left as usize, right as usize])
+            .width(total as usize, WidthType::Dxa);
+        self.docx = std::mem::take(&mut self.docx).add_table(table);
     }
 
     /// One paragraph per hotspot: "N. " and the bold title, then the
@@ -538,21 +614,20 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn image(&mut self, step: &RenderStep) {
+    /// The step's image paragraph, at most `max_width` EMU wide.
+    fn image(&mut self, step: &RenderStep, max_width: u64) -> Paragraph {
         let image = render_step_image(self.handle, &step.step, &self.opts.image);
         self.report.add_warnings(step.step.id, image.warnings);
-        let (width, height) = self.display_size(image.width, image.height);
+        let (width, height) = self.display_size_within(image.width, image.height, max_width);
         let id = self.next_image;
         self.next_image += 1;
         let pic = Pic::new_with_dimensions(image.png, image.width, image.height)
             .id(format!("rIdImage{id}"))
             .size(width, height);
-        let p = self
-            .paragraph()
+        self.paragraph()
             .align(AlignmentType::Center)
             .keep_lines(true)
-            .add_run(Run::new().add_image(pic));
-        self.push(p);
+            .add_run(Run::new().add_image(pic))
     }
 
     /// The chosen cover under the title, sized as step images are, then a
@@ -598,8 +673,13 @@ impl<'a> Writer<'a> {
     /// Displayed size in EMU: the text width, or the 96 dpi size if
     /// narrower, then shrunk to fit the height cap; aspect ratio kept.
     fn display_size(&self, px_w: u32, px_h: u32) -> (u32, u32) {
+        self.display_size_within(px_w, px_h, self.text_width)
+    }
+
+    /// [`Writer::display_size`] at most `max_width` EMU wide.
+    fn display_size_within(&self, px_w: u32, px_h: u32, max_width: u64) -> (u32, u32) {
         let (px_w, px_h) = (u64::from(px_w.max(1)), u64::from(px_h.max(1)));
-        let mut width = (px_w * EMU_PER_PX).min(self.text_width);
+        let mut width = (px_w * EMU_PER_PX).min(max_width.max(1));
         let mut height = width * px_h / px_w;
         let max_height = (self.text_height as f64 * MAX_IMAGE_HEIGHT_RATIO) as u64;
         if height > max_height {
@@ -928,8 +1008,81 @@ fn list_levels(id: usize, numbered: bool) -> AbstractNumbering {
     })
 }
 
-/// The paragraph styles; headings take the accent (`RRGGBB`) if any.
-fn styles(accent: Option<&str>) -> Vec<Style> {
+/// `RGB` as `RRGGBB`, as Word writes colours.
+fn rrggbb([r, g, b]: [u8; 3]) -> String {
+    format!("{r:02X}{g:02X}{b:02X}")
+}
+
+/// The Word font for `font`: its family, else a common one of its kind;
+/// `None` keeps Word's default for sans.
+fn word_font(font: &Font) -> Option<String> {
+    match (font.family(), font.kind) {
+        (Some(family), _) => Some(family.to_owned()),
+        (None, FontKind::Sans) => None,
+        (None, FontKind::Serif) => Some("Georgia".to_owned()),
+        (None, FontKind::Mono) => Some(CODE_FONT.to_owned()),
+    }
+}
+
+fn run_fonts(font: &str) -> RunFonts {
+    RunFonts::new()
+        .ascii(font)
+        .hi_ansi(font)
+        .cs(font)
+        .east_asia(font)
+}
+
+/// The branding's header and footer: the header text, then the footer
+/// text and "page / total" (when numbered), small and grey, on every page.
+fn header_and_footer(mut docx: Docx, branding: &CheckedBranding) -> Docx {
+    let small = |text: &str| text_run(text).size(17).color("595959");
+    if let Some(header) = branding.header() {
+        docx = docx.header(Header::new().add_paragraph(Paragraph::new().add_run(small(header))));
+    }
+    let numbers = branding.page_numbers().unwrap_or(false);
+    if branding.footer().is_none() && !numbers {
+        return docx;
+    }
+    let mut footer = Footer::new();
+    if let Some(text) = branding.footer() {
+        footer = footer.add_paragraph(Paragraph::new().add_run(small(text)));
+    }
+    if numbers {
+        footer = footer.add_paragraph(
+            Paragraph::new()
+                .align(AlignmentType::Right)
+                .size(17)
+                .color("595959")
+                .add_page_num(PageNum::new())
+                .add_run(small(" / "))
+                .add_num_pages(NumPages::new()),
+        );
+    }
+    docx.footer(footer)
+}
+
+/// `styles.xml` with `color` (`RRGGBB`) as the default text colour, which
+/// docx-rs offers no setter for: put before the default size, as
+/// the schema orders the two.
+fn default_text_color(styles: &[u8], color: &str) -> Vec<u8> {
+    const DEFAULTS: &str = "<w:rPrDefault><w:rPr>";
+    let Ok(text) = std::str::from_utf8(styles) else {
+        return styles.to_vec();
+    };
+    let Some(start) = text.find(DEFAULTS).map(|i| i + DEFAULTS.len()) else {
+        return styles.to_vec();
+    };
+    let at = text[start..].find("<w:sz ").map_or(start, |i| start + i);
+    let mut out = String::with_capacity(text.len() + 32);
+    out.push_str(&text[..at]);
+    out.push_str(&format!("<w:color w:val=\"{color}\" />"));
+    out.push_str(&text[at..]);
+    out.into_bytes()
+}
+
+/// The paragraph styles. Headings take `heading` (`RRGGBB`) if any, the
+/// title only `title`; headings and the title use `font` if any.
+fn styles(heading: Option<&str>, title: Option<&str>, font: Option<&str>) -> Vec<Style> {
     let paragraph = |id: &str, name: &str| {
         Style::new(id, StyleType::Paragraph)
             .name(name)
@@ -937,12 +1090,21 @@ fn styles(accent: Option<&str>) -> Vec<Style> {
             .next("Normal")
             .q_format(true)
     };
-    let heading = |style: Style| match accent {
-        Some(accent) => style.color(accent),
+    let font = |style: Style| match font {
+        Some(font) => style.fonts(run_fonts(font)),
         None => style,
     };
+    let heading = |style: Style| match heading {
+        Some(color) => font(style.color(color)),
+        None => font(style),
+    };
+    let title_style = paragraph("Title", "Title").size(52).bold();
+    let title_style = match title {
+        Some(color) => font(title_style.color(color)),
+        None => font(title_style),
+    };
     vec![
-        paragraph("Title", "Title").size(52).bold(),
+        title_style,
         paragraph("Subtitle", "Subtitle")
             .size(28)
             .italic()

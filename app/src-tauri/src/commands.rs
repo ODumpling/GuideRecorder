@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use guiderecorder_core::edit::DetailsEdit;
 use guiderecorder_core::export::docx::Paper;
+use guiderecorder_core::export::preset::Preset;
 use guiderecorder_core::history::VersionInfo;
 use guiderecorder_core::model::{Guide, NaiveDate, Step, StepImage};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -26,6 +27,7 @@ use crate::export::{
     self, with_extension, BrandingRequest, ChosenPaths, ExportPreview, ExportResult, Format,
     MotionRequest, ScormRequest, SkillRequest,
 };
+use crate::presets::{self, LogoChange, PresetList};
 use crate::settings::SettingsStore;
 
 /// Runs `f` with the session on the blocking pool.
@@ -658,6 +660,43 @@ pub async fn preview_export(
 pub async fn logo_preview(chosen: State<'_, Arc<ChosenPaths>>, path: PathBuf) -> Result<String> {
     let chosen = Arc::clone(&chosen);
     blocking(move || export::logo_preview(&chosen, &path)).await
+}
+
+/// The library's brand presets and its default (see [`presets::list`]).
+#[tauri::command]
+pub async fn list_presets(cell: State<'_, Arc<SessionCell>>) -> Result<PresetList> {
+    with_session(cell, presets::list).await
+}
+
+/// Saves a brand preset (a new one without `id`); returns its id.
+#[tauri::command]
+pub async fn save_preset(
+    cell: State<'_, Arc<SessionCell>>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+    id: Option<String>,
+    preset: Preset,
+    logo: Option<LogoChange>,
+) -> Result<String> {
+    let chosen = Arc::clone(&chosen);
+    let logo = logo.unwrap_or_default();
+    with_session(cell, move |s| {
+        presets::save(s, &chosen, id.as_deref(), preset, &logo)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_preset(cell: State<'_, Arc<SessionCell>>, id: String) -> Result<()> {
+    with_session(cell, move |s| presets::delete(s, &id)).await
+}
+
+/// Makes a preset the library's default (`None`: no default).
+#[tauri::command]
+pub async fn set_default_preset(
+    cell: State<'_, Arc<SessionCell>>,
+    id: Option<String>,
+) -> Result<()> {
+    with_session(cell, move |s| presets::set_default(s, id.as_deref())).await
 }
 
 /// Shows a file an export wrote in Finder.

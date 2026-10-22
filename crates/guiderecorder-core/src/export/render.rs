@@ -41,6 +41,8 @@ pub struct RenderGuide {
     /// The cover the author chose ([`Guide::chosen_cover_step`]); `None`
     /// if they chose none, and writers then show no cover image.
     pub cover: Option<RenderCover>,
+    /// When the guide was last changed; a cover shows its day.
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// A guide's chosen cover: its step and how to draw it.
@@ -229,6 +231,7 @@ impl RenderGuide {
             prerequisites: parse_blocks(&guide.prerequisites),
             items,
             review: guide.review.clone(),
+            updated_at: guide.updated_at,
             cover: guide.chosen_cover_step().map(|step| RenderCover {
                 step: step.clone(),
                 options: guide.cover_options,

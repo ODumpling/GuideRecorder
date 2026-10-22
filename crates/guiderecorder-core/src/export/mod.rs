@@ -16,6 +16,7 @@ pub mod out_path;
 pub mod pdf;
 mod persist;
 pub mod pptx;
+pub mod preset;
 pub mod raster;
 pub mod render;
 pub mod report;
@@ -25,6 +26,7 @@ pub mod walkthrough;
 
 pub use md::{Branding, CheckedBranding};
 pub use out_path::{check_out_path, OutPathError};
+pub use preset::{Layout, Preset, PresetStore};
 pub use raster::{
     has_redactions, redacted_image, render_cover_image, render_step_image, verify_crop_rect,
     ImageOptions, PlacedHotspot, RenderWarning, RenderedImage,

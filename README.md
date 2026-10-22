@@ -271,10 +271,25 @@ macOS or Windows; `skill` is an agent skill folder; `scorm` is a SCORM 1.2 `.zip
 `replay.ps1` for a guide recorded on Windows),
 `--course-title`, `--course-id`, `--completion last-step|quiz-passed`,
 `--mastery-score` (default 80) and `--quiz <file>` (SCORM), `--audience <name>`
-(leave out the sections tagged only for other audiences), `--logo`, `--accent`,
+(leave out the sections tagged only for other audiences), `--preset <name>`,
+`--no-preset`, `--layout image-then-text|side-by-side|compact|checklist`,
+`--logo`, `--accent` (these two replace the preset's),
 `--review-details` (version, owner and last review day under the summary),
 `--overwrite` and `--strict`. See `guiderecorder export --help`.
 `list --overdue` shows only guides whose review is past due.
+
+### Brand presets
+
+A brand preset makes every export of a library look the same: logo, colours,
+fonts, cover page fields (company, author, version, date), header and footer
+text, page numbering, a layout (image then text, side by side, compact or
+checklist) and optional custom CSS for HTML. Make them in Settings → Export,
+and choose one in the Export dialog. Each is one file in the library's hidden
+`.presets` folder (`<id>.preset.json`, logo included), so a library shared
+through Dropbox, OneDrive, iCloud or git shares its presets. A library can have
+a default preset (`.presets/library.json`), which the Export dialog starts with
+and `guiderecorder export` uses unless given `--preset` or `--no-preset`.
+`guiderecorder presets` lists them.
 
 ## Build from source
 

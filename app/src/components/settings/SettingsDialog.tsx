@@ -11,9 +11,10 @@ import {
   PrivacySection,
   RecordingSection,
 } from "@/components/settings/sections";
+import { PresetsSection } from "@/components/settings/PresetsSection";
 import { SyncSection } from "@/components/settings/SyncSection";
 import { Button } from "@guiderecorder/ui/button";
-import { tauriExportApi, tauriSettingsApi, type ExportApi, type SettingsApi } from "@/lib/ipc";
+import { tauriExportApi, tauriPresetApi, tauriSettingsApi, type ExportApi, type PresetApi, type SettingsApi } from "@/lib/ipc";
 import { isWindows } from "@/lib/platform";
 import { settingsStore, useSettings } from "@/settings/settings";
 import { cn } from "@guiderecorder/ui/utils";
@@ -49,12 +50,14 @@ export function SettingsDialog({
   initialPage = "general",
   api = tauriSettingsApi,
   exportApi = tauriExportApi,
+  presetApi = tauriPresetApi,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   initialPage?: SettingsPage;
   api?: SettingsApi;
   exportApi?: ExportApi;
+  presetApi?: PresetApi;
 }) {
   const [page, setPage] = useState<SettingsPage>(initialPage);
   const settings = useSettings((s) => s.settings);
@@ -132,7 +135,10 @@ export function SettingsDialog({
               ) : page === "ai" ? (
                 <AiSection api={api} />
               ) : page === "export" ? (
-                <ExportSection exportApi={exportApi} />
+                <div className="flex flex-col gap-8">
+                  <ExportSection exportApi={exportApi} />
+                  <PresetsSection exportApi={exportApi} presetApi={presetApi} />
+                </div>
               ) : page === "permissions" ? (
                 <PermissionsSection api={api} />
               ) : page === "sync" ? (
