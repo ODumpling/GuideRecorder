@@ -29,6 +29,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debug info (PDBs on Windows) is most of the link time and the
+  # target dir's size; line tables still give file:line in backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   changes:
@@ -108,6 +111,10 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install && rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PR caches can't be restored by other PRs, and at ~1.5 GB each
+          # they evict main's from the 10 GB repo limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Versions agree
         run: scripts/version.sh
       - run: cargo fmt --all --check
@@ -124,11 +131,26 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      # Builds on a ReFS Dev Drive, which Defender scans less eagerly than
+      # C:, with the repo, toolchain and cargo registry all copied onto it.
+      - uses: samypr100/setup-dev-drive@v4
+        with:
+          drive-size: 20GB
+          workspace-copy: true
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
       - name: Install Rust (rust-toolchain.toml)
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: rustup toolchain install && rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
       - run: cargo test --workspace --locked
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
 
   licenses:
     name: Dependency licences
