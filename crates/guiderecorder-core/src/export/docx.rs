@@ -20,6 +20,11 @@
 //!   `step-N` bookmark on the step's heading (only guides with decisions
 //!   get bookmarks). A section tagged with audiences has "For: Admin" in
 //!   grey italics under its heading.
+//! - A collection ([`crate::collection`]) has "Contents" after the intro: a
+//!   paragraph per chapter linked to a `chapter-N` bookmark on its heading
+//!   (no page numbers: Word would ask to update a TOC field). Chapters are
+//!   `Heading1` on a new page, sections `Heading2` and steps `Heading3`, a
+//!   style only collections get.
 //! - Fixed words (prerequisites heading, note labels, "Step") come from
 //!   [`Labels`]: [`DocxOptions::labels`], or by default
 //!   [`Labels::for_language`] of the guide's language.
@@ -79,8 +84,8 @@ use super::md::{Labels, Logo};
 use super::preset::{Font, FontKind, Layout};
 use super::raster::{render_step_image, ImageOptions};
 use super::render::{
-    RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderSection, RenderStep,
-    RenderTarget,
+    RenderChapter, RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderSection,
+    RenderStep, RenderTarget,
 };
 use super::report::ExportReport;
 use crate::library::GuideHandle;
@@ -360,6 +365,9 @@ struct Writer<'a> {
     /// Whether step headings carry `step-N` bookmarks, for the links of
     /// decision options; only guides with decisions have them.
     bookmarks: bool,
+    /// Whether this is a collection: chapters are `Heading1`, sections
+    /// `Heading2` and steps `Heading3` (else sections 1 and steps 2).
+    chapters: bool,
     /// Text area size in EMU.
     text_width: u64,
     text_height: u64,
@@ -424,6 +432,7 @@ impl<'a> Writer<'a> {
             next_link: 1,
             next_image: 1,
             bookmarks: false,
+            chapters: false,
             text_width: u64::from(page_w - 2 * MARGIN) * EMU_PER_TWIP,
             text_height: u64::from(page_h - 2 * MARGIN) * EMU_PER_TWIP,
         }
@@ -475,8 +484,24 @@ impl<'a> Writer<'a> {
             self.heading("Heading1", &heading);
             self.blocks(&guide.prerequisites, Context::default());
         }
-        for item in &guide.items {
+        self.chapters = guide.has_chapters();
+        if self.chapters {
+            self.add_heading3_style();
+            self.contents(guide);
+        }
+        for (item, page_break) in guide.items.iter().zip(guide.page_breaks()) {
             match item {
+                RenderItem::Chapter(chapter) => self.chapter(chapter, page_break),
+                RenderItem::Text(text) => {
+                    if page_break {
+                        // Text leading into a chapter starts its page.
+                        let p = self
+                            .paragraph()
+                            .add_run(Run::new().add_break(BreakType::Page));
+                        self.push(p);
+                    }
+                    self.blocks(&text.body, Context::default())
+                }
                 RenderItem::Section(section) => self.section(section),
                 RenderItem::Step(step) => self.step(step),
                 RenderItem::Note(note) => self.note(note),
@@ -484,6 +509,104 @@ impl<'a> Writer<'a> {
             }
         }
         self.docx
+    }
+
+    fn section_style(&self) -> &'static str {
+        if self.chapters {
+            "Heading2"
+        } else {
+            "Heading1"
+        }
+    }
+
+    fn step_style(&self) -> &'static str {
+        if self.chapters {
+            "Heading3"
+        } else {
+            "Heading2"
+        }
+    }
+
+    /// `Heading3`, which steps of a collection use: like `Heading2` (only
+    /// collections get it, so other documents keep their styles).
+    fn add_heading3_style(&mut self) {
+        let accent = self.branding.accent().map(rrggbb);
+        let heading = self.branding.heading_color().map(rrggbb);
+        let font = word_font(&self.branding.fonts().heading);
+        let mut style = Style::new("Heading3", StyleType::Paragraph)
+            .name("heading 3")
+            .based_on("Normal")
+            .next("Normal")
+            .q_format(true)
+            .size(26)
+            .bold()
+            .outline_lvl(2);
+        if let Some(color) = heading.or(accent) {
+            style = style.color(color);
+        }
+        if let Some(font) = font {
+            style = style.fonts(run_fonts(&font));
+        }
+        self.docx = std::mem::take(&mut self.docx).add_style(style);
+    }
+
+    /// A collection's table of contents: "Contents", then a paragraph per
+    /// chapter linked to the bookmark on its heading. Word has no page
+    /// numbers to offer without a field it would ask to update, so there
+    /// are none.
+    fn contents(&mut self, guide: &RenderGuide) {
+        let heading = self
+            .paragraph()
+            .keep_next(true)
+            .add_run(text_run(&self.labels.contents).bold().size(32));
+        self.push(heading);
+        let chapters: Vec<(u32, String)> = guide
+            .chapters()
+            .map(|c| (c.number, c.title.clone()))
+            .collect();
+        for (number, title) in chapters {
+            let link = Hyperlink::new(chapter_bookmark(number), HyperlinkType::Anchor).add_run(
+                styled_run(
+                    &format!("{number}. {title}"),
+                    Format {
+                        link: true,
+                        ..Format::default()
+                    },
+                ),
+            );
+            let p = self.paragraph().add_hyperlink(link);
+            self.push(p);
+        }
+    }
+
+    /// A `Heading1`, on a new page with `page_break` (unless texts leading
+    /// into it started one), bookmarked for the table of contents; then the
+    /// guide's summary, intro and prerequisites.
+    fn chapter(&mut self, chapter: &RenderChapter, page_break: bool) {
+        self.kind = chapter.kind;
+        // Ids past any step's, so the two kinds of bookmark never clash.
+        let bookmark = CHAPTER_BOOKMARKS + chapter.number as usize;
+        let p = self
+            .paragraph()
+            .style("Heading1")
+            .keep_next(true)
+            .page_break_before(page_break)
+            .add_bookmark_start(bookmark, chapter_bookmark(chapter.number))
+            .add_run(text_run(&chapter.title))
+            .add_bookmark_end(bookmark);
+        self.push(p);
+        if !chapter.summary.trim().is_empty() {
+            let p = self
+                .paragraph()
+                .add_run(text_run(chapter.summary.trim()).italic().color("595959"));
+            self.push(p);
+        }
+        self.blocks(&chapter.intro, Context::default());
+        if !chapter.prerequisites.is_empty() {
+            let heading = self.labels.prerequisites.clone();
+            self.heading(self.section_style(), &heading);
+            self.blocks(&chapter.prerequisites, Context::default());
+        }
     }
 
     /// A paragraph with a per-document id (docx-rs' own ids come from a
@@ -524,10 +647,10 @@ impl<'a> Writer<'a> {
         } else {
             self.inlines(&step.title, Format::default(), &mut pieces);
         }
-        let mut heading = self.paragraph().style("Heading2").keep_next(true);
-        let bookmark = step.number as usize;
+        let mut heading = self.paragraph().style(self.step_style()).keep_next(true);
+        let bookmark = step.anchor as usize;
         if self.bookmarks {
-            heading = heading.add_bookmark_start(bookmark, step_bookmark(step.number));
+            heading = heading.add_bookmark_start(bookmark, step_bookmark(step.anchor));
         }
         let mut heading = add_pieces(heading, pieces);
         if self.bookmarks {
@@ -616,7 +739,7 @@ impl<'a> Writer<'a> {
 
     /// The step's image paragraph, at most `max_width` EMU wide.
     fn image(&mut self, step: &RenderStep, max_width: u64) -> Paragraph {
-        let image = render_step_image(self.handle, &step.step, &self.opts.image);
+        let image = render_step_image(&step.handle, &step.step, &self.opts.image);
         self.report.add_warnings(step.step.id, image.warnings);
         let (width, height) = self.display_size_within(image.width, image.height, max_width);
         let id = self.next_image;
@@ -721,7 +844,7 @@ impl<'a> Writer<'a> {
     /// A `Heading1`, then "For: Admin" in grey italics when the section
     /// names its audiences.
     fn section(&mut self, section: &RenderSection) {
-        self.heading("Heading1", &section.title);
+        self.heading(self.section_style(), &section.title);
         if let Some(audiences) = self.labels.audiences(&section.audiences) {
             let p = self
                 .paragraph()
@@ -761,10 +884,10 @@ impl<'a> Writer<'a> {
             let text = self.labels.go_to(&option.target, self.kind);
             p = match option.target {
                 RenderTarget::Step {
-                    number: Some(number),
+                    anchor: Some(anchor),
                     ..
                 } => p.add_hyperlink(
-                    Hyperlink::new(step_bookmark(number), HyperlinkType::Anchor).add_run(
+                    Hyperlink::new(step_bookmark(anchor), HyperlinkType::Anchor).add_run(
                         styled_run(
                             &text,
                             Format {
@@ -928,6 +1051,14 @@ fn add_pieces(paragraph: Paragraph, pieces: Vec<Piece>) -> Paragraph {
 /// The bookmark on step `number`'s heading.
 fn step_bookmark(number: u32) -> String {
     format!("step-{number}")
+}
+
+/// The first bookmark id of chapter headings (steps count up from 1).
+const CHAPTER_BOOKMARKS: usize = 1_000_000;
+
+/// The bookmark on chapter `number`'s heading.
+fn chapter_bookmark(number: u32) -> String {
+    format!("chapter-{number}")
 }
 
 fn text_run(text: &str) -> Run {

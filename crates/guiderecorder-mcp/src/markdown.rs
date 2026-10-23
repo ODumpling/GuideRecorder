@@ -167,6 +167,7 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
                         RenderTarget::Step {
                             number: Some(number),
                             section,
+                            ..
                         } => match section {
                             Some(title) => format!("section “{title}” (step {number})"),
                             None => format!("step {number}"),
@@ -197,6 +198,8 @@ pub fn guide(render: &RenderGuide, meta: &GuideMeta<'_>) -> String {
                 }
                 out.push('\n');
             }
+            // Only collections have these; this renders one guide.
+            RenderItem::Chapter(_) | RenderItem::Text(_) => {}
         }
     }
     while out.ends_with("\n\n") {

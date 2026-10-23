@@ -8,6 +8,7 @@ import { Menu } from "@tauri-apps/api/menu";
 import { create } from "zustand";
 import { Button } from "@guiderecorder/ui/button";
 import { Input } from "@guiderecorder/ui/input";
+import { collectionsStore } from "@/collections/collections";
 import { editorStore } from "@/editor/editor";
 import { folderName, localToday } from "@/editor/library";
 import { fileManager } from "@/lib/platform";
@@ -17,7 +18,10 @@ import { guideSyncStatus } from "@/sync/store";
 import { shareStore, syncStore } from "@/sync/sync";
 
 /** What the name dialog is asking for. */
-export type Naming = { kind: "rename"; guide: GuideListItem } | { kind: "folder"; parent: string };
+export type Naming =
+  | { kind: "rename"; guide: GuideListItem }
+  | { kind: "folder"; parent: string }
+  | { kind: "collection" };
 
 /** The open name dialog, if any; set it to ask for a name. */
 export const namingStore = create<{ naming: Naming | null }>(() => ({ naming: null }));
@@ -147,9 +151,12 @@ export function NameDialog() {
     if (naming) setName(naming.kind === "rename" ? naming.guide.title : "");
   }, [naming]);
   const rename = naming?.kind === "rename";
+  const collection = naming?.kind === "collection";
   const title = rename
     ? "Rename guide"
-    : naming?.parent
+    : collection
+      ? "New collection"
+      : naming?.kind === "folder" && naming.parent
       ? `New folder in “${folderName(naming.parent)}”`
       : "New folder";
 
@@ -161,7 +168,9 @@ export function NameDialog() {
     const done =
       naming.kind === "rename"
         ? name.trim() === naming.guide.title || (await editor.renameGuide(naming.guide, name))
-        : await editor.createFolder(naming.parent, name.trim());
+        : naming.kind === "collection"
+          ? (await collectionsStore.getState().create(name)) !== null
+          : await editor.createFolder(naming.parent, name.trim());
     setSaving(false);
     if (done) onClose();
   }
@@ -182,13 +191,15 @@ export function NameDialog() {
           <Dialog.Description className="text-sm text-muted-foreground">
             {rename
               ? "The guide's folder on disk is renamed to match."
-              : `Folders are plain folders in your library, so ${fileManager()} and sync tools see them too.`}
+              : collection
+                ? "A collection puts guides together into one document, such as an onboarding manual. Guides stay where they are."
+                : `Folders are plain folders in your library, so ${fileManager()} and sync tools see them too.`}
           </Dialog.Description>
           <form className="flex flex-col gap-4" onSubmit={(e) => void submit(e)}>
             <Input
               autoFocus
-              aria-label={rename ? "Title" : "Folder name"}
-              placeholder={rename ? "Title" : "Folder name"}
+              aria-label={rename || collection ? "Title" : "Folder name"}
+              placeholder={rename || collection ? "Title" : "Folder name"}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />

@@ -5,6 +5,12 @@
 //! number. Decision options are resolved to the step number they lead to.
 //! Step images are rendered on demand with [`RenderGuide::step_image`], so a
 //! writer controls size and only pays for the images it emits.
+//!
+//! A [`collection`](crate::collection) renders as one guide whose items
+//! are [`RenderItem::Chapter`]s (one per guide, followed by its items) and
+//! [`RenderItem::Text`]s; a single guide has neither. Each step carries the
+//! bundle its image is read from and an [`anchor`](RenderStep::anchor) that
+//! is unique in the document even when numbers restart per chapter.
 
 use ulid::Ulid;
 
@@ -69,16 +75,47 @@ pub enum RenderItem {
     Section(RenderSection),
     Note(RenderNote),
     Decision(RenderDecision),
+    /// The start of a guide of a collection; its items follow.
+    Chapter(RenderChapter),
+    /// Text between the guides of a collection.
+    Text(RenderText),
 }
 
 #[derive(Debug, Clone)]
 pub struct RenderStep {
     /// 1-based step (or page) number; sections and notes are skipped.
     pub number: u32,
+    /// 1-based position among all steps of the document: what in-page
+    /// links, bookmarks and image files are named by. The same as `number`
+    /// unless numbers restart per chapter.
+    pub anchor: u32,
     pub title: Vec<Inline>,
     pub description: Vec<Block>,
     /// The step as stored, for kind, keystrokes, element and images.
     pub step: Step,
+    /// The bundle the step's images are read from.
+    pub handle: GuideHandle,
+}
+
+/// A guide of a collection, as a chapter heading and its opening text.
+#[derive(Debug, Clone)]
+pub struct RenderChapter {
+    /// 1-based chapter number.
+    pub number: u32,
+    pub guide_id: Ulid,
+    /// Plain text.
+    pub title: String,
+    /// Plain text.
+    pub summary: String,
+    pub kind: GuideKind,
+    pub intro: Vec<Block>,
+    pub prerequisites: Vec<Block>,
+}
+
+/// Text between the guides of a collection.
+#[derive(Debug, Clone)]
+pub struct RenderText {
+    pub body: Vec<Block>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +158,8 @@ pub enum RenderTarget {
     /// (the end of the guide).
     Step {
         number: Option<u32>,
+        /// The step's [`RenderStep::anchor`], for links.
+        anchor: Option<u32>,
         /// The section's plain-text title when a section was chosen.
         section: Option<String>,
     },
@@ -185,9 +224,11 @@ impl RenderGuide {
                     page = url.or(page);
                     RenderItem::Step(RenderStep {
                         number,
+                        anchor: number,
                         title: parse_inlines(&step.title),
                         description,
                         step: step.clone(),
+                        handle: handle.clone(),
                     })
                 }
                 Item::Section(section) => RenderItem::Section(RenderSection {
@@ -255,11 +296,94 @@ impl RenderGuide {
         })
     }
 
+    /// Chapters in order (a collection's guides; none in a guide).
+    pub fn chapters(&self) -> impl Iterator<Item = &RenderChapter> {
+        self.items.iter().filter_map(|item| match item {
+            RenderItem::Chapter(chapter) => Some(chapter),
+            _ => None,
+        })
+    }
+
+    /// Which items start a new page in a paged format, by index: each
+    /// chapter, or the texts right before it (they lead into it), from the
+    /// first of them. None in a guide.
+    pub fn page_breaks(&self) -> Vec<bool> {
+        let mut breaks = vec![false; self.items.len()];
+        let mut run_start = None;
+        for (i, item) in self.items.iter().enumerate() {
+            match item {
+                RenderItem::Text(_) => {
+                    run_start.get_or_insert(i);
+                }
+                RenderItem::Chapter(_) => {
+                    breaks[run_start.unwrap_or(i)] = true;
+                    run_start = None;
+                }
+                _ => run_start = None,
+            }
+        }
+        breaks
+    }
+
+    /// Whether this is a collection, made of chapters.
+    pub fn has_chapters(&self) -> bool {
+        self.chapters().next().is_some()
+    }
+
+    /// Whether any item is a section.
+    pub fn has_sections(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, RenderItem::Section(_)))
+    }
+
     /// Renders the image of `step` with its annotations and burned-in blur.
     /// Never fails: a missing or broken image becomes a placeholder with a
     /// warning.
     pub fn step_image(&self, step: &RenderStep, opts: &ImageOptions) -> RenderedImage {
-        render_step_image(&self.handle, &step.step, opts)
+        render_step_image(&step.handle, &step.step, opts)
+    }
+
+    /// This guide as chapter `number` of a collection: a
+    /// [`RenderItem::Chapter`] and then its items, with `numbers` added to
+    /// step numbers and `anchors` to anchors (decision targets included).
+    pub fn into_chapter(self, number: u32, numbers: u32, anchors: u32) -> Self {
+        let chapter = RenderItem::Chapter(RenderChapter {
+            number,
+            guide_id: self.id,
+            title: self.title.clone(),
+            summary: self.summary.clone(),
+            kind: self.kind,
+            intro: self.intro,
+            prerequisites: self.prerequisites,
+        });
+        let items = std::iter::once(chapter)
+            .chain(self.items.into_iter().map(|mut item| {
+                match &mut item {
+                    RenderItem::Step(step) => {
+                        step.number += numbers;
+                        step.anchor += anchors;
+                    }
+                    RenderItem::Decision(decision) => {
+                        for option in &mut decision.options {
+                            if let RenderTarget::Step { number, anchor, .. } = &mut option.target {
+                                *number = number.map(|n| n + numbers);
+                                *anchor = anchor.map(|a| a + anchors);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                item
+            }))
+            .collect();
+        Self {
+            items,
+            intro: Vec::new(),
+            prerequisites: Vec::new(),
+            cover: None,
+            ..self
+        }
     }
 }
 
@@ -302,6 +426,7 @@ fn resolve(guide: &Guide, from: Ulid, target: &BranchTarget) -> RenderTarget {
             if found {
                 return RenderTarget::Step {
                     number: Some(number),
+                    anchor: Some(number),
                     section,
                 };
             }
@@ -309,6 +434,7 @@ fn resolve(guide: &Guide, from: Ulid, target: &BranchTarget) -> RenderTarget {
     }
     RenderTarget::Step {
         number: None,
+        anchor: None,
         section,
     }
 }

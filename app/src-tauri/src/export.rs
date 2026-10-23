@@ -265,7 +265,7 @@ impl ChosenPaths {
             .any(|p| p == path)
     }
 
-    fn add_exported(&self, path: PathBuf) {
+    pub(crate) fn add_exported(&self, path: PathBuf) {
         remember(&mut self.inner.lock().unwrap().exported, path);
     }
 
@@ -519,7 +519,7 @@ pub fn export_guide(
 /// The UI's branding, checked: the library's preset, or a logo the user
 /// chose (read and decoded here) and a valid accent (blank means none);
 /// with the layout asked for.
-fn check_branding(
+pub(crate) fn check_branding(
     session: &Session,
     chosen: &ChosenPaths,
     request: &BrandingRequest,
@@ -794,7 +794,7 @@ pub fn logo_preview(chosen: &ChosenPaths, path: &Path) -> Result<String> {
     Ok(png_uri(logo.png()))
 }
 
-fn exists(path: &Path) -> AppError {
+pub(crate) fn exists(path: &Path) -> AppError {
     AppError::new(
         ErrorKind::Exists,
         format!("{} already exists", path.display()),
@@ -810,7 +810,7 @@ fn scorm_error(e: scorm::ScormError) -> AppError {
     }
 }
 
-fn md_error(e: md::ExportError) -> AppError {
+pub(crate) fn md_error(e: md::ExportError) -> AppError {
     match e {
         md::ExportError::NotEmpty(path) => AppError::new(
             ErrorKind::Exists,

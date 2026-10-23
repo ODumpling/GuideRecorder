@@ -35,6 +35,10 @@
 //!   per bullet whose "Go to Step N" links to that step (found by metadata
 //!   the step carries only in guides with decisions, `anchors`). A section
 //!   tagged with audiences has "For: Admin" under its heading.
+//! - A collection ([`crate::collection`]) has a table of contents with page
+//!   numbers after the intro (its chapters, `outline` depth 1); each chapter
+//!   is a level 1 heading on a new page (or the page of the text leading
+//!   into it), with sections at level 2 and steps at level 3.
 //! - Notes are tinted boxes with a coloured left rule and a label from
 //!   [`Labels`] ([`PdfOptions::labels`], or [`Labels::for_language`]).
 //! - The Markdown subset maps to bold, italic, code (monospace on a grey
@@ -435,10 +439,24 @@ fn guide_data(
     let mut cx = Cx::default();
     let branding = &opts.branding;
     let layout = branding.layout();
-    let items: Vec<Value> = guide
+    let mut items: Vec<Value> = guide
         .items
         .iter()
         .map(|item| match item {
+            RenderItem::Chapter(chapter) => json!({
+                "kind": "chapter",
+                "title": match clean(chapter.title.trim()).trim() {
+                    "" => untitled(&guide.language).to_owned(),
+                    title => title.to_owned(),
+                },
+                "summary": clean(chapter.summary.trim()),
+                "intro": cx.blocks(&chapter.intro),
+                "prerequisites": cx.blocks(&chapter.prerequisites),
+            }),
+            RenderItem::Text(text) => json!({
+                "kind": "text",
+                "body": cx.blocks(&text.body),
+            }),
             RenderItem::Section(section) => json!({
                 "kind": "section",
                 "title": clean(&section.title),
@@ -454,7 +472,7 @@ fn guide_data(
                         "label": clean(&option.label),
                         "text": clean(&labels.go_to(&option.target, guide.kind)),
                         "step": match option.target {
-                            RenderTarget::Step { number, .. } => number,
+                            RenderTarget::Step { anchor, .. } => anchor,
                             RenderTarget::Guide { .. } => None,
                         },
                     }))
@@ -475,6 +493,7 @@ fn guide_data(
                 json!({
                     "kind": "step",
                     "number": step.number,
+                    "anchor": step.anchor,
                     "title": title,
                     "description": cx.blocks(&step.description),
                     "image": null,
@@ -482,9 +501,9 @@ fn guide_data(
                 })
             }
             RenderItem::Step(step) => {
-                let image = render_step_image(handle, &step.step, &opts.image);
+                let image = render_step_image(&step.handle, &step.step, &opts.image);
                 report.add_warnings(step.step.id, image.warnings);
-                let path = format!("/steps/{}.png", step.number);
+                let path = format!("/steps/{}.png", step.anchor);
                 files.push((path.clone(), image.png));
                 let title = if plain_text(&step.title).trim().is_empty() {
                     Vec::new()
@@ -514,6 +533,7 @@ fn guide_data(
                 json!({
                     "kind": "step",
                     "number": step.number,
+                    "anchor": step.anchor,
                     "title": title,
                     "description": cx.blocks(&step.description),
                     "image": {
@@ -527,6 +547,12 @@ fn guide_data(
             }
         })
         .collect();
+    // A collection's chapters, and texts leading into them, start a page.
+    for (item, page_break) in items.iter_mut().zip(guide.page_breaks()) {
+        if page_break {
+            item["page_break"] = Value::Bool(true);
+        }
+    }
     // Its warnings are left out: the step reports its own.
     let cover = guide.cover.as_ref().map(|cover| {
         let image = cover.image(handle, &opts.image);
@@ -592,10 +618,12 @@ fn guide_data(
             "prerequisites": clean(&labels.prerequisites),
             "step": clean(labels.step_kind(guide.kind)),
             "decision": clean(&labels.decision),
+            "contents": clean(&labels.contents),
         },
         "intro": intro,
         "prerequisites": prerequisites,
         "anchors": guide.decisions().next().is_some(),
+        "chapters": guide.has_chapters(),
         "items": items,
         "brand": {
             "text_fonts": typst_fonts(fonts.body.kind),

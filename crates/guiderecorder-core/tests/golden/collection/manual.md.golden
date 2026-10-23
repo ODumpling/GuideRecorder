@@ -1,0 +1,107 @@
+# Team handbook
+
+Everything a new **teammate** needs.
+
+## Contents
+
+1. Share a calendar event
+2. Rotate an API key
+
+## Share a calendar event
+
+*Invite a colleague to an existing Calendar event.*
+
+This guide shows how to invite someone to an event you **already** created.
+
+### Prerequisites
+
+- A Mac signed in to iCloud
+- An existing event
+
+### Open the event
+
+#### 1. Click **Calendar** in the Dock
+
+![Click Calendar in the Dock](images/01-click-calendar-in-the-dock.png)
+
+#### 2. Double-click the *Team sync* event
+
+![Double-click the Team sync event](images/02-double-click-the-team-sync-event.png)
+
+The event opens in its own window.
+
+> **Tip:** You can also select the event and press `⌘O` to open it.
+
+### Invite people
+
+#### 3. Type the guest's email in **Add Invitees**
+
+![Type the guest's email in Add Invitees](images/03-type-the-guest-s-email-in-add-invitees.png)
+
+Separate several guests with commas.
+
+- Guests get an email invite
+- You can remove them later
+
+#### 4. Right-click the guest and choose **Send Email**
+
+![Right-click the guest and choose Send Email](images/04-right-click-the-guest-and-choose-send-email.png)
+
+#### 5. Press `⌘S` to save
+
+![Press ⌘S to save](images/05-press-s-to-save.png)
+
+> **Note:** Guests see changes after they [refresh their calendar](https://support.apple.com/guide/calendar/welcome/mac).
+
+Next, the *security* basics.
+
+## Rotate an API key
+
+*Replace a leaked or expiring API key without downtime.*
+
+Rotate keys every *90 days*, or right away if one leaks.
+
+### Prerequisites
+
+Admin access to the console.
+
+> **Warning:** Creating a new key **revokes** the old one immediately. Update these first:
+>
+> 1. The CI secret
+> 2. Local `.env` files
+
+#### 6. Open **Settings → API keys**
+
+![Open Settings → API keys](images/06-open-settings-api-keys.png)
+
+#### 7. Enter your password to confirm
+
+![Enter your password to confirm](images/07-enter-your-password-to-confirm.png)
+
+Password input is masked while recording.
+
+#### 8. Click **Create key** and copy the new key
+
+![Click Create key and copy the new key](images/08-click-create-key-and-copy-the-new-key.png)
+
+The key is shown **once**. Store it in your password manager; see [Managing keys](https://example.com/docs/keys).
+
+> **Decision:** Is the key used in **production**?
+>
+> - **Yes:** Go to Step 9
+> - **No:** Go to Step 10
+> - **Unsure:** Go to the guide “Find where an API key is used”
+
+#### 9. Drag the new key to **Production**
+
+![Drag the new key to Production](images/09-drag-the-new-key-to-production.png)
+
+#### 10. Check that the key works
+
+![Check that the key works](images/10-check-that-the-key-works.png)
+
+Run this in Terminal:
+
+`curl -H "x-api-key: $KEY" https://api.example.com/v1/ping`
+
+It should print *pong*.

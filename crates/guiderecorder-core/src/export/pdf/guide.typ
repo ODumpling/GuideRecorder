@@ -8,6 +8,12 @@
 #let data = json("/guide.json")
 #let labels = data.labels
 #let brand = data.brand
+// Heading levels: sections 1 and steps 2, or in a collection (whose
+// chapters are level 1) sections 2 and steps 3. Steps always look alike.
+#let levels = (
+  section: if data.chapters { 2 } else { 1 },
+  step: if data.chapters { 3 } else { 2 },
+)
 #let accent = rgb(data.accent)
 #let muted = rgb("#5f6368")
 #let link-color = rgb("#0563c1")
@@ -164,8 +170,8 @@
 // start on this one). The description flows freely, however long it is.
 #let step(s) = {
   block(breakable: false, sticky: true, width: 100%, above: 1.8em, below: 0.9em)[
-    #if data.anchors { metadata(("step", s.number)) }
-    #heading(level: 2, {
+    #if data.anchors { metadata(("step", s.anchor)) }
+    #heading(level: levels.step, {
       str(s.number) + ". "
       if s.title.len() == 0 { labels.step + " " + str(s.number) } else { inlines(s.title) }
     })
@@ -189,8 +195,8 @@
 
 // A step heading on its own: checklists get a box to tick before it.
 #let step-heading(s) = {
-  if data.anchors { metadata(("step", s.number)) }
-  heading(level: 2, {
+  if data.anchors { metadata(("step", s.anchor)) }
+  heading(level: levels.step, {
     if step-layout == "checklist" {
       box(width: 0.8em, height: 0.8em, stroke: 0.8pt + muted, radius: 1.5pt, baseline: 0.05em)
       h(0.5em)
@@ -254,10 +260,13 @@
 #set par(leading: 0.65em, spacing: 0.9em)
 #set list(indent: 0.4em)
 #set enum(indent: 0.4em)
-#show heading.where(level: 1): set text(size: 16pt, fill: if heading-color == none { accent } else { heading-color }, ..heading-args)
+#let accent-heading = if heading-color == none { accent } else { heading-color }
+#show heading.where(level: 1): set text(size: if data.chapters { 22pt } else { 16pt }, fill: accent-heading, ..heading-args)
 #show heading.where(level: 1): set block(above: 2em, below: 1em)
-#show heading.where(level: 2): set text(size: 12.5pt, ..heading2-args)
-#show heading.where(level: 2): set block(above: 0pt, below: 0.9em)
+#show heading.where(level: levels.section): set text(size: 16pt, fill: accent-heading, ..heading-args)
+#show heading.where(level: levels.section): set block(above: 2em, below: 1em)
+#show heading.where(level: levels.step): set text(size: 12.5pt, ..heading2-args)
+#show heading.where(level: levels.step): set block(above: 0pt, below: 0.9em)
 
 #set page(
   paper: data.paper,
@@ -332,9 +341,30 @@
   blocks(data.prerequisites)
 }
 
+// A collection's table of contents: its chapters, with page numbers.
+#if data.chapters {
+  show outline.entry.where(level: 1): set block(above: 0.9em)
+  outline(title: labels.contents, depth: 1)
+}
+
 #for item in data.items {
-  if item.kind == "section" {
+  if item.kind == "chapter" {
+    if "page_break" in item { pagebreak(weak: true) }
     heading(level: 1, item.title)
+    if item.summary != "" {
+      block(above: 0pt, below: 1.2em, text(size: 12pt, fill: muted, item.summary))
+    }
+    blocks(item.intro)
+    if item.prerequisites.len() > 0 {
+      heading(level: levels.section, labels.prerequisites)
+      blocks(item.prerequisites)
+    }
+  } else if item.kind == "text" {
+    // Text leading into a chapter starts its page.
+    if "page_break" in item { pagebreak(weak: true) }
+    block(above: 1.2em, below: 1.2em, blocks(item.body))
+  } else if item.kind == "section" {
+    heading(level: levels.section, item.title)
     if item.audiences != none {
       block(above: 0pt, below: 1em, text(size: 9.5pt, fill: muted, style: "italic", item.audiences))
     }

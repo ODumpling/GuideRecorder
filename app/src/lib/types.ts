@@ -611,3 +611,33 @@ export type UpdateStatus =
   | { state: "ready"; version: string }
   /** A check or install failed; `message` says which. */
   | { state: "failed"; message: string; manual: boolean };
+
+/** How a collection numbers its steps (core `collection::Numbering`). */
+export type CollectionNumbering = "continuous" | "per-chapter";
+
+/** One entry of a collection: a guide by id, or text between guides. */
+export type CollectionEntry =
+  | { type: "guide"; id: Ulid; guideId: Ulid }
+  | { type: "text"; id: Ulid; body: string };
+
+/** A manual made of several guides (core `collection::Collection`). */
+export interface Collection {
+  version: number;
+  id: Ulid;
+  title: string;
+  /** Markdown, before the first guide. */
+  intro: string;
+  numbering: CollectionNumbering;
+  entries: CollectionEntry[];
+  updatedAt: string;
+}
+
+/** A collection as listed: the collection, or why its file can't be read. */
+export interface CollectionView {
+  id: Ulid;
+  collection: Collection | null;
+  error: string | null;
+}
+
+/** The formats a collection exports to. */
+export type CollectionFormat = "pdf" | "docx" | "html" | "md";

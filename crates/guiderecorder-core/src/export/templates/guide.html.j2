@@ -56,9 +56,39 @@
 {{ prerequisites }}
 </section>
 {%- endif %}
+{%- if contents %}
+<nav class="contents" aria-label="{{ labels.contents }}">
+<h2>{{ labels.contents }}</h2>
+<ol>
+{%- for chapter in contents %}
+<li><a href="#chapter-{{ chapter.number }}">{{ chapter.title }}</a></li>
+{%- endfor %}
+</ol>
+</nav>
+{%- endif %}
 {%- for item in items %}
-{%- if item.kind == "section" %}
-<h2 class="section">{{ item.title }}</h2>
+{%- if item.kind == "chapter" %}
+<h2 class="chapter{% if item.page_break %} page-break{% endif %}" id="chapter-{{ item.number }}">{{ item.title }}</h2>
+{%- if item.summary %}
+<p class="chapter-summary">{{ item.summary }}</p>
+{%- endif %}
+{%- if item.intro %}
+<section class="intro">
+{{ item.intro }}
+</section>
+{%- endif %}
+{%- if item.prerequisites %}
+<section class="prerequisites">
+<h3>{{ labels.prerequisites }}</h3>
+{{ item.prerequisites }}
+</section>
+{%- endif %}
+{%- elif item.kind == "text" %}
+<div class="text{% if item.page_break %} page-break{% endif %}">
+{{ item.body }}
+</div>
+{%- elif item.kind == "section" %}
+<h{{ section_level }} class="section">{{ item.title }}</h{{ section_level }}>
 {%- if item.audiences %}
 <p class="audience">{{ item.audiences }}</p>
 {%- endif %}
@@ -70,7 +100,7 @@
 {{ item.body }}
 </aside>
 {%- else %}
-<article class="step" id="step-{{ item.number }}">
+<article class="step" id="step-{{ item.anchor }}">
 <h{{ step_level }} class="step-title">{% if checklist %}<input class="step-check" type="checkbox" aria-label="{{ labels.step }} {{ item.number }}">{% endif %}<span class="step-number" aria-label="{{ labels.step }} {{ item.number }}">{{ item.number }}</span><span class="step-text">{{ item.title }}</span></h{{ step_level }}>{%- if item.image %}
 <figure class="step-image">
 {%- if item.hotspots %}

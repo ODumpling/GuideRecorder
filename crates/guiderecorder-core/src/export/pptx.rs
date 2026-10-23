@@ -208,6 +208,8 @@ impl<'a> Deck<'a> {
                     let label = labels.note_kind(note.kind).to_owned();
                     deck.text_slide(&label, &note.body)
                 }
+                // Only collections have these, and they export to documents.
+                RenderItem::Chapter(_) | RenderItem::Text(_) => {}
             }
         }
         deck

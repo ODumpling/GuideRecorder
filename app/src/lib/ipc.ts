@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Guide, Rect, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiProviderKind, AiRewriteResult, AppError, BrandPreset, LogoChange, PresetList, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, ScormOptions, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
+import type { AiProviderKind, AiRewriteResult, AppError, BrandPreset, Collection, CollectionFormat, CollectionView, LogoChange, PresetList, CaptureDisplay, CaptureTargetArg, CaptureWindow, DetailsEdit, ExportBranding, ExportFormat, ExportPreviewData, ExportResult, GuideListItem, GuideTarget, LibraryInfo, McpSetup, MotionOptions, NarrationState, OpenedGuide, PaperSize, SkillOptions, Permission, RenamedGuide, ReviewedGuide, PermissionRow, PermissionStatus, RecordingReadiness, RecordingSaved, RecordInto, RegionPick, RewriteStyleArg, HotkeyErrors, ScormOptions, Settings, SettingsView, StampedStatus, UpdateStatus, VersionInfo } from "@/lib/types";
 import type { SyncBackend } from "@guiderecorder/sync/engine";
 
 /** The Tauri commands the editor uses (see app/src-tauri/src/commands.rs). */
@@ -242,6 +242,35 @@ export const tauriPresetApi: PresetApi = {
   savePreset: (id, preset, logo) => invoke("save_preset", { id, preset, logo }),
   deletePreset: (id) => invoke("delete_preset", { id }),
   setDefaultPreset: (id) => invoke("set_default_preset", { id }),
+};
+
+/** The open library's collections (in its `.collections` folder). */
+export interface CollectionApi {
+  listCollections(): Promise<CollectionView[]>;
+  /** A new, empty collection, saved. */
+  createCollection(title: string): Promise<Collection>;
+  /** Saves a collection; resolves to it as written. */
+  saveCollection(collection: Collection): Promise<Collection>;
+  /** Deletes a collection; its guides stay. */
+  deleteCollection(id: string): Promise<void>;
+  /** Exports a collection as one document to a destination a dialog chose. */
+  exportCollection(
+    id: string,
+    format: CollectionFormat,
+    out: string,
+    overwrite: boolean,
+    branding: ExportBranding,
+    paper: PaperSize,
+  ): Promise<ExportResult>;
+}
+
+export const tauriCollectionApi: CollectionApi = {
+  listCollections: () => invoke("list_collections"),
+  createCollection: (title) => invoke("create_collection", { title }),
+  saveCollection: (collection) => invoke("save_collection", { collection }),
+  deleteCollection: (id) => invoke("delete_collection", { id }),
+  exportCollection: (id, format, out, overwrite, branding, paper) =>
+    invoke("export_collection", { id, format, out, overwrite, branding, paper }),
 };
 
 /** Emitted by the Rust side on Cmd+Q; answer with `quit_ack`, then save and quit. */

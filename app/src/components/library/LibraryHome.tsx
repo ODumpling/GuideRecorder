@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppWindow, LayoutGrid, List, LoaderCircle, Monitor, ScanLine, Search, Target } from "lucide-react";
 import { LibraryGuides } from "@/components/library/LibraryGuides";
-import { NameDialog } from "@/components/library/menus";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   folderName,
@@ -348,7 +347,6 @@ export function LibraryHome() {
           )
         )}
       </div>
-      <NameDialog />
     </div>
   );
 }

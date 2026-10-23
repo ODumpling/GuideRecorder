@@ -37,6 +37,11 @@
 //! ([`Labels::go_to`]); Markdown has no stable heading anchors, so they are
 //! not links.
 //!
+//! A collection ([`crate::collection`]) adds `## Contents`, a numbered list of
+//! its chapters, after the intro; each chapter is an H2 with its summary,
+//! intro and prerequisites, and everything in it is one level deeper. Text
+//! between guides is plain paragraphs.
+//!
 //! Step images have their hotspots drawn in as numbered markers, and the
 //! numbered legend under the image gives each hotspot's title (bold) and
 //! description, line breaks kept. The legend uses `1)` markers so a
@@ -143,6 +148,8 @@ pub struct Labels {
     /// Quotation marks around a section or guide title.
     pub quote_open: String,
     pub quote_close: String,
+    /// The heading of a collection's table of contents.
+    pub contents: String,
 }
 
 impl Labels {
@@ -179,6 +186,10 @@ impl Labels {
                     "Last reviewed",
                 ],
             };
+        let contents = match primary.as_str() {
+            "de" => "Inhalt",
+            _ => "Contents",
+        };
         let [decision, audience, go_to, go_to_end, go_to_guide, quote_open, quote_close] =
             match primary.as_str() {
                 "de" => [
@@ -217,6 +228,7 @@ impl Labels {
             go_to_guide: go_to_guide.into(),
             quote_open: quote_open.into(),
             quote_close: quote_close.into(),
+            contents: contents.into(),
         }
     }
 
@@ -228,7 +240,9 @@ impl Labels {
         match target {
             RenderTarget::Guide { title, .. } if title.is_empty() => self.go_to_guide.clone(),
             RenderTarget::Guide { title, .. } => format!("{} {}", self.go_to_guide, quoted(title)),
-            RenderTarget::Step { number, section } => {
+            RenderTarget::Step {
+                number, section, ..
+            } => {
                 let step = number.map(|n| format!("{} {n}", self.step_kind(kind)));
                 match (section.as_deref().filter(|s| !s.is_empty()), step) {
                     (Some(title), Some(step)) => {
@@ -637,7 +651,8 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
 // Export
 
 /// Writes `<out_dir>/guide.md` and `<out_dir>/images/NN-<slug>.png`, with
-/// step images read from the bundle at `handle` (normally `guide.handle`).
+/// step images read from each step's bundle ([`RenderStep::handle`]);
+/// `_handle` is the guide's, taken as by the other writers.
 ///
 /// Refuses a non-empty `out_dir` unless `opts.overwrite`; with it, earlier
 /// `NN-*.png` images this export did not write are removed, and nothing
@@ -646,7 +661,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
 /// plus a warning in the report.
 pub fn export(
     guide: &RenderGuide,
-    handle: &GuideHandle,
+    _handle: &GuideHandle,
     out_dir: impl AsRef<Path>,
     opts: &MdOptions,
 ) -> Result<ExportReport> {
@@ -664,7 +679,7 @@ pub fn export(
     let mut report = ExportReport::default();
     let mut images = Vec::new();
     for (step, name) in guide.steps().zip(&names) {
-        let image = render_step_image(handle, &step.step, &opts.image);
+        let image = render_step_image(&step.handle, &step.step, &opts.image);
         report.add_warnings(step.step.id, image.warnings);
         let path = images_dir.join(name);
         write_atomic(&path, &image.png, Durability::RenameOnly)?;
@@ -716,7 +731,7 @@ pub struct MdPreview {
 
 /// What [`export`] would write, without writing it: the same document and
 /// images (blur and pixelate burned in), at `opts.image`'s size.
-pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &MdOptions) -> MdPreview {
+pub fn preview(guide: &RenderGuide, _handle: &GuideHandle, opts: &MdOptions) -> MdPreview {
     let labels = opts
         .labels
         .clone()
@@ -729,7 +744,7 @@ pub fn preview(guide: &RenderGuide, handle: &GuideHandle, opts: &MdOptions) -> M
         images.push((format!("{IMAGES_DIR}/{LOGO_FILE}"), png.to_vec()));
     }
     for (step, name) in guide.steps().zip(&names) {
-        let image = render_step_image(handle, &step.step, &opts.image);
+        let image = render_step_image(&step.handle, &step.step, &opts.image);
         report.add_warnings(step.step.id, image.warnings);
         images.push((format!("{IMAGES_DIR}/{name}"), image.png));
     }
@@ -810,17 +825,44 @@ fn render_document(
         push_block(&mut out, &blocks(&guide.prerequisites));
     }
 
-    let has_sections = guide
-        .items
-        .iter()
-        .any(|item| matches!(item, RenderItem::Section(_)));
-    let step_heading = if has_sections { "###" } else { "##" };
+    // A collection's chapters are `##`, and everything in them one deeper.
+    let chapters = guide.has_chapters();
+    if chapters {
+        push_block(
+            &mut out,
+            &format!("## {}", heading_text(&escape_line(&labels.contents))),
+        );
+        push_block(&mut out, &contents_list(guide));
+    }
+    let depth = usize::from(chapters);
+    let section_heading = "#".repeat(2 + depth);
+    let step_heading = "#".repeat(if guide.has_sections() { 3 } else { 2 } + depth);
     let mut names = image_names.iter();
     for item in &guide.items {
         match item {
+            RenderItem::Chapter(chapter) => {
+                let title = escape_line(&single_line(&chapter.title));
+                push_block(&mut out, &format!("## {}", heading_text(&title)));
+                let summary = single_line(&chapter.summary);
+                if !summary.is_empty() {
+                    push_block(&mut out, &format!("*{}*", escape_line(&summary)));
+                }
+                if !chapter.intro.is_empty() {
+                    push_block(&mut out, &blocks(&chapter.intro));
+                }
+                if !chapter.prerequisites.is_empty() {
+                    let heading = heading_text(&escape_line(&labels.prerequisites));
+                    push_block(&mut out, &format!("### {heading}"));
+                    push_block(&mut out, &blocks(&chapter.prerequisites));
+                }
+            }
+            RenderItem::Text(text) => push_block(&mut out, &blocks(&text.body)),
             RenderItem::Section(section) => {
                 let title = escape_line(&single_line(&section.title));
-                push_block(&mut out, &format!("## {}", heading_text(&title)));
+                push_block(
+                    &mut out,
+                    &format!("{section_heading} {}", heading_text(&title)),
+                );
                 if let Some(audiences) = labels.audiences(&section.audiences) {
                     push_block(&mut out, &format!("*{}*", escape_line(&audiences)));
                 }
@@ -920,6 +962,19 @@ impl<'a> Extras<'a> {
     }
 }
 
+/// A collection's table of contents: its chapters as a numbered list.
+/// Markdown has no stable heading anchors, so they are not linked.
+fn contents_list(guide: &RenderGuide) -> String {
+    guide
+        .chapters()
+        .map(|chapter| {
+            let title = escape_line(&single_line(&chapter.title));
+            format!("{}. {title}", chapter.number)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// [`image_names`], or none when the layout has no images.
 fn step_image_names(guide: &RenderGuide, branding: &CheckedBranding) -> Vec<String> {
     if branding.layout().has_images() {
@@ -980,8 +1035,9 @@ fn hotspot_legend(step: &RenderStep) -> Option<String> {
     (!items.is_empty()).then(|| items.join("\n"))
 }
 
-/// `NN-<slug>.png` for every step in order. `NN` is the step number,
-/// zero-padded to two digits (more for guides with 100+ steps).
+/// `NN-<slug>.png` for every step in order. `NN` is the step's anchor (its
+/// number, unless numbers restart per chapter), zero-padded to two digits
+/// (more for documents with 100+ steps).
 pub fn image_names(guide: &RenderGuide) -> Vec<String> {
     let count = guide.steps().count();
     let width = count.to_string().len().max(2);
@@ -990,7 +1046,7 @@ pub fn image_names(guide: &RenderGuide) -> Vec<String> {
         .map(|step| {
             format!(
                 "{:0width$}-{}.png",
-                step.number,
+                step.anchor,
                 slug(&plain_text(&step.title))
             )
         })

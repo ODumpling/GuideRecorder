@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { Guide, Rect, RedactionSuggestion, Step, StepImage } from "@guiderecorder/guide-schema";
-import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, BrandPreset, DetailsEdit, ExportBranding, ExportResult, LogoChange, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordInto, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
+import type { AiFinishedEvent, AiGuideEvent, AiRewriteResult, AiStepEvent, CaptureArea, CaptureTargetArg, CaptureWindow, BrandPreset, Collection, DetailsEdit, ExportBranding, ExportResult, LogoChange, HotkeyErrors, GuideListItem, NarrationState, OpenedGuide, RecordInto, RecordingSaved, RecordingSnapshot, RecordingStatus, RewriteStyleArg, Settings, StampedStatus, UpdateStatus, VersionInfo, VersionReason } from "../src/lib/types";
 import { DEFAULT_EXCLUDED_IDS } from "../src/recording/apps";
 
 /** `ai_generate`'s options. */
@@ -115,6 +115,10 @@ export class Backend {
    * and the default; as the `.presets` folder holds them.
    */
   presets = new Map<string, { preset: BrandPreset; logo: string | null }>();
+  /** The library's collections by id, as its `.collections` folder holds them. */
+  collections = new Map<string, Collection>();
+  /** Every `export_collection` call that succeeded. */
+  readonly collectionExports: { id: string; format: string; out: string; overwrite: boolean; paper: string; branding: ExportBranding }[] = [];
   defaultPreset: string | null = null;
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
@@ -1003,6 +1007,49 @@ export class Backend {
           default:
             return { kind: "pages", pages: [page(1), page(2), page(3)], pageCount: 3, approximate: args.format === "docx" };
         }
+      }
+      case "list_collections":
+        return [...this.collections.values()]
+          .sort((a, b) => a.title.localeCompare(b.title))
+          .map((collection) => ({ id: collection.id, collection: structuredClone(collection), error: null }));
+      case "create_collection": {
+        const id = `01JC${String(this.collections.size + 1).padStart(22, "0")}`;
+        const collection: Collection = {
+          version: 1,
+          id,
+          title: String(args.title).trim(),
+          intro: "",
+          numbering: "continuous",
+          entries: [],
+          updatedAt: new Date(0).toISOString(),
+        };
+        this.collections.set(id, collection);
+        return structuredClone(collection);
+      }
+      case "save_collection": {
+        const collection = structuredClone(args.collection as Collection);
+        if (!this.collections.has(collection.id)) fail("notFound", `no collection ${collection.id} in this library`);
+        this.collections.set(collection.id, { ...collection, title: collection.title.trim() });
+        return structuredClone(this.collections.get(collection.id)!);
+      }
+      case "delete_collection":
+        if (!this.collections.delete(String(args.id))) fail("notFound", `no collection ${String(args.id)} in this library`);
+        return null;
+      case "export_collection": {
+        const id = String(args.id);
+        const collection = this.collections.get(id);
+        if (!collection) fail("notFound", `no collection ${id} in this library`);
+        const format = String(args.format);
+        if (!["pdf", "docx", "html", "md"].includes(format)) fail("invalid", "a collection exports as PDF, Word, HTML or Markdown");
+        const out = String(args.out);
+        const overwrite = args.overwrite === true;
+        if (this.exported.has(out) && !overwrite) fail("exists", `${out} already exists`);
+        this.exported.add(out);
+        this.collectionExports.push({ id, format, out, overwrite, paper: String(args.paper), branding: args.branding as ExportBranding });
+        const gone = collection!.entries.filter((e) => e.type === "guide" && !this.bundles.has(e.guideId)).length;
+        const notes = gone > 0 ? [`${gone} guide(s) of the collection are no longer in the library and were left out`] : [];
+        const main = format === "md" ? `${out}/guide.md` : format === "html" ? `${out}/guide.html` : out;
+        return { files: [main], warnings: [], notes } satisfies ExportResult;
       }
       case "list_presets":
         return {

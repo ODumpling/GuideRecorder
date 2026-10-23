@@ -1,9 +1,11 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { BookOpen, Camera, ChevronRight, Folder, FolderPlus, Target, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { BookCopy, BookOpen, BookPlus, Camera, ChevronRight, Folder, FolderPlus, Target, TriangleAlert } from "lucide-react";
 import { NavHeading, STATUS_COLORS } from "@/components/library/bits";
-import { askName, showFolderMenu } from "@/components/library/menus";
+import { askName, NameDialog, showFolderMenu } from "@/components/library/menus";
 import { droppedGuides, guidesAt, isGuideDrag } from "@/components/library/selection";
 import { AccountMenu } from "@/components/library/AccountMenu";
+import { closeCollection, collectionsStore, useCollections } from "@/collections/collections";
+import { withGuides } from "@/collections/store";
 import { editorStore, useEditor } from "@/editor/editor";
 import {
   buildTree,
@@ -134,7 +136,10 @@ function FolderItems({
           pad={22 + depth * INDENT_PX}
           title={node.path}
           current={current === node.path}
-          onClick={() => editorStore.getState().setFolder(node.path)}
+          onClick={() => {
+            closeCollection();
+            editorStore.getState().setFolder(node.path);
+          }}
           onContextMenu={(e) => void showFolderMenu(e, node.path, () => askName({ kind: "folder", parent: node.path }))}
           onDropGuides={(paths) => void moveDropped(paths, node.path)}
         >
@@ -179,8 +184,30 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
   const tree = useMemo(() => buildTree(guides, folders, true), [guides, folders]);
   const tags = useMemo(() => libraryTags(guides), [guides]);
   const overdue = guides.filter((g) => isReviewOverdue(g, today)).length;
-  const { setFolder, setStatusFilter, setTag, setKind } = editorStore.getState();
-  const everything = !statusFilter && folder === null && !tag && !kind;
+  const collections = useCollections((s) => s.collections);
+  const openId = useCollections((s) => s.openId);
+  // Choosing what guides to show closes the open collection.
+  const browse =
+    <T,>(set: (value: T) => void) =>
+    (value: T) => {
+      closeCollection();
+      set(value);
+    };
+  const editor = editorStore.getState();
+  const [setFolder, setStatusFilter, setTag, setKind] = [
+    browse(editor.setFolder),
+    browse(editor.setStatusFilter),
+    browse(editor.setTag),
+    browse(editor.setKind),
+  ];
+  const browsing = openId === null;
+  const everything = browsing && !statusFilter && folder === null && !tag && !kind;
+
+  useEffect(() => void collectionsStore.getState().load(), []);
+  const dropOnCollection = (id: string, paths: string[]) => {
+    const ids = guidesAt(editorStore.getState().guides, paths).map((g) => g.id);
+    if (ids.length > 0) collectionsStore.getState().edit(id, (c) => ({ ...c, entries: withGuides(c.entries, ids) }));
+  };
 
   const toggle = (path: string) =>
     setCollapsed((current) => {
@@ -210,7 +237,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
             label="Review overdue"
             count={overdue}
             warn
-            current={statusFilter === "overdue"}
+            current={browsing && statusFilter === "overdue"}
             onClick={() => setStatusFilter(statusFilter === "overdue" ? null : "overdue")}
           />
         </div>
@@ -223,7 +250,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
               icon={<span className="size-2 rounded-full" style={{ background: STATUS_COLORS[s.value] }} />}
               label={s.label}
               count={guides.filter((g) => g.status === s.value).length}
-              current={statusFilter === s.value}
+              current={browsing && statusFilter === s.value}
               onClick={() => setStatusFilter(statusFilter === s.value ? null : s.value)}
             />
           ))}
@@ -237,7 +264,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
               icon={k.value === "annotated" ? <Target /> : <Camera />}
               label={k.label}
               count={guides.filter((g) => g.kind === k.value).length}
-              current={kind === k.value}
+              current={browsing && kind === k.value}
               onClick={() => setKind(kind === k.value ? null : k.value)}
             />
           ))}
@@ -262,7 +289,42 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
           {tree.folders.length === 0 ? (
             <p className="px-2 text-xs text-muted-foreground">No folders yet</p>
           ) : (
-            <FolderItems nodes={tree.folders} depth={0} current={folder} collapsed={collapsed} onToggle={toggle} />
+            <FolderItems nodes={tree.folders} depth={0} current={browsing ? folder : null} collapsed={collapsed} onToggle={toggle} />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-px">
+          <NavHeading
+            action={
+              <button
+                type="button"
+                aria-label="New collection"
+                title="New collection"
+                onClick={() => askName({ kind: "collection" })}
+                className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-foreground/10 hover:text-foreground"
+              >
+                <BookPlus className="size-3.5" />
+              </button>
+            }
+          >
+            Collections
+          </NavHeading>
+          {collections.length === 0 ? (
+            <p className="px-2 text-xs text-muted-foreground">Put guides together into one manual</p>
+          ) : (
+            collections.map((c) => (
+              <NavItem
+                key={c.id}
+                icon={<BookCopy />}
+                label={c.collection ? c.collection.title || "Untitled collection" : "Unreadable collection"}
+                count={c.collection?.entries.filter((e) => e.type === "guide").length}
+                warn={!c.collection}
+                title={c.error ?? undefined}
+                current={openId === c.id}
+                onClick={() => collectionsStore.getState().open(c.id)}
+                onDropGuides={c.collection ? (paths) => dropOnCollection(c.id, paths) : undefined}
+              />
+            ))
           )}
         </div>
 
@@ -271,7 +333,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
             <NavHeading>Tags</NavHeading>
             <div className="flex flex-wrap gap-1 px-2">
               {tags.map((t) => {
-                const on = tag?.toLowerCase() === t.toLowerCase();
+                const on = browsing && tag?.toLowerCase() === t.toLowerCase();
                 return (
                   <button
                     key={t}
@@ -294,6 +356,7 @@ export function LibraryNav({ onSyncSettings }: { onSyncSettings(): void }) {
         )}
       </div>
       <AccountMenu onSettings={onSyncSettings} />
+      <NameDialog />
     </nav>
   );
 }
