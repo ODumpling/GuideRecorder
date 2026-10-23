@@ -18,7 +18,7 @@ import {
 } from "@/editor/commands";
 import { insertImageSteps } from "@/editor/images";
 import type { EditorStore } from "@/editor/store";
-import { addAnnotatedPages, copyStepImages, errorMessage } from "@/lib/ipc";
+import { addAnnotatedPages, copyStepImages, errorMessage, importSteps } from "@/lib/ipc";
 import type { CoverOptions, NoteKind, Step, StepImage } from "@guiderecorder/guide-schema";
 import { ulid } from "@/lib/ulid";
 
@@ -142,5 +142,29 @@ export async function insertPages(store: EditorStore, atEnd = false): Promise<nu
   if (!now || now.guide.id !== state.guide.id) return 0;
   const items = pages.map((page): Step => ({ ...page, type: "step" }));
   const label = `Add ${items.length} ${items.length === 1 ? "page" : "pages"}`;
+  return now.dispatch(insertItemsAfter(now.guide, items, atEnd ? null : (now.selected?.id ?? null), label)) ? items.length : 0;
+}
+
+/**
+ * Steps of another guide, copied with their images, below the selected
+ * item (`atEnd`: after the last), as one undoable command. Returns how
+ * many were added; failures end up in the store's notice.
+ */
+export async function insertStepsFrom(store: EditorStore, sourceId: string, stepIds: string[], atEnd = false): Promise<number> {
+  const state = current(store);
+  if (!state || stepIds.length === 0) return 0;
+  store.getState().notify(null);
+  let steps: Step[];
+  try {
+    steps = await importSteps(state.guide.id, sourceId, stepIds);
+  } catch (error) {
+    store.getState().notify(`Could not insert the steps: ${errorMessage(error)}`);
+    return 0;
+  }
+  // The guide may have been closed or another opened meanwhile.
+  const now = current(store);
+  if (!now || now.guide.id !== state.guide.id || steps.length === 0) return 0;
+  const items = steps.map((step): Step => ({ ...step, type: "step" }));
+  const label = `Insert ${items.length} ${items.length === 1 ? "step" : "steps"}`;
   return now.dispatch(insertItemsAfter(now.guide, items, atEnd ? null : (now.selected?.id ?? null), label)) ? items.length : 0;
 }

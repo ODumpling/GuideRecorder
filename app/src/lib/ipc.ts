@@ -153,6 +153,20 @@ export function copyStepImages(guideId: string, image: StepImage, newStepId: str
   return invoke("copy_step_images", { guideId, image, newStepId });
 }
 
+/** The saved steps of another guide, to pick which to insert. */
+export function sourceSteps(sourceId: string): Promise<Step[]> {
+  return invoke("source_steps", { sourceId });
+}
+
+/**
+ * Copies steps of guide `sourceId` (with their images) into the open guide,
+ * as new steps in the source's order. Returned, not inserted: the editor
+ * inserts them as one undoable command.
+ */
+export function importSteps(guideId: string, sourceId: string, stepIds: string[]): Promise<Step[]> {
+  return invoke("import_steps", { guideId, sourceId, stepIds });
+}
+
 /** The bytes of an image file dropped on the window (only those). */
 export async function readImageFile(path: string): Promise<ArrayBuffer> {
   return toArrayBuffer(await invoke("read_image_file", { path }));

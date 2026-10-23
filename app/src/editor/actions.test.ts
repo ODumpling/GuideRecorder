@@ -7,6 +7,7 @@ import {
   insertNote,
   insertPages,
   insertSection,
+  insertStepsFrom,
   mergeSelected,
   splitSelected,
   toggleCover,
@@ -20,6 +21,7 @@ const images = vi.hoisted(() => ({ insertImageSteps: vi.fn() }));
 vi.mock("@/editor/images", async (importOriginal) => ({ ...(await importOriginal<object>()), ...images }));
 const ipc = vi.hoisted(() => ({
   addAnnotatedPages: vi.fn(async (_guide: string): Promise<Step[]> => []),
+  importSteps: vi.fn(async (_guide: string, _source: string, _ids: string[]): Promise<Step[]> => []),
   copyStepImages: vi.fn(async (_guide: string, image: StepImage, id: string): Promise<StepImage> => ({
     ...image,
     full: `steps/${id}.webp`,
@@ -149,6 +151,31 @@ describe("actions", () => {
     ipc.addAnnotatedPages.mockResolvedValueOnce([]);
     expect(await insertPages(s)).toBe(0);
     expect(s.getState().undoStack).toHaveLength(0);
+  });
+
+  it("insert steps from another guide below the selection as one undo step", async () => {
+    const s = await store();
+    s.getState().select("A");
+    const bare = (id: string) => {
+      const { type: _type, ...rest } = step(id);
+      return rest as unknown as Step;
+    };
+    ipc.importSteps.mockResolvedValueOnce([bare("X1"), bare("X2")]);
+    expect(await insertStepsFrom(s, "G2", ["Y1", "Y2"])).toBe(2);
+    expect(ipc.importSteps).toHaveBeenLastCalledWith("G1", "G2", ["Y1", "Y2"]);
+    expect(ids(s)).toEqual(["S1", "A", "X1", "X2", "B", "N1", "C"]);
+    expect(s.getState().undoStack.at(-1)?.command.label).toBe("Insert 2 steps");
+    s.getState().undo();
+    expect(ids(s)).toEqual(guide().items.map((item) => item.id));
+
+    // At the end; a failure is a notice and changes nothing.
+    ipc.importSteps.mockResolvedValueOnce([bare("X3")]);
+    expect(await insertStepsFrom(s, "G2", ["Y3"], true)).toBe(1);
+    expect(ids(s).at(-1)).toBe("X3");
+    ipc.importSteps.mockRejectedValueOnce({ kind: "notFound", message: "gone" });
+    expect(await insertStepsFrom(s, "G2", ["Y4"])).toBe(0);
+    expect(s.getState().notice).toContain("gone");
+    expect(await insertStepsFrom(s, "G2", [])).toBe(0);
   });
 
   it("toggle the cover and change its options, undoably", async () => {

@@ -44,6 +44,8 @@ const COMMANDS: &[&str] = &[
     "new_annotated_guide",
     "add_annotated_pages",
     "copy_step_images",
+    "source_steps",
+    "import_steps",
     "read_image_file",
     "choose_export_folder",
     "choose_export_file",

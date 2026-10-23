@@ -35,6 +35,8 @@
     "allow-new-annotated-guide",
     "allow-add-annotated-pages",
     "allow-copy-step-images",
+    "allow-source-steps",
+    "allow-import-steps",
     "allow-read-image-file",
     "allow-choose-export-folder",
     "allow-choose-export-file",

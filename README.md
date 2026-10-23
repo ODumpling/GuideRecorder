@@ -60,6 +60,9 @@ LM Studio, in which case nothing leaves your computer.
      moved, clear them or keep them as they are;
    - **Insert recorded steps here** (same menus, or Insert → Recorded
      steps…) to record new steps into the middle of a guide;
+   - **Insert → Steps from another guide…** to copy chosen steps, with
+     their screenshots and annotations, from another guide of the library
+     (pages, in an annotation guide);
    - annotate screenshots with arrows, boxes, highlights, callouts and blurs,
      and switch between a close-up crop and the full screenshot;
    - review blurs suggested for sensitive text found in the screenshots
