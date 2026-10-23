@@ -1086,6 +1086,7 @@ fn fixture_render_model_and_ast() {
                         out.push_str(&format!("  {:?} -> {:?}\n", option.label, option.target));
                     }
                 }
+                RenderItem::Chapter(_) | RenderItem::Text(_) => unreachable!("not a collection"),
             }
         }
         out.push('\n');

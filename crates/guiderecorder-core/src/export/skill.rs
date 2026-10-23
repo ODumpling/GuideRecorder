@@ -451,7 +451,10 @@ pub fn steps(guide: &RenderGuide, image_names: &[String]) -> SkillSteps {
             RenderItem::Section(s) => {
                 section = Some(single_line(&s.title)).filter(|t| !t.is_empty())
             }
-            RenderItem::Note(_) | RenderItem::Decision(_) => {}
+            RenderItem::Note(_)
+            | RenderItem::Decision(_)
+            | RenderItem::Chapter(_)
+            | RenderItem::Text(_) => {}
             RenderItem::Step(step) => {
                 let stored = &step.step;
                 steps.push(SkillStep {
@@ -684,6 +687,7 @@ pub fn skill_md(guide: &RenderGuide, image_names: &[String], replay: bool) -> St
                 };
                 out.push(quote(&text));
             }
+            RenderItem::Chapter(_) | RenderItem::Text(_) => {}
         }
     }
 

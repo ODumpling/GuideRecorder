@@ -42,8 +42,8 @@ step 2: "Enter your password to confirm"
 step 3: "Click " strong["Create key"] " and copy the new key"
   p "The key is shown " strong["once"] ". Store it in your password manager; see " link("https://example.com/docs/keys" "")["Managing keys"] "."
 decision: "Is the key used in " strong["production"] "?"
-  "Yes" -> Step { number: Some(4), section: None }
-  "No" -> Step { number: Some(5), section: None }
+  "Yes" -> Step { number: Some(4), anchor: Some(4), section: None }
+  "No" -> Step { number: Some(5), anchor: Some(5), section: None }
   "Unsure" -> Guide { id: Ulid(2166395068749415481073467392000003328), title: "Find where an API key is used" }
 step 4: "Drag the new key to " strong["Production"]
 step 5: "Check that the key works"

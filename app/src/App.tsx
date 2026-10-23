@@ -13,6 +13,8 @@ import { RecaptureDialog } from "@/components/RecaptureDialog";
 import { Onboarding } from "@/components/Onboarding";
 import { LibraryHome, LibrarySearch } from "@/components/library/LibraryHome";
 import { LibraryNav } from "@/components/library/LibraryNav";
+import { CollectionView } from "@/components/collections/CollectionView";
+import { useCollections } from "@/collections/collections";
 import { StatusPill } from "@/components/library/bits";
 import { folderName } from "@/editor/library";
 import { Outline } from "@/components/Outline";
@@ -165,6 +167,7 @@ function Toolbar({ onSettings, onSyncSettings }: { onSettings(): void; onSyncSet
 
 export default function App() {
   const hasDoc = useEditor((s) => s.doc !== null);
+  const collectionOpen = useCollections((s) => s.openId !== null);
   // Guide details (nothing selected) has nothing to inspect.
   const selected = useEditor((s) => s.selectedId !== null);
   const annotated = useAnnotated();
@@ -265,7 +268,9 @@ export default function App() {
         <ReadOnlyBanner />
         <Notice />
         <div className="flex min-h-0 flex-1">
-          <main className="flex min-w-0 flex-1 overflow-y-auto">{hasDoc ? <StepView /> : <LibraryHome />}</main>
+          <main className="flex min-w-0 flex-1 overflow-y-auto">
+            {hasDoc ? <StepView /> : collectionOpen ? <CollectionView /> : <LibraryHome />}
+          </main>
           {hasDoc && selected && (
             <aside className="w-72 shrink-0 overflow-y-auto border-l border-border bg-background/40">
               <Inspector onPrivacySettings={() => openSettings("privacy")} />

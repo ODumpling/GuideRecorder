@@ -135,6 +135,7 @@ fn markdown_shows_options_and_audiences() {
 fn options_resolve_to_step_numbers() {
     let step = |n, s: Option<&str>| RenderTarget::Step {
         number: Some(n),
+        anchor: Some(n),
         section: s.map(str::to_owned),
     };
     let guide_target = RenderTarget::Guide {
@@ -174,6 +175,7 @@ fn options_resolve_to_step_numbers() {
             step(2, None),
             RenderTarget::Step {
                 number: None,
+                anchor: None,
                 section: Some("Finish".into()),
             },
         ]
@@ -186,10 +188,12 @@ fn labels_say_where_options_lead() {
     let de = Labels::for_language("de");
     let to_section = RenderTarget::Step {
         number: Some(5),
+        anchor: Some(5),
         section: Some("Admins".into()),
     };
     let end = RenderTarget::Step {
         number: None,
+        anchor: None,
         section: None,
     };
     assert_eq!(
@@ -203,6 +207,7 @@ fn labels_say_where_options_lead() {
     assert_eq!(en.go_to(&end, GuideKind::Walkthrough), "Go to the end");
     let page = RenderTarget::Step {
         number: Some(2),
+        anchor: Some(2),
         section: None,
     };
     assert_eq!(en.go_to(&page, GuideKind::Annotated), "Go to Page 2");

@@ -132,6 +132,23 @@ LM Studio, in which case nothing leaves your computer.
    kept with the export options, not in the guide. The package also works
    opened on its own, without an LMS.
 
+## Collections
+
+Onboarding manuals and runbooks cover many small tasks. Record each task as
+its own guide, then put them together in a **collection**: choose **New
+collection** under Collections in the library sidebar, add guides (or drag them
+onto the collection), and add text between them where it helps. A collection
+has a title and an introduction, and numbers steps either straight through the
+whole document or from 1 in each guide.
+
+A collection refers to its guides instead of copying them, so a change to a
+guide shows up in every collection that has it. Export a collection as one
+**PDF**, **Word**, **HTML** or **Markdown** document: each guide becomes a
+chapter, after a table of contents (with page numbers in the PDF), and in the
+paged formats every chapter starts a new page. A guide that has since been
+deleted is left out, with a note. Collections are files in the library's hidden
+`.collections` folder (`<id>.collection.json`), so a shared library shares them.
+
 ## Annotation guides
 
 Not everything is a sequence of clicks. To explain a floor plan, a form, a

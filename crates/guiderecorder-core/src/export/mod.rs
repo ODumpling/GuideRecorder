@@ -32,7 +32,7 @@ pub use raster::{
     ImageOptions, PlacedHotspot, RenderWarning, RenderedImage,
 };
 pub use render::{
-    RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderOption, RenderSection,
-    RenderStep, RenderTarget,
+    RenderChapter, RenderCover, RenderDecision, RenderGuide, RenderItem, RenderNote, RenderOption,
+    RenderSection, RenderStep, RenderTarget, RenderText,
 };
 pub use report::ExportReport;

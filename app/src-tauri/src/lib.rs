@@ -9,6 +9,7 @@ use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
 mod ai;
 mod annotated;
 mod blocking;
+mod collections;
 mod commands;
 mod editor;
 mod export;
@@ -235,6 +236,11 @@ pub fn run() {
             commands::save_preset,
             commands::delete_preset,
             commands::set_default_preset,
+            commands::list_collections,
+            commands::create_collection,
+            commands::save_collection,
+            commands::delete_collection,
+            commands::export_collection,
             commands::reveal_export,
             commands::open_step_url,
             commands::verify_crop,

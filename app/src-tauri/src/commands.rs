@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use guiderecorder_core::collection::Collection;
 use guiderecorder_core::edit::DetailsEdit;
 use guiderecorder_core::export::docx::Paper;
 use guiderecorder_core::export::preset::Preset;
@@ -19,6 +20,7 @@ use tauri_plugin_dialog::{
 
 use crate::annotated::PAGE_FILE_EXTENSIONS;
 use crate::blocking::blocking;
+use crate::collections::{self, CollectionView};
 use crate::editor::{
     parse_id, AppError, DroppedFiles, ErrorKind, GuideListItem, OpenedGuide, RenamedGuide, Result,
     ReviewedGuide, Session, SessionCell, MAX_PNG_BYTES,
@@ -697,6 +699,56 @@ pub async fn set_default_preset(
     id: Option<String>,
 ) -> Result<()> {
     with_session(cell, move |s| presets::set_default(s, id.as_deref())).await
+}
+
+/// The library's collections (see [`collections::list`]).
+#[tauri::command]
+pub async fn list_collections(cell: State<'_, Arc<SessionCell>>) -> Result<Vec<CollectionView>> {
+    with_session(cell, collections::list).await
+}
+
+/// A new, empty collection, saved.
+#[tauri::command]
+pub async fn create_collection(
+    cell: State<'_, Arc<SessionCell>>,
+    title: String,
+) -> Result<Collection> {
+    with_session(cell, move |s| collections::create(s, &title)).await
+}
+
+/// Saves a collection; returns it as written.
+#[tauri::command]
+pub async fn save_collection(
+    cell: State<'_, Arc<SessionCell>>,
+    collection: Collection,
+) -> Result<Collection> {
+    with_session(cell, move |s| collections::save(s, &collection)).await
+}
+
+/// Deletes a collection; its guides stay.
+#[tauri::command]
+pub async fn delete_collection(cell: State<'_, Arc<SessionCell>>, id: String) -> Result<()> {
+    with_session(cell, move |s| collections::delete(s, &id)).await
+}
+
+/// Exports a collection as one document (see [`collections::export`]).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn export_collection(
+    cell: State<'_, Arc<SessionCell>>,
+    chosen: State<'_, Arc<ChosenPaths>>,
+    id: String,
+    format: Format,
+    out: PathBuf,
+    overwrite: bool,
+    branding: BrandingRequest,
+    paper: Paper,
+) -> Result<ExportResult> {
+    let chosen = Arc::clone(&chosen);
+    with_session(cell, move |s| {
+        collections::export(s, &chosen, &id, format, &out, overwrite, &branding, paper)
+    })
+    .await
 }
 
 /// Shows a file an export wrote in Finder.

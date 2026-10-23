@@ -226,7 +226,10 @@ pub(super) fn render_with(
                 count += 1;
             }
             RenderItem::Decision(_) => count += 1,
-            RenderItem::Section(_) | RenderItem::Note(_) => {}
+            RenderItem::Section(_)
+            | RenderItem::Note(_)
+            | RenderItem::Chapter(_)
+            | RenderItem::Text(_) => {}
         }
     }
     let done = first + count;
@@ -251,6 +254,7 @@ pub(super) fn render_with(
                 section_listed = false;
             }
             RenderItem::Note(note) => notes.push(note_context(note, &labels)),
+            RenderItem::Chapter(_) | RenderItem::Text(_) => {}
             RenderItem::Decision(decision) => {
                 let index = slides.len();
                 if !section_listed {

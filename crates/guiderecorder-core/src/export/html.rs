@@ -10,6 +10,13 @@
 //! "Go to Step N" links to that step's `#step-N` article; a section tagged
 //! with audiences has a "For: Admin" line under its heading.
 //!
+//! A collection ([`crate::collection`]) adds a `nav.contents` list linking
+//! to its chapters (`#chapter-N`), which are H2s with everything in them one
+//! level deeper; in print, each chapter (or the text leading into it) starts
+//! a page. Step ids use [`RenderStep::anchor`](super::RenderStep::anchor),
+//! unique even when numbers restart per chapter. Its extra styles are added
+//! only to collections, so a guide's page is unchanged.
+//!
 //! That is the default [`HtmlMode::Document`]. [`HtmlMode::Walkthrough`]
 //! writes an interactive click-through of the same guide instead, with one
 //! inline script allowed by its hash; see [`walkthrough`](super::walkthrough).
@@ -179,8 +186,22 @@ pub fn render_string(
     };
     let mut report = ExportReport::default();
     let mut items = Vec::with_capacity(guide.items.len());
-    for item in &guide.items {
+    for (item, page_break) in guide.items.iter().zip(guide.page_breaks()) {
         items.push(match item {
+            RenderItem::Chapter(chapter) => context! {
+                kind => "chapter",
+                page_break => page_break,
+                number => chapter.number,
+                title => &chapter.title,
+                summary => chapter.summary.trim(),
+                intro => Value::from_safe_string(blocks_html(&chapter.intro)),
+                prerequisites => Value::from_safe_string(blocks_html(&chapter.prerequisites)),
+            },
+            RenderItem::Text(text) => context! {
+                kind => "text",
+                page_break => page_break,
+                body => Value::from_safe_string(blocks_html(&text.body)),
+            },
             RenderItem::Section(section) => context! {
                 kind => "section",
                 title => &section.title,
@@ -189,9 +210,9 @@ pub fn render_string(
             RenderItem::Decision(decision) => {
                 decision_context(decision, &labels, guide.kind, |target| match target {
                     RenderTarget::Step {
-                        number: Some(number),
+                        anchor: Some(anchor),
                         ..
-                    } => Some(format!("#step-{number}")),
+                    } => Some(format!("#step-{anchor}")),
                     _ => None,
                 })
             }
@@ -210,12 +231,12 @@ pub fn render_string(
                 };
                 // A checklist has no images, so they are not rendered.
                 let (image, hotspots) = if layout.has_images() {
-                    let image = render_step_image(handle, &step.step, &image_opts);
+                    let image = render_step_image(&step.handle, &step.step, &image_opts);
                     report.add_warnings(step.step.id, image.warnings.iter().cloned());
                     let hotspots: Vec<Value> = image
                         .hotspots
                         .iter()
-                        .map(|h| hotspot_context(step.number, h))
+                        .map(|h| hotspot_context(step.anchor, h))
                         .collect();
                     let image = context! {
                         src => Value::from_safe_string(data_uri("image/png", &image.png)),
@@ -230,6 +251,7 @@ pub fn render_string(
                 context! {
                     kind => "step",
                     number => step.number,
+                    anchor => step.anchor,
                     title => Value::from_safe_string(title),
                     description => Value::from_safe_string(blocks_html(&step.description)),
                     image => image,
@@ -242,13 +264,17 @@ pub fn render_string(
     let logo = branding
         .logo()
         .map(|logo| Value::from_safe_string(data_uri("image/png", logo.png())));
-    // Steps sit under section headings when there are any.
-    let has_sections = guide
-        .items
-        .iter()
-        .any(|item| matches!(item, RenderItem::Section(_)));
+    // Steps sit under section headings when there are any, and sections
+    // under a collection's chapters.
+    let depth = u8::from(guide.has_chapters());
+    let contents: Vec<Value> = guide
+        .chapters()
+        .map(|chapter| context! { number => chapter.number, title => &chapter.title })
+        .collect();
     let ctx = context! {
-        step_level => if has_sections { 3 } else { 2 },
+        step_level => if guide.has_sections() { 3 } else { 2 } + depth,
+        section_level => 2 + depth,
+        contents => contents,
         language => language_tag(&guide.language),
         csp => CSP,
         title => &guide.title,
@@ -260,11 +286,12 @@ pub fn render_string(
         page_footer => branding.footer(),
         layout => layout_class(layout),
         checklist => layout == Layout::Checklist,
-        css => Value::from_safe_string(document_stylesheet(branding)),
+        css => Value::from_safe_string(document_stylesheet(branding, guide.has_chapters())),
         logo => logo,
         labels => context! {
             prerequisites => labels.prerequisites,
             step => step_label,
+            contents => labels.contents,
         },
         intro => Value::from_safe_string(blocks_html(&guide.intro)),
         prerequisites => Value::from_safe_string(blocks_html(&guide.prerequisites)),
@@ -475,8 +502,20 @@ pub(super) fn stylesheet(branding: &CheckedBranding) -> String {
 
 /// [`stylesheet`] plus what only the document page has: its header and
 /// footer lines, cover line, layout, and last the custom CSS.
-fn document_stylesheet(branding: &CheckedBranding) -> String {
+fn document_stylesheet(branding: &CheckedBranding, chapters: bool) -> String {
     let mut css = stylesheet(branding);
+    if chapters {
+        css.push_str(
+            ".contents { margin-bottom: 2rem; }\n\
+             .contents ol { padding-left: 1.75rem; }\n\
+             .contents li { margin: .2rem 0; }\n\
+             .chapter { margin-top: 3.5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }\n\
+             h3 { font-size: 1.2rem; line-height: 1.3; margin: 2rem 0 .75rem; overflow-wrap: anywhere; }\n\
+             .chapter-summary { color: var(--muted); }\n\
+             .text { margin: 1.5rem 0; }\n\
+             @media print { .page-break { break-before: page; page-break-before: always; } }\n",
+        );
+    }
     if branding.header().is_some() || branding.footer().is_some() {
         css.push_str(
             ".page-header, .page-footer { color: var(--muted); font-size: .8rem; margin: 0; }\n\

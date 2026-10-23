@@ -6,6 +6,7 @@
 pub mod ai;
 pub mod app_dir;
 pub mod branch;
+pub mod collection;
 pub mod confidence;
 pub mod edit;
 pub mod events;
