@@ -17,7 +17,7 @@ use guiderecorder_core::library::{
     StepImageVariant, GUIDE_FILE, MAX_WEBP_DIMENSION, STEPS_DIR,
 };
 use guiderecorder_core::model::{
-    CoverOptions, Guide, GuideKind, NaiveDate, ReviewInfo, Step, StepImage,
+    Annotation, CoverOptions, Guide, GuideKind, Item, NaiveDate, ReviewInfo, Step, StepImage,
 };
 use guiderecorder_core::pages::{self, PageError};
 use guiderecorder_core::Ulid;
@@ -495,41 +495,94 @@ impl Session {
         let lock = self.guide_lock(guide_id);
         let _guard = lock.lock().unwrap();
         let handle = self.writable_handle(guide_id)?;
-        let copy = |source: &str, variant: StepImageVariant| -> Result<String> {
-            let bytes = read_bundle_image(&handle, source)?;
-            let target = step_image_path(new_step, variant);
-            let path = handle.resolve(&target)?;
-            if std::fs::symlink_metadata(&path).is_ok() {
-                return Err(AppError::new(
-                    ErrorKind::Conflict,
-                    format!("{target} already exists"),
-                ));
-            }
-            // `resolve` refused a symlinked `steps/`; a missing one is made.
-            let steps = handle.steps_dir();
-            match std::fs::create_dir(&steps) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(file_error(&steps, e)),
-            }
-            write_atomic(&path, &bytes, Durability::RenameOnly)?;
-            Ok(target)
-        };
-        Ok(StepImage {
-            full: copy(&image.full, StepImageVariant::Full)?,
-            crop: image
-                .crop
-                .as_deref()
-                .map(|crop| copy(crop, StepImageVariant::Crop))
-                .transpose()?,
-            crop_rect: image.crop_rect,
-            after: image
-                .after
-                .as_deref()
-                .map(|after| copy(after, StepImageVariant::After))
-                .transpose()?,
-            show: image.show,
-        })
+        copy_images(&handle, &handle, image, new_step)
+    }
+
+    /// The steps of guide `source_id` as saved, for choosing which to
+    /// insert into another guide ([`Session::import_steps`]).
+    pub fn source_steps(&self, source_id: &str) -> Result<Vec<Step>> {
+        let source_id = parse_id(source_id)?;
+        let lock = self.guide_lock(source_id);
+        let _guard = lock.lock().unwrap();
+        let handle = self.bundle(source_id)?;
+        let loaded = self.library.read(&handle.path)?;
+        Ok(loaded
+            .guide
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                Item::Step(step) => Some(step),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Copies the steps `step_ids` of guide `source_id` (as saved, in its
+    /// order) into the open guide `guide_id`: each gets a new id, new
+    /// annotation ids and its own copy of the image files. The steps are
+    /// returned, not inserted: the editor inserts them as one undoable
+    /// command. A step id the source doesn't have is refused.
+    pub fn import_steps(
+        &self,
+        guide_id: &str,
+        source_id: &str,
+        step_ids: &[String],
+    ) -> Result<Vec<Step>> {
+        let guide_id = parse_id(guide_id)?;
+        let source_id = parse_id(source_id)?;
+        if guide_id == source_id {
+            return Err(AppError::new(
+                ErrorKind::Invalid,
+                "steps come from another guide; duplicate a step to copy it within one",
+            ));
+        }
+        let wanted = step_ids
+            .iter()
+            .map(|id| parse_id(id))
+            .collect::<Result<std::collections::HashSet<Ulid>>>()?;
+        // Both guides are locked, in id order, while files are copied.
+        let (first, second) = (guide_id.min(source_id), guide_id.max(source_id));
+        let (first, second) = (self.guide_lock(first), self.guide_lock(second));
+        let _guards = (first.lock().unwrap(), second.lock().unwrap());
+        let target = self.writable_handle(guide_id)?;
+        let source = self.bundle(source_id)?;
+        let loaded = self.library.read(&source.path)?;
+        let steps: Vec<Step> = loaded
+            .guide
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                Item::Step(step) if wanted.contains(&step.id) => Some(step),
+                _ => None,
+            })
+            .collect();
+        if steps.len() != wanted.len() {
+            return Err(AppError::new(
+                ErrorKind::NotFound,
+                format!("guide {source_id} no longer has all of those steps"),
+            ));
+        }
+        steps
+            .into_iter()
+            .map(|step| {
+                let id = Ulid::new();
+                let image = copy_images(&loaded.handle, &target, &step.image, id)?;
+                let annotations = step
+                    .annotations
+                    .into_iter()
+                    .map(|annotation| Annotation {
+                        id: Ulid::new(),
+                        ..annotation
+                    })
+                    .collect();
+                Ok(Step {
+                    id,
+                    image,
+                    annotations,
+                    ..step
+                })
+            })
+            .collect()
     }
 
     /// Forgets an opened guide, saves its saved `guide.json` as a version
@@ -910,6 +963,54 @@ pub(crate) fn image_step(handle: &GuideHandle, title: String, image: &RgbaImage)
 
 /// Reads a step image file of the bundle: a checked path, a regular file
 /// (not a symlink), at most [`MAX_PNG_BYTES`].
+/// Copies the image files of `image` (in the bundle at `from`) to the files
+/// of step `new_step` in the bundle at `to`, which may be the same, and
+/// returns the new step's `StepImage`. Sources must be WebP files under
+/// `steps/` or `assets/`, read through [`GuideHandle::resolve`]; existing
+/// files of `new_step` are never overwritten.
+fn copy_images(
+    from: &GuideHandle,
+    to: &GuideHandle,
+    image: &StepImage,
+    new_step: Ulid,
+) -> Result<StepImage> {
+    let copy = |source: &str, variant: StepImageVariant| -> Result<String> {
+        let bytes = read_bundle_image(from, source)?;
+        let target = step_image_path(new_step, variant);
+        let path = to.resolve(&target)?;
+        if std::fs::symlink_metadata(&path).is_ok() {
+            return Err(AppError::new(
+                ErrorKind::Conflict,
+                format!("{target} already exists"),
+            ));
+        }
+        // `resolve` refused a symlinked `steps/`; a missing one is made.
+        let steps = to.steps_dir();
+        match std::fs::create_dir(&steps) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(file_error(&steps, e)),
+        }
+        write_atomic(&path, &bytes, Durability::RenameOnly)?;
+        Ok(target)
+    };
+    Ok(StepImage {
+        full: copy(&image.full, StepImageVariant::Full)?,
+        crop: image
+            .crop
+            .as_deref()
+            .map(|crop| copy(crop, StepImageVariant::Crop))
+            .transpose()?,
+        crop_rect: image.crop_rect,
+        after: image
+            .after
+            .as_deref()
+            .map(|after| copy(after, StepImageVariant::After))
+            .transpose()?,
+        show: image.show,
+    })
+}
+
 fn read_bundle_image(handle: &GuideHandle, relative: &str) -> Result<Vec<u8>> {
     check_image_path(relative)?;
     let path = handle.resolve(relative)?;
@@ -2131,6 +2232,65 @@ pub(crate) mod tests {
             vec![orphan]
         );
         assert!(target.exists() && fs::symlink_metadata(&link).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imports_steps_from_another_guide() {
+        let root = library();
+        let session = Session::start(&root, None).unwrap();
+        let source_id = fixture_id(&root);
+        let source = root.join(FIXTURE);
+        let target = Guide::new("Handbook", "en");
+        let target_id = target.id.to_string();
+        let target_bundle = session.library().create(&target).unwrap().path;
+
+        let steps = session.source_steps(&source_id).unwrap();
+        assert!(steps.len() >= 2);
+        let step = steps
+            .iter()
+            .find(|s| !s.annotations.is_empty())
+            .cloned()
+            .expect("a fixture step with annotations");
+        // Asked for in reverse, returned in the source's order.
+        let wanted = [steps[1].id.to_string(), steps[0].id.to_string()];
+        assert_eq!(
+            session
+                .import_steps(&target_id, &source_id, &wanted)
+                .unwrap_err()
+                .kind,
+            ErrorKind::NotOpen
+        );
+        session.open_guide(&target_id).unwrap();
+        let imported = session
+            .import_steps(&target_id, &source_id, &wanted)
+            .unwrap();
+        assert_eq!(imported.len(), 2);
+        for (new, old) in imported.iter().zip(&steps) {
+            assert_ne!(new.id, old.id);
+            assert_eq!(new.title, old.title);
+            assert_eq!(new.image.full, format!("steps/{}.webp", new.id));
+            assert_eq!(
+                fs::read(target_bundle.join(&new.image.full)).unwrap(),
+                fs::read(source.join(&old.image.full)).unwrap()
+            );
+        }
+
+        // Annotations come along with new ids.
+        let new = session
+            .import_steps(&target_id, &source_id, &[step.id.to_string()])
+            .unwrap()
+            .remove(0);
+        assert_eq!(new.annotations.len(), step.annotations.len());
+        for (a, b) in new.annotations.iter().zip(&step.annotations) {
+            assert_ne!(a.id, b.id);
+            assert_eq!(a.shape, b.shape);
+        }
+
+        let gone = session.import_steps(&target_id, &source_id, &[Ulid::new().to_string()]);
+        assert_eq!(gone.unwrap_err().kind, ErrorKind::NotFound);
+        let itself = session.import_steps(&target_id, &target_id, &[]);
+        assert_eq!(itself.unwrap_err().kind, ErrorKind::Invalid);
         fs::remove_dir_all(root).unwrap();
     }
 

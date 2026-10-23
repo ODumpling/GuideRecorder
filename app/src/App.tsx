@@ -8,6 +8,7 @@ import { ConflictDialog } from "@/components/ConflictDialog";
 import { ExportDialog, exportDialogStore, openExport } from "@/components/ExportDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Inspector } from "@/components/Inspector";
+import { InsertStepsDialog } from "@/components/InsertStepsDialog";
 import { LeaveDialog } from "@/components/LeaveDialog";
 import { RecaptureDialog } from "@/components/RecaptureDialog";
 import { Onboarding } from "@/components/Onboarding";
@@ -285,6 +286,7 @@ export default function App() {
       <SignInDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialPage={settingsPage} />
       <CommandPalette onSettings={openSettings} />
+      {hasDoc && <InsertStepsDialog />}
       <Onboarding />
       {draggingImages && (
         <div className="pointer-events-none fixed inset-3 flex items-center justify-center rounded-xl border-2 border-dashed border-[var(--status-info)] bg-background/70">

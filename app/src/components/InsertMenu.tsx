@@ -1,11 +1,12 @@
 import { useRef } from "react";
 import { DropdownMenu } from "radix-ui";
-import { FilePlus2, GitBranch, Heading, ImagePlus, Info, Lightbulb, ListPlus, Plus, TriangleAlert } from "lucide-react";
+import { FilePlus2, Files, GitBranch, Heading, ImagePlus, Info, Lightbulb, ListPlus, Plus, TriangleAlert } from "lucide-react";
 import { Button } from "@guiderecorder/ui/button";
 import { insertDecision, insertImages, insertNote, insertPages, insertSection } from "@/editor/actions";
 import { editorStore, useAnnotated } from "@/editor/editor";
 import { IMAGE_EXTENSIONS } from "@/editor/images";
 import { startInsert } from "@/editor/recapture";
+import { openInsertSteps } from "@/components/InsertStepsDialog";
 import { startFlow, useRecording } from "@/recording/recording";
 
 const ITEM =
@@ -70,6 +71,9 @@ export default function InsertMenu({ disabled, atEnd = false }: { disabled: bool
                 </DropdownMenu.Item>
               </>
             )}
+            <DropdownMenu.Item className={ITEM} onSelect={() => openInsertSteps(atEnd)}>
+              <Files /> {annotated ? "Pages" : "Steps"} from another guide…
+            </DropdownMenu.Item>
             {!atEnd && (
               <>
                 <DropdownMenu.Separator className="my-1 h-px bg-border" />

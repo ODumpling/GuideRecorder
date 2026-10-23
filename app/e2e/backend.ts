@@ -120,6 +120,9 @@ export class Backend {
   /** Every `export_collection` call that succeeded. */
   readonly collectionExports: { id: string; format: string; out: string; overwrite: boolean; paper: string; branding: ExportBranding }[] = [];
   defaultPreset: string | null = null;
+  /** Every `import_steps` call that succeeded. */
+  readonly imports: { guideId: string; sourceId: string; stepIds: string[] }[] = [];
+  private importCount = 0;
   /** Paths `reveal_export` was asked to show. */
   readonly revealed: string[] = [];
   /** Web pages `open_step_url` was asked to open. */
@@ -922,6 +925,37 @@ export class Backend {
           crop: image.crop && copy(image.crop, ".crop"),
           after: image.after && copy(image.after, ".after"),
         } satisfies StepImage;
+      }
+      case "source_steps":
+        return structuredClone(this.bundle(String(args.sourceId)).guide.items.filter((i): i is Step => i.type === "step"));
+      case "import_steps": {
+        const target = this.bundle(String(args.guideId));
+        const source = this.bundle(String(args.sourceId));
+        if (target === source) fail("invalid", "steps come from another guide");
+        const wanted = new Set(args.stepIds as string[]);
+        const steps = source.guide.items.filter((i): i is Step => i.type === "step" && wanted.has(i.id));
+        if (steps.length !== wanted.size) fail("notFound", "the guide no longer has all of those steps");
+        this.imports.push({ guideId: target.guide.id, sourceId: source.guide.id, stepIds: steps.map((s) => s.id) });
+        return steps.map((step, i) => {
+          const id = `01JS${String(++this.importCount).padStart(22, "0")}`;
+          const copy = (path: string, suffix: string) => {
+            const target_ = `steps/${id}${suffix}.webp`;
+            target.files.set(target_, source.files.get(path) ?? fail("notFound", `no image ${path}`));
+            return target_;
+          };
+          const { type: _type, ...rest } = structuredClone(step);
+          return {
+            ...rest,
+            id,
+            image: {
+              ...step.image,
+              full: copy(step.image.full, ""),
+              crop: step.image.crop && copy(step.image.crop, ".crop"),
+              after: step.image.after && copy(step.image.after, ".after"),
+            },
+            annotations: step.annotations.map((a, j) => ({ ...structuredClone(a), id: `01JA${String(i * 100 + j).padStart(22, "0")}` })),
+          };
+        });
       }
       case "verify_crop": {
         const bundle = this.bundle(String(args.guideId));

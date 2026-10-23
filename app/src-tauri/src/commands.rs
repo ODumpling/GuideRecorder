@@ -458,6 +458,30 @@ pub async fn copy_step_images(
     .await
 }
 
+/// The saved steps of a guide, to pick which to insert into the open one.
+#[tauri::command]
+pub async fn source_steps(
+    cell: State<'_, Arc<SessionCell>>,
+    source_id: String,
+) -> Result<Vec<Step>> {
+    with_session(cell, move |s| s.source_steps(&source_id)).await
+}
+
+/// Copies steps of another guide into the open guide (see
+/// [`Session::import_steps`]); returns them for the editor to insert.
+#[tauri::command]
+pub async fn import_steps(
+    cell: State<'_, Arc<SessionCell>>,
+    guide_id: String,
+    source_id: String,
+    step_ids: Vec<String>,
+) -> Result<Vec<Step>> {
+    with_session(cell, move |s| {
+        s.import_steps(&guide_id, &source_id, &step_ids)
+    })
+    .await
+}
+
 /// The bytes of an image file the user dropped on the window (Tauri gives
 /// the webview paths, not files), for the webview to decode. Only paths
 /// from a recent drop, each once (see [`DroppedFiles`]).

@@ -225,6 +225,8 @@ pub fn run() {
             commands::new_annotated_guide,
             commands::add_annotated_pages,
             commands::copy_step_images,
+            commands::source_steps,
+            commands::import_steps,
             commands::read_image_file,
             commands::choose_export_folder,
             commands::choose_export_file,
