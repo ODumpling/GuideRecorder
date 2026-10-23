@@ -127,6 +127,19 @@ test.describe("framing", () => {
     await expect(after(page)).toHaveAttribute("viewBox", "0 0 64 40");
   });
 
+  test("returns to the click crop after showing the full screenshot", async ({ page, backend }) => {
+    backend.editStep(CALENDAR, WITH_AFTER, (s) => {
+      s.image.cropRect = { x: 16, y: 10, width: 32, height: 20 };
+    });
+    await openGuide(page, "Share a calendar event");
+    await expect(before(page)).toHaveAttribute("viewBox", "16 10 32 20");
+    await page.getByRole("button", { name: "Full", exact: true }).click();
+    await expect(before(page)).toHaveAttribute("viewBox", "0 0 64 40");
+    await toolbar(page).getByRole("button", { name: "Click crop", exact: true }).click();
+    await expect(before(page)).toHaveAttribute("viewBox", "16 10 32 20");
+    await expect(page.getByText(/doesn't match its recorded/)).toHaveCount(0);
+  });
+
   test("shows the whole after frame when its size differs from the screenshot's", async ({ page, backend }) => {
     // The crop image (32×20) stands in for an after frame of another size.
     backend.editStep(CALENDAR, WITH_AFTER, (s) => {
